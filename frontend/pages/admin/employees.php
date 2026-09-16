@@ -2,7 +2,11 @@
 // ================================================================
 // FILE: frontend/pages/admin/employees.php
 // SUPER ADMIN - EMPLOYEES MANAGEMENT
-// FIXED: Branch column standard size + Branch name updates
+// ✅ Uses SHARED header & sidebar (NO DUPLICATES)
+// ✅ Global CSS variables (--page-*) za header
+// ✅ Search bar + scroll buttons < > kwenye TABLE HEADER
+// ✅ Table MOJA TU - hakuna table ndani ya table
+// ✅ Full dark mode support (handled by header)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -22,6 +26,7 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
@@ -45,10 +50,9 @@ try {
 }
 
 // ================================================================
-// BRANCH SELECTION WITH PROPER NAME
+// BRANCH SELECTION
 // ================================================================
 $selected_branch_id = $_GET['branch'] ?? 'all';
-$branch_name = 'All Branches';
 $current_branch_name_display = 'All Branches';
 
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
@@ -57,33 +61,29 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     $stmt->execute([$branch_id]);
     $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($branch_data) {
-        $branch_name = $branch_data['name'];
         $current_branch_name_display = $branch_data['name'];
     }
 } else {
     $selected_branch_id = 'all';
-    $current_branch_name_display = 'All Branches';
 }
 
-// Get branches
 $branches = [];
 $stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active' ORDER BY name");
 $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Unread notifications
 $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
     $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
+} catch (Exception $e) { $unread_notifications = 0; }
 
 $message = '';
 $message_type = '';
 
+// ================================================================
 // HANDLE DEACTIVATE
+// ================================================================
 if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $user_id_to_delete = (int)$_GET['delete'];
     $stmt = $db->prepare("SELECT id, role, full_name, branch_id FROM users WHERE id = ? AND role != 'admin'");
@@ -103,7 +103,9 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     }
 }
 
+// ================================================================
 // HANDLE REACTIVATE
+// ================================================================
 if (isset($_GET['reactivate']) && is_numeric($_GET['reactivate'])) {
     $user_id_to_reactivate = (int)$_GET['reactivate'];
     $stmt = $db->prepare("SELECT id, role, full_name, branch_id FROM users WHERE id = ? AND role != 'admin'");
@@ -124,7 +126,7 @@ if (isset($_GET['reactivate']) && is_numeric($_GET['reactivate'])) {
 }
 
 // ================================================================
-// FETCH EMPLOYEES WITH BRANCH FILTER
+// FETCH EMPLOYEES
 // ================================================================
 $employees = [];
 $filter = '';
@@ -146,7 +148,6 @@ $stmt = $db->query("
 ");
 $employees = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// COUNT BY ROLE
 $total_active = 0;
 $total_inactive = 0;
 $doctors = 0;
@@ -154,6 +155,7 @@ $receptionists = 0;
 $pharmacists = 0;
 $lab_technicians = 0;
 $cashiers = 0;
+$auditors = 0;
 
 foreach ($employees as $emp) {
     if ($emp['status'] === 'active') {
@@ -164,6 +166,7 @@ foreach ($employees as $emp) {
             case 'pharmacy': $pharmacists++; break;
             case 'laboratory': $lab_technicians++; break;
             case 'cashier': $cashiers++; break;
+            case 'audit': $auditors++; break;
         }
     } else {
         $total_inactive++;
@@ -176,896 +179,1186 @@ $profile_pic_url = !empty($profile_pic)
 
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
+// ================================================================
+// GET STATISTICS FOR SIDEBAR
+// ================================================================
+$total_employees = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
+$total_employees = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$total_doctors = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
+$total_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$total_branches = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
+$total_branches = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$pending_lab_tests = 0;
+try {
+    $stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests WHERE status = 'pending'");
+    $pending_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) { $pending_lab_tests = 0; }
+
+$pending_prescriptions = 0;
+try {
+    $stmt = $db->query("SELECT COUNT(*) as count FROM prescriptions WHERE status = 'pending'");
+    $pending_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) { $pending_prescriptions = 0; }
+
+// ================================================================
+// ✅ SHARED HEADER & SIDEBAR
+// ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC CSS - TUMIA VARIABLES ZA HEADER (--page-*) -->
+<!-- ================================================================ -->
 <style>
-/* ================================================================ */
-/* SIDEBAR - Full width on mobile */
-/* ================================================================ */
-.sidebar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: 270px;
-    transform: translateX(0);
-    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-    z-index: 50;
-    overflow-y: auto;
-}
-
-.main-content {
-    margin-left: 270px;
-    margin-top: 68px;
-    padding: 24px 28px;
-    min-height: calc(100vh - 68px);
-    transition: margin-left 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.top-nav {
-    position: fixed;
-    top: 0;
-    left: 270px;
-    right: 0;
-    height: 68px;
-    transition: left 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-    z-index: 40;
-}
-
-@media (max-width: 1024px) {
-    .sidebar {
-        transform: translateX(-100%);
-        width: 280px;
-        border-radius: 0 12px 12px 0;
-        box-shadow: 4px 0 20px rgba(0,0,0,0.3);
-        z-index: 9999;
+    /* ================================================================
+       PAGE HEADER - BLUE GRADIENT
+       ================================================================ */
+    .page-header-emp {
+        background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
+        border-radius: 18px;
+        padding: 24px 32px;
+        margin-bottom: 24px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 8px 32px rgba(10, 76, 168, 0.3);
+        position: relative;
+        overflow: hidden;
     }
-    
-    .sidebar.open { transform: translateX(0) !important; }
-    
-    .main-content {
-        margin-left: 0 !important;
-        padding: 16px;
+
+    .page-header-emp::before {
+        content: '';
+        position: absolute;
+        top: -60%;
+        right: -10%;
+        width: 400px;
+        height: 400px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
     }
-    
-    .top-nav { left: 0 !important; }
-    
-    #sidebarOverlay {
+
+    .page-header-emp .page-title {
+        color: white;
+        font-size: 1.6rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+    }
+
+    .page-header-emp .page-subtitle {
+        color: rgba(255,255,255,0.88);
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 6px;
+    }
+
+    .page-header-emp .role-badge-display {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .page-header-emp .header-badge {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .page-header-emp .btn-outline-light {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.2);
+        padding: 8px 18px;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 0.82rem;
+        transition: all 0.3s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        backdrop-filter: blur(4px);
+        position: relative;
+        z-index: 1;
+    }
+
+    .page-header-emp .btn-outline-light:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        color: white;
+    }
+
+    .page-header-emp .btn-outline-light.primary {
+        background: rgba(255,255,255,0.95);
+        color: #0B5ED7;
+        border-color: white;
+        font-weight: 700;
+    }
+
+    .page-header-emp .btn-outline-light.primary:hover {
+        background: white;
+        color: #0A4CA8;
+    }
+
+    /* ================================================================
+       STATS CARDS
+       ================================================================ */
+    .stats-grid-emp {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 14px;
+        margin-bottom: 20px;
+    }
+
+    .stat-card-emp {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 12px;
+        padding: 16px 18px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        transition: all 0.3s ease;
+        text-align: center;
+        box-shadow: var(--page-shadow-sm, 0 1px 3px rgba(0,0,0,0.06));
+    }
+
+    .stat-card-emp:hover {
+        transform: translateY(-3px);
+        box-shadow: var(--page-shadow-md, 0 4px 12px rgba(0,0,0,0.08));
+        border-color: var(--page-primary, #0B5ED7);
+    }
+
+    .stat-card-emp .stat-icon-wrap {
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+        margin: 0 auto 8px;
+    }
+
+    .stat-card-emp .stat-icon-wrap.blue { background: #E8F0FE; color: #0B5ED7; }
+    .stat-card-emp .stat-icon-wrap.gray { background: #F1F5F9; color: #64748B; }
+    .stat-card-emp .stat-icon-wrap.green { background: #D1FAE5; color: #059669; }
+    .stat-card-emp .stat-icon-wrap.dark-blue { background: #DBEAFE; color: #0A4CA8; }
+    .stat-card-emp .stat-icon-wrap.purple { background: #EDE9FE; color: #7C3AED; }
+    .stat-card-emp .stat-icon-wrap.orange { background: #FEF3C7; color: #D97706; }
+
+    [data-theme="dark"] .stat-card-emp .stat-icon-wrap.blue { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .stat-card-emp .stat-icon-wrap.gray { background: #334155; color: #94A3B8; }
+    [data-theme="dark"] .stat-card-emp .stat-icon-wrap.green { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .stat-card-emp .stat-icon-wrap.dark-blue { background: #1E3A5F; color: #60A5FA; }
+    [data-theme="dark"] .stat-card-emp .stat-icon-wrap.purple { background: #2D1B4E; color: #A78BFA; }
+    [data-theme="dark"] .stat-card-emp .stat-icon-wrap.orange { background: #3D2E0A; color: #FBBF24; }
+
+    .stat-card-emp .stat-number-emp {
+        font-size: 1.6rem;
+        font-weight: 800;
+        color: var(--page-text-primary, #1E293B);
+        line-height: 1.1;
+    }
+
+    .stat-card-emp .stat-number-emp.blue { color: #0B5ED7; }
+    .stat-card-emp .stat-number-emp.green { color: #059669; }
+    .stat-card-emp .stat-number-emp.purple { color: #7C3AED; }
+    .stat-card-emp .stat-number-emp.orange { color: #D97706; }
+    .stat-card-emp .stat-number-emp.gray { color: #64748B; }
+
+    .stat-card-emp .stat-label-emp {
+        font-size: 0.68rem;
+        color: var(--page-text-secondary, #64748B);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-top: 6px;
+    }
+
+    /* ================================================================
+       TABLE CARD
+       ================================================================ */
+    .table-card-emp {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 18px;
+        padding: 22px 24px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        box-shadow: var(--page-shadow-md, 0 4px 12px rgba(0,0,0,0.08));
+    }
+
+    .table-card-emp .card-header-emp {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-bottom: 16px;
+        padding-bottom: 14px;
+        border-bottom: 2px solid var(--page-border, #E2E8F0);
+    }
+
+    .table-card-emp .card-title-emp {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--page-text-primary, #1E293B);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0;
+    }
+
+    .table-card-emp .card-title-emp i {
+        color: var(--page-primary, #0B5ED7);
+    }
+
+    .count-badge-emp {
+        background: var(--page-primary-bg, #E8F0FE);
+        color: var(--page-primary, #0B5ED7);
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.72rem;
+        font-weight: 600;
+    }
+
+    /* ================================================================
+       ✅ FILTER BAR - SEARCH + SCROLL BUTTONS (KAMA PATIENTS.PHP)
+       ================================================================ */
+    .filter-bar-emp {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        width: 100%;
+        justify-content: space-between;
+        padding: 12px 16px;
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        border-radius: 12px;
+        box-shadow: 0 4px 14px rgba(11, 94, 215, 0.25);
+        margin-bottom: 16px;
+    }
+
+    .filter-bar-left-emp {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        flex: 1;
+    }
+
+    .filter-bar-right-emp {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+    }
+
+    .filter-input-emp {
+        padding: 8px 14px;
+        border: 1.5px solid rgba(255,255,255,0.3);
+        border-radius: 9px;
+        font-size: 0.78rem;
+        background: rgba(255,255,255,0.95);
+        color: #1E293B;
+        outline: none;
+        font-weight: 500;
+        height: 38px;
+        font-family: inherit;
+    }
+
+    .filter-input-emp:focus {
+        border-color: white;
+        box-shadow: 0 0 0 3px rgba(255,255,255,0.25);
+    }
+
+    select.filter-input-emp {
+        min-width: 140px;
+        cursor: pointer;
+    }
+
+    .search-input-wrapper-emp {
+        position: relative;
+        display: flex;
+        align-items: center;
+        flex: 1;
+        max-width: 380px;
+        min-width: 200px;
+    }
+
+    .search-input-wrapper-emp i {
+        position: absolute;
+        left: 12px;
+        color: var(--page-primary, #0B5ED7);
+        font-size: 0.8rem;
+        pointer-events: none;
+        z-index: 1;
+    }
+
+    .search-input-wrapper-emp input {
+        padding-left: 34px;
+        padding-right: 34px;
+        width: 100%;
+        font-size: 0.8rem;
+    }
+
+    .search-input-wrapper-emp .clear-search-emp {
+        position: absolute;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: transparent;
+        border: none;
+        color: #64748B;
+        cursor: pointer;
+        padding: 4px 8px;
+        font-size: 0.75rem;
+        display: none;
+        border-radius: 6px;
+        transition: all 0.2s;
+        z-index: 1;
+    }
+
+    .search-input-wrapper-emp .clear-search-emp:hover {
+        background: rgba(11, 94, 215, 0.1);
+        color: #0B5ED7;
+    }
+
+    .search-input-wrapper-emp .clear-search-emp.visible {
+        display: block;
+    }
+
+    .filter-status-emp {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 0.7rem;
+        color: white;
+        padding: 6px 12px;
+        background: rgba(255,255,255,0.15);
+        border-radius: 20px;
+        border: 1px solid rgba(255,255,255,0.2);
+        height: 38px;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+    /* ✅ SCROLL BUTTONS < > */
+    .scroll-controls-emp {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .scroll-btn-emp {
+        width: 38px;
+        height: 38px;
+        border-radius: 9px;
+        border: 1.5px solid rgba(255,255,255,0.3);
+        background: rgba(255,255,255,0.95);
+        color: #0B5ED7;
+        font-size: 0.85rem;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        transition: all 0.3s ease;
+    }
+
+    .scroll-btn-emp:hover:not(:disabled) {
+        background: white;
+        transform: scale(1.08);
+        box-shadow: 0 3px 10px rgba(0,0,0,0.15);
+    }
+
+    .scroll-btn-emp:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+        transform: none !important;
+    }
+
+    /* ================================================================
+       TABLE
+       ================================================================ */
+    .table-scroll-wrapper-emp {
+        overflow-x: auto;
+        overflow-y: auto;
+        max-height: 620px;
+        scroll-behavior: smooth;
+        border-radius: 12px;
+        border: 1px solid var(--page-border, #E2E8F0);
+    }
+
+    .table-scroll-wrapper-emp::-webkit-scrollbar {
+        height: 8px;
+        width: 8px;
+    }
+
+    .table-scroll-wrapper-emp::-webkit-scrollbar-track {
+        background: var(--page-hover, #F8FAFC);
+        border-radius: 10px;
+    }
+
+    .table-scroll-wrapper-emp::-webkit-scrollbar-thumb {
+        background: var(--page-primary, #0B5ED7);
+        border-radius: 10px;
+    }
+
+    .employee-table-emp {
+        width: 100%;
+        min-width: 1200px;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+    }
+
+    .employee-table-emp thead {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+        position: sticky;
+        top: 0;
+        z-index: 5;
+    }
+
+    .employee-table-emp thead th {
+        padding: 14px 16px;
+        text-align: left;
+        font-weight: 700;
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: white;
+        white-space: nowrap;
+    }
+
+    .employee-table-emp tbody td {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--page-border, #E2E8F0);
+        color: var(--page-text-primary, #1E293B);
+        vertical-align: middle;
+    }
+
+    .employee-table-emp tbody tr:nth-child(even) {
+        background: #E8F0FE;
+    }
+
+    [data-theme="dark"] .employee-table-emp tbody tr:nth-child(even) {
+        background: #1E3A5F;
+    }
+
+    .employee-table-emp tbody tr:hover td {
+        background: #D1FAE5;
+    }
+
+    [data-theme="dark"] .employee-table-emp tbody tr:hover td {
+        background: #1A3A2A;
+    }
+
+    .employee-table-emp .col-sno-emp {
+        width: 50px;
+        text-align: center;
+        font-weight: 700;
+        color: var(--page-primary, #0B5ED7);
+        font-size: 0.9rem;
+    }
+
+    .inactive-row-emp {
+        opacity: 0.65;
+    }
+
+    /* Employee Info */
+    .emp-info-cell-emp {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .emp-avatar-emp {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: white;
+        flex-shrink: 0;
+        background: linear-gradient(135deg, #0B5ED7, #1A73E8);
+    }
+
+    .emp-avatar-emp img {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        object-fit: cover;
+    }
+
+    .emp-name-emp {
+        font-weight: 600;
+        color: var(--page-text-primary, #1E293B);
+        font-size: 0.85rem;
+        margin: 0;
+    }
+
+    .emp-username-emp {
+        font-size: 0.68rem;
+        color: var(--page-text-secondary, #64748B);
+        margin: 2px 0 0 0;
+    }
+
+    /* Badges */
+    .role-badge-emp {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.62rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+
+    .role-badge-emp.role-doctor { background: #E8F0FE; color: #0B5ED7; }
+    .role-badge-emp.role-reception { background: #D1FAE5; color: #059669; }
+    .role-badge-emp.role-pharmacy { background: #FEF3C7; color: #D97706; }
+    .role-badge-emp.role-laboratory { background: #EDE9FE; color: #7C3AED; }
+    .role-badge-emp.role-cashier { background: #FCE7F3; color: #DB2777; }
+    .role-badge-emp.role-audit { background: #FEE2E2; color: #DC2626; }
+
+    [data-theme="dark"] .role-badge-emp.role-doctor { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .role-badge-emp.role-reception { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .role-badge-emp.role-pharmacy { background: #3D2E0A; color: #FBBF24; }
+    [data-theme="dark"] .role-badge-emp.role-laboratory { background: #2D1B4E; color: #A78BFA; }
+    [data-theme="dark"] .role-badge-emp.role-cashier { background: #4A1D3D; color: #F472B6; }
+    [data-theme="dark"] .role-badge-emp.role-audit { background: #3A1A1A; color: #F87171; }
+
+    .branch-badge-emp {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 12px;
+        border-radius: 14px;
+        font-size: 0.68rem;
+        font-weight: 600;
+        background: linear-gradient(135deg, #E8F0FE, #D4E4FF);
+        color: #0B5ED7;
+        border: 1.5px solid #BFDBFE;
+        white-space: nowrap;
+    }
+
+    [data-theme="dark"] .branch-badge-emp {
+        background: linear-gradient(135deg, #1E3A5F, #2A4A6F);
+        color: #6EA8FE;
+        border-color: #6EA8FE;
+    }
+
+    .status-badge-emp {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.62rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+
+    .status-badge-emp.active { background: #D1FAE5; color: #059669; }
+    .status-badge-emp.inactive { background: #FEE2E2; color: #DC2626; }
+
+    [data-theme="dark"] .status-badge-emp.active { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .status-badge-emp.inactive { background: #3A1A1A; color: #F87171; }
+
+    /* ================================================================
+       ACTION BUTTONS
+       ================================================================ */
+    .action-buttons-emp {
+        display: flex;
+        gap: 5px;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: nowrap;
+    }
+
+    .action-btn-emp {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+        padding: 6px 12px;
+        border-radius: 7px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        transition: all 0.3s;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+        white-space: nowrap;
+        font-family: inherit;
+    }
+
+    .action-btn-emp i {
+        font-size: 0.72rem;
+    }
+
+    .action-btn-emp:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+    }
+
+    .action-btn-emp.btn-view-emp { background: #0B5ED7; color: white; }
+    .action-btn-emp.btn-view-emp:hover { background: #0A4CA8; color: white; }
+
+    .action-btn-emp.btn-edit-emp { background: #F59E0B; color: white; }
+    .action-btn-emp.btn-edit-emp:hover { background: #D97706; color: white; }
+
+    .action-btn-emp.btn-delete-emp { background: #EF4444; color: white; }
+    .action-btn-emp.btn-delete-emp:hover { background: #DC2626; color: white; }
+
+    .action-btn-emp.btn-reactivate-emp { background: #059669; color: white; }
+    .action-btn-emp.btn-reactivate-emp:hover { background: #047857; color: white; }
+
+    /* ================================================================
+       BUTTONS
+       ================================================================ */
+    .btn-emp {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.78rem;
+        transition: all 0.3s;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+        font-family: inherit;
+    }
+
+    .btn-emp.btn-outline-emp {
+        background: transparent;
+        color: var(--page-text-secondary, #64748B);
+        border: 2px solid var(--page-border, #E2E8F0);
+    }
+
+    .btn-emp.btn-outline-emp:hover {
+        background: var(--page-hover, #F8FAFC);
+        border-color: var(--page-primary, #0B5ED7);
+        color: var(--page-primary, #0B5ED7);
+    }
+
+    .btn-emp.btn-primary-emp {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+    }
+
+    .btn-emp.btn-primary-emp:hover {
+        background: linear-gradient(135deg, #0A4CA8, #083C8A);
+        color: white;
+        transform: translateY(-2px);
+    }
+
+    .btn-emp.btn-danger-emp {
+        background: #DC2626;
+        color: white;
+    }
+
+    .btn-emp.btn-danger-emp:hover {
+        background: #B91C1C;
+        color: white;
+    }
+
+    .btn-emp.btn-success-emp {
+        background: #059669;
+        color: white;
+    }
+
+    .btn-emp.btn-success-emp:hover {
+        background: #047857;
+        color: white;
+    }
+
+    /* ================================================================
+       MESSAGE BOX
+       ================================================================ */
+    .message-box-emp {
+        padding: 14px 20px;
+        border-radius: 12px;
+        margin-bottom: 18px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-weight: 500;
+        animation: slideDownEmp 0.4s ease;
+    }
+
+    @keyframes slideDownEmp {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .message-box-emp.success {
+        background: #D1FAE5;
+        color: #065F46;
+        border: 2px solid #6EE7B7;
+    }
+
+    .message-box-emp.error {
+        background: #FEE2E2;
+        color: #991B1B;
+        border: 2px solid #FCA5A5;
+    }
+
+    [data-theme="dark"] .message-box-emp.success {
+        background: #1A3A2A;
+        color: #34D399;
+        border-color: #34D399;
+    }
+
+    [data-theme="dark"] .message-box-emp.error {
+        background: #3A1A1A;
+        color: #F87171;
+        border-color: #F87171;
+    }
+
+    /* ================================================================
+       MODAL
+       ================================================================ */
+    .modal-emp {
         position: fixed;
         top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(0,0,0,0.5);
-        z-index: 9998;
-        display: none;
+        z-index: 99999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+    }
+
+    .modal-overlay-emp {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.6);
         backdrop-filter: blur(4px);
+        cursor: pointer;
     }
-    
-    #sidebarOverlay.active { display: block !important; }
-}
 
-/* ================================================================ */
-/* TABLE HEADER - SEARCH BOX SMALL + BLUE BACKGROUND */
-/* ================================================================ */
-.table-header-wrapper {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 14px;
-    padding-bottom: 12px;
-    border-bottom: 2px solid var(--border-color);
-}
-
-.table-header-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-}
-
-/* SEARCH BOX - SMALL with BLUE BACKGROUND */
-.table-search-box {
-    position: relative;
-    width: 220px;
-    flex-shrink: 0;
-}
-
-.table-search-box i {
-    position: absolute;
-    left: 12px;
-    top: 50%;
-    transform: translateY(-50%);
-    color: rgba(255,255,255,0.9);
-    font-size: 0.75rem;
-    pointer-events: none;
-}
-
-.table-search-box input {
-    width: 100%;
-    padding: 8px 12px 8px 34px;
-    border: 2px solid #0A4CA8;
-    border-radius: 8px;
-    font-size: 0.75rem;
-    background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-    color: white;
-    outline: none;
-    transition: all 0.3s ease;
-    font-weight: 500;
-    height: 36px;
-    box-shadow: 0 3px 10px rgba(11, 94, 215, 0.25);
-}
-
-.table-search-box input::placeholder {
-    color: rgba(255,255,255,0.85);
-    font-size: 0.72rem;
-}
-
-.table-search-box input:focus {
-    box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.25), 0 4px 14px rgba(11, 94, 215, 0.35);
-    transform: translateY(-1px);
-}
-
-.table-search-box input:hover {
-    box-shadow: 0 5px 16px rgba(11, 94, 215, 0.35);
-}
-
-.table-title-inline {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    white-space: nowrap;
-}
-
-.search-results-info {
-    font-size: 0.68rem;
-    color: #0B5ED7;
-    padding: 5px 10px;
-    background: #E8F0FE;
-    border-radius: 8px;
-    white-space: nowrap;
-    display: none;
-    font-weight: 600;
-    border: 1px solid #0B5ED7;
-}
-
-[data-theme="dark"] .search-results-info {
-    background: #1E3A5F;
-    color: #6EA8FE;
-    border-color: #6EA8FE;
-}
-
-.search-results-info strong { font-size: 0.75rem; }
-
-/* ================================================================ */
-/* ✅ BRANCH BADGE - STANDARD SIZE */
-/* ================================================================ */
-.branch-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 10px;
-    border-radius: 14px;
-    font-size: 0.65rem;
-    font-weight: 600;
-    background: linear-gradient(135deg, #E8F0FE, #D4E4FF);
-    color: #0B5ED7;
-    border: 1.5px solid #0B5ED7;
-    box-shadow: 0 1px 3px rgba(11, 94, 215, 0.12);
-    white-space: nowrap;
-    transition: all 0.3s ease;
-    max-width: 120px;
-}
-
-.branch-badge i {
-    font-size: 0.7rem;
-    color: #0B5ED7;
-    flex-shrink: 0;
-}
-
-.branch-badge:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 2px 6px rgba(11, 94, 215, 0.2);
-    background: linear-gradient(135deg, #D4E4FF, #C4D9FF);
-}
-
-[data-theme="dark"] .branch-badge {
-    background: linear-gradient(135deg, #1E3A5F, #2A4A6F);
-    color: #6EA8FE;
-    border-color: #6EA8FE;
-}
-
-[data-theme="dark"] .branch-badge i {
-    color: #6EA8FE;
-}
-
-/* ================================================================ */
-/* HEADER BRANCH TAG */
-/* ================================================================ */
-.branch-header-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 18px;
-    border-radius: 24px;
-    font-size: 0.9rem;
-    font-weight: 700;
-    background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-    color: white !important;
-    border: 2px solid rgba(255,255,255,0.2);
-    box-shadow: 0 3px 10px rgba(11, 94, 215, 0.3);
-    margin-left: 8px;
-    white-space: nowrap;
-}
-
-.branch-header-tag i {
-    font-size: 1rem;
-    opacity: 0.9;
-}
-
-[data-theme="dark"] .branch-header-tag {
-    background: linear-gradient(135deg, #1A73E8, #0B5ED7);
-}
-
-/* ================================================================ */
-/* STAT CARDS */
-/* ================================================================ */
-.stat-card {
-    border-radius: 12px;
-    padding: 16px 20px;
-    border: none;
-    transition: all 0.3s ease;
-    color: white;
-    min-height: 100px;
-    display: block;
-    position: relative;
-    overflow: hidden;
-}
-
-.stat-card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-}
-
-.stat-card.solid-blue { background: #0B5ED7; }
-.stat-card.solid-green { background: #059669; }
-.stat-card.solid-dark-blue { background: #0A4CA8; }
-.stat-card.solid-purple { background: #7B2FBE; }
-.stat-card.solid-orange { background: #F59E0B; }
-.stat-card.solid-gray { background: #64748B; }
-
-.stat-card .stat-icon {
-    width: 40px;
-    height: 40px;
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1rem;
-    background: rgba(255,255,255,0.2);
-    color: white;
-    flex-shrink: 0;
-}
-
-.stat-card .stat-number {
-    font-size: 1.6rem;
-    font-weight: 700;
-    color: white;
-    line-height: 1.2;
-}
-
-.stat-card .stat-label {
-    font-size: 0.75rem;
-    color: rgba(255,255,255,0.9);
-    font-weight: 500;
-    margin-bottom: 2px;
-}
-
-/* TABLE HEADER */
-.data-table thead th {
-    background: #0B5ED7 !important;
-    color: white !important;
-    font-weight: 600;
-    padding: 10px 12px;
-    font-size: 0.6rem;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    border-bottom: none !important;
-}
-
-.data-table thead th:first-child { border-radius: 8px 0 0 0; }
-.data-table thead th:last-child { border-radius: 0 8px 0 0; }
-
-.inactive-row {
-    opacity: 0.6;
-    background: #F8FAFC !important;
-}
-
-.inactive-row td { border-bottom-color: #E2E8F0 !important; }
-
-[data-theme="dark"] .inactive-row {
-    opacity: 0.5;
-    background: #1E293B !important;
-}
-
-[data-theme="dark"] .inactive-row td { border-bottom-color: #334155 !important; }
-
-.action-buttons {
-    display: flex;
-    flex-direction: row;
-    gap: 4px;
-    align-items: center;
-    justify-content: center;
-    flex-wrap: nowrap;
-}
-
-.action-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    padding: 0;
-    border-radius: 6px;
-    font-size: 0.7rem;
-    transition: all 0.3s;
-    cursor: pointer;
-    border: none;
-    text-decoration: none;
-    flex-shrink: 0;
-}
-
-.action-btn i { font-size: 0.8rem; }
-
-.action-btn:hover {
-    transform: scale(1.1);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-}
-
-.action-btn:active { transform: scale(0.95); }
-
-.role-badge {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 20px;
-    font-size: 0.6rem;
-    font-weight: 600;
-    text-transform: uppercase;
-}
-
-.role-badge.role-doctor { background: #E8F0FE; color: #0B5ED7; }
-.role-badge.role-reception { background: #D1FAE5; color: #059669; }
-.role-badge.role-pharmacy { background: #FEF3C7; color: #D97706; }
-.role-badge.role-laboratory { background: #EDE9FE; color: #7B2FBE; }
-.role-badge.role-cashier { background: #FCE4EC; color: #DC2626; }
-
-[data-theme="dark"] .role-badge.role-doctor { background: #1E3A5F; color: #6EA8FE; }
-[data-theme="dark"] .role-badge.role-reception { background: #1A3A2A; color: #34D399; }
-[data-theme="dark"] .role-badge.role-pharmacy { background: #3D2E0A; color: #FBBF24; }
-[data-theme="dark"] .role-badge.role-laboratory { background: #2D1B4E; color: #A78BFA; }
-[data-theme="dark"] .role-badge.role-cashier { background: #3A1A1A; color: #F87171; }
-
-.status-badge {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 20px;
-    font-size: 0.55rem;
-    font-weight: 600;
-    text-transform: uppercase;
-}
-
-.status-badge.active { background: #D1FAE5; color: #059669; }
-.status-badge.inactive { background: #FEE2E2; color: #DC2626; }
-
-[data-theme="dark"] .status-badge.active { background: #1A3A2A; color: #34D399; }
-[data-theme="dark"] .status-badge.inactive { background: #3A1A1A; color: #F87171; }
-
-.btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 10px;
-    border-radius: 6px;
-    font-weight: 600;
-    font-size: 0.65rem;
-    transition: all 0.3s;
-    cursor: pointer;
-    border: none;
-    text-decoration: none;
-}
-
-.btn-sm { padding: 2px 6px; font-size: 0.6rem; }
-.btn-view { background: #0B5ED7; color: white; }
-.btn-view:hover { background: #0A4CA8; transform: scale(1.05); }
-.btn-edit { background: #F59E0B; color: white; }
-.btn-edit:hover { background: #D97706; transform: scale(1.05); }
-.btn-delete { background: #EF4444; color: white; }
-.btn-delete:hover { background: #DC2626; transform: scale(1.05); }
-.btn-reactivate { background: #059669; color: white; }
-.btn-reactivate:hover { background: #047857; transform: scale(1.05); }
-.btn-danger { background: #EF4444; color: white; }
-.btn-danger:hover { background: #DC2626; }
-.btn-success { background: #059669; color: white; }
-.btn-success:hover { background: #047857; }
-
-.btn-blue { background: #0B5ED7; color: white; }
-.btn-blue:hover {
-    background: #0A4CA8;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-}
-
-.btn-outline {
-    background: transparent;
-    color: var(--text-secondary);
-    border: 2px solid var(--border-color);
-}
-.btn-outline:hover {
-    background: var(--bg-body);
-    border-color: #0B5ED7;
-    color: #0B5ED7;
-}
-
-.message-box {
-    padding: 12px 16px;
-    border-radius: 10px;
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.message-box.success {
-    background: #D1FAE5;
-    color: #059669;
-    border: 1px solid #059669;
-}
-
-.message-box.error {
-    background: #FEE2E2;
-    color: #DC2626;
-    border: 1px solid #DC2626;
-}
-
-[data-theme="dark"] .message-box.success {
-    background: #1A3A2A;
-    color: #34D399;
-    border-color: #34D399;
-}
-
-[data-theme="dark"] .message-box.error {
-    background: #3A1A1A;
-    color: #F87171;
-    border-color: #F87171;
-}
-
-.modal {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    z-index: 99999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.modal-overlay {
-    position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.5);
-    cursor: pointer;
-}
-
-.modal-content {
-    background: var(--bg-card);
-    border-radius: 16px;
-    max-width: 480px;
-    width: 90%;
-    position: relative;
-    z-index: 100000;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-    border: 1px solid var(--border-color);
-}
-
-.modal-header {
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.modal-header h3 {
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-}
-
-.modal-close {
-    background: none;
-    border: none;
-    font-size: 1.5rem;
-    cursor: pointer;
-    color: var(--text-secondary);
-    padding: 0 4px;
-}
-
-.modal-close:hover { color: var(--text-primary); }
-.modal-body { padding: 20px; color: var(--text-primary); }
-.modal-footer {
-    padding: 16px 20px;
-    border-top: 1px solid var(--border-color);
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-}
-
-.toast-custom {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    padding: 14px 20px;
-    border-radius: 12px;
-    z-index: 99999;
-    max-width: 400px;
-    transform: translateY(100px);
-    opacity: 0;
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    color: white;
-    box-shadow: 0 8px 30px rgba(0,0,0,0.15);
-}
-.toast-custom.show { transform: translateY(0); opacity: 1; }
-.toast-custom.success { background: #059669; }
-.toast-custom.error { background: #DC2626; }
-.toast-custom.info { background: #0B5ED7; }
-.toast-custom.warning { background: #D97706; }
-
-@media (max-width: 768px) {
-    .stat-card {
-        min-height: 80px !important;
-        padding: 12px 14px !important;
-    }
-    .stat-card .stat-number { font-size: 1.2rem !important; }
-    .stat-card .stat-icon {
-        width: 32px !important;
-        height: 32px !important;
-        font-size: 0.8rem !important;
-    }
-    .grid-cols-6 { grid-template-columns: repeat(3, 1fr) !important; }
-    .action-btn {
-        width: 26px !important;
-        height: 26px !important;
-    }
-    .action-btn i { font-size: 0.65rem !important; }
-    .data-table thead th {
-        padding: 6px 8px !important;
-        font-size: 0.5rem !important;
-    }
-    .data-table td {
-        padding: 6px 8px !important;
-        font-size: 0.7rem !important;
-    }
-    .btn-blue {
-        padding: 8px 18px !important;
-        font-size: 0.85rem !important;
-        min-height: 38px !important;
-    }
-    
-    .table-header-wrapper {
-        flex-direction: column;
-        align-items: stretch;
-    }
-    
-    .table-header-left {
+    .modal-content-emp {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 18px;
+        max-width: 500px;
         width: 100%;
-        flex-direction: column;
-        align-items: stretch;
+        position: relative;
+        z-index: 100000;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        border: 2px solid var(--page-border, #E2E8F0);
+        overflow: hidden;
     }
-    
-    .table-search-box {
-        width: 100%;
-        max-width: 100%;
-    }
-    
-    .branch-header-tag {
-        font-size: 0.75rem;
-        padding: 4px 12px;
-    }
-}
 
-@media (max-width: 480px) {
-    .grid-cols-6 { grid-template-columns: repeat(2, 1fr) !important; }
-    .action-btn {
-        width: 22px !important;
-        height: 22px !important;
+    .modal-header-emp {
+        padding: 18px 22px;
+        border-bottom: 2px solid var(--page-border, #E2E8F0);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: var(--page-hover, #F8FAFC);
     }
-    .action-btn i { font-size: 0.55rem !important; }
-    .action-buttons { gap: 2px !important; }
-    .btn-blue {
-        padding: 6px 14px !important;
-        font-size: 0.8rem !important;
-        min-height: 34px !important;
+
+    [data-theme="dark"] .modal-header-emp {
+        background: #0F172A;
     }
-    .branch-header-tag {
-        font-size: 0.7rem;
-        padding: 3px 10px;
+
+    .modal-header-emp h3 {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: var(--page-text-primary, #1E293B);
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
     }
-}
+
+    .modal-close-emp {
+        background: transparent;
+        border: none;
+        font-size: 1.6rem;
+        cursor: pointer;
+        color: var(--page-text-secondary, #64748B);
+        padding: 0 4px;
+        line-height: 1;
+        transition: color 0.3s;
+    }
+
+    .modal-close-emp:hover {
+        color: var(--page-danger, #DC2626);
+    }
+
+    .modal-body-emp {
+        padding: 22px;
+        color: var(--page-text-primary, #1E293B);
+    }
+
+    .modal-footer-emp {
+        padding: 16px 22px;
+        border-top: 2px solid var(--page-border, #E2E8F0);
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+    }
+
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer-emp {
+        padding: 14px 0;
+        border-top: 2px solid var(--page-border, #E2E8F0);
+        margin-top: 24px;
+        text-align: center;
+        font-size: 0.72rem;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .footer-emp .footer-brand-emp {
+        color: var(--page-primary, #0B5ED7);
+        font-weight: 700;
+    }
+
+    /* ================================================================
+       EMPTY STATE
+       ================================================================ */
+    .empty-state-emp {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .empty-state-emp i {
+        font-size: 2.5rem;
+        color: var(--page-border, #E2E8F0);
+        margin-bottom: 12px;
+        display: block;
+    }
+
+    /* ================================================================
+       ANIMATIONS
+       ================================================================ */
+    @keyframes fadeInUpEmp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .animate-fade-in-up-emp {
+        animation: fadeInUpEmp 0.4s ease forwards;
+        opacity: 0;
+    }
+
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 1200px) {
+        .stats-grid-emp { grid-template-columns: repeat(3, 1fr); }
+    }
+
+    @media (max-width: 992px) {
+        .filter-bar-emp { flex-direction: column; align-items: stretch; }
+        .filter-bar-left-emp { width: 100%; }
+        .filter-bar-right-emp { width: 100%; justify-content: flex-end; }
+        .search-input-wrapper-emp { max-width: 100%; }
+    }
+
+    @media (max-width: 768px) {
+        .page-header-emp { padding: 18px 20px; flex-direction: column; align-items: flex-start; }
+        .page-header-emp .page-title { font-size: 1.3rem; }
+        .stats-grid-emp { grid-template-columns: repeat(2, 1fr); }
+        .filter-bar-emp { padding: 10px 12px; }
+        .employee-table-emp { font-size: 0.72rem; }
+        .employee-table-emp thead th,
+        .employee-table-emp tbody td { padding: 8px 10px; }
+    }
+
+    @media (max-width: 480px) {
+        .stats-grid-emp { grid-template-columns: 1fr 1fr; }
+        .filter-bar-left-emp { flex-direction: column; align-items: stretch; }
+        .filter-status-emp { display: none; }
+        .search-input-wrapper-emp { min-width: 100%; }
+    }
 </style>
 
-<!-- SIDEBAR OVERLAY -->
-<div id="sidebarOverlay"></div>
-
-<!-- TOP NAV -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search employees...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $branch): ?>
-                <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($branch['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
-
+<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
+<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <!-- ================================================================ -->
+    <!-- PAGE HEADER -->
+    <!-- ================================================================ -->
+    <div class="page-header-emp animate-fade-in-up-emp">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-users-cog mr-2"></i> Employees Management
-                <span class="branch-header-tag" id="headerBranchTag">
-                    <i class="fas fa-store-alt"></i> 
-                    <span id="headerBranchName"><?= htmlspecialchars($current_branch_name_display) ?></span>
-                </span>
+                <i class="fas fa-users-cog"></i>
+                Employees Management
+                <span class="role-badge-display">ADMIN</span>
             </h1>
             <p class="page-subtitle">
-                Manage all employees across branches
+                <i class="fas fa-store-alt"></i>
+                <span class="header-badge">
+                    <i class="fas fa-store-alt"></i>
+                    <?= htmlspecialchars($current_branch_name_display) ?>
+                </span>
+                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                    <i class="fas fa-user-check"></i> <?= number_format($total_active) ?> Active
+                </span>
+                <span class="header-badge" style="background:rgba(255,255,255,0.15);">
+                    <i class="fas fa-users"></i> <?= number_format(count($employees)) ?> Total
+                </span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap">
-            <a href="add_employee.php?branch=<?= $selected_branch_id ?>" class="btn btn-blue" style="padding: 10px 24px; font-size: 0.95rem; border-radius: 10px; min-height: 44px;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <a href="add_employee.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light primary">
                 <i class="fas fa-user-plus"></i> Add Employee
             </a>
-            <button onclick="location.reload()" class="btn btn-outline btn-sm" style="padding: 8px 16px; border-radius: 10px; min-height: 38px; font-size: 0.85rem;">
+            <button onclick="location.reload()" class="btn-outline-light">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
         </div>
     </div>
 
-    <!-- Message -->
+    <!-- ================================================================ -->
+    <!-- MESSAGE -->
+    <!-- ================================================================ -->
     <?php if ($message): ?>
-        <div class="message-box <?= $message_type === 'success' ? 'success' : 'error' ?>">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
-            <?= $message ?>
+        <div class="message-box-emp <?= $message_type === 'success' ? 'success' : 'error' ?>">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>" style="font-size:1.2rem;"></i>
+            <div><?= $message ?></div>
         </div>
     <?php endif; ?>
 
-    <!-- STATISTICS CARDS -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-5">
-        <div class="stat-card solid-blue">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="stat-label">Total Active</p>
-                    <p class="stat-number"><?= number_format($total_active) ?></p>
-                </div>
-                <div class="stat-icon"><i class="fas fa-user-check"></i></div>
-            </div>
+    <!-- ================================================================ -->
+    <!-- STATS CARDS -->
+    <!-- ================================================================ -->
+    <div class="stats-grid-emp animate-fade-in-up-emp" style="animation-delay:0.05s;">
+        <div class="stat-card-emp">
+            <div class="stat-icon-wrap blue"><i class="fas fa-user-check"></i></div>
+            <div class="stat-number-emp blue"><?= number_format($total_active) ?></div>
+            <div class="stat-label-emp">Total Active</div>
         </div>
-        
-        <div class="stat-card solid-gray">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="stat-label">Inactive</p>
-                    <p class="stat-number"><?= number_format($total_inactive) ?></p>
-                </div>
-                <div class="stat-icon"><i class="fas fa-user-slash"></i></div>
-            </div>
+        <div class="stat-card-emp">
+            <div class="stat-icon-wrap gray"><i class="fas fa-user-slash"></i></div>
+            <div class="stat-number-emp gray"><?= number_format($total_inactive) ?></div>
+            <div class="stat-label-emp">Inactive</div>
         </div>
-        
-        <div class="stat-card solid-green">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="stat-label">Doctors</p>
-                    <p class="stat-number"><?= number_format($doctors) ?></p>
-                </div>
-                <div class="stat-icon"><i class="fas fa-user-md"></i></div>
-            </div>
+        <div class="stat-card-emp">
+            <div class="stat-icon-wrap green"><i class="fas fa-user-md"></i></div>
+            <div class="stat-number-emp green"><?= number_format($doctors) ?></div>
+            <div class="stat-label-emp">Doctors</div>
         </div>
-        
-        <div class="stat-card solid-dark-blue">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="stat-label">Receptionists</p>
-                    <p class="stat-number"><?= number_format($receptionists) ?></p>
-                </div>
-                <div class="stat-icon"><i class="fas fa-headset"></i></div>
-            </div>
+        <div class="stat-card-emp">
+            <div class="stat-icon-wrap dark-blue"><i class="fas fa-headset"></i></div>
+            <div class="stat-number-emp blue"><?= number_format($receptionists) ?></div>
+            <div class="stat-label-emp">Reception</div>
         </div>
-        
-        <div class="stat-card solid-purple">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="stat-label">Pharmacy</p>
-                    <p class="stat-number"><?= number_format($pharmacists) ?></p>
-                </div>
-                <div class="stat-icon"><i class="fas fa-pills"></i></div>
-            </div>
+        <div class="stat-card-emp">
+            <div class="stat-icon-wrap purple"><i class="fas fa-pills"></i></div>
+            <div class="stat-number-emp purple"><?= number_format($pharmacists) ?></div>
+            <div class="stat-label-emp">Pharmacy</div>
         </div>
-        
-        <div class="stat-card solid-orange">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="stat-label">Lab & Cashier</p>
-                    <p class="stat-number"><?= number_format($lab_technicians + $cashiers) ?></p>
-                </div>
-                <div class="stat-icon"><i class="fas fa-flask"></i></div>
-            </div>
+        <div class="stat-card-emp">
+            <div class="stat-icon-wrap orange"><i class="fas fa-flask"></i></div>
+            <div class="stat-number-emp orange"><?= number_format($lab_technicians + $cashiers + $auditors) ?></div>
+            <div class="stat-label-emp">Lab/Cash/Audit</div>
         </div>
     </div>
 
-    <!-- EMPLOYEES TABLE -->
-    <div class="card" style="background:var(--bg-card);border-radius:14px;padding:18px 20px;border:2px solid var(--border-color);">
-        <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
-            <h3 class="card-title" style="font-size:1rem;font-weight:600;color:var(--text-primary);">
-                <i class="fas fa-list" style="color:#0B5ED7;"></i> Employee List
+    <!-- ================================================================ -->
+    <!-- TABLE CARD - SEARCH BAR + SCROLL BUTTONS KWENYE TABLE HEADER -->
+    <!-- ================================================================ -->
+    <div class="table-card-emp animate-fade-in-up-emp" style="animation-delay:0.1s;">
+        
+        <!-- Card Header -->
+        <div class="card-header-emp">
+            <h3 class="card-title-emp">
+                <i class="fas fa-list"></i>
+                Employee List
+                <span class="count-badge-emp" id="employeeCountBadge"><?= number_format(count($employees)) ?> employees</span>
             </h3>
         </div>
         
-        <!-- TABLE HEADER -->
-        <div class="table-header-wrapper">
-            <div class="table-header-left">
-                <div class="table-search-box">
+        <!-- ✅ FILTER BAR - SEARCH + SCROLL BUTTONS (KAMA PATIENTS.PHP) -->
+        <div class="filter-bar-emp">
+            <div class="filter-bar-left-emp">
+                
+                <div class="search-input-wrapper-emp">
                     <i class="fas fa-search"></i>
-                    <input type="text" id="tableSearch" placeholder="🔍 Search..." autocomplete="off">
+                    <input type="text" 
+                           id="tableSearch" 
+                           class="filter-input-emp" 
+                           placeholder="🔍 Search employees by name, email, phone, role..."
+                           autocomplete="off">
+                    <button type="button" class="clear-search-emp" id="clearSearchBtn" title="Clear">
+                        <i class="fas fa-times"></i>
+                    </button>
                 </div>
                 
-                <div class="table-title-inline">
-                    <i class="fas fa-users" style="color:#0B5ED7;"></i>
-                    <span>Total:</span>
-                    <span style="color:#0B5ED7;" id="visibleCount"><?= number_format(count($employees)) ?></span>
-                </div>
+                <select id="roleFilter" class="filter-input-emp" onchange="autoFilter()">
+                    <option value="all">👥 All Roles</option>
+                    <option value="doctor">🩺 Doctors</option>
+                    <option value="reception">🎧 Reception</option>
+                    <option value="pharmacy">💊 Pharmacy</option>
+                    <option value="laboratory">🔬 Lab</option>
+                    <option value="cashier">💰 Cashier</option>
+                    <option value="audit">📋 Audit</option>
+                </select>
                 
-                <span class="search-results-info" id="searchInfo">
-                    <i class="fas fa-filter"></i> <strong id="matchCount">0</strong> match
+                <select id="statusFilter" class="filter-input-emp" onchange="autoFilter()">
+                    <option value="all">🟢 All Status</option>
+                    <option value="active">✅ Active</option>
+                    <option value="inactive">⛔ Inactive</option>
+                </select>
+                
+                <span class="filter-status-emp" id="filterStatus">
+                    <i class="fas fa-bolt"></i>
+                    <span id="filterStatusText">Auto-filter</span>
                 </span>
             </div>
             
-            <div class="table-header-right">
-                <span class="branch-badge" id="tableBranchBadge">
-                    <i class="fas fa-store-alt"></i>
-                    <span id="tableBranchName"><?= htmlspecialchars($current_branch_name_display) ?></span>
-                </span>
+            <!-- ✅ SCROLL BUTTONS < > -->
+            <div class="filter-bar-right-emp">
+                <div class="scroll-controls-emp">
+                    <button type="button" 
+                            class="scroll-btn-emp" 
+                            id="scrollLeftBtn" 
+                            onclick="scrollTable('left')" 
+                            title="Scroll Left"
+                            disabled>
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                    <button type="button" 
+                            class="scroll-btn-emp" 
+                            id="scrollRightBtn" 
+                            onclick="scrollTable('right')" 
+                            title="Scroll Right">
+                        <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
             </div>
         </div>
         
-        <div class="overflow-x-auto" style="overflow-x:auto;">
-            <table class="data-table" id="employeesTable" style="width:100%;border-collapse:collapse;font-size:0.75rem;">
+        <!-- ✅ TABLE MOJA TU -->
+        <div class="table-scroll-wrapper-emp" id="tableScrollWrapper">
+            <table class="employee-table-emp" id="employeesTable">
                 <thead>
                     <tr>
-                        <th style="width: 40px;">#</th>
-                        <th>Employee</th>
-                        <th>Role</th>
-                        <th>Email</th>
-                        <th>Phone</th>
-                        <th style="width: 130px; min-width: 130px;">Branch</th>
-                        <th>Status</th>
-                        <th style="width: 120px; min-width: 120px;">Actions</th>
+                        <th class="col-sno-emp">#</th>
+                        <th style="min-width: 220px;"><i class="fas fa-user"></i> Employee</th>
+                        <th style="min-width: 120px;"><i class="fas fa-user-tag"></i> Role</th>
+                        <th style="min-width: 200px;"><i class="fas fa-envelope"></i> Email</th>
+                        <th style="min-width: 140px;"><i class="fas fa-phone"></i> Phone</th>
+                        <th style="min-width: 140px;"><i class="fas fa-store-alt"></i> Branch</th>
+                        <th style="min-width: 110px;"><i class="fas fa-circle"></i> Status</th>
+                        <th style="min-width: 180px;text-align:center;"><i class="fas fa-cog"></i> Actions</th>
                     </tr>
                 </thead>
                 <tbody id="tableBody">
                     <?php if (count($employees) > 0): ?>
-                        <?php $i = 1; foreach ($employees as $emp): ?>
-                            <tr class="emp-row <?= $emp['status'] === 'inactive' ? 'inactive-row' : '' ?>" 
-                                data-branch-id="<?= $emp['branch_id'] ?>"
-                                data-branch-name="<?= htmlspecialchars($emp['branch_name'] ?? 'N/A') ?>"
-                                data-search="<?= strtolower(htmlspecialchars($emp['full_name'] . ' ' . $emp['username'] . ' ' . $emp['email'] . ' ' . ($emp['phone'] ?? '') . ' ' . ($emp['branch_name'] ?? '') . ' ' . $emp['role'] . ' ' . $emp['status'])) ?>">
-                                <td style="padding:6px 12px;border-bottom:1px solid var(--border-color);"><?= $i++ ?></td>
-                                <td style="padding:6px 12px;border-bottom:1px solid var(--border-color);">
-                                    <div class="flex items-center gap-3" style="display:flex;align-items:center;gap:10px;">
+                        <?php $i = 1; foreach ($employees as $emp): 
+                            $initials = strtoupper(substr($emp['full_name'], 0, 1));
+                        ?>
+                            <tr class="emp-row-emp <?= $emp['status'] === 'inactive' ? 'inactive-row-emp' : '' ?>" 
+                                data-search="<?= strtolower(htmlspecialchars($emp['full_name'] . ' ' . $emp['username'] . ' ' . $emp['email'] . ' ' . ($emp['phone'] ?? '') . ' ' . ($emp['branch_name'] ?? '') . ' ' . $emp['role'])) ?>"
+                                data-role="<?= htmlspecialchars($emp['role']) ?>"
+                                data-status="<?= htmlspecialchars($emp['status']) ?>">
+                                <td class="col-sno-emp"><?= $i++ ?></td>
+                                <td>
+                                    <div class="emp-info-cell-emp">
                                         <?php if (!empty($emp['profile_pic'])): ?>
-                                            <img src="/dispensary_system/frontend/assets/uploads/profiles/<?= $emp['profile_pic'] ?>" 
-                                                 alt="<?= htmlspecialchars($emp['full_name']) ?>" 
-                                                 style="width:32px;height:32px;border-radius:50%;object-fit:cover;"
-                                                 onerror="this.style.display='none'">
-                                        <?php else: ?>
-                                            <div style="width:32px;height:32px;border-radius:50%;background:#E8F0FE;color:#0B5ED7;display:flex;align-items:center;justify-content:center;font-size:0.85rem;font-weight:700;">
-                                                <?= strtoupper(substr($emp['full_name'], 0, 1)) ?>
+                                            <div class="emp-avatar-emp">
+                                                <img src="/dispensary_system/frontend/assets/uploads/profiles/<?= $emp['profile_pic'] ?>" 
+                                                     alt="<?= htmlspecialchars($emp['full_name']) ?>"
+                                                     onerror="this.parentElement.innerHTML='<?= $initials ?>'">
                                             </div>
+                                        <?php else: ?>
+                                            <div class="emp-avatar-emp"><?= $initials ?></div>
                                         <?php endif; ?>
                                         <div>
-                                            <p style="font-weight:500;font-size:0.8rem;margin:0;"><?= htmlspecialchars($emp['full_name']) ?></p>
-                                            <p style="font-size:0.65rem;color:var(--text-secondary);margin:0;">@<?= htmlspecialchars($emp['username']) ?></p>
+                                            <p class="emp-name-emp"><?= htmlspecialchars($emp['full_name']) ?></p>
+                                            <p class="emp-username-emp">@<?= htmlspecialchars($emp['username']) ?></p>
                                         </div>
                                     </div>
                                 </td>
-                                <td style="padding:6px 12px;border-bottom:1px solid var(--border-color);">
-                                    <span class="role-badge role-<?= $emp['role'] ?>">
+                                <td>
+                                    <span class="role-badge-emp role-<?= $emp['role'] ?>">
                                         <?php
                                             $role_labels = [
-                                                'doctor' => 'Doctor',
-                                                'reception' => 'Reception',
-                                                'pharmacy' => 'Pharmacy',
-                                                'laboratory' => 'Lab Tech',
-                                                'cashier' => 'Cashier'
+                                                'doctor' => '🩺 Doctor',
+                                                'reception' => '🎧 Reception',
+                                                'pharmacy' => '💊 Pharmacy',
+                                                'laboratory' => '🔬 Lab Tech',
+                                                'cashier' => '💰 Cashier',
+                                                'audit' => '📋 Audit'
                                             ];
                                             echo $role_labels[$emp['role']] ?? ucfirst($emp['role']);
                                         ?>
                                     </span>
                                 </td>
-                                <td style="padding:6px 12px;border-bottom:1px solid var(--border-color);font-size:0.75rem;"><?= htmlspecialchars($emp['email']) ?></td>
-                                <td style="padding:6px 12px;border-bottom:1px solid var(--border-color);font-size:0.75rem;"><?= htmlspecialchars($emp['phone'] ?? 'N/A') ?></td>
-                                <td style="padding:6px 12px;border-bottom:1px solid var(--border-color);width:130px;">
-                                    <span class="branch-badge">
+                                <td style="font-size:0.78rem;"><?= htmlspecialchars($emp['email']) ?></td>
+                                <td style="font-size:0.78rem;"><?= htmlspecialchars($emp['phone'] ?? 'N/A') ?></td>
+                                <td>
+                                    <span class="branch-badge-emp">
                                         <i class="fas fa-store-alt"></i>
                                         <?= htmlspecialchars($emp['branch_name'] ?? 'N/A') ?>
                                     </span>
                                 </td>
-                                <td style="padding:6px 12px;border-bottom:1px solid var(--border-color);">
-                                    <span class="status-badge <?= $emp['status'] === 'active' ? 'active' : 'inactive' ?>">
-                                        <?= $emp['status'] === 'active' ? 'Active' : 'Inactive' ?>
+                                <td>
+                                    <span class="status-badge-emp <?= $emp['status'] === 'active' ? 'active' : 'inactive' ?>">
+                                        <?= $emp['status'] === 'active' ? '✅ Active' : '⛔ Inactive' ?>
                                     </span>
                                 </td>
-                                <td style="padding:6px 12px;border-bottom:1px solid var(--border-color);">
-                                    <div class="action-buttons">
+                                <td>
+                                    <div class="action-buttons-emp">
                                         <a href="view_employee.php?id=<?= $emp['id'] ?>&branch=<?= $selected_branch_id ?>" 
-                                           class="btn btn-sm btn-view action-btn" title="View Employee">
-                                            <i class="fas fa-eye"></i>
+                                           class="action-btn-emp btn-view-emp" title="View Employee">
+                                            <i class="fas fa-eye"></i> View
                                         </a>
                                         <a href="edit_employee.php?id=<?= $emp['id'] ?>&branch=<?= $selected_branch_id ?>" 
-                                           class="btn btn-sm btn-edit action-btn" title="Edit Employee">
-                                            <i class="fas fa-edit"></i>
+                                           class="action-btn-emp btn-edit-emp" title="Edit Employee">
+                                            <i class="fas fa-edit"></i> Edit
                                         </a>
                                         <?php if ($emp['status'] === 'active'): ?>
                                             <button onclick="confirmDelete(<?= $emp['id'] ?>, '<?= htmlspecialchars(addslashes($emp['full_name'])) ?>')" 
-                                                    class="btn btn-sm btn-delete action-btn" title="Deactivate Employee">
+                                                    class="action-btn-emp btn-delete-emp" title="Deactivate">
                                                 <i class="fas fa-user-slash"></i>
                                             </button>
                                         <?php else: ?>
                                             <button onclick="confirmReactivate(<?= $emp['id'] ?>, '<?= htmlspecialchars(addslashes($emp['full_name'])) ?>')" 
-                                                    class="btn btn-sm btn-reactivate action-btn" title="Reactivate Employee">
+                                                    class="action-btn-emp btn-reactivate-emp" title="Reactivate">
                                                 <i class="fas fa-undo"></i>
                                             </button>
                                         <?php endif; ?>
@@ -1073,17 +1366,23 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 </td>
                             </tr>
                         <?php endforeach; ?>
-                        <tr class="no-results-row" id="noResults" style="display:none;">
-                            <td colspan="8" style="text-align:center;padding:30px;color:var(--text-secondary);">
-                                <i class="fas fa-search-minus" style="font-size:2rem;color:var(--border-color);display:block;margin-bottom:8px;"></i>
-                                <p style="font-size:0.9rem;">No employees match your search</p>
+                        <tr class="no-results-row-emp" id="noResults" style="display:none;">
+                            <td colspan="8">
+                                <div class="empty-state-emp">
+                                    <i class="fas fa-search-minus"></i>
+                                    <p style="font-size:0.9rem;font-weight:600;margin:0;">No employees match your search</p>
+                                    <p style="font-size:0.8rem;margin:4px 0 0 0;">Try adjusting your filters</p>
+                                </div>
                             </td>
                         </tr>
                     <?php else: ?>
                         <tr>
-                            <td colspan="8" style="text-align:center;color:var(--text-secondary);font-size:0.85rem;padding:30px;">
-                                <i class="fas fa-users" style="font-size:2rem;display:block;margin-bottom:8px;"></i>
-                                No employees found in <?= htmlspecialchars($current_branch_name_display) ?>
+                            <td colspan="8">
+                                <div class="empty-state-emp">
+                                    <i class="fas fa-users"></i>
+                                    <p style="font-size:0.9rem;font-weight:600;margin:0;">No employees found</p>
+                                    <p style="font-size:0.8rem;margin:4px 0 0 0;">in <?= htmlspecialchars($current_branch_name_display) ?></p>
+                                </div>
                             </td>
                         </tr>
                     <?php endif; ?>
@@ -1092,237 +1391,303 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
+    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <footer class="footer" style="padding:14px 0;border-top:1px solid var(--border-color);margin-top:24px;text-align:center;font-size:0.7rem;color:var(--text-secondary);">
+    <!-- ================================================================ -->
+    <footer class="footer-emp">
         <p>
-            <span style="color:#0B5ED7;font-weight:600;">Braick Dispensary</span> Management System
-            <span>|</span>
+            <span class="footer-brand-emp">Braick Dispensary</span> Management System
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             Employees Management
-            <span>|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span>|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
 
 </main>
 
+<!-- ================================================================ -->
 <!-- DELETE MODAL -->
-<div id="deleteModal" class="modal" style="display:none;">
-    <div class="modal-overlay" onclick="closeModal()"></div>
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3><i class="fas fa-exclamation-triangle text-red-500 mr-2"></i> Deactivate Employee</h3>
-            <button onclick="closeModal()" class="modal-close">&times;</button>
+<!-- ================================================================ -->
+<div id="deleteModal" class="modal-emp" style="display:none;">
+    <div class="modal-overlay-emp" onclick="closeModal()"></div>
+    <div class="modal-content-emp">
+        <div class="modal-header-emp">
+            <h3><i class="fas fa-exclamation-triangle" style="color:#DC2626;"></i> Deactivate Employee</h3>
+            <button onclick="closeModal()" class="modal-close-emp">&times;</button>
         </div>
-        <div class="modal-body">
-            <p>Are you sure you want to deactivate <strong id="deleteName"></strong>?</p>
-            <p class="text-sm text-gray-500 mt-2">
+        <div class="modal-body-emp">
+            <p style="font-size:0.9rem;margin:0 0 8px 0;">Are you sure you want to deactivate <strong id="deleteName" style="color:#DC2626;"></strong>?</p>
+            <p style="font-size:0.78rem;color:var(--page-text-secondary);margin:0;">
                 <i class="fas fa-info-circle"></i> 
-                This employee will no longer be able to login.
+                This employee will no longer be able to login until reactivated.
             </p>
         </div>
-        <div class="modal-footer">
-            <button onclick="closeModal()" class="btn btn-outline btn-sm">Cancel</button>
-            <a href="#" id="deleteLink" class="btn btn-danger btn-sm">
+        <div class="modal-footer-emp">
+            <button onclick="closeModal()" class="btn-emp btn-outline-emp">Cancel</button>
+            <a href="#" id="deleteLink" class="btn-emp btn-danger-emp">
                 <i class="fas fa-user-slash"></i> Deactivate
             </a>
         </div>
     </div>
 </div>
 
+<!-- ================================================================ -->
 <!-- REACTIVATE MODAL -->
-<div id="reactivateModal" class="modal" style="display:none;">
-    <div class="modal-overlay" onclick="closeReactivateModal()"></div>
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3><i class="fas fa-undo text-green-500 mr-2"></i> Reactivate Employee</h3>
-            <button onclick="closeReactivateModal()" class="modal-close">&times;</button>
+<!-- ================================================================ -->
+<div id="reactivateModal" class="modal-emp" style="display:none;">
+    <div class="modal-overlay-emp" onclick="closeReactivateModal()"></div>
+    <div class="modal-content-emp">
+        <div class="modal-header-emp">
+            <h3><i class="fas fa-undo" style="color:#059669;"></i> Reactivate Employee</h3>
+            <button onclick="closeReactivateModal()" class="modal-close-emp">&times;</button>
         </div>
-        <div class="modal-body">
-            <p>Are you sure you want to reactivate <strong id="reactivateName"></strong>?</p>
+        <div class="modal-body-emp">
+            <p style="font-size:0.9rem;margin:0;">Are you sure you want to reactivate <strong id="reactivateName" style="color:#059669;"></strong>?</p>
         </div>
-        <div class="modal-footer">
-            <button onclick="closeReactivateModal()" class="btn btn-outline btn-sm">Cancel</button>
-            <a href="#" id="reactivateLink" class="btn btn-success btn-sm">
+        <div class="modal-footer-emp">
+            <button onclick="closeReactivateModal()" class="btn-emp btn-outline-emp">Cancel</button>
+            <a href="#" id="reactivateLink" class="btn-emp btn-success-emp">
                 <i class="fas fa-undo"></i> Reactivate
             </a>
         </div>
     </div>
 </div>
 
-<!-- TOAST -->
-<div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
-    </div>
-</div>
-
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC JAVASCRIPT (NO dark mode, NO sidebar, NO date-time) -->
+<!-- ================================================================ -->
 <script>
 // ================================================================
-// SIDEBAR TOGGLE WITH OVERLAY
+// ✅ TABLE SCROLL FUNCTIONS
 // ================================================================
-var sidebar = document.getElementById('sidebar');
-var sidebarToggle = document.getElementById('sidebarToggle');
-var sidebarOverlay = document.getElementById('sidebarOverlay');
-
-function openSidebar() {
-    if (!sidebar) return;
-    sidebar.classList.add('open');
-    if (sidebarOverlay) sidebarOverlay.classList.add('active');
-    document.body.style.overflow = 'hidden';
-}
-
-function closeSidebar() {
-    if (!sidebar) return;
-    sidebar.classList.remove('open');
-    if (sidebarOverlay) sidebarOverlay.classList.remove('active');
-    document.body.style.overflow = '';
-}
-
-sidebarToggle?.addEventListener('click', function(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    if (sidebar.classList.contains('open')) {
-        closeSidebar();
+function scrollTable(direction) {
+    var wrapper = document.getElementById('tableScrollWrapper');
+    if (!wrapper) return;
+    
+    var scrollAmount = 400;
+    
+    if (direction === 'left') {
+        wrapper.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
     } else {
-        openSidebar();
+        wrapper.scrollBy({ left: scrollAmount, behavior: 'smooth' });
     }
-});
-
-sidebarOverlay?.addEventListener('click', closeSidebar);
-
-document.querySelectorAll('.sidebar-link').forEach(function(link) {
-    link.addEventListener('click', function() {
-        if (window.innerWidth <= 1024) closeSidebar();
-    });
-});
-
-window.addEventListener('resize', function() {
-    if (window.innerWidth > 1024) closeSidebar();
-});
-
-// ================================================================
-// BRANCH SWITCHER
-// ================================================================
-function switchBranch(branchId) {
-    var url = new URL(window.location.href);
-    url.searchParams.set('branch', branchId);
-    window.location.href = url.toString();
+    
+    setTimeout(updateScrollButtons, 350);
 }
 
-// ================================================================
-// DARK MODE
-// ================================================================
-var darkModeToggle = document.getElementById('darkModeToggle');
-var darkIcon = document.getElementById('darkIcon');
-var darkText = document.getElementById('darkText');
-var htmlElement = document.documentElement;
-
-var savedDarkMode = localStorage.getItem('darkMode');
-if (savedDarkMode === 'true') {
-    htmlElement.setAttribute('data-theme', 'dark');
-    darkIcon.className = 'fas fa-sun';
-    darkText.textContent = 'Light';
+function updateScrollButtons() {
+    var wrapper = document.getElementById('tableScrollWrapper');
+    var leftBtn = document.getElementById('scrollLeftBtn');
+    var rightBtn = document.getElementById('scrollRightBtn');
+    
+    if (!wrapper || !leftBtn || !rightBtn) return;
+    
+    var scrollLeft = wrapper.scrollLeft;
+    var scrollWidth = wrapper.scrollWidth;
+    var clientWidth = wrapper.clientWidth;
+    var maxScroll = scrollWidth - clientWidth;
+    
+    if (maxScroll <= 5) {
+        leftBtn.disabled = true;
+        rightBtn.disabled = true;
+        return;
+    }
+    
+    leftBtn.disabled = (scrollLeft <= 5);
+    rightBtn.disabled = (scrollLeft >= maxScroll - 5);
 }
 
-darkModeToggle?.addEventListener('click', function() {
-    var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-    if (isDark) {
-        htmlElement.removeAttribute('data-theme');
-        darkIcon.className = 'fas fa-moon';
-        darkText.textContent = 'Dark';
-        localStorage.setItem('darkMode', 'false');
-        document.cookie = "dark_mode=false; path=/";
-    } else {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-        localStorage.setItem('darkMode', 'true');
-        document.cookie = "dark_mode=true; path=/";
-    }
-});
-
-// ================================================================
-// AUTO SEARCH - TABLE
-// ================================================================
 (function() {
-    var searchInput = document.getElementById('tableSearch');
-    var noResultsRow = document.getElementById('noResults');
-    var visibleCountEl = document.getElementById('visibleCount');
-    var searchInfo = document.getElementById('searchInfo');
-    var matchCount = document.getElementById('matchCount');
+    var wrapper = document.getElementById('tableScrollWrapper');
+    if (!wrapper) return;
     
-    if (!searchInput) return;
+    wrapper.addEventListener('scroll', updateScrollButtons);
+    window.addEventListener('resize', function() {
+        setTimeout(updateScrollButtons, 100);
+    });
     
-    var totalRows = document.querySelectorAll('.emp-row').length;
+    setTimeout(updateScrollButtons, 200);
+    setTimeout(updateScrollButtons, 600);
     
-    function filterTable() {
-        var query = searchInput.value.toLowerCase().trim();
-        var rows = document.querySelectorAll('.emp-row');
-        var visibleCount = 0;
-        
-        rows.forEach(function(row) {
-            var searchData = row.getAttribute('data-search') || '';
-            if (query === '' || searchData.includes(query)) {
-                row.style.display = '';
-                visibleCount++;
-            } else {
-                row.style.display = 'none';
-            }
-        });
-        
-        if (visibleCountEl) {
-            visibleCountEl.textContent = query === '' ? totalRows : visibleCount;
-        }
-        
-        if (searchInfo && matchCount) {
-            if (query === '') {
-                searchInfo.style.display = 'none';
-            } else {
-                searchInfo.style.display = 'inline-flex';
-                matchCount.textContent = visibleCount;
-            }
-        }
-        
-        if (noResultsRow) {
-            noResultsRow.style.display = (visibleCount === 0 && query !== '' && totalRows > 0) ? '' : 'none';
-        }
-    }
+    // Drag to scroll
+    var isDown = false;
+    var startX = 0;
+    var scrollLeftStart = 0;
     
-    searchInput.addEventListener('input', filterTable);
-    searchInput.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            this.value = '';
-            filterTable();
-            this.blur();
-        }
+    wrapper.addEventListener('mousedown', function(e) {
+        if (e.target.closest('a, button, input, select')) return;
+        isDown = true;
+        wrapper.style.cursor = 'grabbing';
+        startX = e.pageX - wrapper.offsetLeft;
+        scrollLeftStart = wrapper.scrollLeft;
+    });
+    
+    wrapper.addEventListener('mouseleave', function() {
+        isDown = false;
+        wrapper.style.cursor = '';
+    });
+    
+    wrapper.addEventListener('mouseup', function() {
+        isDown = false;
+        wrapper.style.cursor = '';
+    });
+    
+    wrapper.addEventListener('mousemove', function(e) {
+        if (!isDown) return;
+        e.preventDefault();
+        var x = e.pageX - wrapper.offsetLeft;
+        var walk = (x - startX) * 1.5;
+        wrapper.scrollLeft = scrollLeftStart - walk;
     });
 })();
 
 // ================================================================
-// GLOBAL SEARCH
+// ✅ AUTO SEARCH + FILTER
 // ================================================================
-var searchBtn = document.getElementById('searchBtn');
-var searchInput = document.getElementById('searchInput');
+var filterTimeout = null;
 
-function performSearch() {
-    var query = searchInput.value.trim();
-    if (query.length > 0) {
-        var branch = '<?= $selected_branch_id ?>';
-        window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch + '&type=employees';
-    }
+function autoFilter() {
+    if (filterTimeout) clearTimeout(filterTimeout);
+    
+    filterTimeout = setTimeout(function() {
+        filterTableRows();
+    }, 200);
 }
 
-searchBtn?.addEventListener('click', performSearch);
-searchInput?.addEventListener('keypress', function(e) {
-    if (e.key === 'Enter') performSearch();
+function filterTableRows() {
+    var searchInput = document.getElementById('tableSearch');
+    var roleFilter = document.getElementById('roleFilter');
+    var statusFilter = document.getElementById('statusFilter');
+    var clearBtn = document.getElementById('clearSearchBtn');
+    var noResultsRow = document.getElementById('noResults');
+    var countBadge = document.getElementById('employeeCountBadge');
+    var statusText = document.getElementById('filterStatusText');
+    
+    if (!searchInput) return;
+    
+    var query = searchInput.value.toLowerCase().trim();
+    var role = roleFilter ? roleFilter.value : 'all';
+    var status = statusFilter ? statusFilter.value : 'all';
+    
+    var rows = document.querySelectorAll('.emp-row-emp');
+    var totalRows = rows.length;
+    var visibleCount = 0;
+    
+    rows.forEach(function(row) {
+        var searchData = row.getAttribute('data-search') || '';
+        var rowRole = row.getAttribute('data-role') || '';
+        var rowStatus = row.getAttribute('data-status') || '';
+        
+        var matches = true;
+        
+        // Search
+        if (query !== '' && !searchData.includes(query)) {
+            matches = false;
+        }
+        
+        // Role filter
+        if (role !== 'all' && rowRole !== role) {
+            matches = false;
+        }
+        
+        // Status filter
+        if (status !== 'all' && rowStatus !== status) {
+            matches = false;
+        }
+        
+        if (matches) {
+            row.style.display = '';
+            visibleCount++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+    
+    // Update row numbers
+    updateRowNumbers();
+    
+    // Update count badge
+    if (countBadge) {
+        if (query === '' && role === 'all' && status === 'all') {
+            countBadge.textContent = totalRows + ' employees';
+        } else {
+            countBadge.textContent = visibleCount + ' of ' + totalRows + ' found';
+        }
+    }
+    
+    // Update clear button
+    if (clearBtn) {
+        if (query !== '' || role !== 'all' || status !== 'all') {
+            clearBtn.classList.add('visible');
+        } else {
+            clearBtn.classList.remove('visible');
+        }
+    }
+    
+    // Update status text
+    if (statusText) {
+        if (query !== '' || role !== 'all' || status !== 'all') {
+            statusText.textContent = 'Filtered: ' + visibleCount;
+        } else {
+            statusText.textContent = 'Auto-filter';
+        }
+    }
+    
+    // Show/hide no results
+    if (noResultsRow) {
+        if (visibleCount === 0 && totalRows > 0) {
+            noResultsRow.style.display = '';
+        } else {
+            noResultsRow.style.display = 'none';
+        }
+    }
+    
+    setTimeout(updateScrollButtons, 100);
+}
+
+function updateRowNumbers() {
+    var rows = document.querySelectorAll('.emp-row-emp');
+    var counter = 1;
+    rows.forEach(function(row) {
+        if (row.style.display !== 'none') {
+            var snoCell = row.querySelector('.col-sno-emp');
+            if (snoCell) snoCell.textContent = counter;
+            counter++;
+        }
+    });
+}
+
+// Search input event
+document.getElementById('tableSearch')?.addEventListener('input', autoFilter);
+
+// Clear search
+document.getElementById('clearSearchBtn')?.addEventListener('click', function() {
+    var searchInput = document.getElementById('tableSearch');
+    var roleFilter = document.getElementById('roleFilter');
+    var statusFilter = document.getElementById('statusFilter');
+    
+    if (searchInput) searchInput.value = '';
+    if (roleFilter) roleFilter.value = 'all';
+    if (statusFilter) statusFilter.value = 'all';
+    
+    filterTableRows();
+    if (searchInput) searchInput.focus();
+});
+
+// ESC key to clear search
+document.getElementById('tableSearch')?.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        this.value = '';
+        autoFilter();
+        this.blur();
+    }
 });
 
 // ================================================================
-// DELETE MODAL
+// ✅ DELETE MODAL
 // ================================================================
 function confirmDelete(id, name) {
     document.getElementById('deleteName').textContent = name;
@@ -1333,11 +1698,11 @@ function confirmDelete(id, name) {
 
 function closeModal() {
     document.getElementById('deleteModal').style.display = 'none';
-    document.body.style.overflow = 'auto';
+    document.body.style.overflow = '';
 }
 
 // ================================================================
-// REACTIVATE MODAL
+// ✅ REACTIVATE MODAL
 // ================================================================
 function confirmReactivate(id, name) {
     document.getElementById('reactivateName').textContent = name;
@@ -1348,55 +1713,10 @@ function confirmReactivate(id, name) {
 
 function closeReactivateModal() {
     document.getElementById('reactivateModal').style.display = 'none';
-    document.body.style.overflow = 'auto';
+    document.body.style.overflow = '';
 }
 
-// ================================================================
-// DATE & TIME
-// ================================================================
-function updateDateTime() {
-    var now = new Date();
-    var dateStr = now.toLocaleDateString('en-US', {
-        weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-    });
-    var timeStr = now.toLocaleTimeString('en-US', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-    });
-    var dtEl = document.getElementById('currentDateTime');
-    if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-    
-    var ftEl = document.getElementById('footerTime');
-    if (ftEl) ftEl.textContent = timeStr;
-}
-updateDateTime();
-setInterval(updateDateTime, 1000);
-
-// ================================================================
-// TOAST
-// ================================================================
-function showToast(title, message, type) {
-    var toast = document.getElementById('toast');
-    var toastTitle = document.getElementById('toastTitle');
-    var toastMessage = document.getElementById('toastMessage');
-    
-    toast.className = 'toast-custom ' + type;
-    toastTitle.textContent = title;
-    toastMessage.textContent = message;
-    toast.style.display = 'flex';
-    
-    toast.classList.add('show');
-    clearTimeout(toast.timeout);
-    toast.timeout = setTimeout(function() {
-        toast.classList.remove('show');
-        setTimeout(function() {
-            toast.style.display = 'none';
-        }, 400);
-    }, 3500);
-}
-
-// ================================================================
-// ESC KEY CLOSE
-// ================================================================
+// ESC key closes modals
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         closeModal();
@@ -1404,11 +1724,24 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
+// ================================================================
+// ✅ FOOTER TIME
+// ================================================================
+setInterval(function() {
+    var now = new Date();
+    var timeStr = now.toLocaleTimeString('en-US', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+    });
+    var ftEl = document.getElementById('footerTime');
+    if (ftEl) ftEl.textContent = timeStr;
+}, 1000);
+
 console.log('%c👥 Braick - Employees Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Branch column - STANDARD size (130px)', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Branch name updates on change', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Search bar - smaller (220px)', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Mobile sidebar full-hide', 'font-size:13px; color:#34D399;');
+console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#059669;');
+console.log('%c✅ Search bar ipo kwenye TABLE HEADER (kama patients.php)', 'font-size:13px; color:#059669;');
+console.log('%c✅ Scroll buttons < > zipo kwenye TABLE HEADER', 'font-size:13px; color:#059669;');
+console.log('%c✅ Table MOJA TU - hakuna table ndani ya table', 'font-size:13px; color:#059669;');
+console.log('%c🌙 Dark mode: Handled by header', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>

@@ -2,28 +2,23 @@
 // ================================================================
 // FILE: frontend/pages/admin/export_cashier_pdf.php
 // EXPORT CASHIER REPORT TO PDF - HTML FALLBACK VERSION
-// BRAICK DISPENSARY - GREEN THEME - WITH LOGIN SESSION
-// WITH OFFICIAL STAMP & ADMIN CONTACTS
+// ✅ Standalone print/PDF page (NOT using shared header/sidebar)
+// ✅ Green theme - printable
+// ✅ Official stamp & admin contacts
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// CHECK IF USER HAS ADMIN ACCESS
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -32,13 +27,14 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
 }
 
 // ================================================================
-// GET ADMIN DATA FROM SESSION
+// GET ADMIN DATA
 // ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
@@ -48,49 +44,36 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
-// ================================================================
-if ($user_id <= 0) {
-    if (isset($username) && !empty($username)) {
-        require_once __DIR__ . '/../../../backend/config/database.php';
-        try {
-            $db = Database::getInstance()->getConnection();
-            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
-            $stmt->execute([$username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['branch_id'] = $user['branch_id'];
-                $_SESSION['profile_pic'] = $user['profile_pic'];
-                $user_id = $user['id'];
-                $user_full_name = $user['full_name'];
-                $user_role = $user['role'];
-                $user_branch_id = $user['branch_id'];
-                $profile_pic = $user['profile_pic'];
-            }
-        } catch (Exception $e) {
-            // Fallback to session values
+// Session recovery
+if ($user_id <= 0 && !empty($username)) {
+    require_once __DIR__ . '/../../../backend/config/database.php';
+    try {
+        $db = Database::getInstance()->getConnection();
+        $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
+        $stmt->execute([$username]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($user) {
+            $_SESSION['user_id'] = $user['id'];
+            $_SESSION['full_name'] = $user['full_name'];
+            $_SESSION['role'] = $user['role'];
+            $_SESSION['branch_id'] = $user['branch_id'];
+            $_SESSION['profile_pic'] = $user['profile_pic'];
+            $user_id = $user['id'];
+            $user_full_name = $user['full_name'];
+            $user_role = $user['role'];
+            $user_branch_id = $user['branch_id'];
+            $profile_pic = $user['profile_pic'];
         }
-    }
+    } catch (Exception $e) {}
 }
 
-// If still no user_id, redirect to login
 if ($user_id <= 0) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-// ================================================================
-// GET DATABASE CONNECTION
-// ================================================================
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
@@ -98,63 +81,47 @@ try {
 }
 
 // ================================================================
-// GET ADMIN CONTACT NUMBERS
+// ADMIN CONTACTS
 // ================================================================
 $admin_phones = [];
 try {
-    $stmt = $db->prepare("
-        SELECT phone FROM users 
-        WHERE role = 'admin' AND branch_id = ? AND status = 'active'
-        ORDER BY id ASC
-    ");
+    $stmt = $db->prepare("SELECT phone FROM users WHERE role = 'admin' AND branch_id = ? AND status = 'active' ORDER BY id ASC");
     $stmt->execute([$user_branch_id]);
     $admin_phones = $stmt->fetchAll(PDO::FETCH_COLUMN);
-} catch (Exception $e) {
-    $admin_phones = [];
-}
+} catch (Exception $e) { $admin_phones = []; }
 
-// ================================================================
-// GET BRANCH PHONE
-// ================================================================
 $branch_phone = '';
 try {
     $stmt = $db->prepare("SELECT phone FROM branches WHERE id = ?");
     $stmt->execute([$user_branch_id]);
     $branch_phone = $stmt->fetchColumn();
-} catch (Exception $e) {
-    $branch_phone = '';
-}
+} catch (Exception $e) { $branch_phone = ''; }
 
 $admin_phones_display = !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001');
 
 // ================================================================
-// GET PARAMETERS
+// PARAMETERS
 // ================================================================
 $branch_id = isset($_GET['branch']) ? (int)$_GET['branch'] : 0;
 $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
-// ================================================================
-// LOGO PATH
-// ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 $logo_fallback = 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60"><rect width="60" height="60" rx="12" fill="#059669"/><text x="30" y="38" text-anchor="middle" fill="white" font-size="28" font-weight="bold" font-family="Arial">B</text></svg>');
 
 // ================================================================
-// GET BRANCH NAME
+// BRANCH NAME
 // ================================================================
 $branch_name = 'All Branches';
 if ($branch_id > 0) {
     $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
     $stmt->execute([$branch_id]);
     $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($branch_data) {
-        $branch_name = $branch_data['name'];
-    }
+    if ($branch_data) $branch_name = $branch_data['name'];
 }
 
 // ================================================================
-// BUILD DATE FILTER
+// DATE FILTER
 // ================================================================
 $date_filter = "";
 if (!empty($date_from) && !empty($date_to)) {
@@ -165,40 +132,22 @@ if (!empty($date_from) && !empty($date_to)) {
     $date_filter = " AND pb.created_at <= '$date_to 23:59:59'";
 }
 
-// ================================================================
-// BRANCH FILTER - Using visits table to get branch
-// ================================================================
 $branch_filter = "";
 if ($branch_id > 0) {
     $branch_filter = " AND v.branch_id = $branch_id";
 }
 
 // ================================================================
-// FETCH CASHIER DATA - Using bills table
+// FETCH DATA
 // ================================================================
-
-// Total Revenue
-$stmt = $db->query("
-    SELECT COALESCE(SUM(b.total_amount), 0) as total 
-    FROM bills b
-    LEFT JOIN visits v ON b.visit_id = v.id
-    WHERE b.status = 'paid' $branch_filter $date_filter
-");
+$stmt = $db->query("SELECT COALESCE(SUM(b.total_amount), 0) as total FROM bills b LEFT JOIN visits v ON b.visit_id = v.id WHERE b.status = 'paid' $branch_filter $date_filter");
 $total_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Total Expenses (discounts)
-$stmt = $db->query("
-    SELECT COALESCE(SUM(b.total_discount), 0) as total 
-    FROM bills b
-    LEFT JOIN visits v ON b.visit_id = v.id
-    WHERE b.status = 'paid' $branch_filter $date_filter
-");
+$stmt = $db->query("SELECT COALESCE(SUM(b.total_discount), 0) as total FROM bills b LEFT JOIN visits v ON b.visit_id = v.id WHERE b.status = 'paid' $branch_filter $date_filter");
 $total_expenses = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Total Profit = Revenue - Expenses
 $total_profit = $total_revenue - $total_expenses;
 
-// All bills with details - USING bills table
 $stmt = $db->query("
     SELECT b.*, p.full_name as patient_name, u.full_name as cashier_name,
            v.branch_id, br.name as branch_name
@@ -212,10 +161,8 @@ $stmt = $db->query("
 ");
 $cashier_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Patient totals
 $stmt = $db->query("
-    SELECT 
-        p.id, p.full_name, p.patient_id,
+    SELECT p.id, p.full_name, p.patient_id,
         COUNT(b.id) as bill_count,
         COALESCE(SUM(b.total_amount), 0) as total_paid,
         COALESCE(SUM(b.total_discount), 0) as total_discount
@@ -230,7 +177,6 @@ $stmt = $db->query("
 ");
 $patient_totals = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Count bills by status
 $stmt = $db->query("
     SELECT 
         SUM(CASE WHEN b.status = 'paid' THEN 1 ELSE 0 END) as paid_count,
@@ -245,34 +191,21 @@ $stmt = $db->query("
 $bill_stats = $stmt->fetch(PDO::FETCH_ASSOC);
 
 // ================================================================
-// FUNCTION TO GET STATUS LABEL
+// HELPERS
 // ================================================================
 function getStatusLabel($status) {
     $labels = [
-        'pending' => 'Pending',
-        'paid' => 'Paid',
-        'partial' => 'Partial',
-        'cancelled' => 'Cancelled',
-        'completed' => 'Completed',
-        'confirmed' => 'Confirmed',
-        'dispensed' => 'Dispensed',
-        'in_progress' => 'In Progress',
-        'scheduled' => 'Scheduled',
-        'assigned' => 'Assigned'
+        'pending' => 'Pending', 'paid' => 'Paid', 'partial' => 'Partial',
+        'cancelled' => 'Cancelled', 'completed' => 'Completed',
+        'confirmed' => 'Confirmed', 'dispensed' => 'Dispensed',
+        'in_progress' => 'In Progress', 'scheduled' => 'Scheduled', 'assigned' => 'Assigned'
     ];
     return $labels[$status] ?? ucfirst($status);
 }
 
-// ================================================================
-// FORMAT CURRENCY
-// ================================================================
 function formatCurrency($amount) {
     return 'TSh ' . number_format($amount, 0);
 }
-
-// ================================================================
-// DISPLAY HTML REPORT (PRINTABLE)
-// ================================================================
 
 header('Content-Type: text/html; charset=utf-8');
 ?>
@@ -286,13 +219,9 @@ header('Content-Type: text/html; charset=utf-8');
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
         /* ================================================================
-           PRINT STYLES - OPTIMIZED FOR PDF
+           PRINT-OPTIMIZED STYLES - STANDALONE PAGE (NO shared header/sidebar)
            ================================================================ */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
             font-family: 'Segoe UI', Arial, sans-serif;
@@ -311,9 +240,7 @@ header('Content-Type: text/html; charset=utf-8');
             position: relative;
         }
         
-        /* ================================================================
-           HEADER WITH LOGO - GREEN THEME LIKE EXPENSES
-           ================================================================ */
+        /* HEADER */
         .report-header {
             background: linear-gradient(135deg, #059669, #047857);
             color: white;
@@ -332,10 +259,8 @@ header('Content-Type: text/html; charset=utf-8');
         .report-header::before {
             content: '';
             position: absolute;
-            top: -50%;
-            right: -10%;
-            width: 300px;
-            height: 300px;
+            top: -50%; right: -10%;
+            width: 300px; height: 300px;
             background: rgba(255,255,255,0.05);
             border-radius: 50%;
             pointer-events: none;
@@ -350,8 +275,7 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .report-header .brand .logo-container {
-            width: 60px;
-            height: 60px;
+            width: 60px; height: 60px;
             border-radius: 12px;
             background: rgba(255,255,255,0.15);
             display: flex;
@@ -363,8 +287,7 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .report-header .brand .logo-container img {
-            width: 100%;
-            height: 100%;
+            width: 100%; height: 100%;
             object-fit: contain;
             padding: 4px;
         }
@@ -402,7 +325,6 @@ header('Content-Type: text/html; charset=utf-8');
             color: white;
         }
         
-        /* Admin Contact Line */
         .admin-contact-line {
             display: flex;
             justify-content: center;
@@ -423,13 +345,9 @@ header('Content-Type: text/html; charset=utf-8');
             gap: 4px;
         }
         
-        .admin-contact-line i {
-            color: rgba(255,255,255,0.6);
-        }
+        .admin-contact-line i { color: rgba(255,255,255,0.6); }
         
-        /* ================================================================
-           SUMMARY CARDS - GREEN THEME
-           ================================================================ */
+        /* SUMMARY CARDS */
         .summary-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -470,9 +388,7 @@ header('Content-Type: text/html; charset=utf-8');
             color: #94A3B8;
         }
         
-        /* ================================================================
-           SECTION TITLES
-           ================================================================ */
+        /* SECTION TITLES */
         .section-title {
             background: #F1F5F9;
             padding: 8px 14px;
@@ -486,13 +402,9 @@ header('Content-Type: text/html; charset=utf-8');
             gap: 8px;
         }
         
-        .section-title i {
-            color: #059669;
-        }
+        .section-title i { color: #059669; }
         
-        /* ================================================================
-           FILTER INFO
-           ================================================================ */
+        /* FILTER INFO */
         .filter-info {
             background: #F8FAFC;
             padding: 8px 14px;
@@ -506,19 +418,10 @@ header('Content-Type: text/html; charset=utf-8');
             gap: 16px;
         }
         
-        .filter-info span {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
+        .filter-info span { display: inline-flex; align-items: center; gap: 4px; }
+        .filter-info i { color: #059669; }
         
-        .filter-info i {
-            color: #059669;
-        }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
+        /* BADGES */
         .badge {
             display: inline-block;
             padding: 2px 12px;
@@ -535,9 +438,7 @@ header('Content-Type: text/html; charset=utf-8');
         .badge-purple { background: #7C3AED; }
         .badge-secondary { background: #64748B; }
         
-        /* ================================================================
-           DATA TABLE
-           ================================================================ */
+        /* DATA TABLE */
         .data-table {
             width: 100%;
             border-collapse: collapse;
@@ -562,13 +463,8 @@ header('Content-Type: text/html; charset=utf-8');
             vertical-align: middle;
         }
         
-        .data-table tr:last-child td {
-            border-bottom: none;
-        }
-        
-        .data-table tr:hover td {
-            background: #F8FAFC;
-        }
+        .data-table tr:last-child td { border-bottom: none; }
+        .data-table tr:hover td { background: #F8FAFC; }
         
         .text-right { text-align: right; }
         .text-green { color: #059669; }
@@ -576,9 +472,7 @@ header('Content-Type: text/html; charset=utf-8');
         .font-mono { font-family: monospace; }
         .font-bold { font-weight: 700; }
         
-        /* ================================================================
-           OFFICIAL STAMP - LIKE EXPENSES PDF
-           ================================================================ */
+        /* OFFICIAL STAMP */
         .official-stamp {
             margin-top: 20px;
             padding-top: 14px;
@@ -595,9 +489,7 @@ header('Content-Type: text/html; charset=utf-8');
             color: #64748B;
         }
         
-        .official-stamp .stamp-left strong {
-            color: #1E293B;
-        }
+        .official-stamp .stamp-left strong { color: #1E293B; }
         
         .official-stamp .stamp-box {
             text-align: center;
@@ -634,9 +526,7 @@ header('Content-Type: text/html; charset=utf-8');
             margin-top: 2px;
         }
         
-        /* ================================================================
-           NO DATA
-           ================================================================ */
+        /* NO DATA */
         .no-data {
             text-align: center;
             color: #94A3B8;
@@ -644,15 +534,9 @@ header('Content-Type: text/html; charset=utf-8');
             font-style: italic;
         }
         
-        .no-data i {
-            font-size: 24px;
-            display: block;
-            margin-bottom: 8px;
-        }
+        .no-data i { font-size: 24px; display: block; margin-bottom: 8px; }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
+        /* FOOTER */
         .report-footer {
             text-align: center;
             font-size: 10px;
@@ -662,9 +546,7 @@ header('Content-Type: text/html; charset=utf-8');
             border-top: 1px solid #E2E8F0;
         }
         
-        /* ================================================================
-           PRINT BUTTON - HIDDEN IN PRINT
-           ================================================================ */
+        /* PRINT BUTTONS */
         .print-btn-container {
             text-align: center;
             margin-bottom: 16px;
@@ -680,6 +562,7 @@ header('Content-Type: text/html; charset=utf-8');
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s;
+            font-family: inherit;
         }
         
         .print-btn:hover {
@@ -688,9 +571,7 @@ header('Content-Type: text/html; charset=utf-8');
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
         
-        .print-btn i {
-            margin-right: 8px;
-        }
+        .print-btn i { margin-right: 8px; }
         
         .pdf-note {
             text-align: center;
@@ -699,13 +580,9 @@ header('Content-Type: text/html; charset=utf-8');
             margin-bottom: 16px;
         }
         
-        .pdf-note i {
-            color: #DC2626;
-        }
+        .pdf-note i { color: #DC2626; }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
+        /* RESPONSIVE */
         @media (max-width: 768px) {
             .container { padding: 16px; }
             .summary-grid { grid-template-columns: 1fr 1fr; }
@@ -721,22 +598,11 @@ header('Content-Type: text/html; charset=utf-8');
             .summary-grid { grid-template-columns: 1fr; }
         }
         
-        /* ================================================================
-           PRINT STYLES
-           ================================================================ */
+        /* PRINT STYLES */
         @media print {
-            body {
-                background: white !important;
-                padding: 0 !important;
-            }
-            .container {
-                box-shadow: none !important;
-                border-radius: 0 !important;
-                padding: 20px !important;
-            }
-            .print-btn-container, .pdf-note, .no-print {
-                display: none !important;
-            }
+            body { background: white !important; padding: 0 !important; }
+            .container { box-shadow: none !important; border-radius: 0 !important; padding: 20px !important; }
+            .print-btn-container, .pdf-note, .no-print { display: none !important; }
             .report-header {
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
@@ -756,9 +622,7 @@ header('Content-Type: text/html; charset=utf-8');
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
-            .summary-card {
-                border-color: #ddd !important;
-            }
+            .summary-card { border-color: #ddd !important; }
             .official-stamp .stamp-box {
                 background: #D1FAE5 !important;
                 -webkit-print-color-adjust: exact !important;
@@ -776,9 +640,7 @@ header('Content-Type: text/html; charset=utf-8');
 
 <div class="container">
 
-    <!-- ================================================================ -->
-    <!-- PRINT BUTTON -->
-    <!-- ================================================================ -->
+    <!-- PRINT BUTTONS -->
     <div class="print-btn-container no-print">
         <button onclick="window.print()" class="print-btn">
             <i class="fas fa-file-pdf"></i> Save as PDF / Print
@@ -790,17 +652,14 @@ header('Content-Type: text/html; charset=utf-8');
     
     <div class="pdf-note no-print">
         <i class="fas fa-info-circle"></i> 
-        Click <strong>"Save as PDF / Print"</strong> and select <strong>"Save as PDF"</strong> as the destination.
+        Click <strong>"Save as PDF / Print"</strong> and select <strong>"Save as PDF"</strong> as destination.
     </div>
 
-    <!-- ================================================================ -->
-    <!-- HEADER WITH LOGO - GREEN THEME LIKE EXPENSES -->
-    <!-- ================================================================ -->
+    <!-- HEADER -->
     <div class="report-header">
         <div class="brand">
             <div class="logo-container">
-                <img src="<?= $logo_url ?>" 
-                     alt="Braick Dispensary Logo" 
+                <img src="<?= $logo_url ?>" alt="Braick Logo" 
                      onerror="this.onerror=null; this.src='<?= $logo_fallback ?>'">
             </div>
             <div class="logo-text">
@@ -815,24 +674,21 @@ header('Content-Type: text/html; charset=utf-8');
         </div>
     </div>
     
-    <!-- Admin Contact Line -->
+    <!-- ADMIN CONTACT LINE -->
     <div class="admin-contact-line">
         <span><i class="fas fa-phone-alt"></i> Admin: <?= htmlspecialchars($admin_phones_display) ?></span>
         <span><i class="fas fa-envelope"></i> <?= htmlspecialchars($user_branch_name) ?> Branch</span>
         <span><i class="fas fa-user"></i> Generated by: <?= htmlspecialchars($user_full_name) ?></span>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FILTER INFO -->
-    <!-- ================================================================ -->
     <div class="filter-info">
         <span><i class="fas fa-store"></i> Branch: <strong><?= htmlspecialchars($branch_name) ?></strong></span>
         <?php if (!empty($date_from) || !empty($date_to)): ?>
             <span><i class="fas fa-calendar"></i> Period: 
                 <strong>
                     <?= !empty($date_from) ? date('M d, Y', strtotime($date_from)) : 'Start' ?>
-                    -
-                    <?= !empty($date_to) ? date('M d, Y', strtotime($date_to)) : 'End' ?>
+                    - <?= !empty($date_to) ? date('M d, Y', strtotime($date_to)) : 'End' ?>
                 </strong>
             </span>
         <?php else: ?>
@@ -841,9 +697,7 @@ header('Content-Type: text/html; charset=utf-8');
         <span><i class="fas fa-file-invoice"></i> Total Bills: <strong><?= number_format($bill_stats['total_count'] ?? 0) ?></strong></span>
     </div>
 
-    <!-- ================================================================ -->
     <!-- SUMMARY CARDS -->
-    <!-- ================================================================ -->
     <div class="summary-grid">
         <div class="summary-card">
             <div class="number green"><?= formatCurrency($total_revenue) ?></div>
@@ -870,9 +724,7 @@ header('Content-Type: text/html; charset=utf-8');
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- BILLS TABLE -->
-    <!-- ================================================================ -->
     <div class="section-title">
         <i class="fas fa-file-invoice"></i> All Bills (<?= count($cashier_bills) ?>)
     </div>
@@ -883,10 +735,10 @@ header('Content-Type: text/html; charset=utf-8');
                 <tr>
                     <th>Bill #</th>
                     <th>Patient</th>
-                    <th style="text-align:right;">Total</th>
-                    <th style="text-align:right;">Paid</th>
-                    <th style="text-align:right;">Balance</th>
-                    <th style="text-align:right;">Discount</th>
+                    <th class="text-right">Total</th>
+                    <th class="text-right">Paid</th>
+                    <th class="text-right">Balance</th>
+                    <th class="text-right">Discount</th>
                     <th>Status</th>
                     <th>Branch</th>
                     <th>Date</th>
@@ -894,11 +746,7 @@ header('Content-Type: text/html; charset=utf-8');
             </thead>
             <tbody>
                 <?php 
-                $grand_total = 0;
-                $grand_paid = 0;
-                $grand_balance = 0;
-                $grand_discount = 0;
-                
+                $grand_total = $grand_paid = $grand_balance = $grand_discount = 0;
                 foreach ($cashier_bills as $bill):
                     $grand_total += $bill['total_amount'] ?? 0;
                     $grand_paid += $bill['paid_amount'] ?? 0;
@@ -908,10 +756,10 @@ header('Content-Type: text/html; charset=utf-8');
                     <tr>
                         <td class="font-mono" style="font-size:9px;"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></td>
                         <td><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></td>
-                        <td style="text-align:right;font-weight:bold;"><?= formatCurrency($bill['total_amount'] ?? 0) ?></td>
-                        <td style="text-align:right;color:#059669;"><?= formatCurrency($bill['paid_amount'] ?? 0) ?></td>
-                        <td style="text-align:right;color:#DC2626;"><?= formatCurrency($bill['balance'] ?? 0) ?></td>
-                        <td style="text-align:right;"><?= formatCurrency($bill['total_discount'] ?? 0) ?></td>
+                        <td class="text-right font-bold"><?= formatCurrency($bill['total_amount'] ?? 0) ?></td>
+                        <td class="text-right text-green"><?= formatCurrency($bill['paid_amount'] ?? 0) ?></td>
+                        <td class="text-right text-red"><?= formatCurrency($bill['balance'] ?? 0) ?></td>
+                        <td class="text-right"><?= formatCurrency($bill['total_discount'] ?? 0) ?></td>
                         <td>
                             <span class="badge badge-<?= $bill['status'] === 'paid' ? 'success' : ($bill['status'] === 'pending' ? 'warning' : ($bill['status'] === 'partial' ? 'warning' : 'danger')) ?>">
                                 <?= getStatusLabel($bill['status'] ?? 'pending') ?>
@@ -924,11 +772,11 @@ header('Content-Type: text/html; charset=utf-8');
             </tbody>
             <tfoot>
                 <tr style="background:#F8FAFC;font-weight:700;border-top:2px solid #059669;">
-                    <td colspan="2" style="text-align:right;">GRAND TOTAL</td>
-                    <td style="text-align:right;"><?= formatCurrency($grand_total) ?></td>
-                    <td style="text-align:right;color:#059669;"><?= formatCurrency($grand_paid) ?></td>
-                    <td style="text-align:right;color:#DC2626;"><?= formatCurrency($grand_balance) ?></td>
-                    <td style="text-align:right;"><?= formatCurrency($grand_discount) ?></td>
+                    <td colspan="2" class="text-right">GRAND TOTAL</td>
+                    <td class="text-right"><?= formatCurrency($grand_total) ?></td>
+                    <td class="text-right text-green"><?= formatCurrency($grand_paid) ?></td>
+                    <td class="text-right text-red"><?= formatCurrency($grand_balance) ?></td>
+                    <td class="text-right"><?= formatCurrency($grand_discount) ?></td>
                     <td colspan="3"></td>
                 </tr>
             </tfoot>
@@ -940,9 +788,7 @@ header('Content-Type: text/html; charset=utf-8');
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- PATIENT TOTALS -->
-    <!-- ================================================================ -->
     <div class="section-title" style="margin-top:24px;">
         <i class="fas fa-users"></i> Patient Totals (<?= count($patient_totals) ?>)
     </div>
@@ -953,9 +799,9 @@ header('Content-Type: text/html; charset=utf-8');
                 <tr>
                     <th>Patient</th>
                     <th>ID</th>
-                    <th style="text-align:right;"># Bills</th>
-                    <th style="text-align:right;">Total Paid</th>
-                    <th style="text-align:right;">Total Discount</th>
+                    <th class="text-right"># Bills</th>
+                    <th class="text-right">Total Paid</th>
+                    <th class="text-right">Total Discount</th>
                 </tr>
             </thead>
             <tbody>
@@ -963,9 +809,9 @@ header('Content-Type: text/html; charset=utf-8');
                     <tr>
                         <td><strong><?= htmlspecialchars($pt['full_name']) ?></strong></td>
                         <td><?= htmlspecialchars($pt['patient_id']) ?></td>
-                        <td style="text-align:right;"><?= number_format($pt['bill_count']) ?></td>
-                        <td style="text-align:right;color:#059669;font-weight:bold;"><?= formatCurrency($pt['total_paid']) ?></td>
-                        <td style="text-align:right;"><?= formatCurrency($pt['total_discount']) ?></td>
+                        <td class="text-right"><?= number_format($pt['bill_count']) ?></td>
+                        <td class="text-right text-green font-bold"><?= formatCurrency($pt['total_paid']) ?></td>
+                        <td class="text-right"><?= formatCurrency($pt['total_discount']) ?></td>
                     </tr>
                 <?php endforeach; ?>
             </tbody>
@@ -977,9 +823,7 @@ header('Content-Type: text/html; charset=utf-8');
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- OFFICIAL STAMP - LIKE EXPENSES PDF -->
-    <!-- ================================================================ -->
+    <!-- OFFICIAL STAMP -->
     <div class="official-stamp">
         <div class="stamp-left">
             <span>Generated by: <strong><?= htmlspecialchars($user_full_name) ?></strong></span>
@@ -996,9 +840,7 @@ header('Content-Type: text/html; charset=utf-8');
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <div class="report-footer">
         <strong>Braick Dispensary</strong> Management System 
         <span style="margin:0 8px;color:#CBD5E1;">|</span>
@@ -1012,24 +854,14 @@ header('Content-Type: text/html; charset=utf-8');
 </div>
 
 <script>
-    // Auto print if URL has ?print parameter
     if (window.location.search.includes('print=1')) {
-        setTimeout(function() {
-            window.print();
-        }, 500);
+        setTimeout(function() { window.print(); }, 500);
     }
     
-    console.log('%c💰 Braick Dispensary - Export Cashier Report (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c💰 Braick - Export Cashier Report', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c💵 Total Revenue: <?= formatCurrency($total_revenue) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📋 Total Expenses: <?= formatCurrency($total_expenses) ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c📈 Total Profit: <?= formatCurrency($total_profit) ?>', 'font-size:13px; color:#0D9488;');
-    console.log('%c📄 Total Bills: <?= number_format($bill_stats['total_count'] ?? 0) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Using: bills table (NOT patient_bills)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Design like expenses with logo & official stamp', 'font-size:13px; color:#34D399;');
-    console.log('%c📞 Admin Contacts: <?= htmlspecialchars($admin_phones_display) ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c📋 Total Bills: <?= number_format($bill_stats['total_count'] ?? 0) ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

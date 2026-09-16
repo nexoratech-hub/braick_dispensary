@@ -3,6 +3,9 @@
 // FILE: frontend/pages/admin/edit_inventory.php
 // SUPER ADMIN - EDIT INVENTORY ITEM
 // BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
+// ✅ Uses SHARED header & sidebar
+// ✅ Page-specific CSS only
+// ✅ Dark mode inatumia header toggle
 // ================================================================
 
 // ================================================================
@@ -43,6 +46,7 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
@@ -251,566 +255,477 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE HEADERS
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
 include_once '../../components/admin_sidebar.php';
 ?>
 
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Edit Inventory - Braick Dispensary</title>
-    
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
-    <style>
-        :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #3B82F6;
-            --primary-bg: #EFF6FF;
-            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            --success: #059669;
-            --success-bg: #D1FAE5;
-            --danger: #DC2626;
-            --danger-bg: #FEE2E2;
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            --bg-body: #F0F4F8;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
-            --radius: 12px;
-            --radius-lg: 18px;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --primary: #3B82F6;
-            --primary-bg: #1E3A5F;
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 var(--radius) var(--radius) 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-            max-width: 900px;
-        }
-        
-        .page-header {
-            background: var(--primary-gradient);
-            border-radius: var(--radius-lg);
-            padding: 28px 36px;
-            margin-bottom: 28px;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.25);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .page-header .page-title {
-            color: white;
-            font-size: 1.8rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
-        .page-header .header-badge {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: var(--radius);
-            font-weight: 500;
-            font-size: 0.82rem;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        
-        .form-card {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 2px solid var(--border-color);
-            padding: 28px 32px;
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-            margin-bottom: 24px;
-        }
-        
-        .form-card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .form-group {
-            margin-bottom: 16px;
-        }
-        
-        .form-group label {
-            display: block;
-            font-size: 0.75rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            margin-bottom: 4px;
-        }
-        
-        .form-group .required {
-            color: #DC2626;
-            font-weight: 700;
-        }
-        
-        .form-control {
-            width: 100%;
-            padding: 10px 14px;
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            font-size: 0.85rem;
-            color: var(--text-primary);
-            background: var(--bg-body);
-            transition: all 0.3s ease;
-            outline: none;
-        }
-        
-        .form-control:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
-        }
-        
-        .form-control:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-        
-        .form-control::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .form-hint {
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-            margin-top: 4px;
-        }
-        
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 16px;
-        }
-        
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            padding: 10px 20px;
-            border-radius: var(--radius);
-            font-weight: 600;
-            font-size: 0.85rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .btn:hover {
-            transform: translateY(-3px);
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none !important;
-            box-shadow: none !important;
-        }
-        
-        .btn-primary {
-            background: var(--primary-gradient);
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background: linear-gradient(135deg, #0A4CA8, #083C8A);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-primary);
-            border: 2px solid var(--border-color);
-        }
-        
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.15);
-        }
-        
-        .alert {
-            padding: 14px 20px;
-            border-radius: var(--radius);
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            border: 2px solid transparent;
-        }
-        
-        .alert-success {
-            background: var(--success-bg);
-            border-color: var(--success);
-            color: #065F46;
-        }
-        
-        .alert-danger {
-            background: var(--danger-bg);
-            border-color: var(--danger);
-            color: #991B1B;
-        }
-        
-        [data-theme="dark"] .alert-success {
-            background: #1A3A2A;
-            color: #34D399;
-            border-color: #059669;
-        }
-        
-        [data-theme="dark"] .alert-danger {
-            background: #3A1A1A;
-            color: #F87171;
-            border-color: #DC2626;
-        }
-        
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand {
-            color: var(--primary);
-            font-weight: 500;
-        }
-        
-        .grid { display: grid; }
-        .grid-cols-2 { grid-template-columns: 1fr 1fr; }
-        .md\:grid-cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
-        .gap-3 { gap: 12px; }
-        .gap-4 { gap: 16px; }
-        .mt-4 { margin-top: 16px; }
-        .pt-4 { padding-top: 16px; }
-        .mb-4 { margin-bottom: 16px; }
-        .p-3 { padding: 12px; }
-        .text-center { text-align: center; }
-        .text-sm { font-size: 0.75rem; }
-        .text-2xl { font-size: 1.5rem; }
-        .text-lg { font-size: 1.125rem; }
-        .font-bold { font-weight: 700; }
-        .font-semibold { font-weight: 600; }
-        .text-primary { color: var(--primary); }
-        .text-blue-600 { color: #0B5ED7; }
-        .text-green-600 { color: #059669; }
-        .text-purple-600 { color: #7C3AED; }
-        .text-orange-600 { color: #D97706; }
-        .text-gray-500 { color: var(--text-secondary); }
-        .bg-blue-50 { background: #EFF6FF; }
-        .bg-green-50 { background: #D1FAE5; }
-        .bg-purple-50 { background: #F5F3FF; }
-        .bg-orange-50 { background: #FFFBEB; }
-        
-        [data-theme="dark"] .bg-blue-50 { background: #1E3A5F; }
-        [data-theme="dark"] .bg-green-50 { background: #1A3A2A; }
-        [data-theme="dark"] .bg-purple-50 { background: #2D1B4E; }
-        [data-theme="dark"] .bg-orange-50 { background: #3D2E0A; }
-        
-        .border-t-2 { border-top-width: 2px; }
-        .border-gray-200 { border-color: var(--border-color); }
-        .dark\:border-gray-700 { border-color: #334155; }
-        .flex { display: flex; }
-        .flex-wrap { flex-wrap: wrap; }
-        .mr-2 { margin-right: 8px; }
-        
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .form-card { padding: 16px; }
-            .form-row { grid-template-columns: 1fr; }
-            .grid-cols-2 { grid-template-columns: 1fr; }
-            .md\:grid-cols-4 { grid-template-columns: 1fr 1fr; }
-        }
-        
-        @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .page-header { flex-direction: column; align-items: flex-start !important; }
-            .md\:grid-cols-4 { grid-template-columns: 1fr 1fr; }
-        }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        .spinner {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
-        
-        @keyframes spin { to { transform: rotate(360deg); } }
-    </style>
-</head>
-<body>
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC CSS -->
+<!-- ================================================================ -->
+<style>
+    /* ================================================================
+       PAGE VARIABLES
+       ================================================================ */
+    :root {
+        --inv-primary: #0B5ED7;
+        --inv-primary-dark: #0A4CA8;
+        --inv-primary-light: #3B82F6;
+        --inv-primary-bg: #EFF6FF;
+        --inv-primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        --inv-success: #059669;
+        --inv-success-bg: #D1FAE5;
+        --inv-danger: #DC2626;
+        --inv-danger-bg: #FEE2E2;
+        --inv-warning: #D97706;
+        --inv-warning-bg: #FEF3C7;
+        --inv-purple: #7C3AED;
+        --inv-purple-bg: #F5F3FF;
+        --inv-bg-body: #F0F4F8;
+        --inv-bg-card: #FFFFFF;
+        --inv-text-primary: #1E293B;
+        --inv-text-secondary: #64748B;
+        --inv-border-color: #E2E8F0;
+        --inv-radius: 12px;
+        --inv-radius-lg: 18px;
+        --inv-shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+        --inv-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+        --inv-shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
+    }
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+    [data-theme="dark"] {
+        --inv-bg-body: #0F172A;
+        --inv-bg-card: #1E293B;
+        --inv-text-primary: #F1F5F9;
+        --inv-text-secondary: #94A3B8;
+        --inv-border-color: #334155;
+        --inv-primary: #3B82F6;
+        --inv-primary-bg: #1E3A5F;
+        --inv-shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+        --inv-shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
+    }
+
+    /* ================================================================
+       DARK MODE - PAGE YOTE
+       ================================================================ */
+    html[data-theme="dark"] body {
+        background: #0F172A !important;
+    }
+
+    html[data-theme="dark"] .main-content {
+        background: #0F172A !important;
+        color: #F1F5F9;
+    }
+
+    /* ================================================================
+       PAGE HEADER
+       ================================================================ */
+    .page-header-custom {
+        background: var(--inv-primary-gradient);
+        border-radius: var(--inv-radius-lg);
+        padding: 28px 36px;
+        margin-bottom: 28px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 8px 32px rgba(11, 94, 215, 0.25);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .page-header-custom::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -20%;
+        width: 300px;
+        height: 300px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .page-header-custom .page-title {
+        color: white;
+        font-size: 1.8rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+    }
+
+    .page-header-custom .page-title i { font-size: 2rem; opacity: 0.9; }
+
+    .page-header-custom .page-subtitle {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.95rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 6px;
+    }
+
+    .page-header-custom .role-badge-display {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        backdrop-filter: blur(4px);
+    }
+
+    .page-header-custom .header-badge {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .page-header-custom .btn-outline-light {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.2);
+        padding: 8px 18px;
+        border-radius: var(--inv-radius);
+        font-weight: 500;
+        font-size: 0.82rem;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        backdrop-filter: blur(4px);
+        position: relative;
+        z-index: 1;
+        transition: all 0.3s ease;
+    }
+
+    .page-header-custom .btn-outline-light:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        color: white;
+    }
+
+    /* ================================================================
+       FORM CARD
+       ================================================================ */
+    .form-card-custom {
+        background: var(--inv-bg-card);
+        border-radius: var(--inv-radius-lg);
+        border: 2px solid var(--inv-border-color);
+        padding: 28px 32px;
+        transition: all 0.3s ease;
+        box-shadow: var(--inv-shadow-sm);
+        margin-bottom: 24px;
+        max-width: 900px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    .form-card-custom:hover {
+        border-color: var(--inv-primary);
+        box-shadow: var(--inv-shadow-md);
+    }
+
+    .form-card-custom .form-title {
+        font-size: 1.125rem;
+        font-weight: 600;
+        color: var(--inv-primary);
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    /* ================================================================
+       FORM CONTROLS
+       ================================================================ */
+    .form-group-custom {
+        margin-bottom: 16px;
+    }
+
+    .form-group-custom label {
+        display: block;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--inv-text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 4px;
+    }
+
+    .form-group-custom .required {
+        color: #DC2626;
+        font-weight: 700;
+    }
+
+    .form-control-custom {
+        width: 100%;
+        padding: 10px 14px;
+        border: 2px solid var(--inv-border-color);
+        border-radius: var(--inv-radius);
+        font-size: 0.85rem;
+        color: var(--inv-text-primary);
+        background: var(--inv-bg-body);
+        transition: all 0.3s ease;
+        outline: none;
+        font-family: inherit;
+    }
+
+    .form-control-custom:focus {
+        border-color: var(--inv-primary);
+        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
+    }
+
+    .form-control-custom:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .form-control-custom::placeholder {
+        color: var(--inv-text-secondary);
+        opacity: 0.7;
+    }
+
+    [data-theme="dark"] .form-control-custom option {
+        background: #1E293B;
+        color: #F1F5F9;
+    }
+
+    .form-hint-custom {
+        font-size: 0.65rem;
+        color: var(--inv-text-secondary);
+        margin-top: 4px;
+    }
+
+    .form-row-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+    }
+
+    /* ================================================================
+       BUTTONS
+       ================================================================ */
+    .btn-custom {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 10px 20px;
+        border-radius: var(--inv-radius);
+        font-weight: 600;
+        font-size: 0.85rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+        box-shadow: var(--inv-shadow-sm);
+        font-family: inherit;
+    }
+
+    .btn-custom:hover {
+        transform: translateY(-3px);
+        box-shadow: var(--inv-shadow-lg);
+    }
+
+    .btn-custom:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none !important;
+        box-shadow: none !important;
+    }
+
+    .btn-primary-custom {
+        background: var(--inv-primary-gradient);
+        color: white;
+    }
+
+    .btn-primary-custom:hover {
+        background: linear-gradient(135deg, #0A4CA8, #083C8A);
+        box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
+        color: white;
+    }
+
+    .btn-outline-custom {
+        background: transparent;
+        color: var(--inv-text-primary);
+        border: 2px solid var(--inv-border-color);
+    }
+
+    .btn-outline-custom:hover {
+        background: var(--inv-bg-body);
+        border-color: var(--inv-primary);
+        color: var(--inv-primary);
+        box-shadow: 0 4px 16px rgba(11, 94, 215, 0.15);
+    }
+
+    /* ================================================================
+       ALERTS
+       ================================================================ */
+    .alert-custom {
+        padding: 14px 20px;
+        border-radius: var(--inv-radius);
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border: 2px solid transparent;
+        max-width: 900px;
+        margin-left: auto;
+        margin-right: auto;
+        animation: slideDown 0.3s ease;
+    }
+
+    @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .alert-custom.alert-success {
+        background: var(--inv-success-bg);
+        border-color: var(--inv-success);
+        color: #065F46;
+    }
+
+    .alert-custom.alert-danger {
+        background: var(--inv-danger-bg);
+        border-color: var(--inv-danger);
+        color: #991B1B;
+    }
+
+    [data-theme="dark"] .alert-custom.alert-success {
+        background: #1A3A2A;
+        color: #34D399;
+        border-color: #059669;
+    }
+
+    [data-theme="dark"] .alert-custom.alert-danger {
+        background: #3A1A1A;
+        color: #F87171;
+        border-color: #DC2626;
+    }
+
+    /* ================================================================
+       STAT CARDS
+       ================================================================ */
+    .stat-card-custom {
+        text-align: center;
+        padding: 12px;
+        border-radius: var(--inv-radius);
+        transition: all 0.3s ease;
+    }
+
+    .stat-card-custom:hover {
+        transform: translateY(-2px);
+    }
+
+    .stat-card-custom.blue { background: #EFF6FF; }
+    .stat-card-custom.green { background: #D1FAE5; }
+    .stat-card-custom.purple { background: #F5F3FF; }
+    .stat-card-custom.orange { background: #FFFBEB; }
+
+    [data-theme="dark"] .stat-card-custom.blue { background: #1E3A5F; }
+    [data-theme="dark"] .stat-card-custom.green { background: #1A3A2A; }
+    [data-theme="dark"] .stat-card-custom.purple { background: #2D1B4E; }
+    [data-theme="dark"] .stat-card-custom.orange { background: #3D2E0A; }
+
+    .stat-card-custom .stat-value-custom {
+        font-size: 1.5rem;
+        font-weight: 700;
+        margin: 0;
+    }
+
+    .stat-card-custom.blue .stat-value-custom { color: #0B5ED7; }
+    .stat-card-custom.green .stat-value-custom { color: #059669; }
+    .stat-card-custom.purple .stat-value-custom { color: #7C3AED; }
+    .stat-card-custom.orange .stat-value-custom { color: #D97706; }
+
+    .stat-card-custom .stat-label-custom {
+        font-size: 0.75rem;
+        color: var(--inv-text-secondary);
+        margin: 4px 0 0 0;
+    }
+
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer-custom {
+        padding: 14px 0;
+        border-top: 2px solid var(--inv-border-color);
+        margin-top: 24px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--inv-text-secondary);
+    }
+
+    .footer-custom .footer-brand {
+        color: var(--inv-primary);
+        font-weight: 500;
+    }
+
+    /* ================================================================
+       SPINNER
+       ================================================================ */
+    .spinner-custom {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(255,255,255,0.3);
+        border-top-color: white;
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ================================================================
+       ANIMATIONS
+       ================================================================ */
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .animate-fade-in-up {
+        animation: fadeInUp 0.5s ease forwards;
+        opacity: 0;
+    }
+
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 768px) {
+        .page-header-custom { padding: 16px 18px; }
+        .page-header-custom .page-title { font-size: 1.3rem; }
+        .form-card-custom { padding: 16px; }
+        .form-row-2 { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 480px) {
+        .page-header-custom { flex-direction: column; align-items: flex-start !important; }
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -818,7 +733,7 @@ include_once '../../components/admin_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header">
+    <div class="page-header-custom">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-edit"></i>
@@ -836,7 +751,7 @@ include_once '../../components/admin_sidebar.php';
                 </span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="view_inventory.php?id=<?= $item['id'] ?>&branch=<?= $branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-eye"></i> View
             </a>
@@ -850,50 +765,50 @@ include_once '../../components/admin_sidebar.php';
     <!-- MESSAGE -->
     <!-- ================================================================ -->
     <?php if (!empty($message)): ?>
-        <div class="alert alert-<?= $message_type ?> animate-fade-in-up" style="animation-delay:0.05s;">
+        <div class="alert-custom alert-<?= $message_type ?> animate-fade-in-up" style="animation-delay:0.05s;">
             <i class="fas fa-<?= $message_type === 'success' ? 'check-circle' : 'exclamation-circle' ?>"></i>
-            <?= $message ?>
+            <div><?= $message ?></div>
         </div>
     <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- EDIT FORM -->
     <!-- ================================================================ -->
-    <div class="form-card animate-fade-in-up" style="animation-delay:0.1s;">
-        <h3 class="text-lg font-semibold text-primary mb-4">
-            <i class="fas fa-pen mr-2"></i> Edit Inventory Item
+    <div class="form-card-custom animate-fade-in-up" style="animation-delay:0.1s;">
+        <h3 class="form-title">
+            <i class="fas fa-pen"></i> Edit Inventory Item
         </h3>
         
         <form method="POST" action="" id="editForm">
             <input type="hidden" name="action" value="update">
             
             <!-- Row 1: Medication Name & Category -->
-            <div class="form-row">
-                <div class="form-group">
+            <div class="form-row-2">
+                <div class="form-group-custom">
                     <label>Medication Name <span class="required">*</span></label>
-                    <input type="text" name="medication_name" class="form-control" 
+                    <input type="text" name="medication_name" class="form-control-custom" 
                            value="<?= htmlspecialchars($item['medication_name'] ?? '') ?>" 
                            placeholder="e.g. Paracetamol 500mg" required>
                 </div>
-                <div class="form-group">
+                <div class="form-group-custom">
                     <label>Category</label>
-                    <input type="text" name="category" class="form-control" 
+                    <input type="text" name="category" class="form-control-custom" 
                            value="<?= htmlspecialchars($item['category'] ?? '') ?>" 
                            placeholder="e.g. Pain Relief, Antibiotic">
                 </div>
             </div>
             
             <!-- Row 2: Unit & Branch -->
-            <div class="form-row">
-                <div class="form-group">
+            <div class="form-row-2">
+                <div class="form-group-custom">
                     <label>Unit <span class="required">*</span></label>
-                    <input type="text" name="unit" class="form-control" 
+                    <input type="text" name="unit" class="form-control-custom" 
                            value="<?= htmlspecialchars($item['unit'] ?? '') ?>" 
                            placeholder="e.g. Tablets, Capsules, Box" required>
                 </div>
-                <div class="form-group">
+                <div class="form-group-custom">
                     <label>Branch <span class="required">*</span></label>
-                    <select name="branch_id" class="form-control" required>
+                    <select name="branch_id" class="form-control-custom" required>
                         <option value="">Select Branch</option>
                         <?php foreach ($branches as $b): ?>
                             <option value="<?= $b['id'] ?>" <?= ($item['branch_id'] ?? 0) == $b['id'] ? 'selected' : '' ?>>
@@ -905,68 +820,68 @@ include_once '../../components/admin_sidebar.php';
             </div>
             
             <!-- Row 3: Quantity & Reorder Level -->
-            <div class="form-row">
-                <div class="form-group">
+            <div class="form-row-2">
+                <div class="form-group-custom">
                     <label>Quantity <span class="required">*</span></label>
-                    <input type="number" name="quantity" class="form-control" 
+                    <input type="number" name="quantity" class="form-control-custom" 
                            value="<?= htmlspecialchars($item['quantity'] ?? 0) ?>" 
                            placeholder="0" min="0" required>
-                    <p class="form-hint">Current stock quantity</p>
+                    <p class="form-hint-custom">Current stock quantity</p>
                 </div>
-                <div class="form-group">
+                <div class="form-group-custom">
                     <label>Reorder Level</label>
-                    <input type="number" name="reorder_level" class="form-control" 
+                    <input type="number" name="reorder_level" class="form-control-custom" 
                            value="<?= htmlspecialchars($item['reorder_level'] ?? 10) ?>" 
                            placeholder="10" min="0">
-                    <p class="form-hint">Alert when quantity falls below this level</p>
+                    <p class="form-hint-custom">Alert when quantity falls below this level</p>
                 </div>
             </div>
             
             <!-- Row 4: Unit Cost & Selling Price -->
-            <div class="form-row">
-                <div class="form-group">
+            <div class="form-row-2">
+                <div class="form-group-custom">
                     <label>Unit Cost (TSh)</label>
-                    <input type="number" name="unit_cost" class="form-control" 
+                    <input type="number" name="unit_cost" class="form-control-custom" 
                            value="<?= htmlspecialchars($item['unit_cost'] ?? 0) ?>" 
                            placeholder="0" min="0" step="0.01">
-                    <p class="form-hint">Cost price per unit</p>
+                    <p class="form-hint-custom">Cost price per unit</p>
                 </div>
-                <div class="form-group">
+                <div class="form-group-custom">
                     <label>Selling Price (TSh) <span class="required">*</span></label>
-                    <input type="number" name="selling_price" class="form-control" 
+                    <input type="number" name="selling_price" class="form-control-custom" 
                            value="<?= htmlspecialchars($item['selling_price'] ?? 0) ?>" 
                            placeholder="0" min="0" step="0.01" required>
-                    <p class="form-hint">Selling price per unit</p>
+                    <p class="form-hint-custom">Selling price per unit</p>
                 </div>
             </div>
             
             <!-- Row 5: Expiry Date & Batch Number -->
-            <div class="form-row">
-                <div class="form-group">
+            <div class="form-row-2">
+                <div class="form-group-custom">
                     <label>Expiry Date</label>
-                    <input type="date" name="expiry_date" class="form-control" 
+                    <input type="date" name="expiry_date" class="form-control-custom" 
                            value="<?= !empty($item['expiry_date']) ? date('Y-m-d', strtotime($item['expiry_date'])) : '' ?>">
-                    <p class="form-hint">Leave empty if no expiry date</p>
+                    <p class="form-hint-custom">Leave empty if no expiry date</p>
                 </div>
-                <div class="form-group">
+                <div class="form-group-custom">
                     <label>Batch Number</label>
-                    <input type="text" name="batch_number" class="form-control" 
+                    <input type="text" name="batch_number" class="form-control-custom" 
                            value="<?= htmlspecialchars($item['batch_number'] ?? '') ?>" 
                            placeholder="e.g. BATCH-2026-001">
                 </div>
             </div>
             
             <!-- Row 6: Supplier & Status -->
-            <div class="form-row">
-                <div class="form-group">
+            <div class="form-row-2">
+                <div class="form-group-custom">
                     <label>Supplier</label>
-                    <input type="text" name="supplier" class="form-control" 
+                    <input type="text" name="supplier" class="form-control-custom" 
                            value="<?= htmlspecialchars($item['supplier'] ?? '') ?>" 
                            placeholder="e.g. Dodoma Pharma">
                 </div>
-                <div class="form-group">
+                <div class="form-group-custom">
                     <label>Status</label>
-                    <select name="status" class="form-control">
+                    <select name="status" class="form-control-custom">
                         <option value="active" <?= ($item['status'] ?? 'active') === 'active' ? 'selected' : '' ?>>Active</option>
                         <option value="inactive" <?= ($item['status'] ?? 'active') === 'inactive' ? 'selected' : '' ?>>Inactive</option>
                     </select>
@@ -974,14 +889,14 @@ include_once '../../components/admin_sidebar.php';
             </div>
             
             <!-- Form Actions -->
-            <div class="flex flex-wrap gap-3 mt-4 pt-4 border-t-2 border-gray-200 dark:border-gray-700">
-                <button type="submit" class="btn btn-primary">
+            <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:16px;padding-top:16px;border-top:2px solid var(--inv-border-color);">
+                <button type="submit" class="btn-custom btn-primary-custom">
                     <i class="fas fa-save"></i> Update Item
                 </button>
-                <a href="view_inventory.php?id=<?= $item['id'] ?>&branch=<?= $branch_id ?>" class="btn btn-outline">
+                <a href="view_inventory.php?id=<?= $item['id'] ?>&branch=<?= $branch_id ?>" class="btn-custom btn-outline-custom">
                     <i class="fas fa-times"></i> Cancel
                 </a>
-                <a href="pharmacy_inventory.php?branch=<?= $branch_id ?>" class="btn btn-outline">
+                <a href="pharmacy_inventory.php?branch=<?= $branch_id ?>" class="btn-custom btn-outline-custom">
                     <i class="fas fa-arrow-left"></i> Back to Inventory
                 </a>
             </div>
@@ -991,28 +906,28 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- ITEM STATISTICS SUMMARY -->
     <!-- ================================================================ -->
-    <div class="form-card animate-fade-in-up" style="animation-delay:0.15s;">
-        <h3 class="text-lg font-semibold text-primary mb-4">
-            <i class="fas fa-chart-bar mr-2"></i> Item Statistics
+    <div class="form-card-custom animate-fade-in-up" style="animation-delay:0.15s;">
+        <h3 class="form-title">
+            <i class="fas fa-chart-bar"></i> Item Statistics
         </h3>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div class="text-center p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                <p class="text-2xl font-bold text-blue-600"><?= number_format($item['quantity'] ?? 0) ?></p>
-                <p class="text-sm text-gray-500">Current Quantity</p>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;" class="stats-grid-responsive">
+            <div class="stat-card-custom blue">
+                <p class="stat-value-custom"><?= number_format($item['quantity'] ?? 0) ?></p>
+                <p class="stat-label-custom">Current Quantity</p>
             </div>
-            <div class="text-center p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                <p class="text-2xl font-bold text-green-600">TSh <?= number_format(($item['selling_price'] ?? 0) * ($item['quantity'] ?? 0), 0) ?></p>
-                <p class="text-sm text-gray-500">Stock Value</p>
+            <div class="stat-card-custom green">
+                <p class="stat-value-custom">TSh <?= number_format(($item['selling_price'] ?? 0) * ($item['quantity'] ?? 0), 0) ?></p>
+                <p class="stat-label-custom">Stock Value</p>
             </div>
-            <div class="text-center p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
-                <p class="text-2xl font-bold text-purple-600"><?= number_format($item['reorder_level'] ?? 0) ?></p>
-                <p class="text-sm text-gray-500">Reorder Level</p>
+            <div class="stat-card-custom purple">
+                <p class="stat-value-custom"><?= number_format($item['reorder_level'] ?? 0) ?></p>
+                <p class="stat-label-custom">Reorder Level</p>
             </div>
-            <div class="text-center p-3 bg-orange-50 dark:bg-orange-900/20 rounded-lg">
-                <p class="text-2xl font-bold text-orange-600">
+            <div class="stat-card-custom orange">
+                <p class="stat-value-custom">
                     <?= ($item['quantity'] ?? 0) <= ($item['reorder_level'] ?? 0) ? '⚠️' : '✅' ?>
                 </p>
-                <p class="text-sm text-gray-500">
+                <p class="stat-label-custom">
                     <?= ($item['quantity'] ?? 0) <= ($item['reorder_level'] ?? 0) ? 'Below Reorder' : 'Above Reorder' ?>
                 </p>
             </div>
@@ -1022,14 +937,14 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer">
+    <footer class="footer-custom">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             Edit Inventory Item - <?= htmlspecialchars($item['medication_name'] ?? 'N/A') ?>
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1037,99 +952,49 @@ include_once '../../components/admin_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
-        }
-    });
-
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=<?= $branch_id ?>';
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
-        var ftEl = document.getElementById('footerTime');
-        if (ftEl) ftEl.textContent = timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
     // ================================================================
     // FORM SUBMISSION
     // ================================================================
     document.getElementById('editForm')?.addEventListener('submit', function(e) {
         var submitBtn = this.querySelector('button[type="submit"]');
-        submitBtn.innerHTML = '<span class="spinner"></span> Updating...';
+        submitBtn.innerHTML = '<span class="spinner-custom"></span> Updating...';
         submitBtn.disabled = true;
         return true;
     });
+
+    // ================================================================
+    // FOOTER TIME
+    // ================================================================
+    setInterval(function() {
+        var now = new Date();
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var ftEl = document.getElementById('footerTime');
+        if (ftEl) ftEl.textContent = timeStr;
+    }, 1000);
+
+    // ================================================================
+    // RESPONSIVE STATS GRID
+    // ================================================================
+    (function() {
+        function adjustStatsGrid() {
+            var grid = document.querySelector('.stats-grid-responsive');
+            if (!grid) return;
+            
+            if (window.innerWidth <= 768) {
+                grid.style.gridTemplateColumns = '1fr 1fr';
+            } else {
+                grid.style.gridTemplateColumns = 'repeat(4, 1fr)';
+            }
+        }
+        
+        adjustStatsGrid();
+        window.addEventListener('resize', adjustStatsGrid);
+    })();
 
     console.log('%c✏️ Braick Dispensary - Edit Inventory Item', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
@@ -1137,7 +1002,8 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c🏥 Branch: <?= htmlspecialchars($item['branch_name'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📊 Quantity: <?= number_format($item['quantity'] ?? 0) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💰 Price: TSh <?= number_format($item['selling_price'] ?? 0, 0) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Using table: medications_inventory', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#34D399;');
+    console.log('%c🌙 Dark mode: Handled by header (shared)', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

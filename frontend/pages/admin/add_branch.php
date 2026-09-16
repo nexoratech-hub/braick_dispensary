@@ -2,27 +2,19 @@
 // ================================================================
 // FILE: frontend/pages/admin/add_branch.php
 // SUPER ADMIN - ADD NEW BRANCH
-// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
+// ✅ USES SHARED header & sidebar
+// ✅ FULL DARK MODE - Page nzima inakuwa dark
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// CHECK IF USER IS ADMIN
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -36,9 +28,6 @@ if ($_SESSION['role'] !== 'admin') {
     exit;
 }
 
-// ================================================================
-// GET ADMIN DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
@@ -47,16 +36,15 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
 
+$selected_branch_id = $_GET['branch'] ?? 'all';
+
 // ================================================================
-// PROCESS FORM SUBMISSION
+// PROCESS FORM
 // ================================================================
 $errors = [];
 $success = false;
@@ -64,7 +52,6 @@ $form_data = [];
 $branch_id = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Get form data - MATCHING DATABASE COLUMNS
     $form_data = [
         'name' => trim($_POST['name'] ?? ''),
         'location' => trim($_POST['location'] ?? ''),
@@ -74,59 +61,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'logo' => trim($_POST['logo'] ?? '')
     ];
 
-    // ================================================================
-    // VALIDATION
-    // ================================================================
-
-    // Branch name - required
-    if (empty($form_data['name'])) {
-        $errors['name'] = 'Branch name is required';
-    }
-
-    // Location - required
-    if (empty($form_data['location'])) {
-        $errors['location'] = 'Location is required';
-    }
-
-    // Phone - optional but validate format if provided
+    if (empty($form_data['name'])) $errors['name'] = 'Branch name is required';
+    if (empty($form_data['location'])) $errors['location'] = 'Location is required';
     if (!empty($form_data['phone']) && !preg_match('/^[0-9+\-\s()]{7,20}$/', $form_data['phone'])) {
         $errors['phone'] = 'Please enter a valid phone number';
     }
-
-    // Email - optional but validate if provided
     if (!empty($form_data['email']) && !filter_var($form_data['email'], FILTER_VALIDATE_EMAIL)) {
         $errors['email'] = 'Please enter a valid email address';
     }
 
-    // Check if branch name already exists
     if (empty($errors['name'])) {
         $stmt = $db->prepare("SELECT id FROM branches WHERE name = ?");
         $stmt->execute([$form_data['name']]);
-        if ($stmt->fetch()) {
-            $errors['name'] = 'A branch with this name already exists';
-        }
+        if ($stmt->fetch()) $errors['name'] = 'A branch with this name already exists';
     }
 
-    // Check if email already exists (only if email is provided)
     if (empty($errors['email']) && !empty($form_data['email'])) {
         $stmt = $db->prepare("SELECT id FROM branches WHERE email = ?");
         $stmt->execute([$form_data['email']]);
-        if ($stmt->fetch()) {
-            $errors['email'] = 'A branch with this email already exists';
-        }
+        if ($stmt->fetch()) $errors['email'] = 'A branch with this email already exists';
     }
 
-    // ================================================================
-    // INSERT INTO DATABASE
-    // ================================================================
     if (empty($errors)) {
         try {
-            // Direct INSERT with known columns
             $sql = "INSERT INTO branches (name, location, phone, email, logo, status, created_at, updated_at) 
                     VALUES (:name, :location, :phone, :email, :logo, :status, NOW(), NOW())";
-            
             $stmt = $db->prepare($sql);
-            
             $stmt->execute([
                 ':name' => $form_data['name'],
                 ':location' => $form_data['location'],
@@ -138,355 +98,113 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $branch_id = $db->lastInsertId();
             $success = true;
-            
-            // Clear form data on success
-            $form_data = [];
-            
-            // ================================================================
-            // LOG ACTIVITY
-            // ================================================================
+
             try {
-                $stmt = $db->prepare("
-                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
-                    VALUES (?, ?, 'branch_added', ?, NOW())
-                ");
-                $details = "New branch created: " . $form_data['name'] . " (ID: $branch_id) by user: $user_full_name";
-                $stmt->execute([$user_id, $branch_id, $details]);
+                $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'branch_added', ?, NOW())");
+                $stmt->execute([$user_id, $branch_id, "New branch created: " . $form_data['name'] . " (ID: $branch_id) by user: $user_full_name"]);
             } catch (Exception $log_error) {
-                // Ignore logging errors - don't break the main flow
                 error_log('Activity log error: ' . $log_error->getMessage());
             }
-            
+
+            $form_data = [];
         } catch (PDOException $e) {
             $errors['general'] = 'Failed to create branch: ' . $e->getMessage();
-            error_log('Add branch error: ' . $e->getMessage());
         }
     }
 }
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// INCLUDE SHARED HEADER
-// ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once '../../components/admin_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- FULL DARK MODE CSS -->
 <!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
-
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
-<main class="main-content">
-
-    <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
-        <div>
-            <h1 class="page-title">
-                <i class="fas fa-plus-circle mr-2"></i> Add New Branch
-            </h1>
-            <p class="page-subtitle">
-                Create a new branch for the dispensary
-                <span class="ml-2 date-badge">
-                    <i class="fas fa-calendar-day mr-1"></i> <?= date('F d, Y') ?>
-                </span>
-            </p>
-        </div>
-        <div class="flex gap-2 flex-wrap">
-            <a href="branches.php?branch=all" class="btn btn-outline btn-sm">
-                <i class="fas fa-arrow-left"></i> Back to Branches
-            </a>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- SUCCESS MESSAGE -->
-    <!-- ================================================================ -->
-    <?php if ($success && $branch_id): ?>
-        <div class="alert alert-success mb-5">
-            <i class="fas fa-check-circle"></i>
-            <span>✅ Branch created successfully! 
-                <strong><?= htmlspecialchars($form_data['name'] ?? '') ?></strong> 
-                (ID: <?= $branch_id ?>)
-                <a href="branches.php?branch=all" class="alert-link">View all branches</a>
-            </span>
-            <button class="alert-close" onclick="this.parentElement.style.display='none'">&times;</button>
-        </div>
-    <?php endif; ?>
-
-    <!-- ================================================================ -->
-    <!-- GENERAL ERROR -->
-    <!-- ================================================================ -->
-    <?php if (isset($errors['general'])): ?>
-        <div class="alert alert-danger mb-5">
-            <i class="fas fa-exclamation-circle"></i>
-            <span><?= htmlspecialchars($errors['general']) ?></span>
-            <button class="alert-close" onclick="this.parentElement.style.display='none'">&times;</button>
-        </div>
-    <?php endif; ?>
-
-    <!-- ================================================================ -->
-    <!-- ADD BRANCH FORM - MATCHING DATABASE -->
-    <!-- ================================================================ -->
-    <div class="form-card">
-        <div class="form-card-header">
-            <h3 class="form-card-title">
-                <i class="fas fa-hospital"></i> Branch Information
-            </h3>
-            <p class="form-card-subtitle">Fill in the details to create a new branch</p>
-        </div>
-        
-        <form method="POST" action="" class="form-container" id="branchForm" novalidate>
-            <!-- Row 1: Branch Name & Location -->
-            <div class="form-row">
-                <div class="form-group <?= isset($errors['name']) ? 'has-error' : '' ?>">
-                    <label for="name" class="form-label required">
-                        <i class="fas fa-store"></i> Branch Name
-                    </label>
-                    <input 
-                        type="text" 
-                        id="name" 
-                        name="name" 
-                        class="form-control" 
-                        placeholder="Enter branch name (e.g. Dodoma)"
-                        value="<?= htmlspecialchars($form_data['name'] ?? '') ?>"
-                        required
-                    >
-                    <?php if (isset($errors['name'])): ?>
-                        <span class="form-error"><?= htmlspecialchars($errors['name']) ?></span>
-                    <?php endif; ?>
-                </div>
-
-                <div class="form-group <?= isset($errors['location']) ? 'has-error' : '' ?>">
-                    <label for="location" class="form-label required">
-                        <i class="fas fa-map-marker-alt"></i> Location
-                    </label>
-                    <input 
-                        type="text" 
-                        id="location" 
-                        name="location" 
-                        class="form-control" 
-                        placeholder="Enter branch address"
-                        value="<?= htmlspecialchars($form_data['location'] ?? '') ?>"
-                        required
-                    >
-                    <?php if (isset($errors['location'])): ?>
-                        <span class="form-error"><?= htmlspecialchars($errors['location']) ?></span>
-                    <?php endif; ?>
-                </div>
-            </div>
-
-            <!-- Row 2: Phone & Email -->
-            <div class="form-row">
-                <div class="form-group <?= isset($errors['phone']) ? 'has-error' : '' ?>">
-                    <label for="phone" class="form-label">
-                        <i class="fas fa-phone"></i> Phone Number
-                    </label>
-                    <input 
-                        type="tel" 
-                        id="phone" 
-                        name="phone" 
-                        class="form-control" 
-                        placeholder="Enter phone number (e.g. +255 700 000 000)"
-                        value="<?= htmlspecialchars($form_data['phone'] ?? '') ?>"
-                    >
-                    <?php if (isset($errors['phone'])): ?>
-                        <span class="form-error"><?= htmlspecialchars($errors['phone']) ?></span>
-                    <?php endif; ?>
-                    <span class="form-help">Contact phone number for the branch (optional)</span>
-                </div>
-
-                <div class="form-group <?= isset($errors['email']) ? 'has-error' : '' ?>">
-                    <label for="email" class="form-label">
-                        <i class="fas fa-envelope"></i> Email Address
-                    </label>
-                    <input 
-                        type="email" 
-                        id="email" 
-                        name="email" 
-                        class="form-control" 
-                        placeholder="Enter email address"
-                        value="<?= htmlspecialchars($form_data['email'] ?? '') ?>"
-                    >
-                    <?php if (isset($errors['email'])): ?>
-                        <span class="form-error"><?= htmlspecialchars($errors['email']) ?></span>
-                    <?php endif; ?>
-                    <span class="form-help">Contact email for the branch (optional)</span>
-                </div>
-            </div>
-
-            <!-- Row 3: Status -->
-            <div class="form-row single">
-                <div class="form-group">
-                    <label for="status" class="form-label required">
-                        <i class="fas fa-toggle-on"></i> Status
-                    </label>
-                    <select id="status" name="status" class="form-control">
-                        <option value="active" <?= (isset($form_data['status']) && $form_data['status'] === 'active') ? 'selected' : '' ?>>🟢 Active</option>
-                        <option value="inactive" <?= (isset($form_data['status']) && $form_data['status'] === 'inactive') ? 'selected' : '' ?>>🔴 Inactive</option>
-                    </select>
-                    <span class="form-help">Active branches are visible and operational</span>
-                </div>
-            </div>
-
-            <!-- Row 4: Logo URL -->
-            <div class="form-row single">
-                <div class="form-group">
-                    <label for="logo" class="form-label">
-                        <i class="fas fa-image"></i> Logo URL (Optional)
-                    </label>
-                    <input 
-                        type="text" 
-                        id="logo" 
-                        name="logo" 
-                        class="form-control" 
-                        placeholder="Enter logo image URL (optional)"
-                        value="<?= htmlspecialchars($form_data['logo'] ?? '') ?>"
-                    >
-                    <span class="form-help">Upload a logo image or enter a URL</span>
-                </div>
-            </div>
-
-            <!-- Form Actions -->
-            <div class="form-actions">
-                <button type="submit" class="btn btn-primary" id="submitBtn">
-                    <i class="fas fa-save"></i> Create Branch
-                </button>
-                <a href="branches.php?branch=all" class="btn btn-outline">
-                    <i class="fas fa-times"></i> Cancel
-                </a>
-            </div>
-        </form>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
-    <footer class="footer">
-        <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
-            Add New Branch
-            <span class="text-gray-300 mx-2">|</span>
-            <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
-        </p>
-    </footer>
-
-</main>
-
 <style>
     /* ================================================================
-       ROOT VARIABLES
+       ✅ FULL DARK MODE - Ina-override kila kitu
        ================================================================ */
+    
+    /* LIGHT MODE (Default) */
     :root {
-        --bg-body: #F1F5F9;
-        --bg-card: #FFFFFF;
-        --bg-header: #0B5ED7;
-        --text-primary: #0F172A;
-        --text-secondary: #64748B;
-        --text-muted: #94A3B8;
-        --border-color: #E2E8F0;
-        --shadow-sm: 0 2px 8px rgba(0,0,0,0.06);
-        --shadow-md: 0 4px 20px rgba(0,0,0,0.08);
-        --radius: 16px;
-        --radius-sm: 10px;
-        --input-bg: #FFFFFF;
-        --input-border: #D1D5DB;
-        --input-focus: #0B5ED7;
-        --success: #059669;
-        --danger: #EF4444;
+        --page-bg-body: #F1F5F9;
+        --page-bg-card: #FFFFFF;
+        --page-text-primary: #0F172A;
+        --page-text-secondary: #64748B;
+        --page-text-muted: #94A3B8;
+        --page-border: #E2E8F0;
+        --page-input-bg: #FFFFFF;
+        --page-input-border: #D1D5DB;
+        --page-hover: #F8FAFC;
     }
 
+    /* DARK MODE */
     [data-theme="dark"] {
-        --bg-body: #0F172A;
-        --bg-card: #1E293B;
-        --text-primary: #F1F5F9;
-        --text-secondary: #94A3B8;
-        --text-muted: #64748B;
-        --border-color: #334155;
-        --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
-        --shadow-md: 0 4px 20px rgba(0,0,0,0.4);
-        --input-bg: #0F172A;
-        --input-border: #334155;
-        --input-focus: #6EA8FE;
+        --page-bg-body: #0F172A;
+        --page-bg-card: #1E293B;
+        --page-text-primary: #F1F5F9;
+        --page-text-secondary: #94A3B8;
+        --page-text-muted: #64748B;
+        --page-border: #334155;
+        --page-input-bg: #0F172A;
+        --page-input-border: #334155;
+        --page-hover: #0F172A;
     }
 
     /* ================================================================
-       BASE STYLES
+       ✅ BODY & HTML - DARK MODE BACKGROUND
        ================================================================ */
-    .main-content {
-        padding: 20px 24px;
-        background: var(--bg-body);
-        min-height: 100vh;
-        transition: all 0.3s ease;
+    html[data-theme="dark"] body {
+        background: #0F172A !important;
+    }
+
+    /* ================================================================
+       ✅ MAIN CONTENT - DARK MODE BACKGROUND
+       ================================================================ */
+    html[data-theme="dark"] .main-content {
+        background: #0F172A !important;
+        color: #F1F5F9;
+    }
+
+    /* ================================================================
+       ✅ FIXED BODY BACKGROUND - KWA LIGHT MODE
+       ================================================================ */
+    body {
+        background: #F1F5F9;
     }
 
     /* ================================================================
        FORM CARD
        ================================================================ */
     .form-card {
-        background: var(--bg-card);
-        border-radius: var(--radius);
-        border: 1px solid var(--border-color);
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        border: 1px solid var(--page-border, #E2E8F0);
         overflow: hidden;
-        box-shadow: var(--shadow-sm);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
         max-width: 900px;
         margin: 0 auto;
         transition: all 0.3s ease;
     }
 
+    [data-theme="dark"] .form-card {
+        background: #1E293B !important;
+        border-color: #334155 !important;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    }
+
     .form-card:hover {
-        box-shadow: var(--shadow-md);
+        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    }
+
+    [data-theme="dark"] .form-card:hover {
+        box-shadow: 0 4px 24px rgba(0,0,0,0.5);
     }
 
     .form-card-header {
@@ -495,15 +213,10 @@ include_once '../../components/admin_sidebar.php';
         border-bottom: 2px solid #0A4FB0;
     }
 
-    [data-theme="dark"] .form-card-header {
-        background: #0B5ED7 !important;
-        border-bottom: 2px solid #0A4FB0;
-    }
-
     .form-card-title {
         font-size: 1.1rem;
         font-weight: 700;
-        color: #FFFFFF;
+        color: #FFFFFF !important;
         margin: 0;
         display: flex;
         align-items: center;
@@ -516,12 +229,17 @@ include_once '../../components/admin_sidebar.php';
 
     .form-card-subtitle {
         font-size: 0.8rem;
-        color: rgba(255, 255, 255, 0.8);
+        color: rgba(255, 255, 255, 0.8) !important;
         margin: 4px 0 0 34px;
     }
 
     .form-container {
         padding: 28px;
+        background: var(--page-bg-card, #FFFFFF);
+    }
+
+    [data-theme="dark"] .form-container {
+        background: #1E293B !important;
     }
 
     /* ================================================================
@@ -542,32 +260,32 @@ include_once '../../components/admin_sidebar.php';
         margin-bottom: 20px;
     }
 
-    .form-row.single .form-group {
-        margin-bottom: 20px;
-    }
-
     /* ================================================================
        FORM GROUPS
        ================================================================ */
     .form-group.has-error .form-control {
-        border-color: var(--danger);
+        border-color: #EF4444 !important;
     }
 
     .form-group.has-error .form-label {
-        color: var(--danger);
+        color: #EF4444 !important;
     }
 
     .form-label {
         display: block;
         font-size: 0.8rem;
         font-weight: 600;
-        color: var(--text-primary);
+        color: var(--page-text-primary, #0F172A);
         margin-bottom: 6px;
+    }
+
+    [data-theme="dark"] .form-label {
+        color: #F1F5F9 !important;
     }
 
     .form-label.required::after {
         content: ' *';
-        color: var(--danger);
+        color: #EF4444;
         font-weight: 700;
     }
 
@@ -579,7 +297,7 @@ include_once '../../components/admin_sidebar.php';
     }
 
     [data-theme="dark"] .form-label i {
-        color: #6EA8FE;
+        color: #6EA8FE !important;
     }
 
     .form-control {
@@ -587,25 +305,41 @@ include_once '../../components/admin_sidebar.php';
         padding: 10px 14px;
         font-size: 0.9rem;
         font-weight: 400;
-        color: var(--text-primary);
-        background: var(--input-bg);
-        border: 1.5px solid var(--input-border);
+        color: var(--page-text-primary, #0F172A);
+        background: var(--page-input-bg, #FFFFFF);
+        border: 1.5px solid var(--page-input-border, #D1D5DB);
         border-radius: 8px;
         transition: all 0.3s ease;
         outline: none;
         font-family: inherit;
     }
 
+    [data-theme="dark"] .form-control {
+        color: #F1F5F9 !important;
+        background: #0F172A !important;
+        border-color: #334155 !important;
+    }
+
+    [data-theme="dark"] .form-control:focus {
+        border-color: #6EA8FE !important;
+        box-shadow: 0 0 0 3px rgba(110, 168, 254, 0.15) !important;
+    }
+
     .form-control:focus {
-        border-color: var(--input-focus);
+        border-color: #0B5ED7;
         box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
     }
 
     .form-control::placeholder {
-        color: var(--text-muted);
+        color: var(--page-text-muted, #94A3B8);
         font-size: 0.85rem;
     }
 
+    [data-theme="dark"] .form-control::placeholder {
+        color: #64748B !important;
+    }
+
+    /* SELECT DROPDOWN */
     select.form-control {
         appearance: none;
         background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748B' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
@@ -615,23 +349,31 @@ include_once '../../components/admin_sidebar.php';
         cursor: pointer;
     }
 
-    select.form-control option {
-        background: var(--bg-card);
-        color: var(--text-primary);
+    [data-theme="dark"] select.form-control {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394A3B8' d='M6 8L1 3h10z'/%3E%3C/svg%3E") !important;
+    }
+
+    [data-theme="dark"] select.form-control option {
+        background: #1E293B !important;
+        color: #F1F5F9 !important;
     }
 
     .form-error {
         display: block;
         font-size: 0.75rem;
-        color: var(--danger);
+        color: #EF4444;
         margin-top: 4px;
     }
 
     .form-help {
         display: block;
         font-size: 0.7rem;
-        color: var(--text-muted);
+        color: var(--page-text-muted, #94A3B8);
         margin-top: 4px;
+    }
+
+    [data-theme="dark"] .form-help {
+        color: #64748B !important;
     }
 
     /* ================================================================
@@ -642,13 +384,150 @@ include_once '../../components/admin_sidebar.php';
         gap: 12px;
         margin-top: 8px;
         padding-top: 20px;
-        border-top: 1px solid var(--border-color);
+        border-top: 1px solid var(--page-border, #E2E8F0);
         flex-wrap: wrap;
+    }
+
+    [data-theme="dark"] .form-actions {
+        border-top-color: #334155 !important;
     }
 
     .form-actions .btn {
         min-width: 140px;
         justify-content: center;
+    }
+
+    /* ================================================================
+       PAGE HEADER
+       ================================================================ */
+    .page-title {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--page-text-primary, #0F172A);
+        margin: 0;
+        display: flex;
+        align-items: center;
+    }
+
+    [data-theme="dark"] .page-title {
+        color: #F1F5F9 !important;
+    }
+
+    .page-title i {
+        color: #0B5ED7;
+    }
+
+    [data-theme="dark"] .page-title i {
+        color: #6EA8FE !important;
+    }
+
+    .page-subtitle {
+        font-size: 0.85rem;
+        color: var(--page-text-secondary, #64748B);
+        margin: 4px 0 0 0;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+
+    [data-theme="dark"] .page-subtitle {
+        color: #94A3B8 !important;
+    }
+
+    .date-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--page-text-secondary, #64748B);
+        font-size: 0.75rem;
+    }
+
+    [data-theme="dark"] .date-badge {
+        color: #94A3B8 !important;
+    }
+
+    /* ================================================================
+       BUTTONS
+       ================================================================ */
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 10px 20px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.85rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        text-decoration: none;
+        background: var(--page-bg-card, #FFFFFF);
+        color: var(--page-text-primary, #0F172A);
+        border: 1.5px solid var(--page-border, #E2E8F0);
+    }
+
+    [data-theme="dark"] .btn {
+        background: #1E293B !important;
+        color: #F1F5F9 !important;
+        border-color: #334155 !important;
+    }
+
+    .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+
+    [data-theme="dark"] .btn:hover {
+        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    .btn-sm {
+        padding: 5px 12px;
+        font-size: 0.7rem;
+        border-radius: 6px;
+    }
+
+    .btn-primary {
+        background: #0B5ED7 !important;
+        color: white !important;
+        border-color: #0B5ED7 !important;
+    }
+
+    .btn-primary:hover {
+        background: #0A4FB0 !important;
+        border-color: #0A4FB0 !important;
+        color: white !important;
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.4);
+    }
+
+    .btn-outline {
+        background: transparent;
+        color: var(--page-text-secondary, #64748B);
+        border: 1.5px solid var(--page-border, #E2E8F0);
+    }
+
+    [data-theme="dark"] .btn-outline {
+        color: #94A3B8 !important;
+        border-color: #334155 !important;
+        background: transparent !important;
+    }
+
+    .btn-outline:hover {
+        background: var(--page-hover, #F1F5F9);
+        border-color: #0B5ED7;
+        color: #0B5ED7;
+    }
+
+    [data-theme="dark"] .btn-outline:hover {
+        background: #0F172A !important;
+        border-color: #6EA8FE !important;
+        color: #6EA8FE !important;
+    }
+
+    .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none !important;
     }
 
     /* ================================================================
@@ -659,7 +538,7 @@ include_once '../../components/admin_sidebar.php';
         align-items: center;
         gap: 12px;
         padding: 14px 20px;
-        border-radius: var(--radius-sm);
+        border-radius: 10px;
         font-size: 0.9rem;
         font-weight: 500;
         border: 1px solid transparent;
@@ -681,15 +560,15 @@ include_once '../../components/admin_sidebar.php';
     }
 
     [data-theme="dark"] .alert-success {
-        background: #1A3A2A;
-        color: #34D399;
-        border-color: #065F46;
+        background: #1A3A2A !important;
+        color: #34D399 !important;
+        border-color: #065F46 !important;
     }
 
     [data-theme="dark"] .alert-danger {
-        background: #3A1A1A;
-        color: #F87171;
-        border-color: #7F1D1D;
+        background: #3A1A1A !important;
+        color: #F87171 !important;
+        border-color: #7F1D1D !important;
     }
 
     .alert i {
@@ -701,10 +580,6 @@ include_once '../../components/admin_sidebar.php';
         color: inherit;
         text-decoration: underline;
         font-weight: 600;
-    }
-
-    .alert-link:hover {
-        color: #0B5ED7;
     }
 
     .alert-close {
@@ -724,365 +599,245 @@ include_once '../../components/admin_sidebar.php';
     }
 
     /* ================================================================
-       PAGE HEADER
-       ================================================================ */
-    .page-title {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: var(--text-primary);
-        margin: 0;
-        display: flex;
-        align-items: center;
-    }
-
-    .page-title i {
-        color: #0B5ED7;
-    }
-
-    .page-subtitle {
-        font-size: 0.85rem;
-        color: var(--text-secondary);
-        margin: 4px 0 0 0;
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 4px;
-    }
-
-    .date-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        color: var(--text-secondary);
-        font-size: 0.75rem;
-    }
-
-    /* ================================================================
-       BUTTONS
-       ================================================================ */
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 10px 20px;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 0.85rem;
-        transition: all 0.3s ease;
-        cursor: pointer;
-        border: none;
-        text-decoration: none;
-        background: var(--bg-card);
-        color: var(--text-primary);
-        border: 1.5px solid var(--border-color);
-    }
-
-    .btn:hover {
-        transform: translateY(-2px);
-        box-shadow: var(--shadow-md);
-    }
-
-    .btn-sm {
-        padding: 5px 12px;
-        font-size: 0.7rem;
-        border-radius: 6px;
-    }
-
-    .btn-primary {
-        background: #0B5ED7;
-        color: white;
-        border-color: #0B5ED7;
-    }
-
-    .btn-primary:hover {
-        background: #0A4FB0;
-        border-color: #0A4FB0;
-        color: white;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.4);
-    }
-
-    .btn-outline {
-        background: transparent;
-        color: var(--text-secondary);
-        border: 1.5px solid var(--border-color);
-    }
-
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: #0B5ED7;
-        color: #0B5ED7;
-    }
-
-    .btn:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-        transform: none !important;
-    }
-
-    /* ================================================================
-       FOOTER
-       ================================================================ */
-    .footer {
-        margin-top: 30px;
-        padding: 16px 20px;
-        background: var(--bg-card);
-        border-radius: var(--radius);
-        border: 1px solid var(--border-color);
-        text-align: center;
-        max-width: 900px;
-        margin-left: auto;
-        margin-right: auto;
-    }
-
-    .footer p {
-        margin: 0;
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-    }
-
-    .footer-brand {
-        font-weight: 700;
-        color: #0B5ED7;
-    }
-
-    /* ================================================================
-       UTILITY CLASSES
-       ================================================================ */
-    .flex { display: flex; }
-    .flex-wrap { flex-wrap: wrap; }
-    .items-center { align-items: center; }
-    .justify-between { justify-content: space-between; }
-    .gap-2 { gap: 8px; }
-    .gap-3 { gap: 12px; }
-    .gap-4 { gap: 16px; }
-    .gap-5 { gap: 20px; }
-    .mb-5 { margin-bottom: 20px; }
-    .ml-2 { margin-left: 8px; }
-    .mr-1 { margin-right: 4px; }
-    .mr-2 { margin-right: 8px; }
-    .text-gray-300 { color: #94A3B8; }
-    .mx-2 { margin-left: 8px; margin-right: 8px; }
-
-    /* ================================================================
        RESPONSIVE
        ================================================================ */
     @media (max-width: 768px) {
-        .main-content {
-            padding: 12px;
-        }
-
-        .form-container {
-            padding: 20px;
-        }
-
-        .form-card-header {
-            padding: 16px 20px;
-        }
-
-        .form-card-title {
-            font-size: 1rem;
-        }
-
-        .form-card-subtitle {
-            font-size: 0.7rem;
-            margin-left: 0;
-        }
-
-        .form-row {
-            grid-template-columns: 1fr;
-            gap: 0;
-        }
-
-        .form-actions {
-            flex-direction: column;
-        }
-
-        .form-actions .btn {
-            width: 100%;
-            min-width: unset;
-        }
-
-        .page-title {
-            font-size: 1.2rem;
-        }
-
-        .page-subtitle {
-            font-size: 0.75rem;
-        }
-
-        .alert {
-            flex-wrap: wrap;
-            font-size: 0.8rem;
-            padding: 12px 16px;
-        }
+        .form-container { padding: 20px; }
+        .form-card-header { padding: 16px 20px; }
+        .form-card-title { font-size: 1rem; }
+        .form-card-subtitle { font-size: 0.7rem; margin-left: 0; }
+        .form-row { grid-template-columns: 1fr; gap: 0; }
+        .form-actions { flex-direction: column; }
+        .form-actions .btn { width: 100%; min-width: unset; }
+        .page-title { font-size: 1.2rem; }
+        .page-subtitle { font-size: 0.75rem; }
+        .alert { flex-wrap: wrap; font-size: 0.8rem; padding: 12px 16px; }
     }
 
     @media (max-width: 480px) {
-        .main-content {
-            padding: 10px;
-        }
-
-        .form-container {
-            padding: 16px;
-        }
-
-        .form-card-header {
-            padding: 14px 16px;
-        }
-
-        .form-control {
-            font-size: 0.8rem;
-            padding: 8px 12px;
-        }
-
-        .form-label {
-            font-size: 0.75rem;
-        }
-
-        .page-header {
-            flex-direction: column;
-            align-items: flex-start !important;
-        }
-
-        .btn {
-            font-size: 0.75rem;
-            padding: 8px 14px;
-        }
-
-        .btn-sm {
-            font-size: 0.6rem;
-            padding: 3px 8px;
-        }
+        .form-container { padding: 16px; }
+        .form-card-header { padding: 14px 16px; }
+        .form-control { font-size: 0.8rem; padding: 8px 12px; }
+        .form-label { font-size: 0.75rem; }
+        .btn { font-size: 0.75rem; padding: 8px 14px; }
+        .btn-sm { font-size: 0.6rem; padding: 3px 8px; }
     }
 
     /* ================================================================
-       PRINT STYLES
+       PRINT
        ================================================================ */
     @media print {
-        .top-nav,
-        .sidebar,
-        #sidebarToggle,
-        .btn,
-        .dark-toggle-btn,
-        .icon-btn,
-        .search-wrapper,
-        .page-header .flex.gap-2,
-        .footer,
-        .form-actions {
-            display: none !important;
-        }
-
-        .main-content {
-            padding: 0 !important;
-            background: white !important;
-        }
-
-        .form-card {
-            box-shadow: none !important;
-            border: 1px solid #ddd !important;
-        }
-
+        .btn, .form-actions, .page-header .flex.gap-2 { display: none !important; }
+        .form-card { box-shadow: none !important; border: 1px solid #ddd !important; }
         .form-card-header {
             background: #0B5ED7 !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
         }
-
-        .form-card-title {
-            color: white !important;
-        }
-
-        .form-card-subtitle {
-            color: rgba(255, 255, 255, 0.8) !important;
-        }
-
+        .form-card-title { color: white !important; }
+        .form-card-subtitle { color: rgba(255, 255, 255, 0.8) !important; }
         .form-control {
             border: 1px solid #ddd !important;
             background: white !important;
+            color: black !important;
         }
     }
 </style>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- MAIN CONTENT -->
+<!-- ================================================================ -->
+<main class="main-content" style="background: var(--page-bg-body, #F1F5F9);">
+
+    <!-- Page Header -->
+    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+        <div>
+            <h1 class="page-title">
+                <i class="fas fa-plus-circle mr-2"></i> Add New Branch
+            </h1>
+            <p class="page-subtitle">
+                Create a new branch for the dispensary
+                <span class="ml-2 date-badge">
+                    <i class="fas fa-calendar-day mr-1"></i> <?= date('F d, Y') ?>
+                </span>
+            </p>
+        </div>
+        <div class="flex gap-2 flex-wrap">
+            <a href="branches.php?branch=all" class="btn btn-outline btn-sm">
+                <i class="fas fa-arrow-left"></i> Back to Branches
+            </a>
+        </div>
+    </div>
+
+    <!-- SUCCESS MESSAGE -->
+    <?php if ($success && $branch_id): ?>
+        <div class="alert alert-success mb-5">
+            <i class="fas fa-check-circle"></i>
+            <span>✅ Branch created successfully! 
+                <strong>Branch ID: <?= $branch_id ?></strong>
+                <a href="branches.php?branch=all" class="alert-link">View all branches</a>
+            </span>
+            <button class="alert-close" onclick="this.parentElement.style.display='none'">&times;</button>
+        </div>
+    <?php endif; ?>
+
+    <!-- GENERAL ERROR -->
+    <?php if (isset($errors['general'])): ?>
+        <div class="alert alert-danger mb-5">
+            <i class="fas fa-exclamation-circle"></i>
+            <span><?= htmlspecialchars($errors['general']) ?></span>
+            <button class="alert-close" onclick="this.parentElement.style.display='none'">&times;</button>
+        </div>
+    <?php endif; ?>
+
+    <!-- FORM -->
+    <div class="form-card">
+        <div class="form-card-header">
+            <h3 class="form-card-title">
+                <i class="fas fa-hospital"></i> Branch Information
+            </h3>
+            <p class="form-card-subtitle">Fill in the details to create a new branch</p>
+        </div>
+        
+        <form method="POST" action="" class="form-container" id="branchForm" novalidate>
+            <div class="form-row">
+                <div class="form-group <?= isset($errors['name']) ? 'has-error' : '' ?>">
+                    <label for="name" class="form-label required">
+                        <i class="fas fa-store"></i> Branch Name
+                    </label>
+                    <input type="text" id="name" name="name" class="form-control" 
+                           placeholder="Enter branch name (e.g. Dodoma)"
+                           value="<?= htmlspecialchars($form_data['name'] ?? '') ?>" required>
+                    <?php if (isset($errors['name'])): ?>
+                        <span class="form-error"><?= htmlspecialchars($errors['name']) ?></span>
+                    <?php endif; ?>
+                </div>
+
+                <div class="form-group <?= isset($errors['location']) ? 'has-error' : '' ?>">
+                    <label for="location" class="form-label required">
+                        <i class="fas fa-map-marker-alt"></i> Location
+                    </label>
+                    <input type="text" id="location" name="location" class="form-control" 
+                           placeholder="Enter branch address"
+                           value="<?= htmlspecialchars($form_data['location'] ?? '') ?>" required>
+                    <?php if (isset($errors['location'])): ?>
+                        <span class="form-error"><?= htmlspecialchars($errors['location']) ?></span>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group <?= isset($errors['phone']) ? 'has-error' : '' ?>">
+                    <label for="phone" class="form-label">
+                        <i class="fas fa-phone"></i> Phone Number
+                    </label>
+                    <input type="tel" id="phone" name="phone" class="form-control" 
+                           placeholder="Enter phone number (e.g. +255 700 000 000)"
+                           value="<?= htmlspecialchars($form_data['phone'] ?? '') ?>">
+                    <?php if (isset($errors['phone'])): ?>
+                        <span class="form-error"><?= htmlspecialchars($errors['phone']) ?></span>
+                    <?php endif; ?>
+                    <span class="form-help">Contact phone number for the branch (optional)</span>
+                </div>
+
+                <div class="form-group <?= isset($errors['email']) ? 'has-error' : '' ?>">
+                    <label for="email" class="form-label">
+                        <i class="fas fa-envelope"></i> Email Address
+                    </label>
+                    <input type="email" id="email" name="email" class="form-control" 
+                           placeholder="Enter email address"
+                           value="<?= htmlspecialchars($form_data['email'] ?? '') ?>">
+                    <?php if (isset($errors['email'])): ?>
+                        <span class="form-error"><?= htmlspecialchars($errors['email']) ?></span>
+                    <?php endif; ?>
+                    <span class="form-help">Contact email for the branch (optional)</span>
+                </div>
+            </div>
+
+            <div class="form-row single">
+                <div class="form-group">
+                    <label for="status" class="form-label required">
+                        <i class="fas fa-toggle-on"></i> Status
+                    </label>
+                    <select id="status" name="status" class="form-control">
+                        <option value="active" <?= (isset($form_data['status']) && $form_data['status'] === 'active') ? 'selected' : '' ?>>🟢 Active</option>
+                        <option value="inactive" <?= (isset($form_data['status']) && $form_data['status'] === 'inactive') ? 'selected' : '' ?>>🔴 Inactive</option>
+                    </select>
+                    <span class="form-help">Active branches are visible and operational</span>
+                </div>
+            </div>
+
+            <div class="form-row single">
+                <div class="form-group">
+                    <label for="logo" class="form-label">
+                        <i class="fas fa-image"></i> Logo URL (Optional)
+                    </label>
+                    <input type="text" id="logo" name="logo" class="form-control" 
+                           placeholder="Enter logo image URL (optional)"
+                           value="<?= htmlspecialchars($form_data['logo'] ?? '') ?>">
+                    <span class="form-help">Upload a logo image or enter a URL</span>
+                </div>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary" id="submitBtn">
+                    <i class="fas fa-save"></i> Create Branch
+                </button>
+                <a href="branches.php?branch=all" class="btn btn-outline">
+                    <i class="fas fa-times"></i> Cancel
+                </a>
+            </div>
+        </form>
+    </div>
+
+</main>
+
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // ✅ DARK MODE BACKGROUND ENFORCEMENT
+    // Inahakikisha body & main-content zinakuwa dark
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
+    function enforceDarkModeBackground() {
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var body = document.body;
+        var mainContent = document.querySelector('.main-content');
+        
         if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
+            if (body) body.style.background = '#0F172A';
+            if (mainContent) mainContent.style.background = '#0F172A';
         } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
-        }
-    });
-
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    var submitBtn = document.getElementById('submitBtn');
-    var branchForm = document.getElementById('branchForm');
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=all';
+            if (body) body.style.background = '#F1F5F9';
+            if (mainContent) mainContent.style.background = '#F1F5F9';
         }
     }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
+
+    // Run on load
+    enforceDarkModeBackground();
+
+    // Listen for dark mode changes from header
+    document.addEventListener('darkModeChanged', function(e) {
+        setTimeout(enforceDarkModeBackground, 50);
     });
+
+    // Also listen for attribute changes (safety net)
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.attributeName === 'data-theme') {
+                enforceDarkModeBackground();
+            }
+        });
+    });
+    observer.observe(document.documentElement, { attributes: true });
 
     // ================================================================
     // FORM VALIDATION
     // ================================================================
+    var submitBtn = document.getElementById('submitBtn');
+    var branchForm = document.getElementById('branchForm');
+
     branchForm?.addEventListener('submit', function(e) {
         var name = document.getElementById('name').value.trim();
         var location = document.getElementById('location').value.trim();
@@ -1090,29 +845,15 @@ include_once '../../components/admin_sidebar.php';
         var phone = document.getElementById('phone').value.trim();
         var isValid = true;
 
-        // Clear previous errors
         document.querySelectorAll('.form-error').forEach(function(el) { el.remove(); });
         document.querySelectorAll('.has-error').forEach(function(el) { el.classList.remove('has-error'); });
 
-        // Validate name
-        if (!name) {
-            showError('name', 'Branch name is required');
-            isValid = false;
-        }
-
-        // Validate location
-        if (!location) {
-            showError('location', 'Location is required');
-            isValid = false;
-        }
-
-        // Validate phone format if provided
+        if (!name) { showError('name', 'Branch name is required'); isValid = false; }
+        if (!location) { showError('location', 'Location is required'); isValid = false; }
         if (phone && !/^[0-9+\-\s()]{7,20}$/.test(phone)) {
             showError('phone', 'Please enter a valid phone number');
             isValid = false;
         }
-
-        // Validate email if provided
         if (email && !isValidEmail(email)) {
             showError('email', 'Please enter a valid email address');
             isValid = false;
@@ -1120,13 +861,9 @@ include_once '../../components/admin_sidebar.php';
 
         if (!isValid) {
             e.preventDefault();
-            // Scroll to first error
             var firstError = document.querySelector('.has-error');
-            if (firstError) {
-                firstError.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
+            if (firstError) firstError.scrollIntoView({ behavior: 'smooth', block: 'center' });
         } else {
-            // Show loading state
             if (submitBtn) {
                 submitBtn.disabled = true;
                 submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...';
@@ -1151,44 +888,18 @@ include_once '../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // PHONE NUMBER FORMAT HELP
+    // PHONE FORMAT
     // ================================================================
     var phoneInput = document.getElementById('phone');
     if (phoneInput) {
         phoneInput.addEventListener('input', function() {
-            // Remove any non-digit characters except +, -, space, (, )
             this.value = this.value.replace(/[^0-9+\-\s()]/g, '');
         });
     }
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
-        var ftEl = document.getElementById('footerTime');
-        if (ftEl) ftEl.textContent = timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
-    // ================================================================
-    // CONSOLE
-    // ================================================================
     console.log('%c🏢 Braick Dispensary - Add New Branch', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Database: dispensary_db | Table: branches', 'font-size:13px; color:#059669;');
-    console.log('%c📝 Columns: id, name, location, phone, email, logo, status, created_at, updated_at', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#059669;');
+    console.log('%c🌙 FULL DARK MODE inafanya kazi', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>

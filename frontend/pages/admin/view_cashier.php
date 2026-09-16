@@ -2,14 +2,12 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_cashier.php
 // ADMIN - VIEW CASHIER BRANCH DETAILS WITH REVENUE CARDS
-// FIXED: Shows ALL cashiers + receptionists (since they handle cash)
-// FIXED: Uses paid_amount from bills (includes discounts)
-// FIXED: Excludes OTC bills (bill_number NOT LIKE 'BILL-OTC-%')
-// FIXED: Only counts paid bills and paid bill_items
-// FIXED: Prescription revenue from prescription_items table
-// 6 CARDS ONLY: Total Revenue, Expenses, Net Profit, Patient Bills, OTC, Prescriptions
-// FIXED: Total Revenue = Patient Bills + OTC ONLY (Prescription is separate display)
-// ✅ FIXED: Recent Bills now have View, Edit, Cancel buttons + status badges
+// ✅ Uses SHARED header & sidebar
+// ✅ Shows ALL cashiers + receptionists
+// ✅ Uses paid_amount from bills (includes discounts)
+// ✅ Excludes OTC bills
+// ✅ 6 CARDS: Total Revenue, Expenses, Net Profit, Patient Bills, OTC, Prescriptions
+// ✅ Recent Bills with View, Edit, Cancel buttons
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -39,7 +37,6 @@ $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 require_once __DIR__ . '/../../../backend/config/database.php';
@@ -49,6 +46,17 @@ try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     die("Database connection error: " . $e->getMessage());
+}
+
+// ================================================================
+// GET BRANCH ID
+// ================================================================
+$cashier_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$selected_branch_id = $_GET['branch'] ?? 'all';
+
+if ($cashier_id <= 0) {
+    header('Location: cashiers.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
+    exit;
 }
 
 // ================================================================
@@ -62,7 +70,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         try {
             $db->beginTransaction();
             
-            // Check if bill exists and can be cancelled
             $stmt = $db->prepare("SELECT id, bill_number, status, paid_amount FROM bills WHERE id = ?");
             $stmt->execute([$bill_id]);
             $bill = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -79,7 +86,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 throw new Exception('Cannot cancel a paid or partially paid bill. Please refund first.');
             }
             
-            // Update bill status to cancelled
             $stmt = $db->prepare("
                 UPDATE bills 
                 SET status = 'cancelled', 
@@ -89,11 +95,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ");
             $stmt->execute([$cancel_reason, $bill_id]);
             
-            // Update bill items to cancelled
             $stmt = $db->prepare("UPDATE bill_items SET status = 'cancelled', updated_at = NOW() WHERE bill_id = ?");
             $stmt->execute([$bill_id]);
             
-            // Log activity
             try {
                 $log_stmt = $db->prepare("
                     INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
@@ -121,17 +125,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             exit;
         }
     }
-}
-
-// ================================================================
-// GET BRANCH ID
-// ================================================================
-$cashier_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = $_GET['branch'] ?? 'all';
-
-if ($cashier_id <= 0) {
-    header('Location: cashiers.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
-    exit;
 }
 
 // ================================================================
@@ -285,7 +278,7 @@ try {
 }
 
 // ================================================================
-// ✅ GET RECENT BILLS - WITH FULL DETAILS FOR BUTTONS
+// GET RECENT BILLS
 // ================================================================
 $recent_bills = [];
 try {
@@ -341,46 +334,12 @@ try {
 // ================================================================
 // HELPERS
 // ================================================================
-function getStatusBadge($status) {
-    $classes = [
-        'active' => 'success',
-        'inactive' => 'danger',
-        'pending' => 'warning',
-        'paid' => 'success',
-        'partial' => 'info',
-        'cancelled' => 'danger'
-    ];
-    return $classes[$status] ?? 'secondary';
-}
-
-function getStatusIcon($status) {
-    $icons = [
-        'active' => 'fa-check-circle',
-        'inactive' => 'fa-times-circle',
-        'pending' => 'fa-clock',
-        'paid' => 'fa-check-circle',
-        'partial' => 'fa-hourglass-half',
-        'cancelled' => 'fa-times-circle'
-    ];
-    return $icons[$status] ?? 'fa-circle';
-}
-
-function getStatusLabel($status) {
-    $labels = [
-        'pending' => 'Pending',
-        'paid' => 'Paid',
-        'partial' => 'Partial',
-        'cancelled' => 'Cancelled'
-    ];
-    return $labels[$status] ?? ucfirst($status);
-}
-
 function getRoleBadge($role) {
     $badges = [
-        'cashier' => '<span class="badge badge-info" style="font-size:0.55rem;padding:1px 10px;"><i class="fas fa-cash-register"></i> Cashier</span>',
-        'reception' => '<span class="badge badge-teal" style="font-size:0.55rem;padding:1px 10px;"><i class="fas fa-headset"></i> Reception</span>'
+        'cashier' => '<span class="badge-custom badge-blue"><i class="fas fa-cash-register"></i> Cashier</span>',
+        'reception' => '<span class="badge-custom badge-teal"><i class="fas fa-headset"></i> Reception</span>'
     ];
-    return $badges[$role] ?? '<span class="badge badge-secondary">' . ucfirst($role) . '</span>';
+    return $badges[$role] ?? '<span class="badge-custom badge-secondary">' . ucfirst($role) . '</span>';
 }
 
 function formatCurrency($amount) {
@@ -412,1038 +371,698 @@ unset($_SESSION['flash_type']);
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
-
-$total_employees_sidebar = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
-$total_employees_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-$total_doctors_sidebar = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
-$total_doctors_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-$total_branches_sidebar = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
-$total_branches_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>View Cashier - <?= htmlspecialchars($cashier['name'] ?? 'Branch') ?> - Braick Dispensary</title>
-    
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
-    <style>
-        :root {
-            --primary: #059669;
-            --primary-dark: #047857;
-            --primary-light: #34D399;
-            --primary-bg: #D1FAE5;
-            --primary-gradient: linear-gradient(135deg, #059669, #047857);
-            --primary-gradient-strong: linear-gradient(135deg, #047857, #065F46);
-            
-            --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
-            --danger-bg: #FEE2E2;
-            
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            
-            --info: #0B5ED7;
-            --info-bg: #E8F0FE;
-            
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            
-            --bg-body: #F0FDF4;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #D1FAE5;
-            --radius: 12px;
-            --radius-lg: 18px;
-            --table-hover: #ECFDF5;
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --primary: #34D399;
-            --primary-dark: #059669;
-            --primary-light: #6EE7B7;
-            --primary-bg: #1A3A2A;
-            --primary-gradient: linear-gradient(135deg, #059669, #047857);
-            --primary-gradient-strong: linear-gradient(135deg, #047857, #065F46);
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-hover: #1A3A2A;
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* TOP NAV */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.12);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 var(--radius) var(--radius) 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .branch-selector {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            font-size: 0.78rem;
-            color: var(--text-primary);
-            outline: none;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .branch-selector:focus {
-            border-color: var(--primary);
-        }
-        
-        /* MAIN CONTENT */
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-        }
-        
-        /* PAGE HEADER */
-        .page-header {
-            background: var(--primary-gradient-strong);
-            border-radius: var(--radius-lg);
-            padding: 28px 36px;
-            margin-bottom: 28px;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            box-shadow: 0 8px 32px rgba(4, 120, 87, 0.35);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 400px;
-            height: 400px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header .page-title {
-            color: white;
-            font-size: 1.8rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
-        .page-header .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
-        .page-header .header-badge {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
-            transition: all 0.3s ease;
-        }
-        
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: var(--radius);
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        
-        /* DETAIL CARD */
-        .detail-card {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            padding: 24px 28px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-            margin-bottom: 24px;
-        }
-        
-        .detail-card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .detail-label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-        }
-        
-        .detail-value {
-            font-size: 0.95rem;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-        
-        /* REVENUE CARDS */
-        .revenue-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        
-        .revenue-card {
-            border-radius: var(--radius);
-            padding: 18px 20px;
-            border: 2px solid rgba(255,255,255,0.1);
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-            position: relative;
-            overflow: hidden;
-            cursor: pointer;
-            text-decoration: none;
-            color: white;
-            display: block;
-        }
-        
-        .revenue-card::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 200px;
-            height: 200px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .revenue-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.2);
-            border-color: rgba(255,255,255,0.3);
-        }
-        
-        .revenue-card .card-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
-            flex-shrink: 0;
-            margin-bottom: 8px;
-            background: rgba(255,255,255,0.15);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        .revenue-card .card-amount {
-            font-size: 1.4rem;
-            font-weight: 800;
-            color: white;
-            line-height: 1.2;
-        }
-        
-        .revenue-card .card-label {
-            font-size: 0.6rem;
-            color: rgba(255,255,255,0.7);
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            margin: 0;
-        }
-        
-        .revenue-card .card-sub {
-            font-size: 0.65rem;
-            color: rgba(255,255,255,0.6);
-            margin: 0;
-            opacity: 0.8;
-        }
-        
-        .revenue-card .card-nav-arrow {
-            position: absolute;
-            bottom: 10px;
-            right: 14px;
-            font-size: 0.7rem;
-            color: rgba(255,255,255,0.4);
-            opacity: 0.5;
-            transition: all 0.3s ease;
-        }
-        
-        .revenue-card:hover .card-nav-arrow {
-            opacity: 1;
-            transform: translateX(4px);
-            color: rgba(255,255,255,0.9);
-        }
-        
-        /* CARD COLORS */
-        .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-        .card-green { background: linear-gradient(135deg, #059669, #047857); }
-        .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
-        .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-        .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
-        
-        /* TABLE CONTAINER */
-        .table-container {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 2px solid var(--border-color);
-            overflow: hidden;
-            box-shadow: var(--shadow-sm);
-            margin-bottom: 24px;
-        }
-        
-        .table-container .card-header {
-            padding: 14px 20px;
-            background: var(--primary-gradient-strong);
-            border-bottom: 2px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        
-        .table-container .card-header .card-title {
-            font-size: 0.85rem;
-            font-weight: 700;
-            color: white;
-            margin: 0;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .table-container .card-header .card-action {
-            color: rgba(255,255,255,0.7);
-            font-size: 0.65rem;
-            text-decoration: none;
-            transition: all 0.3s;
-        }
-        
-        .table-container .card-header .card-action:hover {
-            color: white;
-        }
-        
-        /* DATA TABLE */
-        .data-table {
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
-            font-size: 0.78rem;
-        }
-        
-        .data-table thead th {
-            background: var(--bg-body);
-            color: var(--text-secondary);
-            font-weight: 700;
-            padding: 10px 14px;
-            font-size: 0.6rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            border-bottom: 2px solid var(--border-color);
-            text-align: left;
-        }
-        
-        [data-theme="dark"] .data-table thead th {
-            background: #0F172A;
-        }
-        
-        .data-table td {
-            padding: 10px 14px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-            vertical-align: middle;
-        }
-        
-        .data-table tbody tr:hover td {
-            background: var(--table-hover);
-        }
-        
-        .data-table tbody tr:last-child td {
-            border-bottom: none;
-        }
-        
-        /* BADGES */
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-        }
-        
-        /* ✅ STATUS BADGES - Clear & Visible */
-        .status-badge-pending {
-            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.62rem;
-            font-weight: 700;
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.3);
-            letter-spacing: 0.03em;
-            text-transform: uppercase;
-        }
-        
-        .status-badge-paid {
-            background: linear-gradient(135deg, #059669, #047857);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.62rem;
-            font-weight: 700;
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
-            letter-spacing: 0.03em;
-            text-transform: uppercase;
-        }
-        
-        .status-badge-partial {
-            background: linear-gradient(135deg, #D97706, #B45309);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.62rem;
-            font-weight: 700;
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            box-shadow: 0 2px 8px rgba(217, 119, 6, 0.3);
-            letter-spacing: 0.03em;
-            text-transform: uppercase;
-        }
-        
-        .status-badge-cancelled {
-            background: linear-gradient(135deg, #DC2626, #B91C1C);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.62rem;
-            font-weight: 700;
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
-            letter-spacing: 0.03em;
-            text-transform: uppercase;
-        }
-        
-        /* ✅ BILL ACTION BUTTONS */
-        .bill-actions {
-            display: flex;
-            gap: 5px;
-            justify-content: center;
-            flex-wrap: wrap;
-        }
-        
-        .bill-action-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 5px 12px;
-            border-radius: 6px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            border: none;
-            cursor: pointer;
-            text-decoration: none;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            white-space: nowrap;
-        }
-        
-        .bill-action-btn i {
-            font-size: 0.7rem;
-        }
-        
-        .bill-btn-view {
-            background: #E8F0FE;
-            color: #0B5ED7;
-            border: 1px solid rgba(11, 94, 215, 0.2);
-        }
-        
-        .bill-btn-view:hover {
-            background: #0B5ED7;
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .bill-btn-edit {
-            background: #FEF3C7;
-            color: #D97706;
-            border: 1px solid rgba(217, 119, 6, 0.2);
-        }
-        
-        .bill-btn-edit:hover {
-            background: #D97706;
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
-        }
-        
-        .bill-btn-cancel {
-            background: #FEE2E2;
-            color: #DC2626;
-            border: 1px solid rgba(220, 38, 38, 0.2);
-        }
-        
-        .bill-btn-cancel:hover {
-            background: #DC2626;
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-        }
-        
-        .bill-btn-disabled {
-            background: #F1F5F9;
-            color: #94A3B8;
-            border: 1px solid #E2E8F0;
-            cursor: not-allowed;
-            opacity: 0.5;
-        }
-        
-        .bill-btn-disabled:hover {
-            transform: none !important;
-            box-shadow: none !important;
-            background: #F1F5F9 !important;
-            color: #94A3B8 !important;
-        }
-        
-        [data-theme="dark"] .bill-btn-view {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        [data-theme="dark"] .bill-btn-edit {
-            background: #3A2E1A;
-            color: #FBBF24;
-        }
-        
-        [data-theme="dark"] .bill-btn-cancel {
-            background: #3A1A1A;
-            color: #F87171;
-        }
-        
-        [data-theme="dark"] .bill-btn-disabled {
-            background: #1E293B;
-            color: #64748B;
-        }
-        
-        /* STAT MINI */
-        .stat-mini {
-            background: var(--bg-card);
-            border-radius: var(--radius);
-            padding: 14px 18px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            text-decoration: none;
-            color: var(--text-primary);
-            display: block;
-        }
-        
-        .stat-mini:hover {
-            border-color: var(--primary);
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .stat-mini .stat-label-mini {
-            font-size: 0.6rem;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            font-weight: 600;
-        }
-        
-        .stat-mini .stat-number-mini {
-            font-size: 1.5rem;
-            font-weight: 800;
-        }
-        
-        .stat-mini .stat-number-mini.text-green-600 { color: #059669; }
-        .stat-mini .stat-number-mini.text-yellow-600 { color: #D97706; }
-        .stat-mini .stat-number-mini.text-purple-600 { color: #7C3AED; }
-        .stat-mini .stat-number-mini.text-teal-600 { color: #0D9488; }
-        .stat-mini .stat-number-mini.text-red-600 { color: #DC2626; }
-        .stat-mini .stat-number-mini.text-blue-600 { color: #0B5ED7; }
-        
-        /* MODAL */
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 9999;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-        }
-        
-        .modal-overlay.show {
-            display: flex;
-        }
-        
-        .modal-content {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            max-width: 500px;
-            width: 100%;
-            padding: 24px 28px;
-            border: 2px solid var(--border-color);
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding-bottom: 12px;
-            border-bottom: 2px solid var(--border-color);
-            margin-bottom: 16px;
-        }
-        
-        .modal-title {
-            font-size: 1.1rem;
-            font-weight: 700;
-            color: #DC2626;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .modal-close {
-            background: none;
-            border: none;
-            font-size: 1.5rem;
-            cursor: pointer;
-            color: var(--text-secondary);
-        }
-        
-        .modal-close:hover {
-            color: #DC2626;
-        }
-        
-        .cancel-reason-textarea {
-            width: 100%;
-            padding: 10px 14px;
-            border: 2px solid var(--border-color);
-            border-radius: 8px;
-            font-size: 0.9rem;
-            resize: vertical;
-            min-height: 80px;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            font-family: inherit;
-        }
-        
-        .cancel-reason-textarea:focus {
-            border-color: #DC2626;
-            box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1);
-            outline: none;
-        }
-        
-        /* FOOTER */
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand {
-            color: var(--primary);
-            font-weight: 700;
-        }
-        
-        /* TOAST */
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 14px 20px;
-            border-radius: 12px;
-            z-index: 999;
-            max-width: 400px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: white;
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .toast-custom.show { transform: translateY(0); opacity: 1; }
-        .toast-custom.success { background: #059669; }
-        .toast-custom.error { background: #DC2626; }
-        .toast-custom.info { background: #0B5ED7; }
-        .toast-custom.warning { background: #D97706; }
-        
-        /* FLASH MESSAGE */
-        .flash-message {
-            padding: 14px 20px;
-            border-radius: var(--radius);
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-weight: 500;
-            font-size: 0.9rem;
-            animation: slideDown 0.5s ease;
-        }
-        
-        .flash-message.success {
-            background: #D1FAE5;
-            color: #065F46;
-            border-left: 5px solid #059669;
-        }
-        
-        .flash-message.error {
-            background: #FEE2E2;
-            color: #991B1B;
-            border-left: 5px solid #DC2626;
-        }
-        
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-15px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-        }
-        
-        /* RESPONSIVE */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .revenue-grid { grid-template-columns: repeat(2, 1fr); }
-        }
-        
-        @media (max-width: 768px) {
-            .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .revenue-grid { grid-template-columns: 1fr 1fr; }
-            .data-table { font-size: 0.65rem; }
-            .data-table thead th, .data-table td { padding: 6px 8px; }
-            .bill-actions { flex-direction: column; }
-            .bill-action-btn { width: 100%; justify-content: center; }
-        }
-        
-        @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .revenue-grid { grid-template-columns: 1fr; }
-            .data-table { font-size: 0.55rem; }
-            .data-table thead th, .data-table td { padding: 4px 6px; }
-        }
-        
-        @media print {
-            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
-            .search-wrapper, .bill-actions, #sidebarToggle { display: none !important; }
-            .main-content { margin: 0; padding: 20px; }
-        }
-    </style>
-</head>
-<body>
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC CSS -->
+<!-- ================================================================ -->
+<style>
+    :root {
+        --page-bg-body: #F0FDF4;
+        --page-bg-card: #FFFFFF;
+        --page-text-primary: #1E293B;
+        --page-text-secondary: #64748B;
+        --page-text-muted: #94A3B8;
+        --page-border: #D1FAE5;
+        --page-hover: #ECFDF5;
+    }
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime">
-            <i class="fas fa-clock" style="color:var(--primary-light);"></i>
-            <span id="clockDisplay" style="font-weight:500;"><?= date('d M Y • h:i:s A') ?></span>
-        </span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%23059669%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+    [data-theme="dark"] {
+        --page-bg-body: #0F172A;
+        --page-bg-card: #1E293B;
+        --page-text-primary: #F1F5F9;
+        --page-text-secondary: #94A3B8;
+        --page-text-muted: #64748B;
+        --page-border: #334155;
+        --page-hover: #1A3A2A;
+    }
+
+    body { background: var(--page-bg-body, #F0FDF4); }
+    html[data-theme="dark"] body { background: #0F172A !important; }
+    .main-content { background: var(--page-bg-body, #F0FDF4); }
+    html[data-theme="dark"] .main-content { background: #0F172A !important; color: #F1F5F9; }
+
+    /* PAGE HEADER */
+    .page-header-custom {
+        background: linear-gradient(135deg, #047857 0%, #065F46 100%);
+        border-radius: 18px;
+        padding: 28px 36px;
+        margin-bottom: 24px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 8px 32px rgba(4, 120, 87, 0.35);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .page-header-custom::before {
+        content: '';
+        position: absolute;
+        top: -60%; right: -10%;
+        width: 400px; height: 400px;
+        background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .page-header-custom .page-title {
+        color: white;
+        font-size: 1.8rem;
+        font-weight: 800;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+    }
+
+    .page-header-custom .page-subtitle {
+        color: rgba(255,255,255,0.9);
+        font-size: 0.95rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 8px;
+    }
+
+    .page-header-custom .role-badge-display {
+        background: rgba(255,255,255,0.25);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .page-header-custom .header-badge {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255,255,255,0.2);
+    }
+
+    .page-header-custom .btn-outline-light {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        border: 1.5px solid rgba(255,255,255,0.3);
+        padding: 8px 18px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.82rem;
+        transition: all 0.3s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        position: relative;
+        z-index: 1;
+    }
+
+    .page-header-custom .btn-outline-light:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        color: white;
+    }
+
+    /* CASHIER INFO CARD */
+    .detail-card-custom {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        border: 2px solid var(--page-border, #D1FAE5);
+        padding: 20px 24px;
+        margin-bottom: 24px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+
+    html[data-theme="dark"] .detail-card-custom {
+        background: #1E293B;
+        border-color: #334155;
+    }
+
+    .detail-label-custom {
+        font-size: 0.7rem;
+        color: var(--page-text-secondary, #64748B);
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 4px;
+    }
+
+    .detail-value-custom {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--page-text-primary, #1E293B);
+    }
+
+    html[data-theme="dark"] .detail-value-custom { color: #F1F5F9; }
+
+    /* REVENUE CARDS */
+    .revenue-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+        margin-bottom: 24px;
+    }
+
+    .revenue-card-custom {
+        border-radius: 14px;
+        padding: 18px 20px;
+        border: 2px solid rgba(255,255,255,0.1);
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+        position: relative;
+        overflow: hidden;
+        text-decoration: none;
+        color: white;
+        display: block;
+    }
+
+    .revenue-card-custom::before {
+        content: '';
+        position: absolute;
+        top: -50%; right: -20%;
+        width: 200px; height: 200px;
+        background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .revenue-card-custom:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+        color: white;
+    }
+
+    .revenue-card-custom .card-icon-custom {
+        width: 44px;
+        height: 44px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2rem;
+        margin-bottom: 8px;
+        background: rgba(255,255,255,0.15);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .revenue-card-custom .card-amount-custom {
+        font-size: 1.4rem;
+        font-weight: 800;
+        color: white;
+        line-height: 1.2;
+    }
+
+    .revenue-card-custom .card-label-custom {
+        font-size: 0.6rem;
+        color: rgba(255,255,255,0.7);
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin: 0;
+    }
+
+    .revenue-card-custom .card-sub-custom {
+        font-size: 0.65rem;
+        color: rgba(255,255,255,0.6);
+        margin: 0;
+        opacity: 0.8;
+    }
+
+    .revenue-card-custom .card-nav-arrow {
+        position: absolute;
+        bottom: 10px; right: 14px;
+        font-size: 0.7rem;
+        color: rgba(255,255,255,0.4);
+        transition: all 0.3s ease;
+    }
+
+    .revenue-card-custom:hover .card-nav-arrow {
+        opacity: 1;
+        transform: translateX(4px);
+        color: rgba(255,255,255,0.9);
+    }
+
+    /* Card Colors */
+    .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+    .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+    .card-green { background: linear-gradient(135deg, #059669, #047857); }
+    .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
+    .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+    .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
+
+    /* TABLE CONTAINER */
+    .table-container-custom {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        border: 2px solid var(--page-border, #D1FAE5);
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        margin-bottom: 24px;
+    }
+
+    html[data-theme="dark"] .table-container-custom {
+        background: #1E293B;
+        border-color: #334155;
+    }
+
+    .table-container-custom .card-header-custom {
+        padding: 14px 20px;
+        background: linear-gradient(135deg, #047857, #065F46);
+        border-bottom: 2px solid var(--page-border, #D1FAE5);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .table-container-custom .card-header-custom .card-title-custom {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: white;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .table-container-custom .card-header-custom .card-action-custom {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.7rem;
+        text-decoration: none;
+        transition: all 0.3s;
+        font-weight: 600;
+    }
+
+    .table-container-custom .card-header-custom .card-action-custom:hover {
+        color: white;
+    }
+
+    /* DATA TABLE */
+    .data-table-custom {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 0.78rem;
+    }
+
+    .data-table-custom thead th {
+        background: var(--page-hover, #ECFDF5);
+        color: var(--page-text-secondary, #64748B);
+        font-weight: 700;
+        padding: 10px 14px;
+        font-size: 0.6rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-bottom: 2px solid var(--page-border, #D1FAE5);
+        text-align: left;
+    }
+
+    html[data-theme="dark"] .data-table-custom thead th {
+        background: #0F172A;
+        border-bottom-color: #334155;
+    }
+
+    .data-table-custom td {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--page-border, #D1FAE5);
+        color: var(--page-text-primary, #1E293B);
+        vertical-align: middle;
+    }
+
+    html[data-theme="dark"] .data-table-custom td {
+        color: #F1F5F9;
+        border-bottom-color: #334155;
+    }
+
+    .data-table-custom tbody tr:hover td {
+        background: var(--page-hover, #ECFDF5);
+    }
+
+    html[data-theme="dark"] .data-table-custom tbody tr:hover td {
+        background: #1A3A2A;
+    }
+
+    .data-table-custom tbody tr:last-child td {
+        border-bottom: none;
+    }
+
+    /* STATUS BADGES */
+    .status-badge-pending {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.62rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        box-shadow: 0 2px 8px rgba(11, 94, 215, 0.3);
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+    }
+
+    .status-badge-paid {
+        background: linear-gradient(135deg, #059669, #047857);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.62rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+    }
+
+    .status-badge-partial {
+        background: linear-gradient(135deg, #D97706, #B45309);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.62rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        box-shadow: 0 2px 8px rgba(217, 119, 6, 0.3);
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+    }
+
+    .status-badge-cancelled {
+        background: linear-gradient(135deg, #DC2626, #B91C1C);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.62rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+    }
+
+    /* BILL ACTIONS */
+    .bill-actions {
+        display: flex;
+        gap: 5px;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+
+    .bill-action-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 12px;
+        border-radius: 6px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        border: none;
+        cursor: pointer;
+        text-decoration: none;
+        transition: all 0.3s ease;
+        white-space: nowrap;
+        font-family: inherit;
+    }
+
+    .bill-btn-view {
+        background: #E8F0FE;
+        color: #0B5ED7;
+        border: 1px solid rgba(11, 94, 215, 0.2);
+    }
+
+    .bill-btn-view:hover {
+        background: #0B5ED7;
+        color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+
+    .bill-btn-edit {
+        background: #FEF3C7;
+        color: #D97706;
+        border: 1px solid rgba(217, 119, 6, 0.2);
+    }
+
+    .bill-btn-edit:hover {
+        background: #D97706;
+        color: white;
+        transform: translateY(-2px);
+    }
+
+    .bill-btn-cancel {
+        background: #FEE2E2;
+        color: #DC2626;
+        border: 1px solid rgba(220, 38, 38, 0.2);
+    }
+
+    .bill-btn-cancel:hover {
+        background: #DC2626;
+        color: white;
+        transform: translateY(-2px);
+    }
+
+    .bill-btn-disabled {
+        background: #F1F5F9;
+        color: #94A3B8;
+        border: 1px solid #E2E8F0;
+        cursor: not-allowed;
+        opacity: 0.5;
+    }
+
+    [data-theme="dark"] .bill-btn-view { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .bill-btn-edit { background: #3A2E1A; color: #FBBF24; }
+    [data-theme="dark"] .bill-btn-cancel { background: #3A1A1A; color: #F87171; }
+    [data-theme="dark"] .bill-btn-disabled { background: #1E293B; color: #64748B; }
+
+    /* STAT MINI */
+    .stat-mini-custom {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 12px;
+        padding: 14px 18px;
+        border: 2px solid var(--page-border, #D1FAE5);
+        transition: all 0.3s ease;
+        text-decoration: none;
+        color: var(--page-text-primary, #1E293B);
+        display: block;
+    }
+
+    html[data-theme="dark"] .stat-mini-custom {
+        background: #1E293B;
+        border-color: #334155;
+        color: #F1F5F9;
+    }
+
+    .stat-mini-custom:hover {
+        border-color: #059669;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.15);
+    }
+
+    .stat-mini-custom .stat-label-mini {
+        font-size: 0.6rem;
+        color: var(--page-text-secondary, #64748B);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        font-weight: 700;
+    }
+
+    .stat-mini-custom .stat-number-mini {
+        font-size: 1.5rem;
+        font-weight: 800;
+    }
+
+    .stat-mini-custom .text-green-600 { color: #059669; }
+    .stat-mini-custom .text-yellow-600 { color: #D97706; }
+    .stat-mini-custom .text-purple-600 { color: #7C3AED; }
+    .stat-mini-custom .text-teal-600 { color: #0D9488; }
+    .stat-mini-custom .text-red-600 { color: #DC2626; }
+    .stat-mini-custom .text-blue-600 { color: #0B5ED7; }
+
+    /* BADGES */
+    .badge-custom {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.6rem;
+        font-weight: 700;
+    }
+
+    .badge-blue { background: #E8F0FE; color: #0B5ED7; }
+    .badge-teal { background: #ECFDF5; color: #0D9488; }
+    .badge-secondary { background: #E2E8F0; color: #64748B; }
+
+    html[data-theme="dark"] .badge-blue { background: #1E3A5F; color: #6EA8FE; }
+    html[data-theme="dark"] .badge-teal { background: #1A3A2A; color: #34D399; }
+    html[data-theme="dark"] .badge-secondary { background: #334155; color: #94A3B8; }
+
+    /* FLASH MESSAGE */
+    .flash-message-custom {
+        padding: 14px 20px;
+        border-radius: 12px;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        animation: slideDown 0.5s ease;
+    }
+
+    .flash-message-custom.success {
+        background: #D1FAE5;
+        color: #065F46;
+        border-left: 5px solid #059669;
+    }
+
+    .flash-message-custom.error {
+        background: #FEE2E2;
+        color: #991B1B;
+        border-left: 5px solid #DC2626;
+    }
+
+    html[data-theme="dark"] .flash-message-custom.success {
+        background: #1A3A2A;
+        color: #34D399;
+    }
+
+    html[data-theme="dark"] .flash-message-custom.error {
+        background: #3A1A1A;
+        color: #F87171;
+    }
+
+    @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-15px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* MODAL */
+    .modal-overlay {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.7);
+        z-index: 9999;
+        justify-content: center;
+        align-items: center;
+        padding: 20px;
+    }
+
+    .modal-overlay.show { display: flex; }
+
+    .modal-content-custom {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        max-width: 500px;
+        width: 100%;
+        padding: 24px 28px;
+        border: 2px solid var(--page-border, #D1FAE5);
+        box-shadow: 0 20px 30px rgba(0,0,0,0.2);
+    }
+
+    html[data-theme="dark"] .modal-content-custom {
+        background: #1E293B;
+        border-color: #334155;
+    }
+
+    .modal-header-custom {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding-bottom: 12px;
+        border-bottom: 2px solid var(--page-border, #D1FAE5);
+        margin-bottom: 16px;
+    }
+
+    .modal-title-custom {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #DC2626;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .modal-close-custom {
+        background: none;
+        border: none;
+        font-size: 1.5rem;
+        cursor: pointer;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .cancel-reason-textarea {
+        width: 100%;
+        padding: 10px 14px;
+        border: 2px solid var(--page-border, #D1FAE5);
+        border-radius: 8px;
+        font-size: 0.9rem;
+        resize: vertical;
+        min-height: 80px;
+        background: var(--page-bg-body, #F0FDF4);
+        color: var(--page-text-primary, #1E293B);
+        font-family: inherit;
+    }
+
+    .cancel-reason-textarea:focus {
+        border-color: #DC2626;
+        outline: none;
+    }
+
+    /* GRID UTILITIES */
+    .grid-2-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .grid-3-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .grid-5-cols { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px; }
+
+    @media (max-width: 1024px) {
+        .revenue-grid { grid-template-columns: repeat(2, 1fr); }
+        .grid-5-cols { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 768px) {
+        .page-header-custom { padding: 18px; }
+        .page-header-custom .page-title { font-size: 1.15rem; }
+        .revenue-grid { grid-template-columns: 1fr; }
+        .grid-2-cols { grid-template-columns: 1fr; }
+        .grid-3-cols { grid-template-columns: 1fr; }
+        .grid-5-cols { grid-template-columns: 1fr 1fr; }
+        .bill-actions { flex-direction: column; }
+        .bill-action-btn { width: 100%; justify-content: center; }
+    }
+
+    @media print {
+        .page-header-custom { background: #047857 !important; -webkit-print-color-adjust: exact; }
+        .bill-actions { display: none !important; }
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -1451,38 +1070,34 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <main class="main-content">
 
     <!-- FLASH MESSAGE -->
-    <?php if ($flash_message): ?>
-        <div class="flash-message <?= $flash_type ?>">
+    <?php if ($flash_message) { ?>
+        <div class="flash-message-custom <?= $flash_type ?>">
             <i class="fas <?= $flash_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
             <span><?= $flash_message ?></span>
         </div>
-    <?php endif; ?>
+    <?php } ?>
 
     <!-- PAGE HEADER -->
-    <div class="page-header animate-fade-in-up">
-        <div>
+    <div class="page-header-custom">
+        <div style="position:relative;z-index:1;">
             <h1 class="page-title">
                 <i class="fas fa-cash-register"></i>
                 Cashier Details
                 <span class="role-badge-display">ADMIN</span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-store-alt"></i>
-                <strong><?= htmlspecialchars($cashier['name'] ?? 'N/A') ?></strong>
+                <span><i class="fas fa-store-alt"></i> <strong><?= htmlspecialchars($cashier['name'] ?? 'N/A') ?></strong></span>
                 <span class="header-badge">
                     <i class="fas fa-<?= ($cashier['status'] ?? 'active') === 'active' ? 'check-circle' : 'times-circle' ?>"></i>
                     <?= ucfirst($cashier['status'] ?? 'Active') ?>
                 </span>
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                <span class="header-badge" style="background:rgba(52,211,153,0.25);border-color:rgba(52,211,153,0.4);color:#A7F3D0;">
                     <i class="fas fa-money-bill-wave"></i> <?= formatCurrency($total_revenue) ?> Revenue
                 </span>
-                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
+                <span class="header-badge" style="background:rgba(251,191,36,0.25);border-color:rgba(251,191,36,0.4);color:#FDE68A;">
                     <i class="fas fa-file-invoice"></i> <?= $cashier['total_bills'] ?? 0 ?> Bills
                 </span>
-                <span class="header-badge" style="background:rgba(239,68,68,0.2);border-color:rgba(239,68,68,0.3);color:#F87171;">
-                    <i class="fas fa-arrow-up"></i> Expenses: <?= formatCurrency($total_expenses) ?>
-                </span>
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                <span class="header-badge" style="background:rgba(52,211,153,0.25);border-color:rgba(52,211,153,0.4);color:#A7F3D0;">
                     <i class="fas fa-chart-line"></i> Profit: <?= formatCurrency($net_profit) ?>
                 </span>
             </p>
@@ -1495,125 +1110,121 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- CASHIER INFO -->
-    <div class="detail-card animate-fade-in-up">
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+    <div class="detail-card-custom">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;">
             <div>
-                <p class="detail-label"><i class="fas fa-map-marker-alt mr-1"></i> Location</p>
-                <p class="detail-value"><?= htmlspecialchars($cashier['location'] ?? 'N/A') ?></p>
+                <p class="detail-label-custom"><i class="fas fa-map-marker-alt"></i> Location</p>
+                <p class="detail-value-custom"><?= htmlspecialchars($cashier['location'] ?? 'N/A') ?></p>
             </div>
             <div>
-                <p class="detail-label"><i class="fas fa-phone mr-1"></i> Phone</p>
-                <p class="detail-value"><?= htmlspecialchars($cashier['phone'] ?? 'N/A') ?></p>
+                <p class="detail-label-custom"><i class="fas fa-phone"></i> Phone</p>
+                <p class="detail-value-custom"><?= htmlspecialchars($cashier['phone'] ?? 'N/A') ?></p>
             </div>
             <div>
-                <p class="detail-label"><i class="fas fa-envelope mr-1"></i> Email</p>
-                <p class="detail-value"><?= htmlspecialchars($cashier['email'] ?? 'N/A') ?></p>
+                <p class="detail-label-custom"><i class="fas fa-envelope"></i> Email</p>
+                <p class="detail-value-custom"><?= htmlspecialchars($cashier['email'] ?? 'N/A') ?></p>
             </div>
             <div>
-                <p class="detail-label"><i class="fas fa-user-tie mr-1"></i> Staff</p>
-                <p class="detail-value">
-                    <span class="badge" style="background:#0B5ED7;color:white;font-size:0.6rem;padding:2px 10px;">
+                <p class="detail-label-custom"><i class="fas fa-user-tie"></i> Staff</p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <span class="badge-custom badge-blue">
                         <i class="fas fa-cash-register"></i> <?= $cashier['active_cashiers'] ?? 0 ?> Cashiers
                     </span>
-                    <span class="badge" style="background:#0D9488;color:white;font-size:0.6rem;padding:2px 10px;">
+                    <span class="badge-custom badge-teal">
                         <i class="fas fa-headset"></i> <?= $cashier['active_receptions'] ?? 0 ?> Reception
                     </span>
-                </p>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- 6 REVENUE CARDS -->
-    <div class="revenue-grid animate-fade-in-up" style="animation-delay:0.05s;">
-        
-        <a href="revenue.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
-            <div class="card-icon"><i class="fas fa-money-bill-wave"></i></div>
-            <p class="card-amount"><?= formatCurrency($total_revenue) ?></p>
-            <p class="card-label">Total Revenue</p>
-            <p class="card-sub">Patient Bills + OTC Sales</p>
+    <div class="revenue-grid">
+        <a href="revenue.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-blue">
+            <div class="card-icon-custom"><i class="fas fa-money-bill-wave"></i></div>
+            <p class="card-amount-custom"><?= formatCurrency($total_revenue) ?></p>
+            <p class="card-label-custom">Total Revenue</p>
+            <p class="card-sub-custom">Patient Bills + OTC Sales</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <a href="expenses.php?branch=<?= $cashier_id ?>" class="revenue-card card-red">
-            <div class="card-icon"><i class="fas fa-arrow-up"></i></div>
-            <p class="card-amount"><?= formatCurrency($total_expenses) ?></p>
-            <p class="card-label">Total Expenses</p>
-            <p class="card-sub">From expenses (paid)</p>
+        <a href="expenses.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-red">
+            <div class="card-icon-custom"><i class="fas fa-arrow-up"></i></div>
+            <p class="card-amount-custom"><?= formatCurrency($total_expenses) ?></p>
+            <p class="card-label-custom">Total Expenses</p>
+            <p class="card-sub-custom">From expenses (paid)</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <a href="profit.php?branch=<?= $cashier_id ?>" class="revenue-card card-green">
-            <div class="card-icon"><i class="fas fa-chart-line"></i></div>
-            <p class="card-amount"><?= formatCurrency($net_profit) ?></p>
-            <p class="card-label">Net Profit</p>
-            <p class="card-sub">Revenue - Expenses</p>
+        <a href="profit.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-green">
+            <div class="card-icon-custom"><i class="fas fa-chart-line"></i></div>
+            <p class="card-amount-custom"><?= formatCurrency($net_profit) ?></p>
+            <p class="card-label-custom">Net Profit</p>
+            <p class="card-sub-custom">Revenue - Expenses</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <a href="bills.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card card-blue">
-            <div class="card-icon"><i class="fas fa-file-invoice"></i></div>
-            <p class="card-amount"><?= formatCurrency($patient_bills_revenue) ?></p>
-            <p class="card-label">Patient Bills</p>
-            <p class="card-sub">Includes prescriptions</p>
+        <a href="bills.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card-custom card-blue">
+            <div class="card-icon-custom"><i class="fas fa-file-invoice"></i></div>
+            <p class="card-amount-custom"><?= formatCurrency($patient_bills_revenue) ?></p>
+            <p class="card-label-custom">Patient Bills</p>
+            <p class="card-sub-custom">Includes prescriptions</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <a href="otc_sales.php?branch=<?= $cashier_id ?>" class="revenue-card card-teal">
-            <div class="card-icon"><i class="fas fa-cash-register"></i></div>
-            <p class="card-amount"><?= formatCurrency($otc_revenue) ?></p>
-            <p class="card-label">OTC Sales</p>
-            <p class="card-sub">Over-the-counter sales</p>
+        <a href="otc_sales.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-teal">
+            <div class="card-icon-custom"><i class="fas fa-cash-register"></i></div>
+            <p class="card-amount-custom"><?= formatCurrency($otc_revenue) ?></p>
+            <p class="card-label-custom">OTC Sales</p>
+            <p class="card-sub-custom">Over-the-counter sales</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <a href="prescriptions.php?branch=<?= $cashier_id ?>" class="revenue-card card-purple">
-            <div class="card-icon"><i class="fas fa-prescription"></i></div>
-            <p class="card-amount"><?= formatCurrency($prescription_revenue) ?></p>
-            <p class="card-label">Prescriptions</p>
-            <p class="card-sub">Already included in bills</p>
+        <a href="prescriptions.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-purple">
+            <div class="card-icon-custom"><i class="fas fa-prescription"></i></div>
+            <p class="card-amount-custom"><?= formatCurrency($prescription_revenue) ?></p>
+            <p class="card-label-custom">Prescriptions</p>
+            <p class="card-sub-custom">Already included in bills</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
-        
     </div>
 
     <!-- BILLS SUMMARY CARDS -->
-    <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6 animate-fade-in-up" style="animation-delay:0.1s;">
-        <a href="bills.php?branch=<?= $cashier_id ?>" class="stat-mini">
-            <p class="stat-label-mini"><i class="fas fa-file-invoice mr-1"></i> Total Bills</p>
+    <div class="grid-5-cols">
+        <a href="bills.php?branch=<?= $cashier_id ?>" class="stat-mini-custom">
+            <p class="stat-label-mini"><i class="fas fa-file-invoice"></i> Total Bills</p>
             <p class="stat-number-mini text-blue-600"><?= number_format($cashier['total_bills'] ?? 0) ?></p>
         </a>
-        <a href="bills.php?branch=<?= $cashier_id ?>&status=pending" class="stat-mini">
-            <p class="stat-label-mini"><i class="fas fa-clock mr-1"></i> Pending</p>
+        <a href="bills.php?branch=<?= $cashier_id ?>&status=pending" class="stat-mini-custom">
+            <p class="stat-label-mini"><i class="fas fa-clock"></i> Pending</p>
             <p class="stat-number-mini text-yellow-600"><?= number_format($cashier['pending_bills'] ?? 0) ?></p>
         </a>
-        <a href="bills.php?branch=<?= $cashier_id ?>&status=partial" class="stat-mini">
-            <p class="stat-label-mini"><i class="fas fa-hourglass-half mr-1"></i> Partial</p>
+        <a href="bills.php?branch=<?= $cashier_id ?>&status=partial" class="stat-mini-custom">
+            <p class="stat-label-mini"><i class="fas fa-hourglass-half"></i> Partial</p>
             <p class="stat-number-mini text-purple-600"><?= number_format($cashier['partial_bills'] ?? 0) ?></p>
         </a>
-        <a href="bills.php?branch=<?= $cashier_id ?>&status=paid" class="stat-mini">
-            <p class="stat-label-mini"><i class="fas fa-check-circle mr-1"></i> Paid</p>
+        <a href="bills.php?branch=<?= $cashier_id ?>&status=paid" class="stat-mini-custom">
+            <p class="stat-label-mini"><i class="fas fa-check-circle"></i> Paid</p>
             <p class="stat-number-mini text-green-600"><?= number_format($cashier['paid_bills'] ?? 0) ?></p>
         </a>
-        <a href="bills.php?branch=<?= $cashier_id ?>&status=cancelled" class="stat-mini">
-            <p class="stat-label-mini"><i class="fas fa-times-circle mr-1"></i> Cancelled</p>
+        <a href="bills.php?branch=<?= $cashier_id ?>&status=cancelled" class="stat-mini-custom">
+            <p class="stat-label-mini"><i class="fas fa-times-circle"></i> Cancelled</p>
             <p class="stat-number-mini text-red-600"><?= number_format($cashier['cancelled_bills'] ?? 0) ?></p>
         </a>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- ✅ RECENT BILLS - WITH VIEW, EDIT, CANCEL BUTTONS + STATUS BADGES -->
-    <!-- ================================================================ -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.15s;">
-        <div class="card-header">
-            <h3 class="card-title">
+    <!-- RECENT BILLS -->
+    <div class="table-container-custom">
+        <div class="card-header-custom">
+            <h3 class="card-title-custom">
                 <i class="fas fa-file-invoice"></i>
                 Recent Bills (<?= count($recent_bills) ?>)
             </h3>
-            <a href="bills.php?branch=<?= $cashier_id ?>" class="card-action">View All →</a>
+            <a href="bills.php?branch=<?= $cashier_id ?>" class="card-action-custom">View All →</a>
         </div>
-        <?php if (count($recent_bills) > 0): ?>
-            <div class="overflow-x-auto">
-                <table class="data-table" id="billsTable">
+        <?php if (count($recent_bills) > 0) { ?>
+            <div style="overflow-x:auto;">
+                <table class="data-table-custom" id="billsTable">
                     <thead>
                         <tr>
                             <th>Bill #</th>
@@ -1627,11 +1238,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($recent_bills as $bill): 
+                        <?php foreach ($recent_bills as $bill) { 
                             $balance = (float)$bill['balance'];
                             $bill_status = strtolower($bill['status'] ?? 'pending');
                             
-                            // ✅ Status badge styling
                             $status_class = '';
                             $status_icon = '';
                             $status_text = '';
@@ -1664,107 +1274,93 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             }
                         ?>
                             <tr>
-                                <td class="font-mono text-xs font-semibold" style="color:#059669;">
+                                <td style="font-family:monospace;font-size:0.7rem;font-weight:700;color:#059669;">
                                     <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
                                 </td>
                                 <td>
                                     <strong><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></strong>
-                                    <?php if (!empty($bill['patient_code'])): ?>
-                                        <div style="font-size:0.6rem;color:var(--text-secondary);">
+                                    <?php if (!empty($bill['patient_code'])) { ?>
+                                        <div style="font-size:0.6rem;color:var(--page-text-secondary);">
                                             <?= htmlspecialchars($bill['patient_code']) ?>
                                         </div>
-                                    <?php endif; ?>
+                                    <?php } ?>
                                 </td>
-                                <td class="font-semibold"><?= formatCurrency($bill['total_amount'] ?? 0) ?></td>
-                                <td style="color:#059669;font-weight:600;"><?= formatCurrency($bill['paid_amount'] ?? 0) ?></td>
+                                <td style="font-weight:700;"><?= formatCurrency($bill['total_amount'] ?? 0) ?></td>
+                                <td style="color:#059669;font-weight:700;"><?= formatCurrency($bill['paid_amount'] ?? 0) ?></td>
                                 <td>
-                                    <?php if ($balance > 0): ?>
+                                    <?php if ($balance > 0) { ?>
                                         <span style="color:#DC2626;font-weight:700;"><?= formatCurrency($balance) ?></span>
-                                    <?php else: ?>
-                                        <span style="color:#059669;font-weight:600;"><?= formatCurrency(0) ?></span>
-                                    <?php endif; ?>
+                                    <?php } else { ?>
+                                        <span style="color:#059669;font-weight:700;"><?= formatCurrency(0) ?></span>
+                                    <?php } ?>
                                 </td>
                                 <td>
-                                    <!-- ✅ STATUS BADGE -->
                                     <span class="<?= $status_class ?>">
                                         <i class="fas <?= $status_icon ?>"></i>
                                         <?= $status_text ?>
                                     </span>
                                 </td>
-                                <td class="text-xs"><?= date('M d, Y', strtotime($bill['created_at'] ?? 'now')) ?></td>
+                                <td style="font-size:0.7rem;"><?= date('M d, Y', strtotime($bill['created_at'] ?? 'now')) ?></td>
                                 <td>
-                                    <!-- ✅ ACTION BUTTONS -->
                                     <div class="bill-actions">
-                                        
-                                        <!-- VIEW BUTTON -->
                                         <a href="view_bill.php?id=<?= $bill['id'] ?>&branch=<?= $cashier_id ?>" 
-                                           class="bill-action-btn bill-btn-view" 
-                                           title="View Bill">
+                                           class="bill-action-btn bill-btn-view">
                                             <i class="fas fa-eye"></i> View
                                         </a>
                                         
-                                        <!-- EDIT BUTTON - Only if not cancelled -->
-                                        <?php if ($bill_status !== 'cancelled'): ?>
+                                        <?php if ($bill_status !== 'cancelled') { ?>
                                             <a href="edit_bill.php?id=<?= $bill['id'] ?>&branch=<?= $cashier_id ?>" 
-                                               class="bill-action-btn bill-btn-edit" 
-                                               title="Edit Bill">
+                                               class="bill-action-btn bill-btn-edit">
                                                 <i class="fas fa-edit"></i> Edit
                                             </a>
-                                        <?php else: ?>
-                                            <button class="bill-action-btn bill-btn-disabled" disabled title="Cannot edit cancelled bill">
+                                        <?php } else { ?>
+                                            <button class="bill-action-btn bill-btn-disabled" disabled>
                                                 <i class="fas fa-edit"></i> Edit
                                             </button>
-                                        <?php endif; ?>
+                                        <?php } ?>
                                         
-                                        <!-- CANCEL BUTTON - Only if not cancelled and no payment -->
-                                        <?php if ($bill_status !== 'cancelled' && $bill_status !== 'paid' && $balance == $bill['total_amount']): ?>
+                                        <?php if ($bill_status !== 'cancelled' && $bill_status !== 'paid' && $balance == $bill['total_amount']) { ?>
                                             <button type="button" 
                                                     class="bill-action-btn bill-btn-cancel" 
-                                                    onclick="openCancelModal(<?= $bill['id'] ?>, '<?= addslashes($bill['bill_number'] ?? 'N/A') ?>', '<?= addslashes($bill['patient_name'] ?? 'N/A') ?>')"
-                                                    title="Cancel Bill">
+                                                    onclick="openCancelModal(<?= $bill['id'] ?>, '<?= addslashes($bill['bill_number'] ?? 'N/A') ?>', '<?= addslashes($bill['patient_name'] ?? 'N/A') ?>')">
                                                 <i class="fas fa-ban"></i> Cancel
                                             </button>
-                                        <?php elseif ($bill_status === 'paid'): ?>
-                                            <button class="bill-action-btn bill-btn-disabled" disabled title="Cannot cancel paid bill">
+                                        <?php } elseif ($bill_status === 'paid') { ?>
+                                            <button class="bill-action-btn bill-btn-disabled" disabled>
                                                 <i class="fas fa-ban"></i> Cancel
                                             </button>
-                                        <?php elseif ($bill_status === 'cancelled'): ?>
-                                            <button class="bill-action-btn bill-btn-disabled" disabled title="Already cancelled">
-                                                <i class="fas fa-times"></i> Cancelled
-                                            </button>
-                                        <?php else: ?>
-                                            <button class="bill-action-btn bill-btn-disabled" disabled title="Cannot cancel - has payment">
+                                        <?php } else { ?>
+                                            <button class="bill-action-btn bill-btn-disabled" disabled>
                                                 <i class="fas fa-ban"></i> Cancel
                                             </button>
-                                        <?php endif; ?>
-                                        
+                                        <?php } ?>
                                     </div>
                                 </td>
                             </tr>
-                        <?php endforeach; ?>
+                        <?php } ?>
                     </tbody>
                 </table>
             </div>
-        <?php else: ?>
-            <div class="text-center py-6 text-gray-400">
-                <i class="fas fa-file-invoice text-2xl block mb-2"></i>
+        <?php } else { ?>
+            <div style="text-align:center;padding:30px;color:var(--page-text-muted);">
+                <i class="fas fa-file-invoice" style="font-size:2rem;display:block;margin-bottom:8px;opacity:0.5;"></i>
                 <p>No bills found</p>
             </div>
-        <?php endif; ?>
+        <?php } ?>
     </div>
 
     <!-- RECENT PAYMENTS -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.2s;">
-        <div class="card-header">
-            <h3 class="card-title">
+    <div class="table-container-custom">
+        <div class="card-header-custom">
+            <h3 class="card-title-custom">
                 <i class="fas fa-credit-card"></i>
                 Recent Payments (<?= count($recent_payments) ?>)
             </h3>
-            <a href="payments.php?branch=<?= $cashier_id ?>" class="card-action">View All →</a>
+            <a href="payments.php?branch=<?= $cashier_id ?>" class="card-action-custom">View All →</a>
         </div>
-        <?php if (count($recent_payments) > 0): ?>
-            <div class="overflow-x-auto">
-                <table class="data-table" id="paymentsTable">
+        <?php if (count($recent_payments) > 0) { ?>
+            <div style="overflow-x:auto;">
+                <table class="data-table-custom" id="paymentsTable">
                     <thead>
                         <tr>
                             <th>Receipt #</th>
@@ -1778,57 +1374,60 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($recent_payments as $payment): ?>
+                        <?php foreach ($recent_payments as $payment) { ?>
                             <tr>
-                                <td class="font-mono text-xs"><?= htmlspecialchars($payment['receipt_number'] ?? 'N/A') ?></td>
-                                <td class="font-mono text-xs"><?= htmlspecialchars($payment['bill_number'] ?? 'N/A') ?></td>
+                                <td style="font-family:monospace;font-size:0.7rem;"><?= htmlspecialchars($payment['receipt_number'] ?? 'N/A') ?></td>
+                                <td style="font-family:monospace;font-size:0.7rem;"><?= htmlspecialchars($payment['bill_number'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($payment['patient_name'] ?? 'N/A') ?></td>
-                                <td class="font-semibold" style="color:#059669;"><?= formatCurrency($payment['amount'] ?? 0) ?></td>
+                                <td style="font-weight:700;color:#059669;"><?= formatCurrency($payment['amount'] ?? 0) ?></td>
                                 <td>
-                                    <span class="badge" style="background:#0B5ED7;color:white;font-size:0.55rem;padding:2px 10px;">
+                                    <span class="badge-custom badge-blue">
                                         <?= ucfirst($payment['payment_method'] ?? 'N/A') ?>
                                     </span>
                                 </td>
                                 <td><?= htmlspecialchars($payment['received_by_name'] ?? 'N/A') ?></td>
-                                <td class="text-xs"><?= date('M d, Y h:i A', strtotime($payment['received_at'] ?? 'now')) ?></td>
+                                <td style="font-size:0.7rem;"><?= date('M d, Y h:i A', strtotime($payment['received_at'] ?? 'now')) ?></td>
                                 <td>
-                                    <a href="view_payment.php?id=<?= $payment['id'] ?>&branch=<?= $cashier_id ?>" class="text-green-600 text-xs hover:underline">View</a>
+                                    <a href="view_payment.php?id=<?= $payment['id'] ?>&branch=<?= $cashier_id ?>" 
+                                       class="bill-action-btn bill-btn-view" style="font-size:0.65rem;padding:4px 10px;">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
                                 </td>
                             </tr>
-                        <?php endforeach; ?>
+                        <?php } ?>
                     </tbody>
                 </table>
             </div>
-        <?php else: ?>
-            <div class="text-center py-6 text-gray-400">
-                <i class="fas fa-credit-card text-2xl block mb-2"></i>
+        <?php } else { ?>
+            <div style="text-align:center;padding:30px;color:var(--page-text-muted);">
+                <i class="fas fa-credit-card" style="font-size:2rem;display:block;margin-bottom:8px;opacity:0.5;"></i>
                 <p>No payments found</p>
             </div>
-        <?php endif; ?>
+        <?php } ?>
     </div>
 
     <!-- STAFF LIST -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.25s;">
-        <div class="card-header">
-            <h3 class="card-title">
+    <div class="table-container-custom">
+        <div class="card-header-custom">
+            <h3 class="card-title-custom">
                 <i class="fas fa-users"></i>
                 Staff (<?= count($staff_list) ?>)
             </h3>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                <span class="badge" style="background:#0B5ED7;color:white;font-size:0.55rem;padding:2px 10px;">
+                <span class="badge-custom" style="background:rgba(255,255,255,0.2);color:white;">
                     <i class="fas fa-cash-register"></i> Cashiers: <?= $cashier_count ?>
                 </span>
-                <span class="badge" style="background:#0D9488;color:white;font-size:0.55rem;padding:2px 10px;">
+                <span class="badge-custom" style="background:rgba(255,255,255,0.2);color:white;">
                     <i class="fas fa-headset"></i> Reception: <?= $reception_count ?>
                 </span>
-                <a href="add_employee.php?branch=<?= $cashier_id ?>" class="card-action" style="background:rgba(255,255,255,0.15);padding:2px 12px;border-radius:12px;">
+                <a href="add_employee.php?branch=<?= $cashier_id ?>" class="card-action-custom" style="background:rgba(255,255,255,0.15);padding:3px 12px;border-radius:12px;">
                     <i class="fas fa-plus"></i> Add Staff
                 </a>
             </div>
         </div>
-        <?php if (count($staff_list) > 0): ?>
-            <div class="overflow-x-auto">
-                <table class="data-table" id="staffTable">
+        <?php if (count($staff_list) > 0) { ?>
+            <div style="overflow-x:auto;">
+                <table class="data-table-custom" id="staffTable">
                     <thead>
                         <tr>
                             <th>Name</th>
@@ -1840,45 +1439,35 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($staff_list as $staff): ?>
+                        <?php foreach ($staff_list as $staff) { ?>
                             <tr>
-                                <td class="font-medium"><?= htmlspecialchars($staff['full_name'] ?? 'N/A') ?></td>
+                                <td style="font-weight:600;"><?= htmlspecialchars($staff['full_name'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($staff['email'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($staff['phone'] ?? 'N/A') ?></td>
                                 <td><?= getRoleBadge($staff['role'] ?? 'other') ?></td>
                                 <td>
-                                    <span class="badge" style="background:<?= $staff['status'] === 'active' ? '#059669' : '#DC2626' ?>;color:white;font-size:0.6rem;padding:2px 10px;">
+                                    <span class="badge-custom" style="background:<?= $staff['status'] === 'active' ? '#059669' : '#DC2626' ?>;color:white;">
                                         <?= ucfirst($staff['status'] ?? 'N/A') ?>
                                     </span>
                                 </td>
                                 <td>
-                                    <a href="view_employee.php?id=<?= $staff['id'] ?>&branch=<?= $cashier_id ?>" class="text-green-600 text-xs hover:underline">View</a>
+                                    <a href="view_employee.php?id=<?= $staff['id'] ?>&branch=<?= $cashier_id ?>" 
+                                       class="bill-action-btn bill-btn-view" style="font-size:0.65rem;padding:4px 10px;">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
                                 </td>
                             </tr>
-                        <?php endforeach; ?>
+                        <?php } ?>
                     </tbody>
                 </table>
             </div>
-        <?php else: ?>
-            <div class="text-center py-6 text-gray-400">
-                <i class="fas fa-users text-2xl block mb-2"></i>
+        <?php } else { ?>
+            <div style="text-align:center;padding:30px;color:var(--page-text-muted);">
+                <i class="fas fa-users" style="font-size:2rem;display:block;margin-bottom:8px;opacity:0.5;"></i>
                 <p>No staff assigned to this branch</p>
             </div>
-        <?php endif; ?>
+        <?php } ?>
     </div>
-
-    <!-- FOOTER -->
-    <footer class="footer">
-        <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
-            Cashier Details - <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?>
-            <span class="text-gray-300 mx-2">|</span>
-            <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
-        </p>
-    </footer>
 
 </main>
 
@@ -1886,22 +1475,22 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- CANCEL BILL MODAL -->
 <!-- ================================================================ -->
 <div class="modal-overlay" id="cancelBillModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <div class="modal-title">
+    <div class="modal-content-custom">
+        <div class="modal-header-custom">
+            <div class="modal-title-custom">
                 <i class="fas fa-exclamation-triangle"></i> Cancel Bill
             </div>
-            <button class="modal-close" onclick="closeCancelModal()">&times;</button>
+            <button class="modal-close-custom" onclick="closeCancelModal()">&times;</button>
         </div>
         
         <div style="text-align:center;font-size:3rem;color:#DC2626;margin-bottom:10px;">
             <i class="fas fa-exclamation-circle"></i>
         </div>
         
-        <p style="text-align:center;color:var(--text-primary);font-weight:600;margin-bottom:8px;">
+        <p style="text-align:center;color:var(--page-text-primary);font-weight:600;margin-bottom:8px;">
             Are you sure you want to cancel this bill?
         </p>
-        <p style="text-align:center;color:var(--text-secondary);font-size:0.85rem;margin-bottom:16px;">
+        <p style="text-align:center;color:var(--page-text-secondary);font-size:0.85rem;margin-bottom:16px;">
             Bill: <strong id="cancelBillNumber"></strong><br>
             Patient: <strong id="cancelPatientName"></strong>
         </p>
@@ -1916,18 +1505,18 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <input type="hidden" name="bill_id" id="cancelBillId" value="">
             
             <div style="margin-bottom:14px;">
-                <label style="display:block;font-size:0.8rem;font-weight:600;margin-bottom:6px;">
+                <label style="display:block;font-size:0.8rem;font-weight:700;margin-bottom:6px;">
                     Reason for Cancellation <span style="color:#DC2626;">*</span>
                 </label>
                 <textarea name="cancel_reason" id="cancelReason" class="cancel-reason-textarea" 
                           placeholder="Enter reason for cancelling this bill..." required></textarea>
             </div>
             
-            <div style="display:flex;gap:10px;padding-top:14px;border-top:2px solid var(--border-color);">
+            <div style="display:flex;gap:10px;padding-top:14px;border-top:2px solid var(--page-border);">
                 <button type="submit" style="flex:1;background:#DC2626;color:white;border:none;padding:10px 24px;border-radius:8px;font-weight:700;font-size:0.9rem;cursor:pointer;">
                     <i class="fas fa-ban"></i> Yes, Cancel Bill
                 </button>
-                <button type="button" onclick="closeCancelModal()" style="background:transparent;color:var(--text-secondary);border:2px solid var(--border-color);padding:10px 24px;border-radius:8px;font-weight:600;font-size:0.9rem;cursor:pointer;">
+                <button type="button" onclick="closeCancelModal()" style="background:transparent;color:var(--page-text-secondary);border:2px solid var(--page-border);padding:10px 24px;border-radius:8px;font-weight:700;font-size:0.9rem;cursor:pointer;">
                     <i class="fas fa-times"></i> No, Go Back
                 </button>
             </div>
@@ -1936,127 +1525,40 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
-    </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // DARK MODE
-    (function() {
-        var darkModeToggle = document.getElementById('darkModeToggle');
-        var darkIcon = document.getElementById('darkIcon');
-        var darkText = document.getElementById('darkText');
-        var htmlElement = document.documentElement;
-        
-        var savedDarkMode = localStorage.getItem('darkMode');
-        var isDark = savedDarkMode === 'true';
+    // DARK MODE BACKGROUND ENFORCEMENT
+    function enforceDarkModeBackground() {
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var body = document.body;
+        var mainContent = document.querySelector('.main-content');
         
         if (isDark) {
-            htmlElement.setAttribute('data-theme', 'dark');
-            if (darkIcon) darkIcon.className = 'fas fa-sun';
-            if (darkText) darkText.textContent = 'Light';
+            if (body) body.style.background = '#0F172A';
+            if (mainContent) mainContent.style.background = '#0F172A';
+        } else {
+            if (body) body.style.background = '#F0FDF4';
+            if (mainContent) mainContent.style.background = '#F0FDF4';
         }
-        
-        darkModeToggle?.addEventListener('click', function(e) {
-            e.preventDefault();
-            var isDarkNow = htmlElement.getAttribute('data-theme') === 'dark';
-            
-            if (isDarkNow) {
-                htmlElement.removeAttribute('data-theme');
-                if (darkIcon) darkIcon.className = 'fas fa-moon';
-                if (darkText) darkText.textContent = 'Dark';
-                localStorage.setItem('darkMode', 'false');
-                document.cookie = "dark_mode=false; path=/";
-            } else {
-                htmlElement.setAttribute('data-theme', 'dark');
-                if (darkIcon) darkIcon.className = 'fas fa-sun';
-                if (darkText) darkText.textContent = 'Light';
-                localStorage.setItem('darkMode', 'true');
-                document.cookie = "dark_mode=true; path=/";
-            }
-        });
-    })();
-
-    // SIDEBAR TOGGLE
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar?.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    // SEARCH
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim().toLowerCase();
-        var tables = ['billsTable', 'paymentsTable', 'staffTable'];
-        
-        tables.forEach(function(tableId) {
-            var table = document.getElementById(tableId);
-            if (!table) return;
-            
-            var rows = table.getElementsByTagName('tbody')[0]?.getElementsByTagName('tr');
-            if (!rows) return;
-            
-            for (var i = 0; i < rows.length; i++) {
-                var row = rows[i];
-                var text = row.textContent.toLowerCase();
-                row.style.display = (query === '' || text.includes(query)) ? '' : 'none';
-            }
-        });
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-    searchInput?.addEventListener('input', performSearch);
-
-    // BRANCH SWITCHER
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        window.location.href = url.toString();
     }
 
-    // CLOCK
-    function updateClock() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var el = document.getElementById('clockDisplay');
-        if (el) el.textContent = dateStr + ' • ' + timeStr;
-        
-        var ftEl = document.getElementById('footerTime');
-        if (ftEl) ftEl.textContent = timeStr;
-    }
-    updateClock();
-    setInterval(updateClock, 1000);
+    enforceDarkModeBackground();
 
-    // ✅ CANCEL BILL MODAL
+    document.addEventListener('darkModeChanged', function(e) {
+        setTimeout(enforceDarkModeBackground, 50);
+    });
+
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.attributeName === 'data-theme') {
+                enforceDarkModeBackground();
+            }
+        });
+    });
+    observer.observe(document.documentElement, { attributes: true });
+
+    // CANCEL BILL MODAL
     function openCancelModal(billId, billNumber, patientName) {
         var modal = document.getElementById('cancelBillModal');
         if (!modal) return;
@@ -2082,40 +1584,19 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     }
     
-    // Close on outside click
     document.getElementById('cancelBillModal')?.addEventListener('click', function(e) {
         if (e.target === this) closeCancelModal();
     });
     
-    // Close on Escape
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') closeCancelModal();
     });
 
-    // TOAST
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
-        toast.className = 'toast-custom ' + (type || 'info');
-        toastTitle.textContent = title || 'Notification';
-        toastMessage.textContent = message || '';
-        toast.style.display = 'flex';
-        
-        setTimeout(function() { toast.classList.add('show'); }, 50);
-        
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() { toast.style.display = 'none'; }, 400);
-        }, 4000);
-    }
-
-    console.log('%c💰 Braick Dispensary - View Cashier', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c✅ FIXED: Recent Bills have View, Edit, Cancel buttons', 'font-size:13px; color:#34D399; font-weight:bold;');
-    console.log('%c✅ FIXED: Status badges (Pending, Paid, Partial, Cancelled)', 'font-size:13px; color:#34D399; font-weight:bold;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?> (ID: <?= $cashier_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c💰 Braick - View Cashier', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#34D399;');
+    console.log('%c🌙 FULL DARK MODE inafanya kazi', 'font-size:13px; color:#7C3AED;');
+    console.log('%c💰 Recent Bills with View/Edit/Cancel buttons', 'font-size:13px; color:#34D399;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

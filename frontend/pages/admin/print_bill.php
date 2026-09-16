@@ -5,6 +5,9 @@
 // USING CASHIER RECEIPT DESIGN
 // BRAICK DISPENSARY - USING EXISTING DB TABLES
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
+// ✅ Standalone page (no header/sidebar needed)
+// ✅ Auto-print support
+// ✅ Receipt saved to database
 // ================================================================
 
 // ================================================================
@@ -33,6 +36,7 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../../auth/login.php'); break;
     }
     exit;
@@ -57,10 +61,11 @@ require_once '../../../backend/helpers/functions.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET BILL ID
+// GET PARAMETERS
 // ================================================================
 $bill_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $auto_print = isset($_GET['print']) && $_GET['print'] == 1;
+$return_branch = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 
 // Initialize variables
 $bill = null;
@@ -189,7 +194,7 @@ try {
 }
 
 // ================================================================
-// LOGO PATH
+// LOGO PATH (MULTIPLE FALLBACKS)
 // ================================================================
 $logo_paths = [
     $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png',
@@ -222,7 +227,8 @@ $profile_pic_url = !empty($profile_pic)
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Receipt - <?= htmlspecialchars($site_name) ?></title>
+    <title>Receipt - <?= htmlspecialchars($site_name ?? 'Braick Dispensary') ?></title>
+    <link rel="icon" href="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" type="image/png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
         /* ================================================================
@@ -242,7 +248,7 @@ $profile_pic_url = !empty($profile_pic)
         }
         
         /* ================================================================
-           PAGE HEADER
+           PAGE HEADER (HIDDEN IN PRINT)
            ================================================================ */
         .page-header {
             max-width: 420px;
@@ -251,6 +257,7 @@ $profile_pic_url = !empty($profile_pic)
             justify-content: space-between;
             align-items: center;
             padding: 0 4px;
+            gap: 8px;
         }
         
         .page-header .back-link {
@@ -264,12 +271,16 @@ $profile_pic_url = !empty($profile_pic)
             border: 2px solid #E2E8F0;
             transition: all 0.3s ease;
             background: white;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
         }
         
         .page-header .back-link:hover {
             border-color: #0B5ED7;
             color: #0B5ED7;
             background: #F8FAFC;
+            transform: translateY(-2px);
         }
         
         .page-header .print-link {
@@ -284,16 +295,15 @@ $profile_pic_url = !empty($profile_pic)
             border: none;
             transition: all 0.3s ease;
             cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
         }
         
         .page-header .print-link:hover {
             background: #0A4CA8;
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .page-header .print-link i {
-            margin-right: 6px;
         }
         
         /* ================================================================
@@ -391,6 +401,10 @@ $profile_pic_url = !empty($profile_pic)
             font-weight: 700;
         }
         
+        .receipt-row .value.capitalize {
+            text-transform: capitalize;
+        }
+        
         .receipt-items {
             margin: 10px 0;
             border-top: 1px dashed #94A3B8;
@@ -417,7 +431,7 @@ $profile_pic_url = !empty($profile_pic)
         
         .receipt-item .item-qty {
             color: #64748B;
-            margin-right: 8px;
+            margin-left: 4px;
         }
         
         /* ================================================================
@@ -609,18 +623,42 @@ $profile_pic_url = !empty($profile_pic)
             .error-box {
                 display: none !important;
             }
+            
+            @page {
+                margin: 0.5cm;
+                size: auto;
+            }
         }
         
         /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 480px) {
+            body {
+                padding: 10px;
+            }
+            
             .receipt {
                 padding: 16px 18px;
+                border-radius: 8px;
             }
             
             .receipt-logo-text {
                 font-size: 1.3rem;
+            }
+            
+            .receipt-title {
+                font-size: 0.9rem;
+            }
+            
+            .receipt-item,
+            .receipt-total-row,
+            .receipt-row {
+                font-size: 0.7rem;
+            }
+            
+            .receipt-grand-total {
+                font-size: 0.85rem;
             }
             
             .page-header {
@@ -631,7 +669,7 @@ $profile_pic_url = !empty($profile_pic)
             .page-header .back-link,
             .page-header .print-link {
                 flex: 1;
-                text-align: center;
+                justify-content: center;
             }
         }
     </style>
@@ -644,7 +682,7 @@ $profile_pic_url = !empty($profile_pic)
     <!-- PAGE HEADER - HIDDEN WHEN PRINTING -->
     <!-- ================================================================ -->
     <div class="page-header no-print">
-        <a href="bills.php" class="back-link">
+        <a href="bills.php?branch=<?= htmlspecialchars($return_branch) ?>" class="back-link">
             <i class="fas fa-arrow-left"></i> Back to Bills
         </a>
         <button onclick="window.print()" class="print-link">
@@ -660,7 +698,7 @@ $profile_pic_url = !empty($profile_pic)
         <i class="fas fa-exclamation-circle"></i>
         <h3>Error</h3>
         <p><?= htmlspecialchars($error_message ?: 'Bill not found') ?></p>
-        <a href="bills.php" class="back-btn">
+        <a href="bills.php?branch=<?= htmlspecialchars($return_branch) ?>" class="back-btn">
             <i class="fas fa-arrow-left"></i> Back to Bills
         </a>
     </div>
@@ -898,7 +936,7 @@ $profile_pic_url = !empty($profile_pic)
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -922,16 +960,23 @@ $profile_pic_url = !empty($profile_pic)
         if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
             // Allow default print behavior
         }
+        // Escape to go back
+        if (e.key === 'Escape') {
+            window.location.href = 'bills.php?branch=<?= htmlspecialchars($return_branch) ?>';
+        }
     });
 
     console.log('%c🧾 Braick - Admin Print Receipt', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📋 Bill #: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c💰 Total: <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');
+    <?php if ($bill): ?>
+        console.log('%c📋 Bill #: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
+        console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+        console.log('%c💰 Total: <?= $currency ?? 'TSh' ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');
+    <?php endif; ?>
     console.log('%c📊 Tables: bills, bill_items, payments, receipts', 'font-size:13px; color:#34D399;');
     console.log('%c🖨️ Receipt saved to database', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Standalone page (no header/sidebar needed)', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

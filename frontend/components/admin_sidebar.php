@@ -1,10 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/components/admin_sidebar.php
-// SUPER ADMIN - SHARED SIDEBAR (FULLY FIXED)
-// FIXED: All badges BLUE background
-// FIXED: Mobile sidebar z-index and shadow issues
-// FIXED: Body scroll lock when sidebar opens on mobile
+// SUPER ADMIN - SHARED SIDEBAR
+// ✅ FIXED: Documents count from patient_documents
+// ✅ FIXED: Sick Sheets count from external_sick_sheets + patient_documents
+// ✅ FIXED: Audit menu - shows "NEW" badge (not user count)
+// ✅ Uses internal_documents for documents
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -24,6 +25,7 @@ if ($_SESSION['role'] !== 'admin') {
         case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
         case 'cashier': header('Location: /dispensary_system/frontend/pages/cashier/dashboard.php'); break;
         case 'reception': header('Location: /dispensary_system/frontend/pages/reception/dashboard.php'); break;
+        case 'audit': header('Location: /dispensary_system/frontend/pages/audit/dashboard.php'); break;
         default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
     }
     exit;
@@ -65,11 +67,20 @@ $total_patients = 0;
 $today_patients = 0;
 $total_services = 0;
 $today_services = 0;
+$total_referrals = 0;
+$total_documents = 0;
+$total_sick_sheets = 0;
+$total_appointments = 0;
+$today_appointments = 0;
+$total_audit_logs = 0;
+$today_audit_logs = 0;
 $module_counts = ['pharmacy' => 0, 'reception' => 0, 'laboratory' => 0, 'cashier' => 0];
 
 if ($db !== null) {
     try {
-        // Total employees
+        // ================================================================
+        // EMPLOYEES & DOCTORS
+        // ================================================================
         if ($selected_branch_id === 'all') {
             $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin' AND status = 'active'");
         } else {
@@ -78,7 +89,6 @@ if ($db !== null) {
         }
         $total_employees = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Total doctors
         if ($selected_branch_id === 'all') {
             $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
         } else {
@@ -87,7 +97,9 @@ if ($db !== null) {
         }
         $total_doctors = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Module counts
+        // ================================================================
+        // MODULE COUNTS
+        // ================================================================
         $modules = ['pharmacy', 'reception', 'laboratory', 'cashier'];
         foreach ($modules as $module) {
             try {
@@ -105,7 +117,9 @@ if ($db !== null) {
             }
         }
         
-        // Total patients
+        // ================================================================
+        // PATIENTS
+        // ================================================================
         if ($selected_branch_id === 'all') {
             $stmt = $db->query("SELECT COUNT(*) as count FROM patients");
         } else {
@@ -114,7 +128,6 @@ if ($db !== null) {
         }
         $total_patients = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Today's patients
         if ($selected_branch_id === 'all') {
             $stmt = $db->query("SELECT COUNT(*) as count FROM patients WHERE DATE(created_at) = CURDATE()");
         } else {
@@ -123,7 +136,9 @@ if ($db !== null) {
         }
         $today_patients = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Total services
+        // ================================================================
+        // SERVICES
+        // ================================================================
         if ($selected_branch_id === 'all') {
             $stmt = $db->query("SELECT COUNT(*) as count FROM bill_items WHERE status != 'cancelled'");
         } else {
@@ -132,7 +147,6 @@ if ($db !== null) {
         }
         $total_services = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Today's services
         if ($selected_branch_id === 'all') {
             $stmt = $db->query("SELECT COUNT(*) as count FROM bill_items WHERE status != 'cancelled' AND DATE(created_at) = CURDATE()");
         } else {
@@ -141,7 +155,9 @@ if ($db !== null) {
         }
         $today_services = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Pending prescriptions
+        // ================================================================
+        // PRESCRIPTIONS & LAB
+        // ================================================================
         if ($selected_branch_id === 'all') {
             $stmt = $db->query("SELECT COUNT(*) as count FROM prescriptions WHERE status IN ('pending', 'confirmed')");
         } else {
@@ -150,7 +166,6 @@ if ($db !== null) {
         }
         $pending_prescriptions = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Pending lab tests
         if ($selected_branch_id === 'all') {
             $stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests WHERE status IN ('pending', 'in_progress')");
         } else {
@@ -159,28 +174,139 @@ if ($db !== null) {
         }
         $pending_lab_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Total branches
+        // ================================================================
+        // BRANCHES
+        // ================================================================
         $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
         $total_branches = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        
+        // ================================================================
+        // ✅ REFERRALS
+        // ================================================================
+        try {
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("SELECT COUNT(*) as count FROM referrals WHERE status != 'cancelled'");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM referrals WHERE branch_id = ? AND status != 'cancelled'");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $total_referrals = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) { $total_referrals = 0; }
+        
+        // ================================================================
+        // ✅ FIXED: DOCUMENTS — from patient_documents (excluding sick_sheets)
+        // ================================================================
+        try {
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("
+                    SELECT COUNT(*) as count FROM patient_documents 
+                    WHERE status = 'active' 
+                    AND (document_type IS NULL OR document_type != 'sick_sheet')
+                ");
+            } else {
+                $stmt = $db->prepare("
+                    SELECT COUNT(*) as count FROM patient_documents 
+                    WHERE branch_id = ? 
+                    AND status = 'active' 
+                    AND (document_type IS NULL OR document_type != 'sick_sheet')
+                ");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $total_documents = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) { 
+            $total_documents = 0; 
+            error_log("Documents count error: " . $e->getMessage());
+        }
+        
+        // ================================================================
+        // ✅ FIXED: SICK SHEETS — from external_sick_sheets + patient_documents
+        // ================================================================
+        try {
+            $external_count = 0;
+            $internal_count = 0;
+            
+            // External sick sheets
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("SELECT COUNT(*) as count FROM external_sick_sheets WHERE status = 'active'");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM external_sick_sheets WHERE branch_id = ? AND status = 'active'");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $external_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // Internal sick sheets (from patient_documents)
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("
+                    SELECT COUNT(*) as count FROM patient_documents 
+                    WHERE document_type = 'sick_sheet' AND status = 'active'
+                ");
+            } else {
+                $stmt = $db->prepare("
+                    SELECT COUNT(*) as count FROM patient_documents 
+                    WHERE branch_id = ? AND document_type = 'sick_sheet' AND status = 'active'
+                ");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $internal_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $total_sick_sheets = $external_count + $internal_count;
+        } catch (Exception $e) { 
+            $total_sick_sheets = 0;
+            error_log("Sick sheets count error: " . $e->getMessage());
+        }
+        
+        // ================================================================
+        // ✅ APPOINTMENTS
+        // ================================================================
+        try {
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("SELECT COUNT(*) as count FROM appointments WHERE status NOT IN ('cancelled', 'completed')");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND status NOT IN ('cancelled', 'completed')");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $total_appointments = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("SELECT COUNT(*) as count FROM appointments WHERE DATE(appointment_date) = CURDATE() AND status NOT IN ('cancelled', 'completed')");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND DATE(appointment_date) = CURDATE() AND status NOT IN ('cancelled', 'completed')");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $today_appointments = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) { 
+            $total_appointments = 0; 
+            $today_appointments = 0; 
+        }
+        
+        // ================================================================
+        // ✅ AUDIT LOGS
+        // ================================================================
+        try {
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("SELECT COUNT(*) as count FROM audit_logs");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM audit_logs WHERE branch_id = ?");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $total_audit_logs = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("SELECT COUNT(*) as count FROM audit_logs WHERE DATE(created_at) = CURDATE()");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM audit_logs WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $today_audit_logs = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) { 
+            $total_audit_logs = 0; 
+            $today_audit_logs = 0; 
+        }
         
     } catch (Exception $e) {
         error_log("Admin sidebar initial data error: " . $e->getMessage());
     }
 }
-
-$initial_hash = md5(json_encode([
-    'total_employees' => $total_employees,
-    'total_patients' => $total_patients,
-    'total_doctors' => $total_doctors,
-    'pharmacy_count' => $module_counts['pharmacy'],
-    'reception_count' => $module_counts['reception'],
-    'laboratory_count' => $module_counts['laboratory'],
-    'cashier_count' => $module_counts['cashier'],
-    'total_services' => $total_services,
-    'total_branches' => $total_branches,
-    'pending_prescriptions' => $pending_prescriptions,
-    'pending_lab_tests' => $pending_lab_tests
-]));
 
 $current_page = basename($_SERVER['PHP_SELF']);
 
@@ -203,9 +329,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 /* ================================================================ */
 .sidebar {
     position: fixed; 
-    top: 0; 
-    left: 0; 
-    bottom: 0;
+    top: 0; left: 0; bottom: 0;
     width: 270px; 
     background: linear-gradient(180deg, #0B4EA8 0%, #0A3D7A 100%);
     color: white;
@@ -223,9 +347,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     box-shadow: 4px 0 30px rgba(0,0,0,0.5);
 }
 
-.sidebar.open {
-    transform: translateX(0) !important;
-}
+.sidebar.open { transform: translateX(0) !important; }
 
 .sidebar::-webkit-scrollbar { width: 5px; }
 .sidebar::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
@@ -243,32 +365,23 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 }
 
 .sidebar-brand .logo {
-    width: 42px; 
-    height: 42px; 
+    width: 42px; height: 42px; 
     border-radius: 10px;
     object-fit: cover; 
-    background: white; 
-    padding: 4px;
+    background: white; padding: 4px;
     border: 2px solid rgba(255,255,255,0.15);
     transition: transform 0.3s ease;
 }
 
-.sidebar-brand .logo:hover {
-    transform: rotate(-5deg) scale(1.05);
-}
+.sidebar-brand .logo:hover { transform: rotate(-5deg) scale(1.05); }
 
 .sidebar-brand .brand-text { 
-    color: white; 
-    font-weight: 700; 
-    font-size: 0.95rem; 
-    line-height: 1.2;
-    letter-spacing: 0.5px;
+    color: white; font-weight: 700; font-size: 0.95rem; 
+    line-height: 1.2; letter-spacing: 0.5px;
 }
 
 .sidebar-brand .brand-sub { 
-    color: #9EC5FE; 
-    font-size: 0.65rem; 
-    font-weight: 500;
+    color: #9EC5FE; font-size: 0.65rem; font-weight: 500;
     letter-spacing: 0.3px;
 }
 
@@ -279,77 +392,43 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 }
 
 .sidebar-branch-selector select {
-    width: 100%;
-    padding: 7px 10px;
-    border-radius: 8px;
-    border: none;
+    width: 100%; padding: 7px 10px;
+    border-radius: 8px; border: none;
     background: rgba(255,255,255,0.12);
-    color: white;
-    font-size: 0.75rem;
-    cursor: pointer;
-    outline: none;
+    color: white; font-size: 0.75rem;
+    cursor: pointer; outline: none;
     transition: all 0.3s ease;
-    appearance: none;
-    -webkit-appearance: none;
+    appearance: none; -webkit-appearance: none;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='white' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 10px center;
 }
 
-.sidebar-branch-selector select:hover {
-    background-color: rgba(255,255,255,0.2);
-}
+.sidebar-branch-selector select:hover { background-color: rgba(255,255,255,0.2); }
+.sidebar-branch-selector select:focus { box-shadow: 0 0 0 2px rgba(10, 168, 79, 0.5); }
+.sidebar-branch-selector select option { background: #0B4EA8; color: white; padding: 8px; }
 
-.sidebar-branch-selector select:focus {
-    box-shadow: 0 0 0 2px rgba(10, 168, 79, 0.5);
-}
-
-.sidebar-branch-selector select option {
-    background: #0B4EA8;
-    color: white;
-    padding: 8px;
-}
-
-.sidebar-nav { 
-    padding: 10px 8px 20px; 
-}
+.sidebar-nav { padding: 10px 8px 20px; }
 
 .sidebar-nav .nav-label {
-    font-size: 0.5rem; 
-    text-transform: uppercase;
-    letter-spacing: 0.08em; 
-    color: #6EA8FE;
-    padding: 8px 10px 4px;
-    margin: 8px 0 2px; 
-    font-weight: 700;
-    opacity: 0.8;
+    font-size: 0.5rem; text-transform: uppercase;
+    letter-spacing: 0.08em; color: #6EA8FE;
+    padding: 8px 10px 4px; margin: 8px 0 2px; 
+    font-weight: 700; opacity: 0.8;
 }
 
-.sidebar-nav .nav-label:first-of-type {
-    margin-top: 0;
-}
-
-.sidebar-nav .nav-label .label-icon {
-    margin-right: 4px;
-}
+.sidebar-nav .nav-label:first-of-type { margin-top: 0; }
+.sidebar-nav .nav-label .label-icon { margin-right: 4px; }
 
 .sidebar-link {
-    display: flex; 
-    align-items: center; 
-    gap: 10px;
-    padding: 8px 12px; 
-    border-radius: 8px;
-    color: #D2E3FC; 
-    text-decoration: none;
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; border-radius: 8px;
+    color: #D2E3FC; text-decoration: none;
     transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-    font-size: 0.8rem; 
-    font-weight: 500;
-    margin: 1px 0;
-    background: transparent;
-    cursor: pointer;
-    border: none;
-    width: 100%;
-    text-align: left;
+    font-size: 0.8rem; font-weight: 500;
+    margin: 1px 0; background: transparent;
+    cursor: pointer; border: none;
+    width: 100%; text-align: left;
     position: relative;
 }
 
@@ -369,37 +448,27 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 .sidebar-link.active::before {
     content: '';
     position: absolute;
-    left: 0;
-    top: 15%;
-    bottom: 15%;
-    width: 4px;
-    background: #0AA84F;
+    left: 0; top: 15%; bottom: 15%;
+    width: 4px; background: #0AA84F;
     border-radius: 0 4px 4px 0;
     box-shadow: 0 0 12px rgba(10, 168, 79, 0.5);
 }
 
 .sidebar-link i { 
-    width: 20px; 
-    text-align: center; 
-    font-size: 0.9rem; 
-    flex-shrink: 0;
-    opacity: 0.8;
+    width: 20px; text-align: center; font-size: 0.9rem; 
+    flex-shrink: 0; opacity: 0.8;
 }
 
 .sidebar-link:hover i,
-.sidebar-link.active i {
-    opacity: 1;
-}
+.sidebar-link.active i { opacity: 1; }
 
 .sidebar-link .link-text {
-    flex: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex: 1; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
 }
 
 /* ================================================================ */
-/* ✅ ALL BADGES - BLUE BACKGROUND */
+/* BADGES */
 /* ================================================================ */
 .sidebar-link .badge {
     margin-left: auto;
@@ -418,25 +487,52 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     line-height: 1.4;
 }
 
+/* ✅ NEW badge style - bright green */
+.sidebar-link .badge.badge-new {
+    background: #10B981 !important;
+    color: #FFFFFF !important;
+    border-color: rgba(255,255,255,0.4) !important;
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.6);
+    animation: pulse-new 2s infinite;
+    font-size: 0.55rem;
+    letter-spacing: 0.05em;
+    font-weight: 800;
+}
+
+@keyframes pulse-new {
+    0%, 100% { 
+        transform: scale(1); 
+        box-shadow: 0 2px 8px rgba(16, 185, 129, 0.6);
+    }
+    50% { 
+        transform: scale(1.08); 
+        box-shadow: 0 3px 14px rgba(16, 185, 129, 0.9);
+    }
+}
+
 .sidebar-link .badge.danger,
 .sidebar-link .badge.success,
 .sidebar-link .badge.warning,
 .sidebar-link .badge.blue,
 .sidebar-link .badge.purple,
-.sidebar-link .badge.green {
+.sidebar-link .badge.green,
+.sidebar-link .badge.orange,
+.sidebar-link .badge.teal {
     background: #0B5ED7 !important;
     color: #FFFFFF !important;
     border-color: rgba(255,255,255,0.25) !important;
 }
 
-.sidebar-link .badge.danger {
-    animation: pulse-badge 2s infinite;
-}
+.sidebar-link .badge.danger { animation: pulse-badge 2s infinite; }
 
 .sidebar-link:hover .badge {
     background: #1A73E8 !important;
     transform: scale(1.08);
     box-shadow: 0 3px 10px rgba(11, 94, 215, 0.6);
+}
+
+.sidebar-link:hover .badge.badge-new {
+    background: #059669 !important;
 }
 
 .sidebar-link.active .badge {
@@ -445,20 +541,23 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     border-color: rgba(255,255,255,0.4) !important;
 }
 
-@keyframes pulse-badge {
-    0%, 100% { 
-        transform: scale(1); 
-        box-shadow: 0 2px 6px rgba(11, 94, 215, 0.4);
-    }
-    50% { 
-        transform: scale(1.1); 
-        box-shadow: 0 3px 12px rgba(11, 94, 215, 0.7);
-    }
+[data-theme="dark"] .sidebar-link .badge {
+    background: #1A73E8 !important;
+    border-color: rgba(255,255,255,0.35) !important;
+    box-shadow: 0 2px 8px rgba(26, 115, 232, 0.5);
 }
 
-.badge-update {
-    animation: badgePop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+[data-theme="dark"] .sidebar-link .badge.badge-new {
+    background: #10B981 !important;
+    border-color: rgba(255,255,255,0.4) !important;
 }
+
+@keyframes pulse-badge {
+    0%, 100% { transform: scale(1); box-shadow: 0 2px 6px rgba(11, 94, 215, 0.4); }
+    50% { transform: scale(1.1); box-shadow: 0 3px 12px rgba(11, 94, 215, 0.7); }
+}
+
+.badge-update { animation: badgePop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
 
 @keyframes badgePop {
     0% { transform: scale(0.3); opacity: 0; }
@@ -466,71 +565,44 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     100% { transform: scale(1); opacity: 1; }
 }
 
-.sidebar-data-flash {
-    animation: flashGreen 0.6s ease;
-}
-
-@keyframes flashGreen {
-    0% { background: rgba(52, 211, 153, 0.15); }
-    50% { background: rgba(52, 211, 153, 0.03); }
-    100% { background: transparent; }
-}
-
 .sidebar-link.logout-link {
     border-top: 2px solid rgba(255,255,255,0.06);
-    padding-top: 10px;
-    margin-top: 4px;
+    padding-top: 10px; margin-top: 4px;
     color: #FCA5A5;
 }
 
 .sidebar-link.logout-link:hover {
-    background: #DC2626;
-    color: white;
+    background: #DC2626; color: white;
     box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
     transform: translateX(4px);
 }
 
-.sidebar-link.logout-link i {
-    opacity: 1;
-}
+.sidebar-link.logout-link i { opacity: 1; }
 
 .sidebar-live-indicator {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.5rem;
-    color: #34D399;
-    margin-left: auto;
-    font-weight: 500;
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 0.5rem; color: #34D399;
+    margin-left: auto; font-weight: 500;
 }
 
 .sidebar-live-indicator .dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #34D399;
-    animation: pulse-dot 1.5s infinite;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #34D399; animation: pulse-dot 1.5s infinite;
     display: inline-block;
 }
 
 .sidebar-status {
     padding: 10px 16px;
     border-top: 2px solid rgba(255,255,255,0.06);
-    display: flex;
-    align-items: center;
-    gap: 10px;
+    display: flex; align-items: center; gap: 10px;
     background: rgba(0,0,0,0.1);
-    position: sticky;
-    bottom: 0;
+    position: sticky; bottom: 0;
     backdrop-filter: blur(10px);
 }
 
 .sidebar-status .status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    display: inline-block;
-    transition: all 0.3s ease;
+    width: 8px; height: 8px; border-radius: 50%;
+    display: inline-block; transition: all 0.3s ease;
 }
 
 .sidebar-status .status-dot.online {
@@ -539,23 +611,15 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     animation: pulse-dot 1.5s infinite;
 }
 
-.sidebar-status .status-dot.offline {
-    background: #94A3B8;
-}
+.sidebar-status .status-dot.offline { background: #94A3B8; }
 
 .sidebar-status .status-text {
-    font-size: 0.65rem;
-    color: #D2E3FC;
-    font-weight: 500;
+    font-size: 0.65rem; color: #D2E3FC; font-weight: 500;
 }
 
 .sidebar-status .update-time {
-    font-size: 0.5rem;
-    color: #6EA8FE;
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 4px;
+    font-size: 0.5rem; color: #6EA8FE;
+    margin-left: auto; display: flex; align-items: center; gap: 4px;
 }
 
 @keyframes pulse-dot {
@@ -563,44 +627,27 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     50% { opacity: 0.3; transform: scale(0.8); }
 }
 
-/* ================================================================ */
-/* ✅ OVERLAY - Base styles */
-/* ================================================================ */
 #sidebarOverlay {
     position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
+    top: 0; left: 0; right: 0; bottom: 0;
     background: rgba(0,0,0,0.5);
-    z-index: 45;
-    display: none;
+    z-index: 45; display: none;
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
     transition: opacity 0.3s ease;
 }
 
-#sidebarOverlay.active {
-    display: block !important;
-}
+#sidebarOverlay.active { display: block !important; }
 
-/* ================================================================ */
-/* DESKTOP: Sidebar always visible */
-/* ================================================================ */
 @media (min-width: 1025px) {
     .sidebar {
         transform: translateX(0) !important;
         z-index: 50;
         box-shadow: 4px 0 20px rgba(0,0,0,0.08);
     }
-    #sidebarOverlay {
-        display: none !important;
-    }
+    #sidebarOverlay { display: none !important; }
 }
 
-/* ================================================================ */
-/* ✅ TABLET/MOBILE: Fixed z-index and shadow */
-/* ================================================================ */
 @media (max-width: 1024px) {
     .sidebar {
         width: 280px;
@@ -620,197 +667,44 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     #sidebarOverlay {
         display: none;
         z-index: 99998 !important;
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0,0,0,0.5);
-        backdrop-filter: blur(4px);
-        -webkit-backdrop-filter: blur(4px);
     }
     
-    #sidebarOverlay.active {
-        display: block !important;
-    }
+    #sidebarOverlay.active { display: block !important; }
     
-    /* Ensure top-nav is below sidebar */
-    .top-nav {
-        z-index: 40 !important;
-    }
+    .top-nav { z-index: 40 !important; }
     
-    /* Make sidebar links clickable */
-    .sidebar.open,
-    .sidebar.open * {
-        pointer-events: auto !important;
-    }
+    .sidebar.open, .sidebar.open * { pointer-events: auto !important; }
+    .sidebar-link { pointer-events: auto !important; cursor: pointer !important; }
     
-    .sidebar-link {
-        pointer-events: auto !important;
-        cursor: pointer !important;
-    }
-    
-    .sidebar-brand {
-        padding: 14px 14px 10px;
-    }
-    .sidebar-brand .logo {
-        width: 36px;
-        height: 36px;
-    }
-    .sidebar-brand .brand-text {
-        font-size: 0.85rem;
-    }
-    .sidebar-link {
-        padding: 7px 10px;
-        font-size: 0.75rem;
-        gap: 8px;
-    }
-    .sidebar-link i {
-        width: 18px;
-        font-size: 0.8rem;
-    }
-    .sidebar-link .badge {
-        font-size: 0.55rem;
-        padding: 1px 7px;
-    }
-    .sidebar-nav .nav-label {
-        font-size: 0.45rem;
-    }
-    .sidebar-status {
-        padding: 8px 14px;
-    }
+    .sidebar-brand { padding: 14px 14px 10px; }
+    .sidebar-brand .logo { width: 36px; height: 36px; }
+    .sidebar-brand .brand-text { font-size: 0.85rem; }
+    .sidebar-link { padding: 7px 10px; font-size: 0.75rem; gap: 8px; }
+    .sidebar-link i { width: 18px; font-size: 0.8rem; }
+    .sidebar-link .badge { font-size: 0.55rem; padding: 1px 7px; }
+    .sidebar-nav .nav-label { font-size: 0.45rem; }
+    .sidebar-status { padding: 8px 14px; }
 }
 
-/* ================================================================ */
-/* ✅ PHONE: Even smaller shadow */
-/* ================================================================ */
 @media (max-width: 768px) {
-    .sidebar {
-        width: 300px;
-        transform: translateX(-100%);
-        border-radius: 0 16px 16px 0;
-        z-index: 99999 !important;
-        box-shadow: 2px 0 8px rgba(0,0,0,0.15);
-        will-change: transform;
-        isolation: isolate;
-    }
-    
-    .sidebar.open {
-        transform: translateX(0) !important;
-        box-shadow: 4px 0 20px rgba(0,0,0,0.25);
-    }
-    
-    #sidebarOverlay {
-        z-index: 99998 !important;
-    }
-    
-    .sidebar-brand {
-        padding: 12px 12px 10px;
-    }
-    .sidebar-brand .logo {
-        width: 34px;
-        height: 34px;
-    }
-    .sidebar-brand .brand-text {
-        font-size: 0.8rem;
-    }
-    .sidebar-link {
-        padding: 6px 10px;
-        font-size: 0.7rem;
-        gap: 8px;
-    }
-    .sidebar-link i {
-        width: 16px;
-        font-size: 0.75rem;
-    }
-    .sidebar-link .badge {
-        font-size: 0.5rem;
-        padding: 1px 6px;
-    }
-    .sidebar-nav .nav-label {
-        font-size: 0.4rem;
-    }
-    .sidebar-status {
-        padding: 6px 12px;
-    }
-    .sidebar-status .status-text {
-        font-size: 0.6rem;
-    }
-    .sidebar-status .update-time {
-        font-size: 0.5rem;
-    }
+    .sidebar { width: 300px; border-radius: 0 16px 16px 0; }
+    .sidebar-link { padding: 6px 10px; font-size: 0.7rem; gap: 8px; }
+    .sidebar-link i { width: 16px; font-size: 0.75rem; }
+    .sidebar-link .badge { font-size: 0.5rem; padding: 1px 6px; }
+    .sidebar-nav .nav-label { font-size: 0.4rem; }
 }
 
-/* ================================================================ */
-/* ✅ SMALL PHONE: Full width with minimal shadow */
-/* ================================================================ */
 @media (max-width: 480px) {
     .sidebar {
-        width: 100%;
-        max-width: 320px;
-        transform: translateX(-100%);
+        width: 100%; max-width: 320px;
         border-radius: 0 20px 20px 0;
-        z-index: 99999 !important;
-        box-shadow: 2px 0 6px rgba(0,0,0,0.15);
-        will-change: transform;
-        isolation: isolate;
     }
-    
-    .sidebar.open {
-        transform: translateX(0) !important;
-        box-shadow: 4px 0 20px rgba(0,0,0,0.25);
-    }
-    
-    #sidebarOverlay {
-        z-index: 99998 !important;
-    }
-    
-    .sidebar-brand {
-        padding: 10px 10px 8px;
-    }
-    .sidebar-brand .logo {
-        width: 30px;
-        height: 30px;
-    }
-    .sidebar-brand .brand-text {
-        font-size: 0.75rem;
-    }
-    .sidebar-link {
-        padding: 5px 8px;
-        font-size: 0.65rem;
-        gap: 6px;
-    }
-    .sidebar-link i {
-        width: 14px;
-        font-size: 0.7rem;
-    }
-    .sidebar-link .badge {
-        font-size: 0.45rem;
-        padding: 1px 5px;
-        min-width: 16px;
-    }
-    .sidebar-nav .nav-label {
-        font-size: 0.4rem;
-        padding: 0 8px;
-    }
-    .sidebar-status {
-        padding: 4px 10px;
-    }
-    .sidebar-status .status-text {
-        font-size: 0.55rem;
-    }
-    .sidebar-status .update-time {
-        font-size: 0.45rem;
-    }
-    .sidebar-status .status-dot {
-        width: 6px;
-        height: 6px;
-    }
+    .sidebar-link { padding: 5px 8px; font-size: 0.65rem; gap: 6px; }
+    .sidebar-link i { width: 14px; font-size: 0.7rem; }
+    .sidebar-link .badge { font-size: 0.45rem; padding: 1px 5px; min-width: 16px; }
+    .sidebar-nav .nav-label { font-size: 0.4rem; padding: 0 8px; }
 }
 
-/* ================================================================ */
-/* ✅ PREVENT ANY OVERLAY FROM BLOCKING SIDEBAR */
-/* ================================================================ */
 @media (max-width: 1024px) {
     body.sidebar-open {
         overflow: hidden !important;
@@ -866,6 +760,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     
     <nav class="sidebar-nav">
         
+        <!-- ============================================================ -->
+        <!-- MAIN MENU -->
+        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">📋</span> Main Menu</div>
         
         <a href="/dispensary_system/frontend/pages/admin/dashboard.php?branch=<?= $selected_branch_id ?>" 
@@ -893,6 +790,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <?php endif; ?>
         </a>
         
+        <!-- ============================================================ -->
+        <!-- MODULES -->
+        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">⚙️</span> Modules</div>
         
         <a href="/dispensary_system/frontend/pages/admin/doctors_list.php?branch=<?= $selected_branch_id ?>" 
@@ -940,6 +840,17 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <span class="badge" id="badgeCashier"><?= $module_counts['cashier'] ?? 0 ?></span>
         </a>
         
+        <!-- ✅ AUDIT MODULE — with "NEW" badge -->
+        <a href="/dispensary_system/frontend/pages/admin/audit_dashboard.php?branch=<?= $selected_branch_id ?>" 
+           class="sidebar-link <?= isActive('audit_dashboard.php') || isAdminPage(['audit_logs.php', 'audit_users.php', 'audit_settings.php']) ? 'active' : '' ?>">
+            <i class="fas fa-clipboard-check"></i>
+            <span class="link-text">Audit</span>
+            <span class="badge badge-new" id="badgeAudit">NEW</span>
+        </a>
+        
+        <!-- ============================================================ -->
+        <!-- SERVICES -->
+        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">💼</span> Services</div>
         
         <a href="/dispensary_system/frontend/pages/admin/services.php?branch=<?= $selected_branch_id ?>" 
@@ -954,6 +865,49 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <?php endif; ?>
         </a>
         
+        <!-- ============================================================ -->
+        <!-- OTHERS SECTION -->
+        <!-- ============================================================ -->
+        <div class="nav-label"><span class="label-icon">📁</span> Others</div>
+        
+        <a href="/dispensary_system/frontend/pages/admin/referrals.php?branch=<?= $selected_branch_id ?>" 
+           class="sidebar-link <?= isActive('referrals.php') || isAdminPage(['view_referral.php', 'add_referral.php', 'edit_referral.php']) ? 'active' : '' ?>">
+            <i class="fas fa-share-square"></i>
+            <span class="link-text">Referrals</span>
+            <span class="badge" id="badgeReferrals"><?= $total_referrals ?></span>
+        </a>
+        
+        <!-- ✅ DOCUMENTS — count from patient_documents -->
+        <a href="/dispensary_system/frontend/pages/admin/documents.php?branch=<?= $selected_branch_id ?>" 
+           class="sidebar-link <?= isActive('documents.php') || isAdminPage(['view_document.php', 'add_document.php', 'edit_document.php']) ? 'active' : '' ?>">
+            <i class="fas fa-folder-open"></i>
+            <span class="link-text">Documents</span>
+            <span class="badge" id="badgeDocuments"><?= $total_documents ?></span>
+        </a>
+        
+        <!-- ✅ SICK SHEETS — count from external + internal -->
+        <a href="/dispensary_system/frontend/pages/admin/sick_sheets.php?branch=<?= $selected_branch_id ?>" 
+           class="sidebar-link <?= isActive('sick_sheets.php') || isAdminPage(['view_sick_sheet.php', 'add_sick_sheet.php', 'edit_sick_sheet.php']) ? 'active' : '' ?>">
+            <i class="fas fa-file-medical"></i>
+            <span class="link-text">Sick Sheets</span>
+            <span class="badge" id="badgeSickSheets"><?= $total_sick_sheets ?></span>
+        </a>
+        
+        <a href="/dispensary_system/frontend/pages/admin/appointments.php?branch=<?= $selected_branch_id ?>" 
+           class="sidebar-link <?= isActive('appointments.php') || isAdminPage(['view_appointment.php', 'add_appointment.php', 'edit_appointment.php', 'calendar.php']) ? 'active' : '' ?>">
+            <i class="fas fa-calendar-check"></i>
+            <span class="link-text">Appointments</span>
+            <span class="badge" id="badgeAppointments"><?= $total_appointments ?></span>
+            <?php if ($today_appointments > 0): ?>
+                <span class="badge" id="badgeAppointmentsToday">+<?= $today_appointments ?></span>
+            <?php else: ?>
+                <span class="badge" id="badgeAppointmentsToday" style="display:none;">+0</span>
+            <?php endif; ?>
+        </a>
+        
+        <!-- ============================================================ -->
+        <!-- MANAGEMENT -->
+        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">🏢</span> Management</div>
         
         <a href="/dispensary_system/frontend/pages/admin/branches.php?branch=<?= $selected_branch_id ?>" 
@@ -969,12 +923,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <span class="link-text">Departments</span>
         </a>
         
-        <a href="/dispensary_system/frontend/pages/admin/reports.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('reports.php') ?>">
-            <i class="fas fa-chart-bar"></i>
-            <span class="link-text">Reports</span>
-        </a>
-        
+        <!-- ============================================================ -->
+        <!-- SYSTEM -->
+        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">🔧</span> System</div>
         
         <a href="/dispensary_system/frontend/pages/admin/settings.php?branch=<?= $selected_branch_id ?>" 
@@ -983,6 +934,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <span class="link-text">Settings</span>
         </a>
         
+        <!-- ============================================================ -->
+        <!-- ACCOUNT -->
+        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">👤</span> Account</div>
         
         <a href="/dispensary_system/frontend/pages/admin/profile.php" 
@@ -1015,7 +969,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 // SIDEBAR CONFIG
 // ================================================================
 var SIDEBAR_CONFIG = {
-    CHECK_INTERVAL: 3000,
+    CHECK_INTERVAL: 5000,
     BRANCH_ID: '<?= $selected_branch_id ?>',
     CURRENT_PAGE: '<?= $current_page ?>'
 };
@@ -1039,7 +993,7 @@ function switchBranch(branchId) {
 }
 
 // ================================================================
-// ✅ SIDEBAR TOGGLE - FIXED for mobile
+// SIDEBAR TOGGLE
 // ================================================================
 (function() {
     function initSidebar() {
@@ -1053,59 +1007,41 @@ function switchBranch(branchId) {
             document.body.appendChild(overlay);
         }
         
-        if (!sidebar) {
-            console.error('❌ Sidebar not found');
-            return;
-        }
+        if (!sidebar) return;
         
         function openSidebar() {
             sidebar.classList.add('open');
             overlay.style.display = 'block';
             overlay.classList.add('active');
-            
-            // ✅ Prevent body scroll with position fixed
             document.body.classList.add('sidebar-open');
             document.body.style.overflow = 'hidden';
             document.body.style.position = 'fixed';
             document.body.style.width = '100%';
             document.body.style.height = '100%';
-            
-            // ✅ Ensure sidebar is on top
             sidebar.style.zIndex = '99999';
             overlay.style.zIndex = '99998';
-            
             sidebarState.isOpen = true;
-            console.log('🔓 Sidebar opened');
         }
         
         function closeSidebar() {
             sidebar.classList.remove('open');
             overlay.style.display = 'none';
             overlay.classList.remove('active');
-            
-            // ✅ Restore body scroll
             document.body.classList.remove('sidebar-open');
             document.body.style.overflow = '';
             document.body.style.position = '';
             document.body.style.width = '';
             document.body.style.height = '';
-            
             sidebar.style.zIndex = '';
             overlay.style.zIndex = '';
-            
             sidebarState.isOpen = false;
-            console.log('🔒 Sidebar closed');
         }
         
         function toggleSidebar() {
-            if (sidebar.classList.contains('open')) {
-                closeSidebar();
-            } else {
-                openSidebar();
-            }
+            if (sidebar.classList.contains('open')) closeSidebar();
+            else openSidebar();
         }
         
-        // Toggle button (hamburger)
         if (toggleBtn) {
             var newToggle = toggleBtn.cloneNode(true);
             toggleBtn.parentNode.replaceChild(newToggle, toggleBtn);
@@ -1115,36 +1051,29 @@ function switchBranch(branchId) {
                 freshToggle.addEventListener('click', function(e) {
                     e.preventDefault();
                     e.stopPropagation();
-                    console.log('🔘 Hamburger clicked');
                     toggleSidebar();
                 });
             }
         }
         
-        // Overlay click
         if (overlay) {
             overlay.addEventListener('click', function(e) {
-                if (e.target === overlay) {
-                    closeSidebar();
-                }
+                if (e.target === overlay) closeSidebar();
             });
         }
         
-        // ESC key
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape' && sidebar.classList.contains('open')) {
                 closeSidebar();
             }
         });
         
-        // Resize handler
         window.addEventListener('resize', function() {
             if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
                 closeSidebar();
             }
         });
         
-        // Close sidebar on link click (mobile only)
         document.querySelectorAll('.sidebar-link').forEach(function(link) {
             link.addEventListener('click', function() {
                 if (window.innerWidth <= 1024 && sidebarState.isOpen) {
@@ -1152,8 +1081,6 @@ function switchBranch(branchId) {
                 }
             });
         });
-        
-        console.log('✅ Admin Sidebar initialized');
     }
     
     if (document.readyState === 'loading') {
@@ -1192,7 +1119,11 @@ function refreshSidebarBadges() {
                 'badgeLaboratory': 'laboratory_count',
                 'badgeCashier': 'cashier_count',
                 'badgeServices': 'total_services',
-                'badgeBranches': 'total_branches'
+                'badgeBranches': 'total_branches',
+                'badgeReferrals': 'total_referrals',
+                'badgeDocuments': 'total_documents',
+                'badgeSickSheets': 'total_sick_sheets',
+                'badgeAppointments': 'total_appointments'
             };
             
             for (var elId in badgeMap) {
@@ -1212,52 +1143,47 @@ function refreshSidebarBadges() {
                 }
             }
             
+            // ✅ Audit badge is now "NEW" - no update needed
+            // (removed from badgeMap)
+            
             // Pending prescriptions
             var prEl = document.getElementById('badgePendingPrescriptions');
             if (prEl && data.data.pending_prescriptions !== undefined) {
                 var val = parseInt(data.data.pending_prescriptions);
-                if (val > 0) {
-                    prEl.textContent = val;
-                    prEl.style.display = '';
-                } else {
-                    prEl.style.display = 'none';
-                }
+                if (val > 0) { prEl.textContent = val; prEl.style.display = ''; }
+                else { prEl.style.display = 'none'; }
             }
             
             // Pending lab tests
             var ltEl = document.getElementById('badgePendingLabTests');
             if (ltEl && data.data.pending_lab_tests !== undefined) {
                 var val2 = parseInt(data.data.pending_lab_tests);
-                if (val2 > 0) {
-                    ltEl.textContent = val2;
-                    ltEl.style.display = '';
-                } else {
-                    ltEl.style.display = 'none';
-                }
+                if (val2 > 0) { ltEl.textContent = val2; ltEl.style.display = ''; }
+                else { ltEl.style.display = 'none'; }
             }
             
-            // Today patients
+            // Today's patients
             var tpEl = document.getElementById('badgePatientsToday');
             if (tpEl && data.data.today_patients !== undefined) {
                 var val3 = parseInt(data.data.today_patients);
-                if (val3 > 0) {
-                    tpEl.textContent = '+' + val3;
-                    tpEl.style.display = '';
-                } else {
-                    tpEl.style.display = 'none';
-                }
+                if (val3 > 0) { tpEl.textContent = '+' + val3; tpEl.style.display = ''; }
+                else { tpEl.style.display = 'none'; }
             }
             
-            // Today services
+            // Today's services
             var tsEl = document.getElementById('badgeServicesToday');
             if (tsEl && data.data.today_services !== undefined) {
                 var val4 = parseInt(data.data.today_services);
-                if (val4 > 0) {
-                    tsEl.textContent = '+' + val4;
-                    tsEl.style.display = '';
-                } else {
-                    tsEl.style.display = 'none';
-                }
+                if (val4 > 0) { tsEl.textContent = '+' + val4; tsEl.style.display = ''; }
+                else { tsEl.style.display = 'none'; }
+            }
+            
+            // Today's appointments
+            var aptEl = document.getElementById('badgeAppointmentsToday');
+            if (aptEl && data.data.today_appointments !== undefined) {
+                var val6 = parseInt(data.data.today_appointments);
+                if (val6 > 0) { aptEl.textContent = '+' + val6; aptEl.style.display = ''; }
+                else { aptEl.style.display = 'none'; }
             }
         }
     })
@@ -1288,11 +1214,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
 window.refreshSidebarData = refreshSidebarBadges;
 
-console.log('%c🏥 Braick - Admin Sidebar (Mobile FIXED)', 'font-size:16px; font-weight:bold; color:#0AA84F;');
-console.log('%c✅ All badges have BLUE background', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Mobile sidebar z-index: 99999', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Mobile sidebar shadow: reduced', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Body scroll lock: fixed', 'font-size:13px; color:#34D399;');
+console.log('%c🏥 Braick - Admin Sidebar (FIXED)', 'font-size:16px; font-weight:bold; color:#0AA84F;');
+console.log('%c✅ Documents count from patient_documents', 'font-size:13px; color:#34D399;');
+console.log('%c✅ Sick Sheets count from external + internal', 'font-size:13px; color:#34D399;');
+console.log('%c✅ Audit badge shows NEW', 'font-size:13px; color:#10B981; font-weight:bold;');
 console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#34D399;');
-console.log('%c📊 Cashier: <?= $module_counts['cashier'] ?> | Pharmacy: <?= $module_counts['pharmacy'] ?>', 'font-size:13px; color:#34D399;');
 </script>

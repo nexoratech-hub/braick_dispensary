@@ -2,31 +2,22 @@
 // ================================================================
 // FILE: frontend/pages/admin/settings.php
 // SUPER ADMIN - SYSTEM SETTINGS
-// BRAICK DISPENSARY - USING EXISTING DATABASE
-// WITH SHARED HEADER & SIDEBAR
-// FIXED: Edit branch buttons now work properly
-// FIXED: FULL BLUE background on System Settings card (NO WHITE)
-// FIXED: Page header 100% BLUE - NO WHITE BACKGROUND
+// BRAICK DISPENSARY
+// ✅ Uses SHARED admin_header.php & admin_sidebar.php
+// ✅ Page-specific CSS only (no duplicates)
+// ✅ Dark mode via header toggle
+// ✅ FULL BLUE page header - NO WHITE BACKGROUND
 // ================================================================
 
-// ================================================================
-// SESSION START
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../../auth/login.php');
     exit;
 }
 
-// ================================================================
-// ROLE CHECK - ONLY ADMIN CAN ACCESS
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -35,14 +26,12 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../../auth/login.php'); break;
     }
     exit;
 }
 
-// ================================================================
-// GET ADMIN DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
@@ -60,7 +49,7 @@ try {
 }
 
 // ================================================================
-// BRANCH SELECTION
+// GET FILTER PARAMETERS
 // ================================================================
 $selected_branch_id = $_GET['branch'] ?? 'all';
 $active_tab = $_GET['tab'] ?? 'general';
@@ -70,67 +59,51 @@ $edit_branch_id = isset($_GET['edit_branch']) ? (int)$_GET['edit_branch'] : 0;
 // GET STATISTICS FOR SIDEBAR
 // ================================================================
 $total_employees = 0;
+$total_doctors = 0;
+$total_branches = 0;
+$pending_lab_tests = 0;
+$pending_prescriptions = 0;
+
 try {
     $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
     $total_employees = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-} catch (Exception $e) {
-    $total_employees = 0;
-}
+} catch (Exception $e) {}
 
-$total_doctors = 0;
 try {
     $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
     $total_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-} catch (Exception $e) {
-    $total_doctors = 0;
-}
+} catch (Exception $e) {}
 
-$total_branches = 0;
 try {
     $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
     $total_branches = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-} catch (Exception $e) {
-    $total_branches = 0;
-}
+} catch (Exception $e) {}
 
-$pending_lab_tests = 0;
 try {
     $stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests WHERE status = 'pending'");
     $pending_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-} catch (Exception $e) {
-    $pending_lab_tests = 0;
-}
+} catch (Exception $e) {}
 
-$pending_prescriptions = 0;
 try {
     $stmt = $db->query("SELECT COUNT(*) as count FROM prescriptions WHERE status = 'pending'");
     $pending_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-} catch (Exception $e) {
-    $pending_prescriptions = 0;
-}
+} catch (Exception $e) {}
 
 // ================================================================
-// GET BRANCHES FOR SELECTOR
+// GET BRANCHES
 // ================================================================
 $branches = [];
 try {
     $stmt = $db->query("SELECT id, name, location, phone, email, status FROM branches WHERE status = 'active' ORDER BY name");
-    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $branches[] = $row;
-    }
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $branches = [];
 }
 
-// ================================================================
-// GET ALL BRANCHES (INCLUDING INACTIVE FOR EDIT)
-// ================================================================
 $all_branches = [];
 try {
     $stmt = $db->query("SELECT id, name, location, phone, email, status FROM branches ORDER BY name");
-    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $all_branches[] = $row;
-    }
+    $all_branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $all_branches = [];
 }
@@ -144,119 +117,81 @@ $message_type = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
-    // ================================================================
-    // UPDATE GENERAL SETTINGS
-    // ================================================================
+    // UPDATE GENERAL
     if ($action === 'update_general') {
-        $site_name = trim($_POST['site_name'] ?? '');
-        $site_phone = trim($_POST['site_phone'] ?? '');
-        $site_email = trim($_POST['site_email'] ?? '');
-        $site_address = trim($_POST['site_address'] ?? '');
-        $currency = trim($_POST['currency'] ?? 'TSh');
-        $timezone = trim($_POST['timezone'] ?? 'Africa/Dar_es_Salaam');
+        $settings_data = [
+            'site_name' => trim($_POST['site_name'] ?? ''),
+            'site_phone' => trim($_POST['site_phone'] ?? ''),
+            'site_email' => trim($_POST['site_email'] ?? ''),
+            'site_address' => trim($_POST['site_address'] ?? ''),
+            'currency' => trim($_POST['currency'] ?? 'TSh'),
+            'timezone' => trim($_POST['timezone'] ?? 'Africa/Dar_es_Salaam')
+        ];
         
         try {
-            $settings_data = [
-                'site_name' => $site_name,
-                'site_phone' => $site_phone,
-                'site_email' => $site_email,
-                'site_address' => $site_address,
-                'currency' => $currency,
-                'timezone' => $timezone
-            ];
-            
             foreach ($settings_data as $key => $value) {
                 $stmt = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, category, updated_at) 
                                        VALUES (?, ?, 'general', NOW()) 
                                        ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = NOW()");
                 $stmt->execute([$key, $value, $value]);
             }
-            
             $message = "✅ General settings updated successfully!";
             $message_type = 'success';
-            
-            // Refresh settings
-            $settings = [];
-            $stmt = $db->query("SELECT setting_key, setting_value, category FROM system_settings");
-            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                $settings[$row['setting_key']] = $row['setting_value'];
-            }
-            
         } catch (Exception $e) {
             $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
         }
     }
     
-    // ================================================================
-    // UPDATE FINANCIAL SETTINGS
-    // ================================================================
+    // UPDATE FINANCIAL
     if ($action === 'update_financial') {
-        $currency_symbol = trim($_POST['currency_symbol'] ?? 'TSh');
-        $tax_percent = (float)($_POST['tax_percent'] ?? 0);
-        $max_discount_percent = (float)($_POST['max_discount_percent'] ?? 20);
-        $registration_fee = (float)($_POST['registration_fee'] ?? 0);
-        $consultation_fee = (float)($_POST['consultation_fee'] ?? 0);
+        $settings_data = [
+            'currency' => trim($_POST['currency_symbol'] ?? 'TSh'),
+            'tax_percent' => (float)($_POST['tax_percent'] ?? 0),
+            'max_discount_percent' => (float)($_POST['max_discount_percent'] ?? 20),
+            'registration_fee' => (float)($_POST['registration_fee'] ?? 0),
+            'consultation_fee' => (float)($_POST['consultation_fee'] ?? 0)
+        ];
         
         try {
-            $settings_data = [
-                'currency' => $currency_symbol,
-                'tax_percent' => $tax_percent,
-                'max_discount_percent' => $max_discount_percent,
-                'registration_fee' => $registration_fee,
-                'consultation_fee' => $consultation_fee
-            ];
-            
             foreach ($settings_data as $key => $value) {
                 $stmt = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, category, updated_at) 
                                        VALUES (?, ?, 'financial', NOW()) 
                                        ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = NOW()");
                 $stmt->execute([$key, $value, $value]);
             }
-            
             $message = "✅ Financial settings updated successfully!";
             $message_type = 'success';
-            
         } catch (Exception $e) {
             $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
         }
     }
     
-    // ================================================================
-    // UPDATE BUSINESS HOURS
-    // ================================================================
+    // UPDATE HOURS
     if ($action === 'update_hours') {
-        $business_hours_start = trim($_POST['business_hours_start'] ?? '08:00');
-        $business_hours_end = trim($_POST['business_hours_end'] ?? '18:00');
-        $weekend_days = isset($_POST['weekend_days']) ? implode(',', $_POST['weekend_days']) : '';
+        $settings_data = [
+            'business_hours_start' => trim($_POST['business_hours_start'] ?? '08:00'),
+            'business_hours_end' => trim($_POST['business_hours_end'] ?? '18:00'),
+            'weekend_days' => isset($_POST['weekend_days']) ? implode(',', $_POST['weekend_days']) : ''
+        ];
         
         try {
-            $settings_data = [
-                'business_hours_start' => $business_hours_start,
-                'business_hours_end' => $business_hours_end,
-                'weekend_days' => $weekend_days
-            ];
-            
             foreach ($settings_data as $key => $value) {
                 $stmt = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, category, updated_at) 
                                        VALUES (?, ?, 'hours', NOW()) 
                                        ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = NOW()");
                 $stmt->execute([$key, $value, $value]);
             }
-            
             $message = "✅ Business hours updated successfully!";
             $message_type = 'success';
-            
         } catch (Exception $e) {
             $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
         }
     }
     
-    // ================================================================
-    // UPDATE BRANCH - FIXED
-    // ================================================================
+    // UPDATE BRANCH
     if ($action === 'update_branch') {
         $branch_id = (int)($_POST['branch_id'] ?? 0);
         $branch_name = trim($_POST['branch_name'] ?? '');
@@ -273,17 +208,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message = "✅ Branch updated successfully!";
                 $message_type = 'success';
                 
-                // Refresh branches list
+                // Refresh branches
                 $all_branches = [];
                 $stmt = $db->query("SELECT id, name, location, phone, email, status FROM branches ORDER BY name");
-                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                    $all_branches[] = $row;
-                }
+                $all_branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
-                // Clear edit mode after successful update
                 $edit_branch_id = 0;
                 $edit_branch = null;
-                
             } catch (Exception $e) {
                 $message = "❌ Error: " . $e->getMessage();
                 $message_type = 'error';
@@ -294,64 +225,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // ================================================================
     // UPDATE SYSTEM
-    // ================================================================
     if ($action === 'update_system') {
-        $maintenance_mode = isset($_POST['maintenance_mode']) ? 1 : 0;
-        $debug_mode = isset($_POST['debug_mode']) ? 1 : 0;
-        $log_activities = isset($_POST['log_activities']) ? 1 : 0;
+        $settings_data = [
+            'maintenance_mode' => isset($_POST['maintenance_mode']) ? 1 : 0,
+            'debug_mode' => isset($_POST['debug_mode']) ? 1 : 0,
+            'log_activities' => isset($_POST['log_activities']) ? 1 : 0
+        ];
         
         try {
-            $settings_data = [
-                'maintenance_mode' => $maintenance_mode,
-                'debug_mode' => $debug_mode,
-                'log_activities' => $log_activities
-            ];
-            
             foreach ($settings_data as $key => $value) {
                 $stmt = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, category, updated_at) 
                                        VALUES (?, ?, 'system', NOW()) 
                                        ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = NOW()");
                 $stmt->execute([$key, $value, $value]);
             }
-            
             $message = "✅ System settings updated successfully!";
             $message_type = 'success';
-            
         } catch (Exception $e) {
             $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
         }
     }
     
-    // ================================================================
     // UPDATE SECURITY
-    // ================================================================
     if ($action === 'update_security') {
-        $password_policy = $_POST['password_policy'] ?? 'medium';
-        $session_timeout = (int)($_POST['session_timeout'] ?? 30);
-        $max_login_attempts = (int)($_POST['max_login_attempts'] ?? 5);
-        $two_factor_auth = isset($_POST['two_factor_auth']) ? 1 : 0;
+        $settings_data = [
+            'password_policy' => $_POST['password_policy'] ?? 'medium',
+            'session_timeout' => (int)($_POST['session_timeout'] ?? 30),
+            'max_login_attempts' => (int)($_POST['max_login_attempts'] ?? 5),
+            'two_factor_auth' => isset($_POST['two_factor_auth']) ? 1 : 0
+        ];
         
         try {
-            $settings_data = [
-                'password_policy' => $password_policy,
-                'session_timeout' => $session_timeout,
-                'max_login_attempts' => $max_login_attempts,
-                'two_factor_auth' => $two_factor_auth
-            ];
-            
             foreach ($settings_data as $key => $value) {
                 $stmt = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, category, updated_at) 
                                        VALUES (?, ?, 'security', NOW()) 
                                        ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = NOW()");
                 $stmt->execute([$key, $value, $value]);
             }
-            
             $message = "✅ Security settings updated successfully!";
             $message_type = 'success';
-            
         } catch (Exception $e) {
             $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
@@ -364,15 +278,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // ================================================================
 $settings = [];
 try {
-    $stmt = $db->query("SELECT setting_key, setting_value, category FROM system_settings");
-    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $settings[$row['setting_key']] = $row['setting_value'];
-    }
+    $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
+    $settings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
 } catch (Exception $e) {
     $settings = [];
 }
 
-// Default values
+// Defaults
 $defaults = [
     'site_name' => 'Braick Dispensary',
     'site_phone' => '+255 700 000 000',
@@ -396,16 +308,13 @@ $defaults = [
     'two_factor_auth' => 0
 ];
 
-// Merge settings with defaults
 foreach ($defaults as $key => $value) {
     if (!isset($settings[$key])) {
         $settings[$key] = $value;
     }
 }
 
-// ================================================================
-// GET BRANCH FOR EDIT - FIXED
-// ================================================================
+// GET EDIT BRANCH
 $edit_branch = null;
 if ($edit_branch_id > 0) {
     $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
@@ -413,9 +322,7 @@ if ($edit_branch_id > 0) {
     $edit_branch = $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
+// PROFILE PICTURE
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
@@ -423,961 +330,659 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// FAVICON - INLINE SVG (ALWAYS WORKS)
-// ================================================================
-$favicon_url = 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="#0B5ED7"/><text x="50" y="68" font-size="60" font-weight="bold" text-anchor="middle" fill="white" font-family="Arial">B</text></svg>');
-
-// ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
-$selected_branch_id = $selected_branch_id ?? 'all';
-$total_employees = $total_employees ?? 0;
-$total_doctors = $total_doctors ?? 0;
-$total_branches = $total_branches ?? 0;
-$pending_lab_tests = $pending_lab_tests ?? 0;
-$pending_prescriptions = $pending_prescriptions ?? 0;
 include_once '../../components/admin_sidebar.php';
 ?>
 
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>System Settings - Braick Dispensary</title>
-    
-    <!-- Favicon -->
-    <link rel="icon" href="<?= $favicon_url ?>" type="image/svg+xml">
-    <link rel="shortcut icon" href="<?= $favicon_url ?>" type="image/svg+xml">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
-    <style>
-        /* ================================================================
-           SETTINGS PAGE STYLES - 100% BLUE HEADER, NO WHITE
-           ================================================================ */
-        :root {
-            --bg-body: #F1F5F9;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #DBEAFE;
-            --success: #059669;
-            --danger: #EF4444;
-            --warning: #D97706;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-light: #93C5FD;
-            --primary-bg: #1E3A5F;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 8px 30px rgba(0,0,0,0.4);
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Inter', 'Segoe UI', sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        /* ================================================================ */
-        /* TOP NAV - CUSTOM HEADER */
-        /* ================================================================ */
-        .top-nav {
-            position: fixed;
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC CSS -->
+<!-- ================================================================ -->
+<style>
+    /* ================================================================
+       PAGE VARIABLES
+       ================================================================ */
+    :root {
+        --set-primary: #0B5ED7;
+        --set-primary-dark: #0A4CA8;
+        --set-primary-light: #6EA8FE;
+        --set-primary-bg: #DBEAFE;
+        --set-success: #059669;
+        --set-danger: #EF4444;
+        --set-warning: #D97706;
+        --set-bg-body: #F1F5F9;
+        --set-bg-card: #FFFFFF;
+        --set-text-primary: #1E293B;
+        --set-text-secondary: #64748B;
+        --set-border-color: #E2E8F0;
+        --set-radius: 12px;
+        --set-radius-lg: 16px;
+        --set-shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+        --set-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+        --set-shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
+    }
+
+    [data-theme="dark"] {
+        --set-bg-body: #0F172A;
+        --set-bg-card: #1E293B;
+        --set-text-primary: #F1F5F9;
+        --set-text-secondary: #94A3B8;
+        --set-border-color: #334155;
+        --set-primary-bg: #1E3A5F;
+        --set-shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
+        --set-shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+    }
+
+    /* ================================================================
+       DARK MODE
+       ================================================================ */
+    html[data-theme="dark"] body {
+        background: #0F172A !important;
+    }
+
+    html[data-theme="dark"] .main-content {
+        background: #0F172A !important;
+        color: #F1F5F9;
+    }
+
+    /* ================================================================
+       PAGE HEADER - 100% BLUE, NO WHITE
+       ================================================================ */
+    .page-header-set {
+        background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%) !important;
+        border-radius: 16px;
+        padding: 28px 36px;
+        margin-bottom: 28px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 8px 32px rgba(11, 94, 215, 0.35);
+        position: relative;
+        overflow: hidden;
+        border: none;
+    }
+
+    .page-header-set .page-title-set {
+        color: #FFFFFF;
+        font-size: 1.8rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin: 0;
+        position: relative;
+        z-index: 1;
+    }
+
+    .page-header-set .page-title-set i {
+        color: #FFFFFF;
+        opacity: 0.9;
+    }
+
+    .page-header-set .role-badge-display-set {
+        background: rgba(255,255,255,0.15);
+        color: #FFFFFF;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        backdrop-filter: blur(4px);
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .page-header-set .page-subtitle-set {
+        color: rgba(255,255,255,0.9);
+        font-size: 0.95rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 6px;
+        position: relative;
+        z-index: 1;
+    }
+
+    .page-header-set .header-badge-set {
+        background: rgba(255,255,255,0.10);
+        color: #FFFFFF;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255,255,255,0.15);
+    }
+
+    .page-header-set .header-badge-set i {
+        color: #FFFFFF;
+    }
+
+    .page-header-set .btn-outline-light-set {
+        background: rgba(255,255,255,0.12);
+        color: #FFFFFF;
+        border: 1px solid rgba(255,255,255,0.25);
+        padding: 8px 18px;
+        border-radius: 10px;
+        font-weight: 500;
+        font-size: 0.82rem;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        backdrop-filter: blur(4px);
+        transition: all 0.3s;
+        position: relative;
+        z-index: 1;
+    }
+
+    .page-header-set .btn-outline-light-set:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        color: #FFFFFF;
+    }
+
+    /* ================================================================
+       SETTINGS SIDEBAR
+       ================================================================ */
+    .settings-sidebar-set {
+        background: var(--set-bg-card);
+        border-radius: 16px;
+        padding: 16px;
+        border: 2px solid var(--set-border-color);
+        position: sticky;
+        top: 80px;
+        box-shadow: var(--set-shadow-sm);
+        transition: all 0.3s ease;
+    }
+
+    .settings-sidebar-set:hover {
+        border-color: var(--set-primary-light);
+        box-shadow: var(--set-shadow-md);
+    }
+
+    .settings-sidebar-set .nav-link-set {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        border-radius: 10px;
+        color: var(--set-text-secondary);
+        text-decoration: none;
+        transition: all 0.3s ease;
+        font-size: 0.85rem;
+        font-weight: 500;
+        border: 2px solid transparent;
+        margin-bottom: 4px;
+    }
+
+    .settings-sidebar-set .nav-link-set:hover {
+        background: var(--set-bg-body);
+        color: var(--set-primary);
+        border-color: var(--set-primary-bg);
+    }
+
+    .settings-sidebar-set .nav-link-set.active {
+        background: var(--set-primary-bg);
+        color: var(--set-primary);
+        border-color: var(--set-primary);
+        font-weight: 600;
+    }
+
+    [data-theme="dark"] .settings-sidebar-set .nav-link-set.active {
+        background: #1E3A5F;
+        color: #6EA8FE;
+        border-color: #6EA8FE;
+    }
+
+    .settings-sidebar-set .nav-link-set i {
+        width: 20px;
+        text-align: center;
+        font-size: 0.95rem;
+    }
+
+    .settings-sidebar-set .nav-link-set .badge-set {
+        margin-left: auto;
+        background: var(--set-primary);
+        color: white;
+        font-size: 0.6rem;
+        padding: 2px 8px;
+        border-radius: 12px;
+    }
+
+    /* ================================================================
+       SETTINGS CONTENT
+       ================================================================ */
+    .settings-content-set {
+        background: var(--set-bg-card);
+        border-radius: 16px;
+        padding: 24px;
+        border: 2px solid var(--set-border-color);
+        box-shadow: var(--set-shadow-sm);
+        transition: all 0.3s ease;
+    }
+
+    .settings-content-set:hover {
+        border-color: var(--set-primary-light);
+        box-shadow: var(--set-shadow-md);
+    }
+
+    .settings-content-set .section-header-set {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+        padding-bottom: 16px;
+        margin-bottom: 20px;
+        border-bottom: 2px solid var(--set-border-color);
+    }
+
+    .settings-content-set .section-header-set h2 {
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: var(--set-text-primary);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0;
+    }
+
+    .settings-content-set .section-header-set h2 i {
+        color: var(--set-primary);
+    }
+
+    /* ================================================================
+       FORM CONTROLS
+       ================================================================ */
+    .form-label-set {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--set-text-primary);
+        margin-bottom: 4px;
+        display: block;
+    }
+
+    .form-label-set .required-set {
+        color: #EF4444;
+        margin-left: 2px;
+    }
+
+    .form-control-set {
+        width: 100%;
+        padding: 10px 14px;
+        border: 2px solid var(--set-border-color);
+        border-radius: 10px;
+        font-size: 0.9rem;
+        transition: all 0.3s ease;
+        outline: none;
+        background: var(--set-bg-card);
+        color: var(--set-text-primary);
+        font-family: inherit;
+    }
+
+    .form-control-set:focus {
+        border-color: var(--set-primary);
+        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
+    }
+
+    .form-control-set::placeholder {
+        color: var(--set-text-secondary);
+        opacity: 0.5;
+    }
+
+    select.form-control-set {
+        cursor: pointer;
+    }
+
+    [data-theme="dark"] select.form-control-set option {
+        background: #1E293B;
+        color: #F1F5F9;
+    }
+
+    .form-row-set {
+        margin-bottom: 16px;
+    }
+
+    .form-actions-set {
+        display: flex;
+        gap: 12px;
+        padding-top: 16px;
+        margin-top: 16px;
+        border-top: 2px solid var(--set-border-color);
+        flex-wrap: wrap;
+    }
+
+    /* ================================================================
+       BUTTONS
+       ================================================================ */
+    .btn-set {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 20px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.85rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+        font-family: inherit;
+    }
+
+    .btn-primary-set {
+        background: var(--set-primary);
+        color: white;
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+    .btn-primary-set:hover {
+        background: var(--set-primary-dark);
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(11, 94, 215, 0.4);
+        color: white;
+    }
+
+    .btn-secondary-set {
+        background: var(--set-bg-body);
+        color: var(--set-text-primary);
+        border: 2px solid var(--set-border-color);
+    }
+    .btn-secondary-set:hover {
+        background: var(--set-bg-card);
+        border-color: var(--set-primary);
+        color: var(--set-primary);
+    }
+
+    .btn-success-set {
+        background: #059669;
+        color: white;
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+    }
+    .btn-success-set:hover {
+        background: #047857;
+        transform: translateY(-2px);
+        color: white;
+    }
+
+    .btn-danger-set {
+        background: #EF4444;
+        color: white;
+        box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+    }
+    .btn-danger-set:hover {
+        background: #DC2626;
+        transform: translateY(-2px);
+        color: white;
+    }
+
+    .btn-sm-set {
+        padding: 4px 12px;
+        font-size: 0.7rem;
+        border-radius: 6px;
+    }
+
+    /* ================================================================
+       BRANCH CARD
+       ================================================================ */
+    .branch-card-set {
+        background: var(--set-bg-card);
+        border-radius: 12px;
+        padding: 16px 18px;
+        border: 2px solid var(--set-border-color);
+        transition: all 0.3s ease;
+        margin-bottom: 12px;
+    }
+
+    .branch-card-set:hover {
+        border-color: var(--set-primary);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.06);
+    }
+
+    .branch-card-set .branch-header-set {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .branch-card-set .branch-name-set {
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--set-text-primary);
+    }
+
+    .branch-card-set .branch-location-set {
+        font-size: 0.8rem;
+        color: var(--set-text-secondary);
+        margin-top: 2px;
+    }
+
+    .badge-status-set {
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .badge-status-set.active { background: #E6F7EE; color: #059669; }
+    .badge-status-set.inactive { background: #FEE2E2; color: #EF4444; }
+
+    [data-theme="dark"] .badge-status-set.active { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .badge-status-set.inactive { background: #3A1A1A; color: #F87171; }
+
+    /* ================================================================
+       EDIT BRANCH FORM
+       ================================================================ */
+    .edit-branch-form-set {
+        margin-top: 20px;
+        padding-top: 20px;
+        border-top: 2px solid var(--set-border-color);
+    }
+
+    .edit-branch-form-set .form-title-set {
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--set-text-primary);
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .edit-branch-form-set .form-title-set i {
+        color: var(--set-primary);
+    }
+
+    /* ================================================================
+       MESSAGE
+       ================================================================ */
+    .message-set {
+        padding: 16px 20px;
+        border-radius: 12px;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 0.9rem;
+        font-weight: 500;
+        animation: slideDown 0.3s ease;
+    }
+
+    @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .message-set.success {
+        background: #D1FAE5;
+        color: #065F46;
+        border: 2px solid #059669;
+    }
+
+    .message-set.error {
+        background: #FEE2E2;
+        color: #991B1B;
+        border: 2px solid #EF4444;
+    }
+
+    [data-theme="dark"] .message-set.success { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .message-set.error { background: #3A1A1A; color: #F87171; }
+
+    /* ================================================================
+       EMPTY STATE
+       ================================================================ */
+    .empty-state-set {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--set-text-secondary);
+    }
+
+    .empty-state-set i {
+        font-size: 3rem;
+        color: var(--set-border-color);
+        margin-bottom: 12px;
+    }
+
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer-set {
+        padding: 14px 0;
+        border-top: 2px solid var(--set-border-color);
+        margin-top: 24px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--set-text-secondary);
+    }
+
+    .footer-set .footer-brand-set {
+        color: var(--set-primary);
+        font-weight: 600;
+    }
+
+    /* ================================================================
+       ANIMATIONS
+       ================================================================ */
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .animate-fade-in-up-set {
+        animation: fadeInUp 0.5s ease forwards;
+        opacity: 0;
+    }
+
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 1024px) {
+        .settings-sidebar-set {
+            position: relative;
             top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: background 0.3s ease, border-color 0.3s ease;
-        }
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        .top-nav .branch-selector {
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            background: var(--bg-card);
-            font-size: 0.82rem;
-            font-weight: 500;
-            cursor: pointer;
-            outline: none;
-            min-width: 160px;
-            color: var(--text-primary);
-            transition: all 0.3s;
-        }
-        .top-nav .branch-selector:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            background: #94A3B8;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-        }
-        
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-            background: var(--bg-body);
-            transition: background 0.3s ease;
-        }
-        
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 20px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            transition: border-color 0.3s ease, color 0.3s ease;
-        }
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
-        /* ================================================================ */
-        /* PAGE HEADER - 100% BLUE, ABSOLUTELY NO WHITE BACKGROUND */
-        /* ================================================================ */
-        .page-header {
-            background: #0B5ED7 !important;
-            background-color: #0B5ED7 !important;
-            background-image: none !important;
-            background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%) !important;
-            border-radius: 16px;
-            padding: 28px 36px !important;
-            margin-bottom: 28px;
-            display: flex !important;
-            flex-wrap: wrap !important;
-            justify-content: space-between !important;
-            align-items: center !important;
-            gap: 16px !important;
-            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.35) !important;
-            position: relative;
-            overflow: hidden;
-            border: none !important;
-            min-height: 80px !important;
-        }
-
-        /* ONDOA DECORATIVE CIRCLE */
-        .page-header::before {
-            display: none !important;
-            content: none !important;
-        }
-
-        /* FORCE REMOVE all white backgrounds inside page-header */
-        .page-header,
-        .page-header *,
-        .page-header .page-title,
-        .page-header .page-title *,
-        .page-header .page-subtitle,
-        .page-header .page-subtitle *,
-        .page-header .role-badge-display,
-        .page-header .header-badge,
-        .page-header .btn-outline-light,
-        .page-header .btn-outline-light *,
-        .page-header .btn-outline-light i,
-        .page-header .page-title i,
-        .page-header .page-title span,
-        .page-header div,
-        .page-header .flex,
-        .page-header .flex *,
-        .page-header .flex.items-center,
-        .page-header .flex.items-center *,
-        .page-header .gap-4,
-        .page-header .gap-4 *,
-        .page-header .ml-2,
-        .page-header .ml-2 * {
-            background: transparent !important;
-            background-color: transparent !important;
-            background-image: none !important;
-            background: none !important;
-        }
-
-        /* All text inside page header should be WHITE */
-        .page-header,
-        .page-header *,
-        .page-header .page-title,
-        .page-header .page-title *,
-        .page-header .page-subtitle,
-        .page-header .page-subtitle *,
-        .page-header .role-badge-display,
-        .page-header .header-badge,
-        .page-header .btn-outline-light,
-        .page-header .btn-outline-light * {
-            color: #FFFFFF !important;
-        }
-
-        .page-header .page-title {
-            font-size: 1.8rem !important;
-            font-weight: 700 !important;
-            display: flex !important;
-            align-items: center !important;
-            gap: 12px !important;
-            flex-wrap: wrap !important;
-            margin: 0 !important;
-            position: relative !important;
-            z-index: 1 !important;
-        }
-        .page-header .page-title i {
-            opacity: 0.9 !important;
-            color: #FFFFFF !important;
-        }
-        .page-header .page-title .role-badge-display {
-            background: rgba(255,255,255,0.15) !important;
-            color: #FFFFFF !important;
-            padding: 4px 14px !important;
-            border-radius: 20px !important;
-            font-size: 0.65rem !important;
-            font-weight: 600 !important;
-            text-transform: uppercase !important;
-            letter-spacing: 0.05em !important;
-            backdrop-filter: blur(4px) !important;
-            border: 1px solid rgba(255,255,255,0.1) !important;
-        }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.9) !important;
-            font-size: 0.95rem !important;
-            display: flex !important;
-            align-items: center !important;
-            gap: 10px !important;
-            flex-wrap: wrap !important;
-            margin: 0 !important;
-            position: relative !important;
-            z-index: 1 !important;
-        }
-        .page-header .page-subtitle .header-badge {
-            background: rgba(255,255,255,0.10) !important;
-            color: #FFFFFF !important;
-            padding: 4px 14px !important;
-            border-radius: 20px !important;
-            font-size: 0.7rem !important;
-            font-weight: 500 !important;
-            backdrop-filter: blur(4px) !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            gap: 6px !important;
-            border: 1px solid rgba(255,255,255,0.15) !important;
-        }
-        .page-header .page-subtitle .header-badge i {
-            color: #FFFFFF !important;
-        }
-        
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.12) !important;
-            background-color: rgba(255,255,255,0.12) !important;
-            color: #FFFFFF !important;
-            border: 1px solid rgba(255,255,255,0.25) !important;
-            padding: 8px 18px !important;
-            border-radius: 10px !important;
-            font-weight: 500 !important;
-            font-size: 0.82rem !important;
-            transition: all 0.3s !important;
-            text-decoration: none !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            gap: 8px !important;
-            backdrop-filter: blur(4px) !important;
-            position: relative !important;
-            z-index: 1 !important;
-        }
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25) !important;
-            transform: translateY(-2px) !important;
-        }
-        .page-header .btn-outline-light i {
-            color: #FFFFFF !important;
-        }
-
-        /* Override any Tailwind bg classes inside page-header */
-        .page-header .bg-white,
-        .page-header .bg-gray-100,
-        .page-header .bg-gray-200,
-        .page-header .bg-gray-50,
-        .page-header .bg-slate-100,
-        .page-header .bg-slate-200,
-        .page-header .bg-blue-50,
-        .page-header .bg-blue-100 {
-            background: transparent !important;
-            background-color: transparent !important;
-        }
-
-        /* Dark mode support */
-        [data-theme="dark"] .page-header {
-            background: #0A3D7A !important;
-            background-color: #0A3D7A !important;
-            background: linear-gradient(135deg, #0A3D7A 0%, #072A55 100%) !important;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.4) !important;
-        }
-        [data-theme="dark"] .page-header .role-badge-display {
-            background: rgba(255,255,255,0.10) !important;
-        }
-        [data-theme="dark"] .page-header .header-badge {
-            background: rgba(255,255,255,0.08) !important;
-        }
-        [data-theme="dark"] .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.08) !important;
-        }
-        [data-theme="dark"] .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.18) !important;
-        }
-        
-        /* ================================================================ */
-        /* SETTINGS SIDEBAR */
-        /* ================================================================ */
-        .settings-sidebar {
-            background: var(--bg-card);
-            border-radius: 16px;
-            padding: 16px;
-            border: 2px solid var(--border-color);
-            position: sticky;
-            top: 80px;
-            box-shadow: var(--shadow-sm);
-            transition: all 0.3s ease;
-        }
-        
-        .settings-sidebar:hover {
-            border-color: var(--primary-light);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .settings-sidebar .nav-link {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 10px 14px;
-            border-radius: 10px;
-            color: var(--text-secondary);
-            text-decoration: none;
-            transition: all 0.3s ease;
-            font-size: 0.85rem;
-            font-weight: 500;
-            border: 2px solid transparent;
-            margin-bottom: 4px;
-        }
-        
-        .settings-sidebar .nav-link:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-            border-color: var(--primary-bg);
-        }
-        
-        .settings-sidebar .nav-link.active {
-            background: var(--primary-bg);
-            color: var(--primary);
-            border-color: var(--primary);
-            font-weight: 600;
-        }
-        
-        [data-theme="dark"] .settings-sidebar .nav-link.active {
-            background: #1E3A5F;
-            color: #6EA8FE;
-            border-color: #6EA8FE;
-        }
-        
-        .settings-sidebar .nav-link i {
-            width: 20px;
-            text-align: center;
-            font-size: 0.95rem;
-        }
-        
-        .settings-sidebar .nav-link .badge {
-            margin-left: auto;
-            background: var(--primary);
-            color: white;
-            font-size: 0.6rem;
-            padding: 2px 8px;
-            border-radius: 12px;
-        }
-        
-        /* ================================================================ */
-        /* SETTINGS CONTENT */
-        /* ================================================================ */
-        .settings-content {
-            background: var(--bg-card);
-            border-radius: 16px;
-            padding: 24px;
-            border: 2px solid var(--border-color);
-            box-shadow: var(--shadow-sm);
-            transition: all 0.3s ease;
-        }
-        
-        .settings-content:hover {
-            border-color: var(--primary-light);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .settings-content .section-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 12px;
-            padding-bottom: 16px;
-            margin-bottom: 20px;
-            border-bottom: 2px solid var(--border-color);
-        }
-        
-        .settings-content .section-header h2 {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .settings-content .section-header h2 i {
-            color: var(--primary);
-        }
-        
-        .form-label {
-            font-size: 0.85rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 4px;
-            display: block;
-        }
-        
-        .form-label .required {
-            color: #EF4444;
-            margin-left: 2px;
-        }
-        
-        .form-control {
-            width: 100%;
-            padding: 10px 14px;
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            font-size: 0.9rem;
-            transition: all 0.3s ease;
-            outline: none;
-            background: var(--bg-card);
-            color: var(--text-primary);
-            font-family: 'Inter', 'Segoe UI', sans-serif;
-        }
-        
-        .form-control:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
-        }
-        
-        .form-control::placeholder {
-            color: var(--text-secondary);
-            opacity: 0.5;
-        }
-        
-        .form-row {
             margin-bottom: 16px;
         }
-        
-        .form-row:last-child {
-            margin-bottom: 0;
-        }
-        
-        .form-actions {
-            display: flex;
-            gap: 12px;
-            padding-top: 16px;
-            margin-top: 16px;
-            border-top: 2px solid var(--border-color);
-            flex-wrap: wrap;
-        }
-        
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 20px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 0.85rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-        }
-        
-        .btn-primary {
-            background: var(--primary);
-            color: white;
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        .btn-primary:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(11, 94, 215, 0.4);
-        }
-        
-        .btn-secondary {
-            background: var(--bg-body);
-            color: var(--text-primary);
-            border: 2px solid var(--border-color);
-        }
-        .btn-secondary:hover {
-            background: var(--bg-card);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .btn-success {
-            background: #059669;
-            color: white;
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        .btn-success:hover {
-            background: #047857;
-            transform: translateY(-2px);
-        }
-        
-        .btn-danger {
-            background: #EF4444;
-            color: white;
-            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
-        }
-        .btn-danger:hover {
-            background: #DC2626;
-            transform: translateY(-2px);
-        }
-        
-        .btn-sm {
-            padding: 4px 12px;
-            font-size: 0.7rem;
-            border-radius: 6px;
-        }
-        
-        .branch-card {
-            background: var(--bg-card);
-            border-radius: 12px;
-            padding: 16px 18px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            margin-bottom: 12px;
-        }
-        
-        .branch-card:hover {
-            border-color: var(--primary);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.06);
-        }
-        
-        .branch-card .branch-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        
-        .branch-card .branch-name {
-            font-size: 1rem;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-        
-        .branch-card .branch-location {
-            font-size: 0.8rem;
-            color: var(--text-secondary);
-            margin-top: 2px;
-        }
-        
-        .badge-status {
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
-        
-        .badge-status.active { background: #E6F7EE; color: #059669; }
-        .badge-status.inactive { background: #FEE2E2; color: #EF4444; }
-        
-        [data-theme="dark"] .badge-status.active { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .badge-status.inactive { background: #3A1A1A; color: #F87171; }
-        
-        .empty-state {
-            text-align: center;
-            padding: 40px 20px;
-            color: var(--text-secondary);
-        }
-        
-        .empty-state i {
-            font-size: 3rem;
-            color: var(--border-color);
-            margin-bottom: 12px;
-        }
-        
-        .edit-branch-form {
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 2px solid var(--border-color);
-        }
-        
-        .edit-branch-form .form-title {
-            font-size: 1rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .edit-branch-form .form-title i {
-            color: var(--primary);
-        }
-        
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 14px 20px;
-            border-radius: 12px;
-            z-index: 999;
-            max-width: 400px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s ease;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: white;
-            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
-        }
-        .toast-custom.show { transform: translateY(0); opacity: 1; }
-        .toast-custom.success { background: #059669; }
-        .toast-custom.error { background: #EF4444; }
-        .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: #D97706; }
-        
-        .text-danger { color: #EF4444; }
-        
-        @media (max-width: 1024px) {
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav { left: 0; }
-        }
-        
-        @media (max-width: 768px) {
-            .settings-sidebar {
-                position: relative;
-                top: 0;
-                margin-bottom: 16px;
-            }
-            .settings-content {
-                padding: 16px;
-            }
-            .branch-card .branch-header {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-            .page-header {
-                padding: 20px 24px !important;
-                flex-direction: column;
-                align-items: flex-start !important;
-            }
-            .page-header .page-title {
-                font-size: 1.4rem !important;
-            }
-        }
-        
-        @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .settings-content { padding: 12px; }
-            .page-header { padding: 16px 18px !important; }
-            .page-header .page-title { font-size: 1.1rem !important; flex-direction: column; align-items: flex-start !important; }
-            .page-header .page-subtitle { font-size: 0.75rem !important; flex-direction: column; align-items: flex-start !important; gap: 4px !important; }
-            .top-nav { flex-wrap: wrap; height: auto; padding: 8px 12px; gap: 8px; }
-            .top-nav .search-wrapper { max-width: 100%; flex: 1 1 100%; }
-            .top-nav .branch-selector { min-width: 100px; font-size: 0.65rem; }
-            .top-nav .datetime { font-size: 0.6rem; }
-            .main-content { margin-top: 110px; }
-        }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        @media print {
-            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
-            .search-wrapper, .footer, #sidebarToggle { display: none !important; }
-            .main-content { margin: 0; padding: 20px; }
-            .settings-content, .settings-sidebar { border: 1px solid #ddd !important; box-shadow: none !important; }
-        }
-    </style>
-</head>
-<body>
+    }
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $branch): ?>
-                <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($branch['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+    @media (max-width: 768px) {
+        .page-header-set { padding: 20px 24px; }
+        .page-header-set .page-title-set { font-size: 1.4rem; }
+        .settings-content-set { padding: 16px; }
+        .branch-card-set .branch-header-set { flex-direction: column; align-items: flex-start; }
+    }
+
+    @media (max-width: 480px) {
+        .page-header-set { padding: 16px 18px; flex-direction: column; align-items: flex-start !important; }
+        .page-header-set .page-title-set { font-size: 1.1rem; }
+        .settings-content-set { padding: 12px; }
+    }
+
+    @media print {
+        .btn-set, .btn-outline-light-set, .settings-sidebar-set { display: none !important; }
+        .page-header-set { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER - 100% BLUE, NO WHITE BACKGROUND -->
-    <!-- ================================================================ -->
-    <div class="page-header animate-fade-in-up" 
-         style="background: #0B5ED7 !important; 
-                background-color: #0B5ED7 !important; 
-                background-image: none !important; 
-                background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%) !important; 
-                border: none !important; 
-                box-shadow: 0 8px 32px rgba(11,94,215,0.35) !important;
-                min-height: 80px !important;
-                border-radius: 16px !important;
-                padding: 28px 36px !important;
-                margin-bottom: 28px !important;
-                display: flex !important;
-                flex-wrap: wrap !important;
-                justify-content: space-between !important;
-                align-items: center !important;
-                gap: 16px !important;
-                position: relative !important;
-                overflow: hidden !important;">
-        
-        <div style="background: transparent !important; position: relative !important; z-index: 1 !important;">
-            <h1 class="page-title" style="background: transparent !important; color: #FFFFFF !important; font-size: 1.8rem !important; font-weight: 700 !important; display: flex !important; align-items: center !important; gap: 12px !important; flex-wrap: wrap !important; margin: 0 !important;">
-                <i class="fas fa-cog" style="color: #FFFFFF !important; opacity: 0.9 !important;"></i> 
+    <!-- Page Header - 100% BLUE -->
+    <div class="page-header-set animate-fade-in-up-set">
+        <div>
+            <h1 class="page-title-set">
+                <i class="fas fa-cog"></i>
                 System Settings
-                <span class="role-badge-display" style="background: rgba(255,255,255,0.15) !important; color: #FFFFFF !important; padding: 4px 14px !important; border-radius: 20px !important; font-size: 0.65rem !important; font-weight: 600 !important; text-transform: uppercase !important; letter-spacing: 0.05em !important; backdrop-filter: blur(4px) !important; border: 1px solid rgba(255,255,255,0.1) !important;">ADMIN</span>
+                <span class="role-badge-display-set">ADMIN</span>
             </h1>
-            <p class="page-subtitle" style="background: transparent !important; color: rgba(255,255,255,0.9) !important; font-size: 0.95rem !important; display: flex !important; align-items: center !important; gap: 10px !important; flex-wrap: wrap !important; margin: 0 !important; position: relative !important; z-index: 1 !important;">
+            <p class="page-subtitle-set">
                 Manage system configurations
-                <span class="header-badge" style="background: rgba(255,255,255,0.10) !important; color: #FFFFFF !important; padding: 4px 14px !important; border-radius: 20px !important; font-size: 0.7rem !important; font-weight: 500 !important; backdrop-filter: blur(4px) !important; display: inline-flex !important; align-items: center !important; gap: 6px !important; border: 1px solid rgba(255,255,255,0.15) !important;">
-                    <i class="fas fa-store-alt" style="color: #FFFFFF !important;"></i> <?= $selected_branch_id === 'all' ? 'All Branches' : htmlspecialchars($user_branch_name) ?>
+                <span class="header-badge-set">
+                    <i class="fas fa-store-alt"></i>
+                    <?= $selected_branch_id === 'all' ? 'All Branches' : htmlspecialchars($user_branch_name) ?>
                 </span>
             </p>
         </div>
-        <div style="background: transparent !important; position: relative !important; z-index: 1 !important;">
-            <a href="dashboard.php" class="btn-outline-light" style="background: rgba(255,255,255,0.12) !important; background-color: rgba(255,255,255,0.12) !important; color: #FFFFFF !important; border: 1px solid rgba(255,255,255,0.25) !important; padding: 8px 18px !important; border-radius: 10px !important; font-weight: 500 !important; font-size: 0.82rem !important; text-decoration: none !important; display: inline-flex !important; align-items: center !important; gap: 8px !important; backdrop-filter: blur(4px) !important; transition: all 0.3s !important;">
-                <i class="fas fa-arrow-left" style="color: #FFFFFF !important;"></i> Dashboard
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <a href="dashboard.php" class="btn-outline-light-set">
+                <i class="fas fa-arrow-left"></i> Dashboard
             </a>
         </div>
     </div>
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>" style="position:relative;z-index:1;">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
-            <?= $message ?>
+        <div class="message-set <?= $message_type ?>">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+            <div><?= $message ?></div>
         </div>
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- SETTINGS LAYOUT - SIDEBAR + CONTENT -->
+    <!-- SETTINGS LAYOUT -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 lg:grid-cols-4 gap-5">
+    <div style="display:grid;grid-template-columns:1fr;gap:20px;" class="settings-layout-set">
         
         <!-- Settings Sidebar -->
-        <div class="lg:col-span-1">
-            <div class="settings-sidebar">
+        <div style="max-width:100%;" class="settings-sidebar-wrapper-set">
+            <div class="settings-sidebar-set">
                 <nav>
-                    <a href="?tab=general&branch=<?= $selected_branch_id ?>" class="nav-link <?= $active_tab === 'general' ? 'active' : '' ?>">
+                    <a href="?tab=general&branch=<?= $selected_branch_id ?>" class="nav-link-set <?= $active_tab === 'general' ? 'active' : '' ?>">
                         <i class="fas fa-cog"></i>
                         <span>General</span>
                     </a>
-                    <a href="?tab=financial&branch=<?= $selected_branch_id ?>" class="nav-link <?= $active_tab === 'financial' ? 'active' : '' ?>">
+                    <a href="?tab=financial&branch=<?= $selected_branch_id ?>" class="nav-link-set <?= $active_tab === 'financial' ? 'active' : '' ?>">
                         <i class="fas fa-money-bill-wave"></i>
                         <span>Financial</span>
                     </a>
-                    <a href="?tab=hours&branch=<?= $selected_branch_id ?>" class="nav-link <?= $active_tab === 'hours' ? 'active' : '' ?>">
+                    <a href="?tab=hours&branch=<?= $selected_branch_id ?>" class="nav-link-set <?= $active_tab === 'hours' ? 'active' : '' ?>">
                         <i class="fas fa-clock"></i>
                         <span>Business Hours</span>
                     </a>
-                    <a href="?tab=branches&branch=<?= $selected_branch_id ?>" class="nav-link <?= $active_tab === 'branches' ? 'active' : '' ?>">
+                    <a href="?tab=branches&branch=<?= $selected_branch_id ?>" class="nav-link-set <?= $active_tab === 'branches' ? 'active' : '' ?>">
                         <i class="fas fa-store-alt"></i>
                         <span>Branches</span>
-                        <span class="badge"><?= count($all_branches) ?></span>
+                        <span class="badge-set"><?= count($all_branches) ?></span>
                     </a>
-                    <a href="?tab=security&branch=<?= $selected_branch_id ?>" class="nav-link <?= $active_tab === 'security' ? 'active' : '' ?>">
+                    <a href="?tab=security&branch=<?= $selected_branch_id ?>" class="nav-link-set <?= $active_tab === 'security' ? 'active' : '' ?>">
                         <i class="fas fa-shield-alt"></i>
                         <span>Security</span>
                     </a>
-                    <a href="?tab=system&branch=<?= $selected_branch_id ?>" class="nav-link <?= $active_tab === 'system' ? 'active' : '' ?>">
+                    <a href="?tab=system&branch=<?= $selected_branch_id ?>" class="nav-link-set <?= $active_tab === 'system' ? 'active' : '' ?>">
                         <i class="fas fa-server"></i>
                         <span>System</span>
                     </a>
@@ -1386,378 +991,361 @@ include_once '../../components/admin_sidebar.php';
         </div>
         
         <!-- Settings Content -->
-        <div class="lg:col-span-3">
-            <div class="settings-content animate-fade-in-up">
+        <div class="settings-content-set animate-fade-in-up-set" style="animation-delay:0.05s;">
+            
+            <!-- ================================================================ -->
+            <!-- GENERAL TAB -->
+            <!-- ================================================================ -->
+            <?php if ($active_tab === 'general'): ?>
+            
+            <div class="section-header-set">
+                <h2><i class="fas fa-cog"></i> General Settings</h2>
+            </div>
+            
+            <form method="POST">
+                <input type="hidden" name="action" value="update_general">
                 
-                <!-- ================================================================ -->
-                <!-- GENERAL TAB -->
-                <!-- ================================================================ -->
-                <?php if ($active_tab === 'general'): ?>
-                
-                <div class="section-header">
-                    <h2>
-                        <i class="fas fa-cog"></i>
-                        General Settings
-                    </h2>
+                <div class="form-row-set">
+                    <label class="form-label-set">Site Name <span class="required-set">*</span></label>
+                    <input type="text" name="site_name" class="form-control-set" value="<?= htmlspecialchars($settings['site_name']) ?>" required>
                 </div>
                 
-                <form method="POST">
-                    <input type="hidden" name="action" value="update_general">
-                    
-                    <div class="form-row">
-                        <label class="form-label">Site Name <span class="required">*</span></label>
-                        <input type="text" name="site_name" class="form-control" value="<?= htmlspecialchars($settings['site_name'] ?? 'Braick Dispensary') ?>" required>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Phone Number</label>
-                        <input type="text" name="site_phone" class="form-control" value="<?= htmlspecialchars($settings['site_phone'] ?? '+255 700 000 000') ?>">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Email</label>
-                        <input type="email" name="site_email" class="form-control" value="<?= htmlspecialchars($settings['site_email'] ?? 'info@braick.com') ?>">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Address</label>
-                        <input type="text" name="site_address" class="form-control" value="<?= htmlspecialchars($settings['site_address'] ?? 'Dodoma City, Tanzania') ?>">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Currency</label>
-                        <input type="text" name="currency" class="form-control" value="<?= htmlspecialchars($settings['currency'] ?? 'TSh') ?>">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Timezone</label>
-                        <select name="timezone" class="form-control">
-                            <option value="Africa/Dar_es_Salaam" <?= ($settings['timezone'] ?? '') == 'Africa/Dar_es_Salaam' ? 'selected' : '' ?>>Africa/Dar_es_Salaam</option>
-                            <option value="Africa/Nairobi" <?= ($settings['timezone'] ?? '') == 'Africa/Nairobi' ? 'selected' : '' ?>>Africa/Nairobi</option>
-                            <option value="Africa/Maputo" <?= ($settings['timezone'] ?? '') == 'Africa/Maputo' ? 'selected' : '' ?>>Africa/Maputo</option>
-                            <option value="Africa/Kampala" <?= ($settings['timezone'] ?? '') == 'Africa/Kampala' ? 'selected' : '' ?>>Africa/Kampala</option>
-                            <option value="Africa/Lagos" <?= ($settings['timezone'] ?? '') == 'Africa/Lagos' ? 'selected' : '' ?>>Africa/Lagos</option>
-                            <option value="UTC" <?= ($settings['timezone'] ?? '') == 'UTC' ? 'selected' : '' ?>>UTC</option>
-                        </select>
-                    </div>
-                    
-                    <div class="form-actions">
-                        <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Save Changes</button>
-                    </div>
-                </form>
-                
-                <?php endif; ?>
-                
-                <!-- ================================================================ -->
-                <!-- FINANCIAL TAB -->
-                <!-- ================================================================ -->
-                <?php if ($active_tab === 'financial'): ?>
-                
-                <div class="section-header">
-                    <h2>
-                        <i class="fas fa-money-bill-wave"></i>
-                        Financial Settings
-                    </h2>
+                <div class="form-row-set">
+                    <label class="form-label-set">Phone Number</label>
+                    <input type="text" name="site_phone" class="form-control-set" value="<?= htmlspecialchars($settings['site_phone']) ?>">
                 </div>
                 
-                <form method="POST">
-                    <input type="hidden" name="action" value="update_financial">
-                    
-                    <div class="form-row">
-                        <label class="form-label">Currency Symbol</label>
-                        <input type="text" name="currency_symbol" class="form-control" value="<?= htmlspecialchars($settings['currency'] ?? 'TSh') ?>">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Tax Percentage (%)</label>
-                        <input type="number" name="tax_percent" class="form-control" step="0.01" min="0" value="<?= htmlspecialchars($settings['tax_percent'] ?? 0) ?>">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Max Discount Percentage (%)</label>
-                        <input type="number" name="max_discount_percent" class="form-control" step="0.01" min="0" max="100" value="<?= htmlspecialchars($settings['max_discount_percent'] ?? 20) ?>">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Default Registration Fee</label>
-                        <input type="number" name="registration_fee" class="form-control" step="0.01" min="0" value="<?= htmlspecialchars($settings['registration_fee'] ?? 5000) ?>">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Default Consultation Fee</label>
-                        <input type="number" name="consultation_fee" class="form-control" step="0.01" min="0" value="<?= htmlspecialchars($settings['consultation_fee'] ?? 10000) ?>">
-                    </div>
-                    
-                    <div class="form-actions">
-                        <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Save Changes</button>
-                    </div>
-                </form>
-                
-                <?php endif; ?>
-                
-                <!-- ================================================================ -->
-                <!-- BUSINESS HOURS TAB -->
-                <!-- ================================================================ -->
-                <?php if ($active_tab === 'hours'): ?>
-                
-                <div class="section-header">
-                    <h2>
-                        <i class="fas fa-clock"></i>
-                        Business Hours
-                    </h2>
+                <div class="form-row-set">
+                    <label class="form-label-set">Email</label>
+                    <input type="email" name="site_email" class="form-control-set" value="<?= htmlspecialchars($settings['site_email']) ?>">
                 </div>
                 
-                <form method="POST">
-                    <input type="hidden" name="action" value="update_hours">
-                    
-                    <div class="form-row">
-                        <label class="form-label">Opening Time <span class="required">*</span></label>
-                        <input type="time" name="business_hours_start" class="form-control" value="<?= htmlspecialchars($settings['business_hours_start'] ?? '08:00') ?>" required>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Closing Time <span class="required">*</span></label>
-                        <input type="time" name="business_hours_end" class="form-control" value="<?= htmlspecialchars($settings['business_hours_end'] ?? '18:00') ?>" required>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Weekend Days</label>
-                        <div class="flex flex-wrap gap-3">
-                            <?php 
-                            $weekend_days = explode(',', $settings['weekend_days'] ?? 'Saturday,Sunday');
-                            $all_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-                            foreach ($all_days as $day):
-                            ?>
-                                <label class="flex items-center gap-2" style="cursor:pointer;font-size:0.85rem;">
-                                    <input type="checkbox" name="weekend_days[]" value="<?= $day ?>" <?= in_array($day, $weekend_days) ? 'checked' : '' ?>>
-                                    <?= $day ?>
-                                </label>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                    
-                    <div class="form-actions">
-                        <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Save Changes</button>
-                    </div>
-                </form>
-                
-                <?php endif; ?>
-                
-                <!-- ================================================================ -->
-                <!-- BRANCHES TAB - FIXED EDIT BUTTONS -->
-                <!-- ================================================================ -->
-                <?php if ($active_tab === 'branches'): ?>
-                
-                <div class="section-header">
-                    <h2>
-                        <i class="fas fa-store-alt"></i>
-                        Branches
-                        <span class="text-sm font-normal text-gray-400" style="color:var(--text-secondary);font-weight:400;">(<?= count($all_branches) ?> branches)</span>
-                    </h2>
+                <div class="form-row-set">
+                    <label class="form-label-set">Address</label>
+                    <input type="text" name="site_address" class="form-control-set" value="<?= htmlspecialchars($settings['site_address']) ?>">
                 </div>
                 
-                <?php if (count($all_branches) > 0): ?>
-                    <?php foreach ($all_branches as $branch): ?>
-                        <div class="branch-card">
-                            <div class="branch-header">
-                                <div>
-                                    <div class="branch-name">
-                                        <?= htmlspecialchars($branch['name']) ?>
-                                        <span class="badge-status <?= ($branch['status'] ?? 'active') === 'active' ? 'active' : 'inactive' ?> ml-2">
-                                            <?= ($branch['status'] ?? 'active') === 'active' ? '✅ Active' : '❌ Inactive' ?>
-                                        </span>
-                                    </div>
-                                    <?php if (!empty($branch['location'])): ?>
-                                        <div class="branch-location">
-                                            <i class="fas fa-map-marker-alt mr-1" style="color: var(--text-secondary);"></i>
-                                            <?= htmlspecialchars($branch['location']) ?>
-                                        </div>
-                                    <?php endif; ?>
-                                    <div class="branch-location">
-                                        <?php if (!empty($branch['phone'])): ?>
-                                            <i class="fas fa-phone mr-1" style="color: var(--text-secondary);"></i>
-                                            <?= htmlspecialchars($branch['phone']) ?>
-                                        <?php endif; ?>
-                                        <?php if (!empty($branch['email'])): ?>
-                                            <span class="mx-2">|</span>
-                                            <i class="fas fa-envelope mr-1" style="color: var(--text-secondary);"></i>
-                                            <?= htmlspecialchars($branch['email']) ?>
-                                        <?php endif; ?>
-                                    </div>
+                <div class="form-row-set">
+                    <label class="form-label-set">Currency</label>
+                    <input type="text" name="currency" class="form-control-set" value="<?= htmlspecialchars($settings['currency']) ?>">
+                </div>
+                
+                <div class="form-row-set">
+                    <label class="form-label-set">Timezone</label>
+                    <select name="timezone" class="form-control-set">
+                        <option value="Africa/Dar_es_Salaam" <?= $settings['timezone'] == 'Africa/Dar_es_Salaam' ? 'selected' : '' ?>>Africa/Dar_es_Salaam</option>
+                        <option value="Africa/Nairobi" <?= $settings['timezone'] == 'Africa/Nairobi' ? 'selected' : '' ?>>Africa/Nairobi</option>
+                        <option value="Africa/Maputo" <?= $settings['timezone'] == 'Africa/Maputo' ? 'selected' : '' ?>>Africa/Maputo</option>
+                        <option value="Africa/Kampala" <?= $settings['timezone'] == 'Africa/Kampala' ? 'selected' : '' ?>>Africa/Kampala</option>
+                        <option value="Africa/Lagos" <?= $settings['timezone'] == 'Africa/Lagos' ? 'selected' : '' ?>>Africa/Lagos</option>
+                        <option value="UTC" <?= $settings['timezone'] == 'UTC' ? 'selected' : '' ?>>UTC</option>
+                    </select>
+                </div>
+                
+                <div class="form-actions-set">
+                    <button type="submit" class="btn-set btn-success-set"><i class="fas fa-save"></i> Save Changes</button>
+                </div>
+            </form>
+            
+            <?php endif; ?>
+            
+            <!-- ================================================================ -->
+            <!-- FINANCIAL TAB -->
+            <!-- ================================================================ -->
+            <?php if ($active_tab === 'financial'): ?>
+            
+            <div class="section-header-set">
+                <h2><i class="fas fa-money-bill-wave"></i> Financial Settings</h2>
+            </div>
+            
+            <form method="POST">
+                <input type="hidden" name="action" value="update_financial">
+                
+                <div class="form-row-set">
+                    <label class="form-label-set">Currency Symbol</label>
+                    <input type="text" name="currency_symbol" class="form-control-set" value="<?= htmlspecialchars($settings['currency']) ?>">
+                </div>
+                
+                <div class="form-row-set">
+                    <label class="form-label-set">Tax Percentage (%)</label>
+                    <input type="number" name="tax_percent" class="form-control-set" step="0.01" min="0" value="<?= htmlspecialchars($settings['tax_percent']) ?>">
+                </div>
+                
+                <div class="form-row-set">
+                    <label class="form-label-set">Max Discount Percentage (%)</label>
+                    <input type="number" name="max_discount_percent" class="form-control-set" step="0.01" min="0" max="100" value="<?= htmlspecialchars($settings['max_discount_percent']) ?>">
+                </div>
+                
+                <div class="form-row-set">
+                    <label class="form-label-set">Default Registration Fee</label>
+                    <input type="number" name="registration_fee" class="form-control-set" step="0.01" min="0" value="<?= htmlspecialchars($settings['registration_fee']) ?>">
+                </div>
+                
+                <div class="form-row-set">
+                    <label class="form-label-set">Default Consultation Fee</label>
+                    <input type="number" name="consultation_fee" class="form-control-set" step="0.01" min="0" value="<?= htmlspecialchars($settings['consultation_fee']) ?>">
+                </div>
+                
+                <div class="form-actions-set">
+                    <button type="submit" class="btn-set btn-success-set"><i class="fas fa-save"></i> Save Changes</button>
+                </div>
+            </form>
+            
+            <?php endif; ?>
+            
+            <!-- ================================================================ -->
+            <!-- BUSINESS HOURS TAB -->
+            <!-- ================================================================ -->
+            <?php if ($active_tab === 'hours'): ?>
+            
+            <div class="section-header-set">
+                <h2><i class="fas fa-clock"></i> Business Hours</h2>
+            </div>
+            
+            <form method="POST">
+                <input type="hidden" name="action" value="update_hours">
+                
+                <div class="form-row-set">
+                    <label class="form-label-set">Opening Time <span class="required-set">*</span></label>
+                    <input type="time" name="business_hours_start" class="form-control-set" value="<?= htmlspecialchars($settings['business_hours_start']) ?>" required>
+                </div>
+                
+                <div class="form-row-set">
+                    <label class="form-label-set">Closing Time <span class="required-set">*</span></label>
+                    <input type="time" name="business_hours_end" class="form-control-set" value="<?= htmlspecialchars($settings['business_hours_end']) ?>" required>
+                </div>
+                
+                <div class="form-row-set">
+                    <label class="form-label-set">Weekend Days</label>
+                    <div style="display:flex;flex-wrap:wrap;gap:12px;">
+                        <?php 
+                        $weekend_days = explode(',', $settings['weekend_days']);
+                        $all_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+                        foreach ($all_days as $day):
+                        ?>
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.85rem;color:var(--set-text-primary);">
+                                <input type="checkbox" name="weekend_days[]" value="<?= $day ?>" <?= in_array($day, $weekend_days) ? 'checked' : '' ?>>
+                                <?= $day ?>
+                            </label>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+                
+                <div class="form-actions-set">
+                    <button type="submit" class="btn-set btn-success-set"><i class="fas fa-save"></i> Save Changes</button>
+                </div>
+            </form>
+            
+            <?php endif; ?>
+            
+            <!-- ================================================================ -->
+            <!-- BRANCHES TAB -->
+            <!-- ================================================================ -->
+            <?php if ($active_tab === 'branches'): ?>
+            
+            <div class="section-header-set">
+                <h2>
+                    <i class="fas fa-store-alt"></i>
+                    Branches
+                    <span style="font-size:0.85rem;font-weight:400;color:var(--set-text-secondary);">(<?= count($all_branches) ?> branches)</span>
+                </h2>
+            </div>
+            
+            <?php if (count($all_branches) > 0): ?>
+                <?php foreach ($all_branches as $branch): ?>
+                    <div class="branch-card-set">
+                        <div class="branch-header-set">
+                            <div>
+                                <div class="branch-name-set">
+                                    <?= htmlspecialchars($branch['name']) ?>
+                                    <span class="badge-status-set <?= ($branch['status'] ?? 'active') === 'active' ? 'active' : 'inactive' ?>" style="margin-left:8px;">
+                                        <?= ($branch['status'] ?? 'active') === 'active' ? '✅ Active' : '❌ Inactive' ?>
+                                    </span>
                                 </div>
-                                <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                                    <a href="?tab=branches&branch=<?= $selected_branch_id ?>&edit_branch=<?= $branch['id'] ?>" class="btn btn-primary btn-sm">
-                                        <i class="fas fa-edit"></i> Edit
-                                    </a>
+                                <?php if (!empty($branch['location'])): ?>
+                                    <div class="branch-location-set">
+                                        <i class="fas fa-map-marker-alt" style="margin-right:4px;"></i>
+                                        <?= htmlspecialchars($branch['location']) ?>
+                                    </div>
+                                <?php endif; ?>
+                                <div class="branch-location-set">
+                                    <?php if (!empty($branch['phone'])): ?>
+                                        <i class="fas fa-phone" style="margin-right:4px;"></i>
+                                        <?= htmlspecialchars($branch['phone']) ?>
+                                    <?php endif; ?>
+                                    <?php if (!empty($branch['email'])): ?>
+                                        <span style="margin:0 8px;">|</span>
+                                        <i class="fas fa-envelope" style="margin-right:4px;"></i>
+                                        <?= htmlspecialchars($branch['email']) ?>
+                                    <?php endif; ?>
                                 </div>
                             </div>
+                            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                                <a href="?tab=branches&branch=<?= $selected_branch_id ?>&edit_branch=<?= $branch['id'] ?>" class="btn-set btn-primary-set btn-sm-set">
+                                    <i class="fas fa-edit"></i> Edit
+                                </a>
+                            </div>
                         </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div class="empty-state">
-                        <i class="fas fa-store-alt"></i>
-                        <p>No branches found.</p>
                     </div>
-                <?php endif; ?>
-                
-                <!-- Edit Branch Form - FIXED -->
-                <?php if ($edit_branch): ?>
-                <div class="edit-branch-form">
-                    <div class="form-title">
-                        <i class="fas fa-edit"></i> Edit Branch: <?= htmlspecialchars($edit_branch['name']) ?>
-                        <a href="?tab=branches&branch=<?= $selected_branch_id ?>" class="text-sm text-gray-400 hover:text-red-500 ml-2" style="font-size:0.8rem;color:var(--text-secondary);text-decoration:none;">
-                            <i class="fas fa-times"></i> Cancel
-                        </a>
-                    </div>
-                    
-                    <form method="POST">
-                        <input type="hidden" name="action" value="update_branch">
-                        <input type="hidden" name="branch_id" value="<?= $edit_branch['id'] ?>">
-                        
-                        <div class="form-row">
-                            <label class="form-label">Branch Name <span class="required">*</span></label>
-                            <input type="text" name="branch_name" class="form-control" value="<?= htmlspecialchars($edit_branch['name']) ?>" required>
-                        </div>
-                        
-                        <div class="form-row">
-                            <label class="form-label">Location</label>
-                            <input type="text" name="branch_location" class="form-control" value="<?= htmlspecialchars($edit_branch['location'] ?? '') ?>">
-                        </div>
-                        
-                        <div class="form-row">
-                            <label class="form-label">Phone</label>
-                            <input type="text" name="branch_phone" class="form-control" value="<?= htmlspecialchars($edit_branch['phone'] ?? '') ?>">
-                        </div>
-                        
-                        <div class="form-row">
-                            <label class="form-label">Email</label>
-                            <input type="email" name="branch_email" class="form-control" value="<?= htmlspecialchars($edit_branch['email'] ?? '') ?>">
-                        </div>
-                        
-                        <div class="form-row">
-                            <label class="form-label">Status</label>
-                            <select name="branch_status" class="form-control">
-                                <option value="active" <?= ($edit_branch['status'] ?? 'active') === 'active' ? 'selected' : '' ?>>Active</option>
-                                <option value="inactive" <?= ($edit_branch['status'] ?? 'active') === 'inactive' ? 'selected' : '' ?>>Inactive</option>
-                            </select>
-                        </div>
-                        
-                        <div class="form-actions">
-                            <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Update Branch</button>
-                            <a href="?tab=branches&branch=<?= $selected_branch_id ?>" class="btn btn-secondary">Cancel</a>
-                        </div>
-                    </form>
+                <?php endforeach; ?>
+            <?php else: ?>
+                <div class="empty-state-set">
+                    <i class="fas fa-store-alt"></i>
+                    <p>No branches found.</p>
                 </div>
-                <?php endif; ?>
-                
-                <?php endif; ?>
-                
-                <!-- ================================================================ -->
-                <!-- SECURITY TAB -->
-                <!-- ================================================================ -->
-                <?php if ($active_tab === 'security'): ?>
-                
-                <div class="section-header">
-                    <h2>
-                        <i class="fas fa-shield-alt"></i>
-                        Security Settings
-                    </h2>
+            <?php endif; ?>
+            
+            <!-- Edit Branch Form -->
+            <?php if ($edit_branch): ?>
+            <div class="edit-branch-form-set">
+                <div class="form-title-set">
+                    <i class="fas fa-edit"></i> Edit Branch: <?= htmlspecialchars($edit_branch['name']) ?>
+                    <a href="?tab=branches&branch=<?= $selected_branch_id ?>" style="font-size:0.8rem;color:var(--set-text-secondary);text-decoration:none;margin-left:8px;">
+                        <i class="fas fa-times"></i> Cancel
+                    </a>
                 </div>
                 
                 <form method="POST">
-                    <input type="hidden" name="action" value="update_security">
+                    <input type="hidden" name="action" value="update_branch">
+                    <input type="hidden" name="branch_id" value="<?= $edit_branch['id'] ?>">
                     
-                    <div class="form-row">
-                        <label class="form-label">Password Policy</label>
-                        <select name="password_policy" class="form-control">
-                            <option value="low" <?= ($settings['password_policy'] ?? 'medium') === 'low' ? 'selected' : '' ?>>Low (min 6 chars)</option>
-                            <option value="medium" <?= ($settings['password_policy'] ?? 'medium') === 'medium' ? 'selected' : '' ?>>Medium (min 8 chars, mixed case)</option>
-                            <option value="high" <?= ($settings['password_policy'] ?? 'medium') === 'high' ? 'selected' : '' ?>>High (min 10 chars, mixed case, numbers, special)</option>
+                    <div class="form-row-set">
+                        <label class="form-label-set">Branch Name <span class="required-set">*</span></label>
+                        <input type="text" name="branch_name" class="form-control-set" value="<?= htmlspecialchars($edit_branch['name']) ?>" required>
+                    </div>
+                    
+                    <div class="form-row-set">
+                        <label class="form-label-set">Location</label>
+                        <input type="text" name="branch_location" class="form-control-set" value="<?= htmlspecialchars($edit_branch['location'] ?? '') ?>">
+                    </div>
+                    
+                    <div class="form-row-set">
+                        <label class="form-label-set">Phone</label>
+                        <input type="text" name="branch_phone" class="form-control-set" value="<?= htmlspecialchars($edit_branch['phone'] ?? '') ?>">
+                    </div>
+                    
+                    <div class="form-row-set">
+                        <label class="form-label-set">Email</label>
+                        <input type="email" name="branch_email" class="form-control-set" value="<?= htmlspecialchars($edit_branch['email'] ?? '') ?>">
+                    </div>
+                    
+                    <div class="form-row-set">
+                        <label class="form-label-set">Status</label>
+                        <select name="branch_status" class="form-control-set">
+                            <option value="active" <?= ($edit_branch['status'] ?? 'active') === 'active' ? 'selected' : '' ?>>Active</option>
+                            <option value="inactive" <?= ($edit_branch['status'] ?? 'active') === 'inactive' ? 'selected' : '' ?>>Inactive</option>
                         </select>
                     </div>
                     
-                    <div class="form-row">
-                        <label class="form-label">Session Timeout (minutes)</label>
-                        <input type="number" name="session_timeout" class="form-control" min="5" max="1440" value="<?= htmlspecialchars($settings['session_timeout'] ?? 30) ?>">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Max Login Attempts</label>
-                        <input type="number" name="max_login_attempts" class="form-control" min="3" max="20" value="<?= htmlspecialchars($settings['max_login_attempts'] ?? 5) ?>">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-                            <input type="checkbox" name="two_factor_auth" value="1" <?= ($settings['two_factor_auth'] ?? 0) ? 'checked' : '' ?>>
-                            Enable Two-Factor Authentication
-                        </label>
-                    </div>
-                    
-                    <div class="form-actions">
-                        <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Save Changes</button>
+                    <div class="form-actions-set">
+                        <button type="submit" class="btn-set btn-success-set"><i class="fas fa-save"></i> Update Branch</button>
+                        <a href="?tab=branches&branch=<?= $selected_branch_id ?>" class="btn-set btn-secondary-set">Cancel</a>
                     </div>
                 </form>
+            </div>
+            <?php endif; ?>
+            
+            <?php endif; ?>
+            
+            <!-- ================================================================ -->
+            <!-- SECURITY TAB -->
+            <!-- ================================================================ -->
+            <?php if ($active_tab === 'security'): ?>
+            
+            <div class="section-header-set">
+                <h2><i class="fas fa-shield-alt"></i> Security Settings</h2>
+            </div>
+            
+            <form method="POST">
+                <input type="hidden" name="action" value="update_security">
                 
-                <?php endif; ?>
-                
-                <!-- ================================================================ -->
-                <!-- SYSTEM TAB -->
-                <!-- ================================================================ -->
-                <?php if ($active_tab === 'system'): ?>
-                
-                <div class="section-header">
-                    <h2>
-                        <i class="fas fa-server"></i>
-                        System Settings
-                    </h2>
+                <div class="form-row-set">
+                    <label class="form-label-set">Password Policy</label>
+                    <select name="password_policy" class="form-control-set">
+                        <option value="low" <?= $settings['password_policy'] === 'low' ? 'selected' : '' ?>>Low (min 6 chars)</option>
+                        <option value="medium" <?= $settings['password_policy'] === 'medium' ? 'selected' : '' ?>>Medium (min 8 chars, mixed case)</option>
+                        <option value="high" <?= $settings['password_policy'] === 'high' ? 'selected' : '' ?>>High (min 10 chars, mixed case, numbers, special)</option>
+                    </select>
                 </div>
                 
-                <form method="POST">
-                    <input type="hidden" name="action" value="update_system">
-                    
-                    <div class="form-row">
-                        <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-                            <input type="checkbox" name="maintenance_mode" value="1" <?= ($settings['maintenance_mode'] ?? 0) ? 'checked' : '' ?>>
-                            Maintenance Mode (site will be inaccessible to non-admin users)
-                        </label>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-                            <input type="checkbox" name="debug_mode" value="1" <?= ($settings['debug_mode'] ?? 0) ? 'checked' : '' ?>>
-                            Debug Mode (show detailed error messages)
-                        </label>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-                            <input type="checkbox" name="log_activities" value="1" <?= ($settings['log_activities'] ?? 1) ? 'checked' : '' ?>>
-                            Log User Activities
-                        </label>
-                    </div>
-                    
-                    <div class="form-actions">
-                        <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Save Changes</button>
-                    </div>
-                </form>
+                <div class="form-row-set">
+                    <label class="form-label-set">Session Timeout (minutes)</label>
+                    <input type="number" name="session_timeout" class="form-control-set" min="5" max="1440" value="<?= htmlspecialchars($settings['session_timeout']) ?>">
+                </div>
                 
-                <?php endif; ?>
+                <div class="form-row-set">
+                    <label class="form-label-set">Max Login Attempts</label>
+                    <input type="number" name="max_login_attempts" class="form-control-set" min="3" max="20" value="<?= htmlspecialchars($settings['max_login_attempts']) ?>">
+                </div>
                 
+                <div class="form-row-set">
+                    <label class="form-label-set" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                        <input type="checkbox" name="two_factor_auth" value="1" <?= $settings['two_factor_auth'] ? 'checked' : '' ?>>
+                        Enable Two-Factor Authentication
+                    </label>
+                </div>
+                
+                <div class="form-actions-set">
+                    <button type="submit" class="btn-set btn-success-set"><i class="fas fa-save"></i> Save Changes</button>
+                </div>
+            </form>
+            
+            <?php endif; ?>
+            
+            <!-- ================================================================ -->
+            <!-- SYSTEM TAB -->
+            <!-- ================================================================ -->
+            <?php if ($active_tab === 'system'): ?>
+            
+            <div class="section-header-set">
+                <h2><i class="fas fa-server"></i> System Settings</h2>
             </div>
+            
+            <form method="POST">
+                <input type="hidden" name="action" value="update_system">
+                
+                <div class="form-row-set">
+                    <label class="form-label-set" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                        <input type="checkbox" name="maintenance_mode" value="1" <?= $settings['maintenance_mode'] ? 'checked' : '' ?>>
+                        Maintenance Mode (site will be inaccessible to non-admin users)
+                    </label>
+                </div>
+                
+                <div class="form-row-set">
+                    <label class="form-label-set" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                        <input type="checkbox" name="debug_mode" value="1" <?= $settings['debug_mode'] ? 'checked' : '' ?>>
+                        Debug Mode (show detailed error messages)
+                    </label>
+                </div>
+                
+                <div class="form-row-set">
+                    <label class="form-label-set" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                        <input type="checkbox" name="log_activities" value="1" <?= $settings['log_activities'] ? 'checked' : '' ?>>
+                        Log User Activities
+                    </label>
+                </div>
+                
+                <div class="form-actions-set">
+                    <button type="submit" class="btn-set btn-success-set"><i class="fas fa-save"></i> Save Changes</button>
+                </div>
+            </form>
+            
+            <?php endif; ?>
+            
         </div>
     </div>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer mt-5">
+    <footer class="footer-set">
         <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="footer-brand-set">Braick Dispensary</span> Management System
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             System Settings
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1765,148 +1353,28 @@ include_once '../../components/admin_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
-    </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // FOOTER TIME
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
-        }
-    });
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        window.location.href = url.toString();
-    }
-
-    // ================================================================
-    // TOAST
-    // ================================================================
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
-    }
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            var branch = '<?= $selected_branch_id ?>';
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
+    setInterval(function() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
         var ftEl = document.getElementById('footerTime');
         if (ftEl) ftEl.textContent = timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    }, 1000);
 
     console.log('%c⚙️ Braick - System Settings', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ No duplicate CSS/JS', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Page Header: 100% BLUE - NO WHITE BACKGROUND', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ All texts are WHITE on blue background', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Edit branch buttons now work properly', 'font-size:13px; color:#34D399;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Tab: <?= ucfirst($active_tab) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🌙 Dark mode: Handled by header (shared)', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

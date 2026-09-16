@@ -2,29 +2,21 @@
 // ================================================================
 // FILE: frontend/pages/admin/receptions.php
 // SUPER ADMIN - VIEW ALL RECEPTIONS (BRANCHES)
-// BRAICK DISPENSARY - BLUE THEME - USING EXISTING DATABASE
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
-// FIXED: Branch filter error with invalid_id parameter - DISPLAY ALL BRANCHES
+// BRAICK DISPENSARY - BLUE THEME
+// ✅ Uses SHARED admin_header.php & admin_sidebar.php
+// ✅ Page-specific CSS only (no duplicates)
+// ✅ Dark mode via header toggle
 // ================================================================
 
-// ================================================================
-// SESSION START
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../../auth/login.php');
     exit;
 }
 
-// ================================================================
-// ROLE CHECK - ONLY ADMIN CAN ACCESS
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -33,14 +25,12 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../../auth/login.php'); break;
     }
     exit;
 }
 
-// ================================================================
-// GET ADMIN DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
@@ -48,7 +38,6 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// Include database
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
@@ -71,15 +60,14 @@ try {
 }
 
 // ================================================================
-// GET FILTER PARAMETERS - FIXED: Ignore invalid_id error
+// GET FILTER PARAMETERS
 // ================================================================
 $selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? $_GET['status'] : 'all';
 
-// ✅ FIX: If error parameter exists, reset branch to 'all' and redirect to clean URL
+// Redirect if error parameters exist
 if (isset($_GET['error']) || isset($_GET['invalid_id'])) {
-    // Redirect to clean URL without error parameter
     $clean_url = $_SERVER['PHP_SELF'] . '?branch=all';
     if (!empty($search)) {
         $clean_url .= '&search=' . urlencode($search);
@@ -91,29 +79,23 @@ if (isset($_GET['error']) || isset($_GET['invalid_id'])) {
     exit;
 }
 
-// ================================================================
-// VALIDATE BRANCH ID - If invalid, show all branches
-// ================================================================
+// Validate branch ID
 $branch_id_for_query = null;
 $error_msg = '';
 
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     $branch_id_for_query = (int)$selected_branch_id;
     
-    // Verify branch exists (check both active and inactive)
     try {
         $stmt = $db->prepare("SELECT id, status FROM branches WHERE id = ?");
         $stmt->execute([$branch_id_for_query]);
         $branch_exists = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if (!$branch_exists) {
-            // Branch doesn't exist - show all
             $error_msg = 'Branch not found. Showing all branches.';
             $selected_branch_id = 'all';
             $branch_id_for_query = null;
         }
-        // If branch exists but is inactive, still show it if specifically requested
-        // (status filter will handle it)
     } catch (Exception $e) {
         $error_msg = 'Error validating branch. Showing all branches.';
         $selected_branch_id = 'all';
@@ -122,34 +104,20 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 }
 
 // ================================================================
-// BUILD QUERY WITH FILTERS - FIXED
+// BUILD QUERY
 // ================================================================
 $query = "
     SELECT 
-        b.id,
-        b.name,
-        b.location,
-        b.phone,
-        b.email,
-        b.logo,
-        b.status,
-        b.created_at,
-        b.updated_at,
+        b.id, b.name, b.location, b.phone, b.email, b.logo, b.status, b.created_at, b.updated_at,
         COALESCE((SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception' AND status = 'active'), 0) as active_receptionists,
         COALESCE((SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception'), 0) as total_receptionists,
         COALESCE((SELECT COUNT(*) FROM patients WHERE branch_id = b.id), 0) as total_patients,
         COALESCE((SELECT COUNT(*) FROM patients WHERE branch_id = b.id AND DATE(created_at) = CURDATE()), 0) as today_patients,
         COALESCE((SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'pending'), 0) as pending_visits,
-        COALESCE((SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'assigned'), 0) as assigned_visits,
-        COALESCE((SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'with_doctor'), 0) as with_doctor_visits,
         COALESCE((SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'scheduled'), 0) as scheduled_appointments,
         COALESCE((SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'confirmed'), 0) as confirmed_appointments,
-        COALESCE((SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND DATE(appointment_date) = CURDATE()), 0) as today_appointments,
         COALESCE((SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND DATE(visit_date) = CURDATE()), 0) as today_visits,
         COALESCE((SELECT COUNT(*) FROM appointments WHERE branch_id = b.id), 0) as total_appointments,
-        COALESCE((SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'paid'), 0) as paid_bills,
-        COALESCE((SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'partial'), 0) as partial_bills,
-        COALESCE((SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'pending'), 0) as pending_bills,
         COALESCE((SELECT COALESCE(SUM(total_amount), 0) FROM bills WHERE branch_id = b.id AND status = 'paid'), 0) as total_revenue
     FROM branches b
     WHERE 1=1
@@ -157,22 +125,16 @@ $query = "
 
 $params = [];
 
-// Branch filter - only if valid branch ID provided
 if ($branch_id_for_query !== null && is_numeric($branch_id_for_query)) {
     $query .= " AND b.id = ?";
     $params[] = $branch_id_for_query;
 }
 
-// Status filter
 if ($status_filter !== 'all' && in_array($status_filter, ['active', 'inactive'])) {
     $query .= " AND b.status = ?";
     $params[] = $status_filter;
-} else {
-    // ✅ FIX: Show ALL branches by default (both active and inactive)
-    // No status filter applied
 }
 
-// Search filter
 if (!empty($search)) {
     $query .= " AND (b.name LIKE ? OR b.location LIKE ? OR b.phone LIKE ? OR b.email LIKE ?)";
     $search_term = "%$search%";
@@ -184,9 +146,6 @@ if (!empty($search)) {
 
 $query .= " ORDER BY b.name ASC";
 
-// ================================================================
-// EXECUTE QUERY
-// ================================================================
 $receptions = [];
 try {
     $stmt = $db->prepare($query);
@@ -197,9 +156,7 @@ try {
     $receptions = [];
 }
 
-// ================================================================
 // GET BRANCHES FOR FILTER
-// ================================================================
 $branches = [];
 try {
     $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
@@ -208,9 +165,7 @@ try {
     $branches = [];
 }
 
-// ================================================================
 // GET SUMMARY STATISTICS
-// ================================================================
 $total_receptions = count($receptions);
 $total_patients = 0;
 $total_appointments = 0;
@@ -226,9 +181,6 @@ foreach ($receptions as $r) {
     $total_revenue += ($r['total_revenue'] ?? 0);
 }
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
@@ -241,1108 +193,767 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 include_once '../../components/admin_header.php';
 include_once '../../components/admin_sidebar.php';
 ?>
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Receptions - Braick Dispensary</title>
-    
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
-    <style>
-        /* ================================================================
-           ROOT VARIABLES - BOLDER BLUE THEME
-           ================================================================ */
-        :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #3B82F6;
-            --primary-bg: #EFF6FF;
-            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #073B8A);
-            
-            --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
-            --success-bg: #D1FAE5;
-            
-            --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
-            --danger-bg: #FEE2E2;
-            
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            
-            --teal: #0D9488;
-            --teal-bg: #ECFDF5;
-            
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            
-            --bg-body: #F0F4F8;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
-            --radius: 12px;
-            --radius-lg: 18px;
-            --table-hover: #F8FAFC;
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-light: #60A5FA;
-            --primary-bg: #1E3A5F;
-            --primary-gradient: linear-gradient(135deg, #2563EB, #1D4ED8);
-            --primary-gradient-strong: linear-gradient(135deg, #1D4ED8, #1E40AF);
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-hover: #1E293B;
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV - SHARED HEADER
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 var(--radius) var(--radius) 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .branch-selector {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            font-size: 0.78rem;
-            color: var(--text-primary);
-            outline: none;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .branch-selector:focus {
-            border-color: var(--primary);
-        }
-        
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-        }
-        
-        /* ================================================================
-           PAGE HEADER - BOLDER BLUE THEME
-           ================================================================ */
-        .page-header {
-            background: var(--primary-gradient-strong);
-            border-radius: var(--radius-lg);
-            padding: 28px 36px;
-            margin-bottom: 28px;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            box-shadow: 0 8px 32px rgba(10, 76, 168, 0.35);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 400px;
-            height: 400px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header .page-title {
-            color: white;
-            font-size: 1.8rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
-        .page-header .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
-        .page-header .header-badge {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
-            transition: all 0.3s ease;
-        }
-        
-        .page-header .header-badge:hover {
-            background: rgba(255,255,255,0.2);
-            transform: translateY(-1px);
-        }
-        
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: var(--radius);
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        
-        /* ================================================================
-           ALERT / ERROR MESSAGE
-           ================================================================ */
-        .alert {
-            padding: 14px 20px;
-            border-radius: var(--radius);
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-size: 0.9rem;
-            border: 1px solid transparent;
-            animation: slideDown 0.3s ease;
-        }
-        
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .alert-error {
-            background: var(--danger-bg);
-            color: var(--danger);
-            border-color: var(--danger);
-        }
-        
-        .alert-success {
-            background: var(--success-bg);
-            color: var(--success);
-            border-color: var(--success);
-        }
-        
-        .alert-warning {
-            background: var(--warning-bg);
-            color: var(--warning);
-            border-color: var(--warning);
-        }
-        
-        .alert-info {
-            background: var(--primary-bg);
-            color: var(--primary);
-            border-color: var(--primary);
-        }
-        
-        /* ================================================================
-           STATS ROW - BOLDER BLUE CARDS
-           ================================================================ */
-        .stats-row {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        
-        .stat-card {
-            background: var(--bg-card);
-            border-radius: var(--radius);
-            padding: 16px 20px;
-            border: 2px solid var(--border-color);
-            box-shadow: var(--shadow-sm);
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .stat-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 5px;
-            height: 100%;
-            background: var(--primary-gradient-strong);
-            border-radius: 0 3px 3px 0;
-            opacity: 0.8;
-        }
-        
-        .stat-card:hover {
-            border-color: var(--primary);
-            transform: translateY(-4px);
-            box-shadow: 0 8px 25px rgba(11, 94, 215, 0.15);
-        }
-        
-        .stat-card:hover::before {
-            opacity: 1;
-            width: 6px;
-        }
-        
-        .stat-card .stat-icon-wrapper {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 8px;
-        }
-        
-        .stat-card .stat-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.15rem;
-            flex-shrink: 0;
-            border: 2px solid transparent;
-            transition: all 0.3s ease;
-        }
-        
-        .stat-card:hover .stat-icon {
-            transform: scale(1.05);
-        }
-        
-        .stat-card .stat-icon.blue { 
-            background: var(--primary-bg); 
-            color: var(--primary);
-            border-color: rgba(11, 94, 215, 0.2);
-        }
-        .stat-card .stat-icon.green { 
-            background: #ECFDF5; 
-            color: #059669;
-            border-color: rgba(5, 150, 105, 0.2);
-        }
-        .stat-card .stat-icon.orange { 
-            background: #FFFBEB; 
-            color: #F59E0B;
-            border-color: rgba(245, 158, 11, 0.2);
-        }
-        .stat-card .stat-icon.purple { 
-            background: #F5F3FF; 
-            color: #7C3AED;
-            border-color: rgba(124, 58, 237, 0.2);
-        }
-        .stat-card .stat-icon.teal { 
-            background: #ECFDF5; 
-            color: #0D9488;
-            border-color: rgba(13, 148, 136, 0.2);
-        }
-        .stat-card .stat-icon.red { 
-            background: #FEF2F2; 
-            color: #DC2626;
-            border-color: rgba(220, 38, 38, 0.2);
-        }
-        
-        [data-theme="dark"] .stat-card .stat-icon.blue { 
-            background: #1E3A5F; 
-            color: #3B82F6;
-            border-color: rgba(59, 130, 246, 0.3);
-        }
-        [data-theme="dark"] .stat-card .stat-icon.green { 
-            background: #1A3A2A; 
-            color: #34D399;
-            border-color: rgba(52, 211, 153, 0.3);
-        }
-        [data-theme="dark"] .stat-card .stat-icon.orange { 
-            background: #3D2E0A; 
-            color: #FBBF24;
-            border-color: rgba(251, 191, 36, 0.3);
-        }
-        [data-theme="dark"] .stat-card .stat-icon.purple { 
-            background: #2D1B4E; 
-            color: #A78BFA;
-            border-color: rgba(167, 139, 250, 0.3);
-        }
-        [data-theme="dark"] .stat-card .stat-icon.teal { 
-            background: #0F3D3D; 
-            color: #5EEAD4;
-            border-color: rgba(94, 234, 212, 0.3);
-        }
-        [data-theme="dark"] .stat-card .stat-icon.red { 
-            background: #3A1A1A; 
-            color: #F87171;
-            border-color: rgba(248, 113, 113, 0.3);
-        }
-        
-        .stat-card .stat-label {
-            font-size: 0.6rem;
-            color: var(--text-secondary);
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            margin: 0 0 2px 0;
-        }
-        
-        .stat-card .stat-value {
-            font-size: 1.3rem;
-            font-weight: 800;
-            color: var(--text-primary);
-            margin: 0;
-            line-height: 1.2;
-        }
-        
-        .stat-card .stat-value.blue { color: var(--primary); }
-        .stat-card .stat-value.green { color: #059669; }
-        .stat-card .stat-value.orange { color: #F59E0B; }
-        .stat-card .stat-value.purple { color: #7C3AED; }
-        .stat-card .stat-value.teal { color: #0D9488; }
-        .stat-card .stat-value.red { color: #DC2626; }
-        
-        .stat-card .stat-change {
-            font-size: 0.6rem;
-            font-weight: 600;
-            margin-top: 4px;
-            display: inline-flex;
-            align-items: center;
-            gap: 3px;
-            padding: 2px 8px;
-            border-radius: 12px;
-            background: var(--bg-body);
-        }
-        
-        .stat-card .stat-change.up { color: #059669; }
-        .stat-card .stat-change.down { color: #DC2626; }
-        .stat-card .stat-change.neutral { color: var(--text-secondary); }
-        
-        /* ================================================================
-           FILTER BAR
-           ================================================================ */
-        .filter-bar {
-            background: var(--bg-card);
-            border-radius: var(--radius);
-            padding: 14px 18px;
-            border: 2px solid var(--border-color);
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            align-items: center;
-            margin-bottom: 24px;
-            box-shadow: var(--shadow-sm);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .filter-bar::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 4px;
-            background: var(--primary-gradient-strong);
-        }
-        
-        .filter-bar .filter-label {
-            font-size: 0.7rem;
-            font-weight: 700;
-            color: var(--primary);
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-        }
-        
-        .filter-bar select,
-        .filter-bar input {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 8px;
-            padding: 5px 10px;
-            font-size: 0.75rem;
-            color: var(--text-primary);
-            outline: none;
-            transition: all 0.3s;
-        }
-        
-        .filter-bar select:focus,
-        .filter-bar input:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.15);
-        }
-        
-        .filter-bar .btn-filter {
-            background: var(--primary-gradient-strong);
-            color: white;
-            border: none;
-            padding: 6px 16px;
-            border-radius: 8px;
-            font-weight: 700;
-            font-size: 0.7rem;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .filter-bar .btn-filter:hover {
-            transform: scale(1.03);
-            box-shadow: 0 4px 16px rgba(10, 76, 168, 0.35);
-        }
-        
-        .filter-bar .btn-reset {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-            padding: 6px 16px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.7rem;
-            cursor: pointer;
-            transition: all 0.3s;
-            text-decoration: none;
-        }
-        
-        .filter-bar .btn-reset:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        /* ================================================================
-           RECEPTION CARDS - BOLDER BLUE THEME
-           ================================================================ */
-        .reception-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-            gap: 20px;
-        }
-        
-        .reception-card {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 2px solid var(--border-color);
-            overflow: hidden;
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-            position: relative;
-        }
-        
-        .reception-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 5px;
-            background: var(--primary-gradient-strong);
-            opacity: 0.7;
-            transition: opacity 0.3s ease, height 0.3s ease;
-        }
-        
-        .reception-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 12px 35px rgba(11, 94, 215, 0.15);
-            border-color: var(--primary);
-        }
-        
-        .reception-card:hover::before {
-            opacity: 1;
-            height: 6px;
-        }
-        
-        .reception-card .card-top {
-            padding: 16px 18px 12px 18px;
-            border-bottom: 2px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: start;
-            background: var(--primary-gradient-strong);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .reception-card .card-top::after {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 200px;
-            height: 200px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        [data-theme="dark"] .reception-card .card-top {
-            background: linear-gradient(135deg, #1D4ED8, #1E40AF);
-        }
-        
-        .reception-card .card-top .name {
-            font-size: 1.05rem;
-            font-weight: 800;
-            color: white;
-            position: relative;
-            z-index: 1;
-            text-shadow: 0 1px 3px rgba(0,0,0,0.15);
-        }
-        
-        .reception-card .card-top .name i {
-            color: rgba(255,255,255,0.85);
-            margin-right: 8px;
-        }
-        
-        .reception-card .card-top .location-text {
-            font-size: 0.7rem;
-            color: rgba(255,255,255,0.75);
-            margin-top: 2px;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .reception-card .card-top .location-text i {
-            color: rgba(255,255,255,0.6);
-            font-size: 0.65rem;
-        }
-        
-        .reception-card .card-top .status-badge {
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            position: relative;
-            z-index: 1;
-            backdrop-filter: blur(4px);
-        }
-        
-        .reception-card .card-top .status-badge.active {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.3);
-        }
-        
-        .reception-card .card-top .status-badge.inactive {
-            background: rgba(220, 38, 38, 0.3);
-            color: #FCA5A5;
-            border: 1px solid rgba(220, 38, 38, 0.3);
-        }
-        
-        .reception-card .card-body {
-            padding: 14px 18px 16px 18px;
-        }
-        
-        .reception-card .card-body .info-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            padding: 4px 0;
-        }
-        
-        .reception-card .card-body .info-row i {
-            width: 18px;
-            color: var(--primary);
-            font-size: 0.75rem;
-        }
-        
-        .reception-card .card-stats {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 4px;
-            padding: 10px 18px;
-            background: var(--bg-body);
-            border-top: 2px solid var(--border-color);
-            border-bottom: 2px solid var(--border-color);
-        }
-        
-        [data-theme="dark"] .reception-card .card-stats {
-            background: #0F172A;
-        }
-        
-        .reception-card .card-stats .stat-item {
-            text-align: center;
-            padding: 6px 0;
-            border-radius: 8px;
-            transition: all 0.3s ease;
-        }
-        
-        .reception-card .card-stats .stat-item:hover {
-            background: var(--primary-bg);
-            transform: scale(1.02);
-        }
-        
-        [data-theme="dark"] .reception-card .card-stats .stat-item:hover {
-            background: #1E3A5F;
-        }
-        
-        .reception-card .card-stats .stat-item .num {
-            font-size: 1rem;
-            font-weight: 800;
-            color: var(--text-primary);
-        }
-        
-        .reception-card .card-stats .stat-item .num.blue { color: var(--primary); }
-        .reception-card .card-stats .stat-item .num.green { color: #059669; }
-        .reception-card .card-stats .stat-item .num.orange { color: #F59E0B; }
-        .reception-card .card-stats .stat-item .num.purple { color: #7C3AED; }
-        .reception-card .card-stats .stat-item .num.red { color: #DC2626; }
-        .reception-card .card-stats .stat-item .num.teal { color: #0D9488; }
-        
-        .reception-card .card-stats .stat-item .label {
-            font-size: 0.5rem;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            font-weight: 700;
-        }
-        
-        .reception-card .card-actions {
-            padding: 10px 18px;
-            display: flex;
-            gap: 8px;
-            justify-content: flex-end;
-            flex-wrap: wrap;
-        }
-        
-        .reception-card .card-actions .btn-action {
-            padding: 5px 14px;
-            border-radius: 8px;
-            font-size: 0.65rem;
-            font-weight: 700;
-            text-decoration: none;
-            transition: all 0.3s;
-            border: 2px solid var(--border-color);
-            color: var(--text-secondary);
-            background: transparent;
-            cursor: pointer;
-        }
-        
-        .reception-card .card-actions .btn-action:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-            transform: translateY(-2px);
-        }
-        
-        .reception-card .card-actions .btn-action.primary {
-            background: var(--primary-gradient-strong);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        .reception-card .card-actions .btn-action.primary:hover {
-            background: var(--primary-dark);
-            border-color: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(10, 76, 168, 0.35);
-        }
-        
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: var(--text-secondary);
-        }
-        
-        .empty-state i {
-            font-size: 4rem;
-            color: var(--border-color);
-            margin-bottom: 16px;
-        }
-        
-        .empty-state h3 {
-            font-size: 1.3rem;
-            color: var(--text-primary);
-            margin-bottom: 8px;
-        }
-        
-        .empty-state p {
-            font-size: 0.9rem;
-        }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand {
-            color: var(--primary);
-            font-weight: 700;
-        }
-        
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .reception-grid { grid-template-columns: 1fr; }
-            .stats-row { grid-template-columns: 1fr 1fr; }
-            .filter-bar { flex-direction: column; align-items: stretch; }
-            .reception-card .card-stats { grid-template-columns: repeat(4, 1fr); }
-        }
-        
-        @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .stats-row { grid-template-columns: 1fr; }
-            .page-header { flex-direction: column; align-items: flex-start !important; }
-            .reception-card .card-stats { grid-template-columns: repeat(2, 1fr); }
-        }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        /* ================================================================
-           PRINT STYLES
-           ================================================================ */
-        @media print {
-            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
-            .search-wrapper, .page-header .btn-outline-light,
-            .filter-bar, .footer, #sidebarToggle { display: none !important; }
-            .main-content { margin: 0; padding: 20px; }
-            .reception-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .page-header {
-                background: #0B5ED7 !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-            }
-            .page-title, .page-subtitle, .header-badge, .role-badge-display {
-                color: white !important;
-            }
-        }
-    </style>
-</head>
-<body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- PAGE-SPECIFIC CSS -->
 <!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search receptions..." value="<?= htmlspecialchars($search) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+<style>
+    /* ================================================================
+       PAGE VARIABLES
+       ================================================================ */
+    :root {
+        --rec-primary: #0B5ED7;
+        --rec-primary-dark: #0A4CA8;
+        --rec-primary-light: #3B82F6;
+        --rec-primary-bg: #EFF6FF;
+        --rec-primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        --rec-primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #073B8A);
+        --rec-success: #059669;
+        --rec-success-bg: #D1FAE5;
+        --rec-danger: #DC2626;
+        --rec-danger-bg: #FEE2E2;
+        --rec-warning: #D97706;
+        --rec-warning-bg: #FEF3C7;
+        --rec-purple: #7C3AED;
+        --rec-purple-bg: #EDE9FE;
+        --rec-teal: #0D9488;
+        --rec-gray-50: #F8FAFC;
+        --rec-gray-100: #F1F5F9;
+        --rec-gray-200: #E2E8F0;
+        --rec-gray-300: #CBD5E1;
+        --rec-gray-400: #94A3B8;
+        --rec-gray-500: #64748B;
+        --rec-gray-600: #475569;
+        --rec-gray-700: #334155;
+        --rec-gray-800: #1E293B;
+        --rec-gray-900: #0F172A;
+        --rec-bg-body: #F0F4F8;
+        --rec-bg-card: #FFFFFF;
+        --rec-text-primary: #1E293B;
+        --rec-text-secondary: #64748B;
+        --rec-border-color: #E2E8F0;
+        --rec-radius: 12px;
+        --rec-radius-lg: 18px;
+        --rec-shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+        --rec-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        --rec-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+        --rec-shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
+        --rec-table-hover: #F8FAFC;
+    }
+
+    [data-theme="dark"] {
+        --rec-bg-body: #0F172A;
+        --rec-bg-card: #1E293B;
+        --rec-text-primary: #F1F5F9;
+        --rec-text-secondary: #94A3B8;
+        --rec-border-color: #334155;
+        --rec-primary-bg: #1E3A5F;
+        --rec-shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+        --rec-shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+        --rec-table-hover: #1E293B;
+    }
+
+    /* ================================================================
+       DARK MODE - PAGE YOTE
+       ================================================================ */
+    html[data-theme="dark"] body {
+        background: #0F172A !important;
+    }
+
+    html[data-theme="dark"] .main-content {
+        background: #0F172A !important;
+        color: #F1F5F9;
+    }
+
+    /* ================================================================
+       PAGE HEADER
+       ================================================================ */
+    .page-header-rec {
+        background: var(--rec-primary-gradient-strong);
+        border-radius: var(--rec-radius-lg);
+        padding: 28px 36px;
+        margin-bottom: 28px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 8px 32px rgba(10, 76, 168, 0.35);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .page-header-rec::before {
+        content: '';
+        position: absolute;
+        top: -60%;
+        right: -10%;
+        width: 400px;
+        height: 400px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .page-header-rec::after {
+        content: '';
+        position: absolute;
+        bottom: -40%;
+        left: -5%;
+        width: 300px;
+        height: 300px;
+        background: rgba(255,255,255,0.03);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .page-header-rec .page-title-rec {
+        color: white;
+        font-size: 1.8rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+    }
+
+    .page-header-rec .page-title-rec i {
+        font-size: 2rem;
+        opacity: 0.9;
+    }
+
+    .page-header-rec .page-subtitle-rec {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.95rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 6px;
+    }
+
+    .page-header-rec .page-subtitle-rec strong {
+        color: white;
+        font-weight: 600;
+    }
+
+    .page-header-rec .role-badge-display-rec {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        backdrop-filter: blur(4px);
+    }
+
+    .page-header-rec .header-badge-rec {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255,255,255,0.1);
+        transition: all 0.3s ease;
+    }
+
+    .page-header-rec .header-badge-rec:hover {
+        background: rgba(255,255,255,0.2);
+        transform: translateY(-1px);
+    }
+
+    /* ================================================================
+       ALERT
+       ================================================================ */
+    .alert-rec {
+        padding: 14px 20px;
+        border-radius: var(--rec-radius);
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 0.9rem;
+        border: 1px solid transparent;
+        animation: slideDown 0.3s ease;
+    }
+
+    @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .alert-warning-rec {
+        background: var(--rec-warning-bg);
+        color: var(--rec-warning);
+        border-color: var(--rec-warning);
+    }
+
+    [data-theme="dark"] .alert-warning-rec {
+        background: #3D2E0A;
+        color: #FBBF24;
+    }
+
+    /* ================================================================
+       STATS ROW
+       ================================================================ */
+    .stats-row-rec {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 16px;
+        margin-bottom: 24px;
+    }
+
+    .stat-card-rec {
+        background: var(--rec-bg-card);
+        border-radius: var(--rec-radius);
+        padding: 16px 20px;
+        border: 2px solid var(--rec-border-color);
+        box-shadow: var(--rec-shadow-sm);
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .stat-card-rec::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 5px;
+        height: 100%;
+        background: var(--rec-primary-gradient-strong);
+        border-radius: 0 3px 3px 0;
+        opacity: 0.8;
+    }
+
+    .stat-card-rec:hover {
+        border-color: var(--rec-primary);
+        transform: translateY(-4px);
+        box-shadow: 0 8px 25px rgba(11, 94, 215, 0.15);
+    }
+
+    .stat-card-rec:hover::before {
+        opacity: 1;
+        width: 6px;
+    }
+
+    .stat-card-rec .stat-icon-wrapper-rec {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 8px;
+    }
+
+    .stat-card-rec .stat-icon-rec {
+        width: 44px;
+        height: 44px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.15rem;
+        flex-shrink: 0;
+        border: 2px solid transparent;
+        transition: all 0.3s ease;
+    }
+
+    .stat-card-rec:hover .stat-icon-rec {
+        transform: scale(1.05);
+    }
+
+    .stat-card-rec .stat-icon-rec.blue { 
+        background: var(--rec-primary-bg); 
+        color: var(--rec-primary);
+        border-color: rgba(11, 94, 215, 0.2);
+    }
+    .stat-card-rec .stat-icon-rec.green { 
+        background: #ECFDF5; 
+        color: #059669;
+        border-color: rgba(5, 150, 105, 0.2);
+    }
+    .stat-card-rec .stat-icon-rec.orange { 
+        background: #FFFBEB; 
+        color: #F59E0B;
+        border-color: rgba(245, 158, 11, 0.2);
+    }
+    .stat-card-rec .stat-icon-rec.purple { 
+        background: #F5F3FF; 
+        color: #7C3AED;
+        border-color: rgba(124, 58, 237, 0.2);
+    }
+    .stat-card-rec .stat-icon-rec.teal { 
+        background: #ECFDF5; 
+        color: #0D9488;
+        border-color: rgba(13, 148, 136, 0.2);
+    }
+    .stat-card-rec .stat-icon-rec.red { 
+        background: #FEF2F2; 
+        color: #DC2626;
+        border-color: rgba(220, 38, 38, 0.2);
+    }
+
+    [data-theme="dark"] .stat-card-rec .stat-icon-rec.blue { 
+        background: #1E3A5F; 
+        color: #3B82F6;
+    }
+    [data-theme="dark"] .stat-card-rec .stat-icon-rec.green { 
+        background: #1A3A2A; 
+        color: #34D399;
+    }
+    [data-theme="dark"] .stat-card-rec .stat-icon-rec.orange { 
+        background: #3D2E0A; 
+        color: #FBBF24;
+    }
+    [data-theme="dark"] .stat-card-rec .stat-icon-rec.purple { 
+        background: #2D1B4E; 
+        color: #A78BFA;
+    }
+    [data-theme="dark"] .stat-card-rec .stat-icon-rec.teal { 
+        background: #0F3D3D; 
+        color: #5EEAD4;
+    }
+
+    .stat-card-rec .stat-label-rec {
+        font-size: 0.6rem;
+        color: var(--rec-text-secondary);
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin: 0 0 2px 0;
+    }
+
+    .stat-card-rec .stat-value-rec {
+        font-size: 1.3rem;
+        font-weight: 800;
+        color: var(--rec-text-primary);
+        margin: 0;
+        line-height: 1.2;
+    }
+
+    .stat-card-rec .stat-value-rec.blue { color: var(--rec-primary); }
+    .stat-card-rec .stat-value-rec.green { color: #059669; }
+    .stat-card-rec .stat-value-rec.orange { color: #F59E0B; }
+    .stat-card-rec .stat-value-rec.purple { color: #7C3AED; }
+    .stat-card-rec .stat-value-rec.teal { color: #0D9488; }
+
+    .stat-card-rec .stat-change-rec {
+        font-size: 0.6rem;
+        font-weight: 600;
+        margin-top: 4px;
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 2px 8px;
+        border-radius: 12px;
+        background: var(--rec-bg-body);
+    }
+
+    .stat-card-rec .stat-change-rec.up { color: #059669; }
+    .stat-card-rec .stat-change-rec.down { color: #DC2626; }
+    .stat-card-rec .stat-change-rec.neutral { color: var(--rec-text-secondary); }
+
+    /* ================================================================
+       FILTER BAR
+       ================================================================ */
+    .filter-bar-rec {
+        background: var(--rec-bg-card);
+        border-radius: var(--rec-radius);
+        padding: 14px 18px;
+        border: 2px solid var(--rec-border-color);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 24px;
+        box-shadow: var(--rec-shadow-sm);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .filter-bar-rec::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: var(--rec-primary-gradient-strong);
+    }
+
+    .filter-bar-rec .filter-label-rec {
+        font-size: 0.7rem;
+        font-weight: 700;
+        color: var(--rec-primary);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+
+    .filter-bar-rec select,
+    .filter-bar-rec input {
+        background: var(--rec-bg-body);
+        border: 2px solid var(--rec-border-color);
+        border-radius: 8px;
+        padding: 5px 10px;
+        font-size: 0.75rem;
+        color: var(--rec-text-primary);
+        outline: none;
+        transition: all 0.3s;
+        font-family: inherit;
+    }
+
+    .filter-bar-rec select:focus,
+    .filter-bar-rec input:focus {
+        border-color: var(--rec-primary);
+        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.15);
+    }
+
+    .filter-bar-rec .btn-filter-rec {
+        background: var(--rec-primary-gradient-strong);
+        color: white;
+        border: none;
+        padding: 6px 16px;
+        border-radius: 8px;
+        font-weight: 700;
+        font-size: 0.7rem;
+        cursor: pointer;
+        transition: all 0.3s;
+        font-family: inherit;
+    }
+
+    .filter-bar-rec .btn-filter-rec:hover {
+        transform: scale(1.03);
+        box-shadow: 0 4px 16px rgba(10, 76, 168, 0.35);
+    }
+
+    .filter-bar-rec .btn-reset-rec {
+        background: transparent;
+        color: var(--rec-text-secondary);
+        border: 2px solid var(--rec-border-color);
+        padding: 6px 16px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.7rem;
+        cursor: pointer;
+        transition: all 0.3s;
+        text-decoration: none;
+    }
+
+    .filter-bar-rec .btn-reset-rec:hover {
+        border-color: var(--rec-primary);
+        color: var(--rec-primary);
+    }
+
+    /* ================================================================
+       RECEPTION CARDS
+       ================================================================ */
+    .reception-grid-rec {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+        gap: 20px;
+    }
+
+    .reception-card-rec {
+        background: var(--rec-bg-card);
+        border-radius: var(--rec-radius-lg);
+        border: 2px solid var(--rec-border-color);
+        overflow: hidden;
+        transition: all 0.3s ease;
+        box-shadow: var(--rec-shadow-sm);
+        position: relative;
+    }
+
+    .reception-card-rec:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 12px 35px rgba(11, 94, 215, 0.15);
+        border-color: var(--rec-primary);
+    }
+
+    .reception-card-rec .card-top-rec {
+        padding: 16px 18px 12px 18px;
+        border-bottom: 2px solid var(--rec-border-color);
+        display: flex;
+        justify-content: space-between;
+        align-items: start;
+        background: var(--rec-primary-gradient-strong);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .reception-card-rec .card-top-rec::after {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -20%;
+        width: 200px;
+        height: 200px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .reception-card-rec .card-top-rec .name-rec {
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: white;
+        position: relative;
+        z-index: 1;
+    }
+
+    .reception-card-rec .card-top-rec .name-rec i {
+        color: rgba(255,255,255,0.85);
+        margin-right: 8px;
+    }
+
+    .reception-card-rec .card-top-rec .location-text-rec {
+        font-size: 0.7rem;
+        color: rgba(255,255,255,0.75);
+        margin-top: 2px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        position: relative;
+        z-index: 1;
+    }
+
+    .reception-card-rec .card-top-rec .location-text-rec i {
+        color: rgba(255,255,255,0.6);
+        font-size: 0.65rem;
+    }
+
+    .reception-card-rec .card-top-rec .status-badge-rec {
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.6rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        position: relative;
+        z-index: 1;
+        backdrop-filter: blur(4px);
+    }
+
+    .reception-card-rec .card-top-rec .status-badge-rec.active {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.3);
+    }
+
+    .reception-card-rec .card-top-rec .status-badge-rec.inactive {
+        background: rgba(220, 38, 38, 0.3);
+        color: #FCA5A5;
+        border: 1px solid rgba(220, 38, 38, 0.3);
+    }
+
+    .reception-card-rec .card-body-rec {
+        padding: 14px 18px 16px 18px;
+    }
+
+    .reception-card-rec .card-body-rec .info-row-rec {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.75rem;
+        color: var(--rec-text-secondary);
+        padding: 4px 0;
+    }
+
+    .reception-card-rec .card-body-rec .info-row-rec i {
+        width: 18px;
+        color: var(--rec-primary);
+        font-size: 0.75rem;
+    }
+
+    .reception-card-rec .card-stats-rec {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 4px;
+        padding: 10px 18px;
+        background: var(--rec-bg-body);
+        border-top: 2px solid var(--rec-border-color);
+        border-bottom: 2px solid var(--rec-border-color);
+    }
+
+    [data-theme="dark"] .reception-card-rec .card-stats-rec {
+        background: #0F172A;
+    }
+
+    .reception-card-rec .card-stats-rec .stat-item-rec {
+        text-align: center;
+        padding: 6px 0;
+        border-radius: 8px;
+        transition: all 0.3s ease;
+    }
+
+    .reception-card-rec .card-stats-rec .stat-item-rec:hover {
+        background: var(--rec-primary-bg);
+        transform: scale(1.02);
+    }
+
+    [data-theme="dark"] .reception-card-rec .card-stats-rec .stat-item-rec:hover {
+        background: #1E3A5F;
+    }
+
+    .reception-card-rec .card-stats-rec .stat-item-rec .num-rec {
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--rec-text-primary);
+    }
+
+    .reception-card-rec .card-stats-rec .stat-item-rec .num-rec.blue { color: var(--rec-primary); }
+    .reception-card-rec .card-stats-rec .stat-item-rec .num-rec.green { color: #059669; }
+    .reception-card-rec .card-stats-rec .stat-item-rec .num-rec.orange { color: #F59E0B; }
+    .reception-card-rec .card-stats-rec .stat-item-rec .num-rec.purple { color: #7C3AED; }
+    .reception-card-rec .card-stats-rec .stat-item-rec .num-rec.teal { color: #0D9488; }
+
+    .reception-card-rec .card-stats-rec .stat-item-rec .label-rec {
+        font-size: 0.5rem;
+        color: var(--rec-text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        font-weight: 700;
+    }
+
+    .reception-card-rec .card-actions-rec {
+        padding: 10px 18px;
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+    }
+
+    .reception-card-rec .card-actions-rec .btn-action-rec {
+        padding: 5px 14px;
+        border-radius: 8px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        text-decoration: none;
+        transition: all 0.3s;
+        border: 2px solid var(--rec-border-color);
+        color: var(--rec-text-secondary);
+        background: transparent;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .reception-card-rec .card-actions-rec .btn-action-rec:hover {
+        border-color: var(--rec-primary);
+        color: var(--rec-primary);
+        transform: translateY(-2px);
+    }
+
+    .reception-card-rec .card-actions-rec .btn-action-rec.primary {
+        background: var(--rec-primary-gradient-strong);
+        color: white;
+        border-color: var(--rec-primary);
+    }
+
+    .reception-card-rec .card-actions-rec .btn-action-rec.primary:hover {
+        background: var(--rec-primary-dark);
+        border-color: var(--rec-primary-dark);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(10, 76, 168, 0.35);
+        color: white;
+    }
+
+    /* ================================================================
+       EMPTY STATE
+       ================================================================ */
+    .empty-state-rec {
+        text-align: center;
+        padding: 60px 20px;
+        color: var(--rec-text-secondary);
+    }
+
+    .empty-state-rec i {
+        font-size: 4rem;
+        color: var(--rec-border-color);
+        margin-bottom: 16px;
+    }
+
+    .empty-state-rec h3 {
+        font-size: 1.3rem;
+        color: var(--rec-text-primary);
+        margin-bottom: 8px;
+    }
+
+    .empty-state-rec p {
+        font-size: 0.9rem;
+    }
+
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer-rec {
+        padding: 14px 0;
+        border-top: 2px solid var(--rec-border-color);
+        margin-top: 24px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--rec-text-secondary);
+    }
+
+    .footer-rec .footer-brand-rec {
+        color: var(--rec-primary);
+        font-weight: 700;
+    }
+
+    /* ================================================================
+       ANIMATIONS
+       ================================================================ */
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .animate-fade-in-up-rec {
+        animation: fadeInUp 0.5s ease forwards;
+        opacity: 0;
+    }
+
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 768px) {
+        .page-header-rec { padding: 16px 18px; }
+        .page-header-rec .page-title-rec { font-size: 1.3rem; }
+        .reception-grid-rec { grid-template-columns: 1fr; }
+        .stats-row-rec { grid-template-columns: 1fr 1fr; }
+        .filter-bar-rec { flex-direction: column; align-items: stretch; }
+    }
+
+    @media (max-width: 480px) {
+        .stats-row-rec { grid-template-columns: 1fr; }
+        .page-header-rec { flex-direction: column; align-items: flex-start !important; }
+        .reception-card-rec .card-stats-rec { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    /* ================================================================
+       PRINT
+       ================================================================ */
+    @media print {
+        .btn-filter-rec, .btn-reset-rec, .filter-bar-rec, .card-actions-rec { display: none !important; }
+        .reception-card-rec { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
+        .page-header-rec {
+            background: #0B5ED7 !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -1350,82 +961,77 @@ include_once '../../components/admin_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header">
+    <div class="page-header-rec animate-fade-in-up-rec">
         <div>
-            <h1 class="page-title">
+            <h1 class="page-title-rec">
                 <i class="fas fa-headset"></i>
                 Receptions
-                <span class="role-badge-display">ADMIN</span>
+                <span class="role-badge-display-rec">ADMIN</span>
             </h1>
-            <p class="page-subtitle">
+            <p class="page-subtitle-rec">
                 <i class="fas fa-store-alt"></i>
                 <strong><?= $total_receptions ?></strong> reception desks found
-                <span class="header-badge">
+                <span class="header-badge-rec">
                     <i class="fas fa-users"></i> <?= number_format($total_patients) ?> Patients
                 </span>
-                <span class="header-badge" style="background:rgba(124,58,237,0.2);border-color:rgba(124,58,237,0.3);color:#A78BFA;">
+                <span class="header-badge-rec">
                     <i class="fas fa-calendar-check"></i> <?= number_format($total_appointments) ?> Appointments
                 </span>
-                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
+                <span class="header-badge-rec">
                     <i class="fas fa-clock"></i> <?= number_format($pending_visits) ?> Pending
                 </span>
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                <span class="header-badge-rec">
                     <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($total_revenue, 0) ?> Revenue
                 </span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <!-- Add Reception Button REMOVED -->
-        </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- ERROR MESSAGE - SHOW ONLY IF NOT EMPTY -->
-    <!-- ================================================================ -->
+    <!-- Error Message -->
     <?php if (!empty($error_msg)): ?>
-        <div class="alert alert-warning">
+        <div class="alert-rec alert-warning-rec">
             <i class="fas fa-exclamation-triangle"></i>
             <?= htmlspecialchars($error_msg) ?>
         </div>
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS ROW - BOLDER BLUE CARDS -->
+    <!-- STATISTICS ROW -->
     <!-- ================================================================ -->
-    <div class="stats-row animate-fade-in-up">
-        <div class="stat-card">
-            <div class="stat-icon-wrapper">
-                <div class="stat-icon blue"><i class="fas fa-headset"></i></div>
-                <span class="stat-change up"><i class="fas fa-arrow-up"></i> +<?= $total_receptions ?></span>
+    <div class="stats-row-rec animate-fade-in-up-rec" style="animation-delay:0.05s;">
+        <div class="stat-card-rec">
+            <div class="stat-icon-wrapper-rec">
+                <div class="stat-icon-rec blue"><i class="fas fa-headset"></i></div>
+                <span class="stat-change-rec up"><i class="fas fa-arrow-up"></i> +<?= $total_receptions ?></span>
             </div>
-            <p class="stat-label">Total Receptions</p>
-            <p class="stat-value blue"><?= $total_receptions ?></p>
+            <p class="stat-label-rec">Total Receptions</p>
+            <p class="stat-value-rec blue"><?= $total_receptions ?></p>
         </div>
         
-        <div class="stat-card">
-            <div class="stat-icon-wrapper">
-                <div class="stat-icon green"><i class="fas fa-users"></i></div>
-                <span class="stat-change up"><i class="fas fa-arrow-up"></i> Active</span>
+        <div class="stat-card-rec">
+            <div class="stat-icon-wrapper-rec">
+                <div class="stat-icon-rec green"><i class="fas fa-users"></i></div>
+                <span class="stat-change-rec up"><i class="fas fa-arrow-up"></i> Active</span>
             </div>
-            <p class="stat-label">Total Patients</p>
-            <p class="stat-value green"><?= number_format($total_patients) ?></p>
+            <p class="stat-label-rec">Total Patients</p>
+            <p class="stat-value-rec green"><?= number_format($total_patients) ?></p>
         </div>
         
-        <div class="stat-card">
-            <div class="stat-icon-wrapper">
-                <div class="stat-icon purple"><i class="fas fa-calendar-check"></i></div>
-                <span class="stat-change neutral"><i class="fas fa-minus"></i> All</span>
+        <div class="stat-card-rec">
+            <div class="stat-icon-wrapper-rec">
+                <div class="stat-icon-rec purple"><i class="fas fa-calendar-check"></i></div>
+                <span class="stat-change-rec neutral"><i class="fas fa-minus"></i> All</span>
             </div>
-            <p class="stat-label">Total Appointments</p>
-            <p class="stat-value purple"><?= number_format($total_appointments) ?></p>
+            <p class="stat-label-rec">Total Appointments</p>
+            <p class="stat-value-rec purple"><?= number_format($total_appointments) ?></p>
         </div>
         
-        <div class="stat-card">
-            <div class="stat-icon-wrapper">
-                <div class="stat-icon <?= $pending_visits > 0 ? 'orange' : 'green' ?>">
+        <div class="stat-card-rec">
+            <div class="stat-icon-wrapper-rec">
+                <div class="stat-icon-rec <?= $pending_visits > 0 ? 'orange' : 'green' ?>">
                     <i class="fas fa-clock"></i>
                 </div>
-                <span class="stat-change <?= $pending_visits > 0 ? 'down' : 'up' ?>">
+                <span class="stat-change-rec <?= $pending_visits > 0 ? 'down' : 'up' ?>">
                     <?php if ($pending_visits > 0): ?>
                         <i class="fas fa-exclamation-triangle"></i> Attention
                     <?php else: ?>
@@ -1433,39 +1039,39 @@ include_once '../../components/admin_sidebar.php';
                     <?php endif; ?>
                 </span>
             </div>
-            <p class="stat-label">Pending Visits</p>
-            <p class="stat-value <?= $pending_visits > 0 ? 'orange' : 'green' ?>">
+            <p class="stat-label-rec">Pending Visits</p>
+            <p class="stat-value-rec <?= $pending_visits > 0 ? 'orange' : 'green' ?>">
                 <?= number_format($pending_visits) ?>
             </p>
         </div>
         
-        <div class="stat-card">
-            <div class="stat-icon-wrapper">
-                <div class="stat-icon teal"><i class="fas fa-calendar-day"></i></div>
-                <span class="stat-change up"><i class="fas fa-arrow-up"></i> Today</span>
+        <div class="stat-card-rec">
+            <div class="stat-icon-wrapper-rec">
+                <div class="stat-icon-rec teal"><i class="fas fa-calendar-day"></i></div>
+                <span class="stat-change-rec up"><i class="fas fa-arrow-up"></i> Today</span>
             </div>
-            <p class="stat-label">Today's Visits</p>
-            <p class="stat-value teal"><?= number_format($today_visits) ?></p>
+            <p class="stat-label-rec">Today's Visits</p>
+            <p class="stat-value-rec teal"><?= number_format($today_visits) ?></p>
         </div>
         
-        <div class="stat-card">
-            <div class="stat-icon-wrapper">
-                <div class="stat-icon orange"><i class="fas fa-money-bill-wave"></i></div>
-                <span class="stat-change up"><i class="fas fa-arrow-up"></i> Total</span>
+        <div class="stat-card-rec">
+            <div class="stat-icon-wrapper-rec">
+                <div class="stat-icon-rec orange"><i class="fas fa-money-bill-wave"></i></div>
+                <span class="stat-change-rec up"><i class="fas fa-arrow-up"></i> Total</span>
             </div>
-            <p class="stat-label">Total Revenue</p>
-            <p class="stat-value orange">TSh <?= number_format($total_revenue / 1000, 0) ?>K</p>
+            <p class="stat-label-rec">Total Revenue</p>
+            <p class="stat-value-rec orange">TSh <?= number_format($total_revenue / 1000, 0) ?>K</p>
         </div>
     </div>
 
     <!-- ================================================================ -->
     <!-- FILTER BAR -->
     <!-- ================================================================ -->
-    <div class="filter-bar animate-fade-in-up" style="animation-delay:0.05s;">
-        <span class="filter-label"><i class="fas fa-filter"></i> Filter</span>
+    <div class="filter-bar-rec animate-fade-in-up-rec" style="animation-delay:0.1s;">
+        <span class="filter-label-rec"><i class="fas fa-filter"></i> Filter</span>
         
-        <form method="GET" action="" class="flex flex-wrap gap-2 items-center w-full">
-            <select name="branch" class="flex-1 min-w-[120px]">
+        <form method="GET" action="" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;flex:1;">
+            <select name="branch" style="flex:1;min-width:120px;">
                 <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
                 <?php foreach ($branches as $b): ?>
                     <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
@@ -1474,101 +1080,101 @@ include_once '../../components/admin_sidebar.php';
                 <?php endforeach; ?>
             </select>
             
-            <select name="status" class="flex-1 min-w-[120px]">
+            <select name="status" style="flex:1;min-width:120px;">
                 <option value="all" <?= $status_filter === 'all' ? 'selected' : '' ?>>All Status</option>
                 <option value="active" <?= $status_filter === 'active' ? 'selected' : '' ?>>Active</option>
                 <option value="inactive" <?= $status_filter === 'inactive' ? 'selected' : '' ?>>Inactive</option>
             </select>
             
             <input type="text" name="search" placeholder="Search by name, location..." 
-                   value="<?= htmlspecialchars($search) ?>" class="flex-1 min-w-[180px]">
+                   value="<?= htmlspecialchars($search) ?>" style="flex:1;min-width:180px;">
             
-            <button type="submit" class="btn-filter">
+            <button type="submit" class="btn-filter-rec">
                 <i class="fas fa-search"></i> Apply
             </button>
             
-            <a href="receptions.php" class="btn-reset">
+            <a href="receptions.php" class="btn-reset-rec">
                 <i class="fas fa-times"></i> Reset
             </a>
         </form>
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECEPTION GRID - DISPLAY ALL BRANCHES -->
+    <!-- RECEPTION GRID -->
     <!-- ================================================================ -->
     <?php if (count($receptions) > 0): ?>
-        <div class="reception-grid animate-fade-in-up" style="animation-delay:0.1s;">
+        <div class="reception-grid-rec animate-fade-in-up-rec" style="animation-delay:0.15s;">
             <?php foreach ($receptions as $reception): ?>
-                <div class="reception-card">
-                    <!-- CARD HEADER - BLUE BACKGROUND -->
-                    <div class="card-top">
+                <div class="reception-card-rec">
+                    <!-- CARD HEADER -->
+                    <div class="card-top-rec">
                         <div>
-                            <div class="name">
+                            <div class="name-rec">
                                 <i class="fas fa-headset"></i>
                                 <?= htmlspecialchars($reception['name']) ?>
                             </div>
-                            <div class="location-text">
+                            <div class="location-text-rec">
                                 <i class="fas fa-map-marker-alt"></i>
                                 <?= htmlspecialchars($reception['location'] ?? 'N/A') ?>
                             </div>
                         </div>
-                        <span class="status-badge <?= ($reception['status'] ?? 'active') === 'active' ? 'active' : 'inactive' ?>">
+                        <span class="status-badge-rec <?= ($reception['status'] ?? 'active') === 'active' ? 'active' : 'inactive' ?>">
                             <?= ($reception['status'] ?? 'active') === 'active' ? 'Active' : 'Inactive' ?>
                         </span>
                     </div>
                     
-                    <div class="card-body">
-                        <div class="info-row">
+                    <div class="card-body-rec">
+                        <div class="info-row-rec">
                             <i class="fas fa-phone"></i>
                             <?= htmlspecialchars($reception['phone'] ?? 'N/A') ?>
                         </div>
-                        <div class="info-row">
+                        <div class="info-row-rec">
                             <i class="fas fa-envelope"></i>
                             <?= htmlspecialchars($reception['email'] ?? 'N/A') ?>
                         </div>
-                        <div class="info-row">
+                        <div class="info-row-rec">
                             <i class="fas fa-user-tie"></i>
                             <?= ($reception['active_receptionists'] ?? 0) ?> Active / <?= ($reception['total_receptionists'] ?? 0) ?> Receptionists
                         </div>
-                        <div class="info-row">
+                        <div class="info-row-rec">
                             <i class="fas fa-calendar-plus"></i>
                             Created: <?= date('M d, Y', strtotime($reception['created_at'] ?? 'now')) ?>
                         </div>
                     </div>
                     
-                    <div class="card-stats">
-                        <div class="stat-item">
-                            <div class="num blue"><?= number_format($reception['total_patients'] ?? 0) ?></div>
-                            <div class="label">Patients</div>
+                    <div class="card-stats-rec">
+                        <div class="stat-item-rec">
+                            <div class="num-rec blue"><?= number_format($reception['total_patients'] ?? 0) ?></div>
+                            <div class="label-rec">Patients</div>
                         </div>
-                        <div class="stat-item">
-                            <div class="num purple"><?= number_format(($reception['scheduled_appointments'] ?? 0) + ($reception['confirmed_appointments'] ?? 0)) ?></div>
-                            <div class="label">Appointments</div>
+                        <div class="stat-item-rec">
+                            <div class="num-rec purple"><?= number_format(($reception['scheduled_appointments'] ?? 0) + ($reception['confirmed_appointments'] ?? 0)) ?></div>
+                            <div class="label-rec">Appointments</div>
                         </div>
-                        <div class="stat-item">
-                            <div class="num <?= ($reception['pending_visits'] ?? 0) > 0 ? 'orange' : 'green' ?>">
+                        <div class="stat-item-rec">
+                            <div class="num-rec <?= ($reception['pending_visits'] ?? 0) > 0 ? 'orange' : 'green' ?>">
                                 <?= number_format($reception['pending_visits'] ?? 0) ?>
                             </div>
-                            <div class="label">Pending</div>
+                            <div class="label-rec">Pending</div>
                         </div>
-                        <div class="stat-item">
-                            <div class="num teal"><?= number_format($reception['today_visits'] ?? 0) ?></div>
-                            <div class="label">Today</div>
+                        <div class="stat-item-rec">
+                            <div class="num-rec teal"><?= number_format($reception['today_visits'] ?? 0) ?></div>
+                            <div class="label-rec">Today</div>
                         </div>
                     </div>
                     
                     <!-- CARD ACTIONS -->
-                    <div class="card-actions">
+                    <div class="card-actions-rec">
                         <a href="view_branch.php?id=<?= $reception['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
-                           class="btn-action primary">
+                           class="btn-action-rec primary">
                             <i class="fas fa-eye"></i> View
                         </a>
                         <a href="edit_branch.php?id=<?= $reception['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
-                           class="btn-action">
+                           class="btn-action-rec">
                             <i class="fas fa-edit"></i> Edit
                         </a>
                         <a href="branch_dashboard.php?id=<?= $reception['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
-                           class="btn-action">
+                           class="btn-action-rec">
                             <i class="fas fa-chart-bar"></i> Dashboard
                         </a>
                     </div>
@@ -1576,7 +1182,7 @@ include_once '../../components/admin_sidebar.php';
             <?php endforeach; ?>
         </div>
     <?php else: ?>
-        <div class="empty-state animate-fade-in-up" style="animation-delay:0.1s;">
+        <div class="empty-state-rec animate-fade-in-up-rec" style="animation-delay:0.15s;">
             <i class="fas fa-headset"></i>
             <h3>No Receptions Found</h3>
             <p>Try adjusting your filters</p>
@@ -1586,14 +1192,14 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer">
+    <footer class="footer-rec">
         <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="footer-brand-rec">Braick Dispensary</span> Management System
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             Receptions
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1601,124 +1207,31 @@ include_once '../../components/admin_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // FOOTER TIME
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
-        }
-    });
-
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    function performSearch() {
-        var query = searchInput.value.trim();
-        var branch = document.querySelector('select[name="branch"]')?.value || 'all';
-        var status = document.querySelector('select[name="status"]')?.value || 'all';
-        var url = 'receptions.php?branch=' + encodeURIComponent(branch) + '&status=' + encodeURIComponent(status);
-        if (query.length > 0) {
-            url += '&search=' + encodeURIComponent(query);
-        }
-        window.location.href = url;
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        // Remove error param when switching branches
-        url.searchParams.delete('error');
-        window.location.href = url.toString();
-    }
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
+    setInterval(function() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
         var ftEl = document.getElementById('footerTime');
         if (ftEl) ftEl.textContent = timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    }, 1000);
 
-    console.log('%c📋 Braick Dispensary - Receptions (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Braick Dispensary - Receptions', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ No duplicate CSS/JS', 'font-size:13px; color:#34D399;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Total Receptions: <?= $total_receptions ?>', 'font-size:13px; color:#059669;');
     console.log('%c👥 Total Patients: <?= number_format($total_patients) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📅 Total Appointments: <?= number_format($total_appointments) ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c🔄 Pending Visits: <?= number_format($pending_visits) ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c✅ FIXED: Branch filter with invalid_id parameter - redirects to clean URL', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Shows ALL branches (both active and inactive)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Links use view_branch.php, edit_branch.php, branch_dashboard.php', 'font-size:13px; color:#34D399;');
+    console.log('%c🌙 Dark mode: Handled by header (shared)', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

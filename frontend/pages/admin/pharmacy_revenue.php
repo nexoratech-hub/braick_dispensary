@@ -3,27 +3,20 @@
 // FILE: frontend/pages/admin/pharmacy_revenue.php
 // ADMIN - PHARMACY REVENUE DETAILS
 // BRAICK DISPENSARY - USING EXISTING DB TABLES
-// GREEN THEME - WITH WHITE TEXT
+// ✅ Uses SHARED header & sidebar
+// ✅ Page-specific CSS only (no duplicates)
+// ✅ Dark mode via header toggle
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// CHECK IF USER IS ADMIN
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -32,14 +25,12 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
 }
 
-// ================================================================
-// GET ADMIN DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
@@ -48,9 +39,6 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
@@ -61,7 +49,6 @@ $db = Database::getInstance()->getConnection();
 // ================================================================
 $branch_id = isset($_GET['branch']) ? (int)$_GET['branch'] : 0;
 
-// If no branch ID provided, use the user's branch
 if ($branch_id <= 0) {
     $branch_id = $user_branch_id;
 }
@@ -74,15 +61,7 @@ $branch = null;
 try {
     $stmt = $db->prepare("
         SELECT 
-            b.id,
-            b.name,
-            b.location,
-            b.phone,
-            b.email,
-            b.logo,
-            b.status,
-            b.created_at,
-            b.updated_at,
+            b.id, b.name, b.location, b.phone, b.email, b.logo, b.status, b.created_at, b.updated_at,
             (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'pharmacy' AND status = 'active') as active_pharmacists,
             (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'pharmacy') as total_pharmacists
         FROM branches b
@@ -91,19 +70,10 @@ try {
     $stmt->execute([$branch_id]);
     $branch = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    // If branch not found, try to get from user session
     if (!$branch) {
         $stmt = $db->prepare("
             SELECT 
-                b.id,
-                b.name,
-                b.location,
-                b.phone,
-                b.email,
-                b.logo,
-                b.status,
-                b.created_at,
-                b.updated_at,
+                b.id, b.name, b.location, b.phone, b.email, b.logo, b.status, b.created_at, b.updated_at,
                 (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'pharmacy' AND status = 'active') as active_pharmacists,
                 (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'pharmacy') as total_pharmacists
             FROM branches b
@@ -114,7 +84,6 @@ try {
         $branch_id = $user_branch_id;
     }
     
-    // If still no branch, create fallback
     if (!$branch) {
         $branch = [
             'id' => $user_branch_id,
@@ -128,7 +97,6 @@ try {
         ];
     }
 } catch (Exception $e) {
-    error_log("Error fetching branch: " . $e->getMessage());
     $branch = [
         'id' => $user_branch_id,
         'name' => $user_branch_name ?? 'Dodoma',
@@ -142,10 +110,8 @@ try {
 }
 
 // ================================================================
-// PHARMACY REVENUE QUERIES - USING EXISTING TABLES
+// PHARMACY REVENUE QUERIES
 // ================================================================
-
-// 1. PRESCRIPTION REVENUE (from bills with medication items)
 try {
     $stmt = $db->prepare("
         SELECT 
@@ -167,7 +133,6 @@ try {
     $prescription_stats = ['total_revenue' => 0, 'total_prescriptions' => 0, 'avg_prescription' => 0, 'max_prescription' => 0, 'min_prescription' => 0];
 }
 
-// 2. OTC REVENUE (from otc_sales)
 try {
     $stmt = $db->prepare("
         SELECT 
@@ -186,10 +151,9 @@ try {
     $otc_stats = ['total_revenue' => 0, 'total_otc_sales' => 0, 'avg_otc' => 0, 'max_otc' => 0, 'min_otc' => 0];
 }
 
-// 3. TOTAL PHARMACY REVENUE
 $pharmacy_total = ($prescription_stats['total_revenue'] ?? 0) + ($otc_stats['total_revenue'] ?? 0);
 
-// 4. MONTHLY PHARMACY REVENUE (Last 12 months) - from bills and otc_sales
+// Monthly revenue
 $monthly_revenue = [];
 try {
     $stmt = $db->prepare("
@@ -225,7 +189,7 @@ try {
     $monthly_revenue = [];
 }
 
-// 5. RECENT PRESCRIPTION SALES (from bills with medication items)
+// Recent prescriptions
 $recent_prescriptions = [];
 try {
     $stmt = $db->prepare("
@@ -255,19 +219,13 @@ try {
     $recent_prescriptions = [];
 }
 
-// 6. RECENT OTC SALES
+// Recent OTC
 $recent_otc_sales = [];
 try {
     $stmt = $db->prepare("
         SELECT 
-            os.id,
-            os.sale_number,
-            os.customer_name,
-            os.total_amount,
-            os.discount_amount,
-            os.total_amount as net_amount,
-            os.payment_method,
-            os.created_at,
+            os.id, os.sale_number, os.customer_name, os.total_amount, os.discount_amount,
+            os.total_amount as net_amount, os.payment_method, os.created_at,
             u.full_name as sold_by_name,
             (SELECT COUNT(*) FROM otc_sale_items WHERE sale_id = os.id) as item_count
         FROM otc_sales os
@@ -283,7 +241,7 @@ try {
     $recent_otc_sales = [];
 }
 
-// 7. TOP MEDICATIONS SOLD (from prescription_items)
+// Top medications
 $top_medications = [];
 try {
     $stmt = $db->prepare("
@@ -307,7 +265,7 @@ try {
     $top_medications = [];
 }
 
-// 8. OTC TOP ITEMS
+// Top OTC items
 $top_otc_items = [];
 try {
     $stmt = $db->prepare("
@@ -332,48 +290,31 @@ try {
 }
 
 // ================================================================
-// FORMAT CURRENCY
+// HELPER FUNCTIONS
 // ================================================================
 function formatCurrency($amount) {
     return 'TSh ' . number_format($amount, 0);
 }
 
-// ================================================================
-// STATUS BADGE CLASS
-// ================================================================
 function getPaymentMethodBadge($method) {
     $classes = [
-        'cash' => 'success',
-        'm-pesa' => 'info',
-        'airtel_money' => 'info',
-        'tigo_pesa' => 'info',
-        'halopesa' => 'info',
-        'bank' => 'purple',
-        'card' => 'purple',
-        'insurance' => 'teal',
-        'other' => 'secondary'
+        'cash' => 'success', 'm-pesa' => 'info', 'airtel_money' => 'info',
+        'tigo_pesa' => 'info', 'halopesa' => 'info', 'bank' => 'purple',
+        'card' => 'purple', 'insurance' => 'teal', 'other' => 'secondary'
     ];
     return $classes[$method] ?? 'secondary';
 }
 
 function getPaymentMethodIcon($method) {
     $icons = [
-        'cash' => 'fa-money-bill-wave',
-        'm-pesa' => 'fa-mobile-alt',
-        'airtel_money' => 'fa-mobile-alt',
-        'tigo_pesa' => 'fa-mobile-alt',
-        'halopesa' => 'fa-mobile-alt',
-        'bank' => 'fa-university',
-        'card' => 'fa-credit-card',
-        'insurance' => 'fa-shield-alt',
-        'other' => 'fa-circle'
+        'cash' => 'fa-money-bill-wave', 'm-pesa' => 'fa-mobile-alt',
+        'airtel_money' => 'fa-mobile-alt', 'tigo_pesa' => 'fa-mobile-alt',
+        'halopesa' => 'fa-mobile-alt', 'bank' => 'fa-university',
+        'card' => 'fa-credit-card', 'insurance' => 'fa-shield-alt', 'other' => 'fa-circle'
     ];
     return $icons[$method] ?? 'fa-circle';
 }
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
@@ -387,709 +328,529 @@ include_once '../../components/admin_header.php';
 include_once '../../components/admin_sidebar.php';
 ?>
 
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pharmacy Revenue - <?= htmlspecialchars($branch['name'] ?? 'Dodoma') ?> - Braick Dispensary</title>
-    
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    
-    <style>
-        :root {
-            --primary: #059669;
-            --primary-dark: #047857;
-            --primary-light: #34D399;
-            --primary-bg: #D1FAE5;
-            --primary-gradient: linear-gradient(135deg, #059669, #047857);
-            --primary-gradient-strong: linear-gradient(135deg, #047857, #065F46);
-            
-            --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
-            --success-bg: #D1FAE5;
-            
-            --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
-            --danger-bg: #FEE2E2;
-            
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            
-            --teal: #0D9488;
-            --teal-bg: #ECFDF5;
-            
-            --orange: #F59E0B;
-            --orange-bg: #FFFBEB;
-            
-            --pink: #EC4899;
-            --pink-bg: #FDF2F8;
-            
-            --indigo: #4F46E5;
-            --indigo-bg: #EEF2FF;
-            
-            --blue: #0B5ED7;
-            --blue-bg: #E8F0FE;
-            
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 8px 30px rgba(0,0,0,0.12);
-            --shadow-lg: 0 15px 50px rgba(0,0,0,0.15);
-            
-            --bg-body: #F0FDF4;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #D1FAE5;
-            --radius: 16px;
-            --radius-lg: 24px;
-            --table-hover: #ECFDF5;
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --primary: #34D399;
-            --primary-dark: #059669;
-            --primary-light: #6EE7B7;
-            --primary-bg: #1A3A2A;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 8px 30px rgba(0,0,0,0.3);
-            --shadow-lg: 0 15px 50px rgba(0,0,0,0.4);
-            --table-hover: #1A3A2A;
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.12);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 var(--radius) var(--radius) 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-        }
-        
-        .page-header {
-            background: var(--primary-gradient-strong);
-            border-radius: var(--radius-lg);
-            padding: 32px 40px;
-            margin-bottom: 32px;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            box-shadow: 0 8px 32px rgba(4, 120, 87, 0.35);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 400px;
-            height: 400px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header .page-title {
-            color: white;
-            font-size: 2rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-title i {
-            font-size: 2.2rem;
-            opacity: 0.9;
-        }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 1rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
-        .page-header .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 16px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
-        .page-header .header-badge {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            padding: 4px 16px;
-            border-radius: 20px;
-            font-size: 0.75rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
-            transition: all 0.3s ease;
-        }
-        
-        .page-header .header-badge:hover {
-            background: rgba(255,255,255,0.2);
-            transform: translateY(-1px);
-        }
-        
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 20px;
-            border-radius: var(--radius);
-            font-weight: 500;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        
-        /* ================================================================
-           STATS CARDS - WITH WHITE TEXT
-           ================================================================ */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 20px;
-            margin-bottom: 28px;
-        }
-        
-        .stat-card {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 2px solid var(--border-color);
-            padding: 24px 28px;
-            box-shadow: var(--shadow-sm);
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-            color: white !important;
-        }
-        
-        .stat-card:hover {
-            transform: translateY(-4px);
-            box-shadow: var(--shadow-md);
-            border-color: var(--primary);
-        }
-        
-        .stat-card .stat-icon {
-            width: 52px;
-            height: 52px;
-            border-radius: 14px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.4rem;
-            margin-bottom: 10px;
-            background: rgba(255,255,255,0.2) !important;
-            color: white !important;
-            border: 1px solid rgba(255,255,255,0.15);
-        }
-        
-        .stat-card .stat-number {
-            font-size: 2.2rem;
-            font-weight: 800;
-            line-height: 1.1;
-            color: white !important;
-        }
-        
-        .stat-card .stat-label {
-            font-size: 0.75rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin: 4px 0 0 0;
-            color: rgba(255,255,255,0.85) !important;
-        }
-        
-        .stat-card .stat-sub {
-            font-size: 0.7rem;
-            margin: 4px 0 0 0;
-            color: rgba(255,255,255,0.7) !important;
-        }
-        
-        /* Card Colors with White Text */
-        .stat-card.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-        .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
-        .stat-card.green { background: linear-gradient(135deg, #059669, #047857); }
-        .stat-card.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
-        
-        .stat-card.purple .stat-icon { background: rgba(255,255,255,0.15) !important; }
-        .stat-card.orange .stat-icon { background: rgba(255,255,255,0.15) !important; }
-        .stat-card.green .stat-icon { background: rgba(255,255,255,0.15) !important; }
-        .stat-card.teal .stat-icon { background: rgba(255,255,255,0.15) !important; }
-        
-        [data-theme="dark"] .stat-card.purple { background: linear-gradient(135deg, #6D28D9, #5B21B6); }
-        [data-theme="dark"] .stat-card.orange { background: linear-gradient(135deg, #B45309, #92400E); }
-        [data-theme="dark"] .stat-card.green { background: linear-gradient(135deg, #047857, #065F46); }
-        [data-theme="dark"] .stat-card.teal { background: linear-gradient(135deg, #0F766E, #0D5E56); }
-        
-        /* ================================================================
-           TABLE CONTAINER
-           ================================================================ */
-        .table-container {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 2px solid var(--border-color);
-            overflow: hidden;
-            box-shadow: var(--shadow-sm);
-            margin-bottom: 28px;
-        }
-        
-        .table-container .card-header {
-            padding: 14px 24px;
-            background: var(--primary-gradient-strong);
-            border-bottom: 2px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        
-        .table-container .card-header .card-title {
-            font-size: 0.9rem;
-            font-weight: 700;
-            color: white;
-            margin: 0;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .table-container .card-header .card-title i {
-            color: rgba(255,255,255,0.8);
-        }
-        
-        .table-container .card-header .card-action {
-            color: rgba(255,255,255,0.7);
-            font-size: 0.7rem;
-            text-decoration: none;
-            transition: all 0.3s;
-        }
-        
-        .table-container .card-header .card-action:hover {
-            color: white;
-        }
-        
-        .table-container .card-body {
-            padding: 20px 24px;
-        }
-        
-        .chart-container {
-            position: relative;
-            height: 280px;
-            width: 100%;
-        }
-        
-        .data-table {
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
-            font-size: 0.82rem;
-        }
-        
-        .data-table thead th {
-            background: var(--bg-body);
-            color: var(--text-secondary);
-            font-weight: 700;
-            padding: 12px 16px;
-            font-size: 0.65rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            border-bottom: 2px solid var(--border-color);
-            text-align: left;
-        }
-        
-        [data-theme="dark"] .data-table thead th {
-            background: #0F172A;
-        }
-        
-        .data-table td {
-            padding: 10px 16px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-            vertical-align: middle;
-        }
-        
-        .data-table tbody tr:hover td {
-            background: var(--table-hover);
-        }
-        
-        .data-table tbody tr:last-child td {
-            border-bottom: none;
-        }
-        
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            color: white;
-            letter-spacing: 0.02em;
-        }
-        
-        .badge-success { background: #059669; }
-        .badge-danger { background: #DC2626; }
-        .badge-warning { background: #D97706; color: #1E293B; }
-        .badge-info { background: #0B5ED7; }
-        .badge-secondary { background: #64748B; }
-        .badge-purple { background: #7C3AED; }
-        .badge-teal { background: #0D9488; }
-        .badge-pink { background: #EC4899; }
-        
-        [data-theme="dark"] .badge-warning { color: #1E293B; }
-        
-        .footer {
-            padding: 16px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 28px;
-            text-align: center;
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand {
-            color: var(--primary);
-            font-weight: 700;
-        }
-        
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 20px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 18px 20px; }
-            .page-header .page-title { font-size: 1.4rem; }
-            .stats-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
-            .stat-card .stat-number { font-size: 1.6rem; }
-            .stat-card { padding: 16px 18px; }
-            .data-table { font-size: 0.7rem; }
-            .data-table thead th, .data-table td { padding: 8px 10px; }
-            .table-container .card-header { padding: 12px 16px; }
-            .table-container .card-body { padding: 12px 16px; }
-        }
-        
-        @media (max-width: 480px) {
-            .main-content { padding: 12px; }
-            .stats-grid { grid-template-columns: 1fr; gap: 10px; }
-            .page-header { flex-direction: column; align-items: flex-start !important; }
-            .stat-card .stat-number { font-size: 1.8rem; }
-            .data-table { font-size: 0.6rem; }
-            .data-table thead th, .data-table td { padding: 6px 8px; }
-        }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(30px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
-            opacity: 0;
-        }
-        
-        .stats-grid .stat-card {
-            animation: fadeInUp 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
-            opacity: 0;
-        }
-        
-        .stats-grid .stat-card:nth-child(1) { animation-delay: 0.05s; }
-        .stats-grid .stat-card:nth-child(2) { animation-delay: 0.10s; }
-        .stats-grid .stat-card:nth-child(3) { animation-delay: 0.15s; }
-        .stats-grid .stat-card:nth-child(4) { animation-delay: 0.20s; }
-    </style>
-</head>
-<body>
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC CSS -->
+<!-- ================================================================ -->
+<style>
+    /* ================================================================
+       PAGE VARIABLES
+       ================================================================ */
+    :root {
+        --pr-primary: #059669;
+        --pr-primary-dark: #047857;
+        --pr-primary-light: #34D399;
+        --pr-primary-bg: #D1FAE5;
+        --pr-primary-gradient: linear-gradient(135deg, #059669, #047857);
+        --pr-primary-gradient-strong: linear-gradient(135deg, #047857, #065F46);
+        --pr-success: #059669;
+        --pr-success-bg: #D1FAE5;
+        --pr-danger: #DC2626;
+        --pr-danger-bg: #FEE2E2;
+        --pr-warning: #D97706;
+        --pr-warning-bg: #FEF3C7;
+        --pr-purple: #7C3AED;
+        --pr-purple-bg: #EDE9FE;
+        --pr-teal: #0D9488;
+        --pr-teal-bg: #ECFDF5;
+        --pr-orange: #F59E0B;
+        --pr-orange-bg: #FFFBEB;
+        --pr-pink: #EC4899;
+        --pr-indigo: #4F46E5;
+        --pr-blue: #0B5ED7;
+        --pr-blue-bg: #E8F0FE;
+        --pr-gray-50: #F8FAFC;
+        --pr-gray-100: #F1F5F9;
+        --pr-gray-200: #E2E8F0;
+        --pr-gray-300: #CBD5E1;
+        --pr-gray-400: #94A3B8;
+        --pr-gray-500: #64748B;
+        --pr-gray-600: #475569;
+        --pr-gray-700: #334155;
+        --pr-gray-800: #1E293B;
+        --pr-gray-900: #0F172A;
+        --pr-shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+        --pr-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        --pr-shadow-md: 0 8px 30px rgba(0,0,0,0.12);
+        --pr-shadow-lg: 0 15px 50px rgba(0,0,0,0.15);
+        --pr-bg-body: #F0FDF4;
+        --pr-bg-card: #FFFFFF;
+        --pr-text-primary: #1E293B;
+        --pr-text-secondary: #64748B;
+        --pr-border-color: #D1FAE5;
+        --pr-radius: 16px;
+        --pr-radius-lg: 24px;
+        --pr-table-hover: #ECFDF5;
+    }
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+    [data-theme="dark"] {
+        --pr-bg-body: #0F172A;
+        --pr-bg-card: #1E293B;
+        --pr-text-primary: #F1F5F9;
+        --pr-text-secondary: #94A3B8;
+        --pr-border-color: #334155;
+        --pr-primary: #34D399;
+        --pr-primary-dark: #059669;
+        --pr-primary-bg: #1A3A2A;
+        --pr-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        --pr-shadow-md: 0 8px 30px rgba(0,0,0,0.3);
+        --pr-table-hover: #1A3A2A;
+    }
+
+    /* ================================================================
+       DARK MODE - PAGE YOTE
+       ================================================================ */
+    html[data-theme="dark"] body {
+        background: #0F172A !important;
+    }
+
+    html[data-theme="dark"] .main-content {
+        background: #0F172A !important;
+        color: #F1F5F9;
+    }
+
+    /* ================================================================
+       PAGE HEADER
+       ================================================================ */
+    .page-header-pr {
+        background: var(--pr-primary-gradient-strong);
+        border-radius: var(--pr-radius-lg);
+        padding: 32px 40px;
+        margin-bottom: 32px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 8px 32px rgba(4, 120, 87, 0.35);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .page-header-pr::before {
+        content: '';
+        position: absolute;
+        top: -60%;
+        right: -10%;
+        width: 400px;
+        height: 400px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .page-header-pr::after {
+        content: '';
+        position: absolute;
+        bottom: -40%;
+        left: -5%;
+        width: 300px;
+        height: 300px;
+        background: rgba(255,255,255,0.03);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .page-header-pr .page-title {
+        color: white;
+        font-size: 2rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+    }
+
+    .page-header-pr .page-title i {
+        font-size: 2.2rem;
+        opacity: 0.9;
+    }
+
+    .page-header-pr .page-subtitle {
+        color: rgba(255,255,255,0.85);
+        font-size: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 8px;
+    }
+
+    .page-header-pr .page-subtitle strong {
+        color: white;
+        font-weight: 600;
+    }
+
+    .page-header-pr .role-badge-display {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 4px 16px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        backdrop-filter: blur(4px);
+    }
+
+    .page-header-pr .header-badge {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        padding: 4px 16px;
+        border-radius: 20px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255,255,255,0.1);
+        transition: all 0.3s ease;
+    }
+
+    .page-header-pr .header-badge:hover {
+        background: rgba(255,255,255,0.2);
+        transform: translateY(-1px);
+    }
+
+    .page-header-pr .btn-outline-light {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.2);
+        padding: 8px 20px;
+        border-radius: var(--pr-radius);
+        font-weight: 500;
+        font-size: 0.85rem;
+        transition: all 0.3s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        backdrop-filter: blur(4px);
+        position: relative;
+        z-index: 1;
+    }
+
+    .page-header-pr .btn-outline-light:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        color: white;
+    }
+
+    /* ================================================================
+       STATS CARDS
+       ================================================================ */
+    .stats-grid-pr {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 20px;
+        margin-bottom: 28px;
+    }
+
+    .stat-card-pr {
+        background: var(--pr-bg-card);
+        border-radius: var(--pr-radius-lg);
+        border: 2px solid var(--pr-border-color);
+        padding: 24px 28px;
+        box-shadow: var(--pr-shadow-sm);
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+        color: white !important;
+    }
+
+    .stat-card-pr:hover {
+        transform: translateY(-4px);
+        box-shadow: var(--pr-shadow-md);
+        border-color: var(--pr-primary);
+    }
+
+    .stat-card-pr .stat-icon {
+        width: 52px;
+        height: 52px;
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.4rem;
+        margin-bottom: 10px;
+        background: rgba(255,255,255,0.2) !important;
+        color: white !important;
+        border: 1px solid rgba(255,255,255,0.15);
+    }
+
+    .stat-card-pr .stat-number {
+        font-size: 2.2rem;
+        font-weight: 800;
+        line-height: 1.1;
+        color: white !important;
+    }
+
+    .stat-card-pr .stat-label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin: 4px 0 0 0;
+        color: rgba(255,255,255,0.85) !important;
+    }
+
+    .stat-card-pr .stat-sub {
+        font-size: 0.7rem;
+        margin: 4px 0 0 0;
+        color: rgba(255,255,255,0.7) !important;
+    }
+
+    .stat-card-pr.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+    .stat-card-pr.orange { background: linear-gradient(135deg, #D97706, #B45309); }
+    .stat-card-pr.green { background: linear-gradient(135deg, #059669, #047857); }
+    .stat-card-pr.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
+
+    .stat-card-pr.purple .stat-icon { background: rgba(255,255,255,0.15) !important; }
+    .stat-card-pr.orange .stat-icon { background: rgba(255,255,255,0.15) !important; }
+    .stat-card-pr.green .stat-icon { background: rgba(255,255,255,0.15) !important; }
+    .stat-card-pr.teal .stat-icon { background: rgba(255,255,255,0.15) !important; }
+
+    [data-theme="dark"] .stat-card-pr.purple { background: linear-gradient(135deg, #6D28D9, #5B21B6); }
+    [data-theme="dark"] .stat-card-pr.orange { background: linear-gradient(135deg, #B45309, #92400E); }
+    [data-theme="dark"] .stat-card-pr.green { background: linear-gradient(135deg, #047857, #065F46); }
+    [data-theme="dark"] .stat-card-pr.teal { background: linear-gradient(135deg, #0F766E, #0D5E56); }
+
+    /* ================================================================
+       TABLE CONTAINER
+       ================================================================ */
+    .table-container-pr {
+        background: var(--pr-bg-card);
+        border-radius: var(--pr-radius-lg);
+        border: 2px solid var(--pr-border-color);
+        overflow: hidden;
+        box-shadow: var(--pr-shadow-sm);
+        margin-bottom: 28px;
+    }
+
+    .table-container-pr .card-header-pr {
+        padding: 14px 24px;
+        background: var(--pr-primary-gradient-strong);
+        border-bottom: 2px solid var(--pr-border-color);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .table-container-pr .card-header-pr .card-title-pr {
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: white;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .table-container-pr .card-header-pr .card-title-pr i {
+        color: rgba(255,255,255,0.8);
+    }
+
+    .table-container-pr .card-header-pr .card-action-pr {
+        color: rgba(255,255,255,0.7);
+        font-size: 0.7rem;
+        text-decoration: none;
+        transition: all 0.3s;
+    }
+
+    .table-container-pr .card-header-pr .card-action-pr:hover {
+        color: white;
+    }
+
+    .table-container-pr .card-body-pr {
+        padding: 20px 24px;
+    }
+
+    .chart-container-pr {
+        position: relative;
+        height: 280px;
+        width: 100%;
+    }
+
+    .data-table-pr {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 0.82rem;
+    }
+
+    .data-table-pr thead th {
+        background: var(--pr-bg-body);
+        color: var(--pr-text-secondary);
+        font-weight: 700;
+        padding: 12px 16px;
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-bottom: 2px solid var(--pr-border-color);
+        text-align: left;
+    }
+
+    [data-theme="dark"] .data-table-pr thead th {
+        background: #0F172A;
+    }
+
+    .data-table-pr td {
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--pr-border-color);
+        color: var(--pr-text-primary);
+        vertical-align: middle;
+    }
+
+    .data-table-pr tbody tr:hover td {
+        background: var(--pr-table-hover);
+    }
+
+    .data-table-pr tbody tr:last-child td {
+        border-bottom: none;
+    }
+
+    /* ================================================================
+       BADGES
+       ================================================================ */
+    .badge-pr {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        color: white;
+        letter-spacing: 0.02em;
+    }
+
+    .badge-success-pr { background: #059669; }
+    .badge-danger-pr { background: #DC2626; }
+    .badge-warning-pr { background: #D97706; color: #1E293B; }
+    .badge-info-pr { background: #0B5ED7; }
+    .badge-secondary-pr { background: #64748B; }
+    .badge-purple-pr { background: #7C3AED; }
+    .badge-teal-pr { background: #0D9488; }
+
+    [data-theme="dark"] .badge-warning-pr { color: #1E293B; }
+
+    /* ================================================================
+       TEXT UTILITIES
+       ================================================================ */
+    .text-primary-pr { color: var(--pr-primary); }
+    .text-success-pr { color: #059669; }
+    .text-danger-pr { color: #DC2626; }
+    .text-warning-pr { color: #D97706; }
+    .text-purple-pr { color: #7C3AED; }
+    .text-orange-pr { color: #D97706; }
+    .text-green-pr { color: #059669; }
+    .text-gray-400-pr { color: var(--pr-text-secondary); }
+    .font-mono-pr { font-family: monospace; }
+    .font-bold-pr { font-weight: 700; }
+    .font-semibold-pr { font-weight: 600; }
+    .font-medium-pr { font-weight: 500; }
+
+    .empty-state-pr {
+        text-align: center;
+        padding: 32px 20px;
+        color: var(--pr-text-secondary);
+    }
+
+    .empty-state-pr i {
+        font-size: 3rem;
+        display: block;
+        margin-bottom: 12px;
+        color: var(--pr-border-color);
+    }
+
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer-pr {
+        padding: 16px 0;
+        border-top: 2px solid var(--pr-border-color);
+        margin-top: 28px;
+        text-align: center;
+        font-size: 0.75rem;
+        color: var(--pr-text-secondary);
+    }
+
+    .footer-pr .footer-brand-pr {
+        color: var(--pr-primary);
+        font-weight: 700;
+    }
+
+    /* ================================================================
+       ANIMATIONS
+       ================================================================ */
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(30px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .animate-fade-in-up {
+        animation: fadeInUp 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        opacity: 0;
+    }
+
+    .stats-grid-pr .stat-card-pr {
+        animation: fadeInUp 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        opacity: 0;
+    }
+
+    .stats-grid-pr .stat-card-pr:nth-child(1) { animation-delay: 0.05s; }
+    .stats-grid-pr .stat-card-pr:nth-child(2) { animation-delay: 0.10s; }
+    .stats-grid-pr .stat-card-pr:nth-child(3) { animation-delay: 0.15s; }
+    .stats-grid-pr .stat-card-pr:nth-child(4) { animation-delay: 0.20s; }
+
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 1024px) {
+        .stats-grid-pr { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 768px) {
+        .page-header-pr { padding: 18px 20px; }
+        .page-header-pr .page-title { font-size: 1.4rem; }
+        .stats-grid-pr { grid-template-columns: 1fr 1fr; gap: 12px; }
+        .stat-card-pr .stat-number { font-size: 1.6rem; }
+        .stat-card-pr { padding: 16px 18px; }
+        .data-table-pr { font-size: 0.7rem; }
+        .data-table-pr thead th, .data-table-pr td { padding: 8px 10px; }
+        .table-container-pr .card-header-pr { padding: 12px 16px; }
+        .table-container-pr .card-body-pr { padding: 12px 16px; }
+    }
+
+    @media (max-width: 480px) {
+        .stats-grid-pr { grid-template-columns: 1fr; gap: 10px; }
+        .page-header-pr { flex-direction: column; align-items: flex-start !important; }
+        .stat-card-pr .stat-number { font-size: 1.8rem; }
+        .data-table-pr { font-size: 0.6rem; }
+        .data-table-pr thead th, .data-table-pr td { padding: 6px 8px; }
+    }
+
+    /* ================================================================
+       PRINT
+       ================================================================ */
+    @media print {
+        .btn-outline-light, .page-header-pr .btn-outline-light { display: none !important; }
+        .table-container-pr { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
+        .page-header-pr {
+            background: #059669 !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -1099,7 +860,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- PAGE HEADER -->
     <!-- ================================================================ -->
-    <div class="page-header">
+    <div class="page-header-pr">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-prescription-bottle"></i>
@@ -1113,19 +874,19 @@ include_once '../../components/admin_sidebar.php';
                     <i class="fas fa-<?= ($branch['status'] ?? 'active') === 'active' ? 'check-circle' : 'times-circle' ?>"></i>
                     <?= ucfirst($branch['status'] ?? 'Active') ?>
                 </span>
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-money-bill-wave"></i> <?= formatCurrency($pharmacy_total) ?> Total Revenue
+                <span class="header-badge">
+                    <i class="fas fa-money-bill-wave"></i> <?= formatCurrency($pharmacy_total) ?> Total
                 </span>
-                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
-                    <i class="fas fa-prescription"></i> <?= $prescription_stats['total_prescriptions'] ?? 0 ?> Prescriptions
+                <span class="header-badge">
+                    <i class="fas fa-prescription"></i> <?= $prescription_stats['total_prescriptions'] ?? 0 ?> Rx
                 </span>
-                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
-                    <i class="fas fa-shopping-cart"></i> <?= $otc_stats['total_otc_sales'] ?? 0 ?> OTC Sales
+                <span class="header-badge">
+                    <i class="fas fa-shopping-cart"></i> <?= $otc_stats['total_otc_sales'] ?? 0 ?> OTC
                 </span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="cashier_dashboard.php?id=<?= $branch_id ?>&branch=<?= $branch_id ?>" class="btn-outline-light">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <a href="cashier_dashboard.php?branch=<?= $branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
             <a href="pharmacy_revenue_report.php?branch=<?= $branch_id ?>" class="btn-outline-light">
@@ -1135,70 +896,68 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS - WITH WHITE TEXT -->
+    <!-- STATS CARDS -->
     <!-- ================================================================ -->
-    <div class="stats-grid">
-        
-        <div class="stat-card purple">
+    <div class="stats-grid-pr">
+        <div class="stat-card-pr purple">
             <div class="stat-icon"><i class="fas fa-prescription"></i></div>
             <p class="stat-number"><?= formatCurrency($prescription_stats['total_revenue'] ?? 0) ?></p>
             <p class="stat-label">Prescription Revenue</p>
             <p class="stat-sub"><?= $prescription_stats['total_prescriptions'] ?? 0 ?> prescriptions • Avg: <?= formatCurrency($prescription_stats['avg_prescription'] ?? 0) ?></p>
         </div>
         
-        <div class="stat-card orange">
+        <div class="stat-card-pr orange">
             <div class="stat-icon"><i class="fas fa-shopping-cart"></i></div>
             <p class="stat-number"><?= formatCurrency($otc_stats['total_revenue'] ?? 0) ?></p>
             <p class="stat-label">OTC Revenue</p>
             <p class="stat-sub"><?= $otc_stats['total_otc_sales'] ?? 0 ?> OTC sales • Avg: <?= formatCurrency($otc_stats['avg_otc'] ?? 0) ?></p>
         </div>
         
-        <div class="stat-card green">
+        <div class="stat-card-pr green">
             <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
             <p class="stat-number"><?= formatCurrency($pharmacy_total) ?></p>
             <p class="stat-label">Total Pharmacy Revenue</p>
             <p class="stat-sub"><?= ($prescription_stats['total_prescriptions'] ?? 0) + ($otc_stats['total_otc_sales'] ?? 0) ?> total transactions</p>
         </div>
         
-        <div class="stat-card teal">
+        <div class="stat-card-pr teal">
             <div class="stat-icon"><i class="fas fa-users"></i></div>
             <p class="stat-number"><?= $branch['active_pharmacists'] ?? 0 ?>/<?= $branch['total_pharmacists'] ?? 0 ?></p>
             <p class="stat-label">Pharmacists</p>
             <p class="stat-sub">Active / Total</p>
         </div>
-        
     </div>
 
     <!-- ================================================================ -->
     <!-- MONTHLY REVENUE CHART -->
     <!-- ================================================================ -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.25s;">
-        <div class="card-header">
-            <h3 class="card-title">
+    <div class="table-container-pr animate-fade-in-up" style="animation-delay:0.25s;">
+        <div class="card-header-pr">
+            <h3 class="card-title-pr">
                 <i class="fas fa-chart-bar"></i>
                 Monthly Pharmacy Revenue (Last 12 Months)
             </h3>
         </div>
-        <div class="card-body">
-            <div class="chart-container">
+        <div class="card-body-pr">
+            <div class="chart-container-pr">
                 <canvas id="monthlyRevenueChart"></canvas>
             </div>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- TOP MEDICATIONS (from prescriptions) -->
+    <!-- TOP MEDICATIONS -->
     <!-- ================================================================ -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.3s;">
-        <div class="card-header">
-            <h3 class="card-title">
+    <div class="table-container-pr animate-fade-in-up" style="animation-delay:0.3s;">
+        <div class="card-header-pr">
+            <h3 class="card-title-pr">
                 <i class="fas fa-pills"></i>
                 Top Prescription Medications (<?= count($top_medications) ?>)
             </h3>
         </div>
         <?php if (count($top_medications) > 0): ?>
-            <div class="overflow-x-auto">
-                <table class="data-table">
+            <div style="overflow-x:auto;">
+                <table class="data-table-pr">
                     <thead>
                         <tr>
                             <th>#</th>
@@ -1210,11 +969,10 @@ include_once '../../components/admin_sidebar.php';
                         </tr>
                     </thead>
                     <tbody>
-                        <?php $rank = 1; ?>
-                        <?php foreach ($top_medications as $med): ?>
+                        <?php $rank = 1; foreach ($top_medications as $med): ?>
                             <tr>
-                                <td class="font-semibold text-gray-400">#<?= $rank++ ?></td>
-                                <td class="font-medium"><?= htmlspecialchars($med['medication_name'] ?? 'N/A') ?></td>
+                                <td class="font-semibold-pr text-gray-400-pr">#<?= $rank++ ?></td>
+                                <td class="font-medium-pr"><?= htmlspecialchars($med['medication_name'] ?? 'N/A') ?></td>
                                 <td style="text-align:center;"><?= $med['total_prescriptions'] ?? 0 ?></td>
                                 <td style="text-align:center;"><?= $med['total_quantity'] ?? 0 ?></td>
                                 <td style="text-align:right;font-family:monospace;"><?= formatCurrency($med['avg_price'] ?? 0) ?></td>
@@ -1225,8 +983,8 @@ include_once '../../components/admin_sidebar.php';
                 </table>
             </div>
         <?php else: ?>
-            <div class="text-center py-8 text-gray-400">
-                <i class="fas fa-pills text-3xl block mb-3"></i>
+            <div class="empty-state-pr">
+                <i class="fas fa-pills"></i>
                 <p>No prescription medication data found</p>
             </div>
         <?php endif; ?>
@@ -1235,16 +993,16 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- TOP OTC ITEMS -->
     <!-- ================================================================ -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.35s;">
-        <div class="card-header">
-            <h3 class="card-title">
+    <div class="table-container-pr animate-fade-in-up" style="animation-delay:0.35s;">
+        <div class="card-header-pr">
+            <h3 class="card-title-pr">
                 <i class="fas fa-capsules"></i>
                 Top OTC Items (<?= count($top_otc_items) ?>)
             </h3>
         </div>
         <?php if (count($top_otc_items) > 0): ?>
-            <div class="overflow-x-auto">
-                <table class="data-table">
+            <div style="overflow-x:auto;">
+                <table class="data-table-pr">
                     <thead>
                         <tr>
                             <th>#</th>
@@ -1256,11 +1014,10 @@ include_once '../../components/admin_sidebar.php';
                         </tr>
                     </thead>
                     <tbody>
-                        <?php $rank = 1; ?>
-                        <?php foreach ($top_otc_items as $item): ?>
+                        <?php $rank = 1; foreach ($top_otc_items as $item): ?>
                             <tr>
-                                <td class="font-semibold text-gray-400">#<?= $rank++ ?></td>
-                                <td class="font-medium"><?= htmlspecialchars($item['medication_name'] ?? 'N/A') ?></td>
+                                <td class="font-semibold-pr text-gray-400-pr">#<?= $rank++ ?></td>
+                                <td class="font-medium-pr"><?= htmlspecialchars($item['medication_name'] ?? 'N/A') ?></td>
                                 <td style="text-align:center;"><?= $item['total_sales'] ?? 0 ?></td>
                                 <td style="text-align:center;"><?= $item['total_quantity'] ?? 0 ?></td>
                                 <td style="text-align:right;font-family:monospace;"><?= formatCurrency($item['avg_price'] ?? 0) ?></td>
@@ -1271,8 +1028,8 @@ include_once '../../components/admin_sidebar.php';
                 </table>
             </div>
         <?php else: ?>
-            <div class="text-center py-8 text-gray-400">
-                <i class="fas fa-capsules text-3xl block mb-3"></i>
+            <div class="empty-state-pr">
+                <i class="fas fa-capsules"></i>
                 <p>No OTC item data found</p>
             </div>
         <?php endif; ?>
@@ -1281,17 +1038,17 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- RECENT PRESCRIPTIONS -->
     <!-- ================================================================ -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.4s;">
-        <div class="card-header">
-            <h3 class="card-title">
+    <div class="table-container-pr animate-fade-in-up" style="animation-delay:0.4s;">
+        <div class="card-header-pr">
+            <h3 class="card-title-pr">
                 <i class="fas fa-prescription"></i>
                 Recent Prescriptions (<?= count($recent_prescriptions) ?>)
             </h3>
-            <a href="prescriptions.php?branch=<?= $branch_id ?>" class="card-action">View All →</a>
+            <a href="prescriptions.php?branch=<?= $branch_id ?>" class="card-action-pr">View All →</a>
         </div>
         <?php if (count($recent_prescriptions) > 0): ?>
-            <div class="overflow-x-auto">
-                <table class="data-table">
+            <div style="overflow-x:auto;">
+                <table class="data-table-pr">
                     <thead>
                         <tr>
                             <th>Bill #</th>
@@ -1308,28 +1065,28 @@ include_once '../../components/admin_sidebar.php';
                     <tbody>
                         <?php foreach ($recent_prescriptions as $sale): ?>
                             <tr>
-                                <td class="font-mono text-xs"><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></td>
+                                <td class="font-mono-pr" style="font-size:0.7rem;"><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($sale['patient_name'] ?? 'Walk-in') ?></td>
                                 <td style="text-align:center;"><?= $sale['item_count'] ?? 0 ?></td>
-                                <td class="font-semibold"><?= formatCurrency($sale['total_amount'] ?? 0) ?></td>
-                                <td class="text-orange-600"><?= formatCurrency($sale['discount_amount'] ?? 0) ?></td>
-                                <td class="font-semibold text-green-600"><?= formatCurrency($sale['net_amount'] ?? 0) ?></td>
+                                <td class="font-semibold-pr"><?= formatCurrency($sale['total_amount'] ?? 0) ?></td>
+                                <td class="text-orange-pr"><?= formatCurrency($sale['discount_amount'] ?? 0) ?></td>
+                                <td class="font-semibold-pr text-green-pr"><?= formatCurrency($sale['net_amount'] ?? 0) ?></td>
                                 <td>
-                                    <span class="badge badge-<?= getPaymentMethodBadge($sale['payment_method'] ?? 'cash') ?>" style="font-size:0.6rem;padding:2px 10px;">
+                                    <span class="badge-pr badge-<?= getPaymentMethodBadge($sale['payment_method'] ?? 'cash') ?>-pr" style="font-size:0.6rem;padding:2px 10px;">
                                         <i class="fas <?= getPaymentMethodIcon($sale['payment_method'] ?? 'cash') ?>"></i>
                                         <?= ucfirst($sale['payment_method'] ?? 'N/A') ?>
                                     </span>
                                 </td>
                                 <td><?= htmlspecialchars($sale['pharmacist_name'] ?? 'N/A') ?></td>
-                                <td class="text-xs"><?= date('M d, Y h:i A', strtotime($sale['created_at'] ?? 'now')) ?></td>
+                                <td style="font-size:0.7rem;"><?= date('M d, Y h:i A', strtotime($sale['created_at'] ?? 'now')) ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
             </div>
         <?php else: ?>
-            <div class="text-center py-8 text-gray-400">
-                <i class="fas fa-prescription text-3xl block mb-3"></i>
+            <div class="empty-state-pr">
+                <i class="fas fa-prescription"></i>
                 <p>No prescription sales found</p>
             </div>
         <?php endif; ?>
@@ -1338,17 +1095,17 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- RECENT OTC SALES -->
     <!-- ================================================================ -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.45s;">
-        <div class="card-header">
-            <h3 class="card-title">
+    <div class="table-container-pr animate-fade-in-up" style="animation-delay:0.45s;">
+        <div class="card-header-pr">
+            <h3 class="card-title-pr">
                 <i class="fas fa-shopping-cart"></i>
                 Recent OTC Sales (<?= count($recent_otc_sales) ?>)
             </h3>
-            <a href="otc_sales.php?branch=<?= $branch_id ?>" class="card-action">View All →</a>
+            <a href="otc_sales.php?branch=<?= $branch_id ?>" class="card-action-pr">View All →</a>
         </div>
         <?php if (count($recent_otc_sales) > 0): ?>
-            <div class="overflow-x-auto">
-                <table class="data-table">
+            <div style="overflow-x:auto;">
+                <table class="data-table-pr">
                     <thead>
                         <tr>
                             <th>Sale #</th>
@@ -1365,28 +1122,28 @@ include_once '../../components/admin_sidebar.php';
                     <tbody>
                         <?php foreach ($recent_otc_sales as $sale): ?>
                             <tr>
-                                <td class="font-mono text-xs"><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></td>
+                                <td class="font-mono-pr" style="font-size:0.7rem;"><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($sale['customer_name'] ?? 'Walk-in') ?></td>
                                 <td style="text-align:center;"><?= $sale['item_count'] ?? 0 ?></td>
-                                <td class="font-semibold"><?= formatCurrency($sale['total_amount'] ?? 0) ?></td>
-                                <td class="text-orange-600"><?= formatCurrency($sale['discount_amount'] ?? 0) ?></td>
-                                <td class="font-semibold text-green-600"><?= formatCurrency($sale['net_amount'] ?? 0) ?></td>
+                                <td class="font-semibold-pr"><?= formatCurrency($sale['total_amount'] ?? 0) ?></td>
+                                <td class="text-orange-pr"><?= formatCurrency($sale['discount_amount'] ?? 0) ?></td>
+                                <td class="font-semibold-pr text-green-pr"><?= formatCurrency($sale['net_amount'] ?? 0) ?></td>
                                 <td>
-                                    <span class="badge badge-<?= getPaymentMethodBadge($sale['payment_method'] ?? 'cash') ?>" style="font-size:0.6rem;padding:2px 10px;">
+                                    <span class="badge-pr badge-<?= getPaymentMethodBadge($sale['payment_method'] ?? 'cash') ?>-pr" style="font-size:0.6rem;padding:2px 10px;">
                                         <i class="fas <?= getPaymentMethodIcon($sale['payment_method'] ?? 'cash') ?>"></i>
                                         <?= ucfirst($sale['payment_method'] ?? 'N/A') ?>
                                     </span>
                                 </td>
                                 <td><?= htmlspecialchars($sale['sold_by_name'] ?? 'N/A') ?></td>
-                                <td class="text-xs"><?= date('M d, Y h:i A', strtotime($sale['created_at'] ?? 'now')) ?></td>
+                                <td style="font-size:0.7rem;"><?= date('M d, Y h:i A', strtotime($sale['created_at'] ?? 'now')) ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
             </div>
         <?php else: ?>
-            <div class="text-center py-8 text-gray-400">
-                <i class="fas fa-shopping-cart text-3xl block mb-3"></i>
+            <div class="empty-state-pr">
+                <i class="fas fa-shopping-cart"></i>
                 <p>No OTC sales found</p>
             </div>
         <?php endif; ?>
@@ -1395,14 +1152,14 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer">
+    <footer class="footer-pr">
         <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="footer-brand-pr">Braick Dispensary</span> Management System
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             Pharmacy Revenue - <?= htmlspecialchars($branch['name'] ?? 'Dodoma') ?>
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1410,103 +1167,18 @@ include_once '../../components/admin_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
-        }
-    });
-
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
-        var ftEl = document.getElementById('footerTime');
-        if (ftEl) ftEl.textContent = timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
     // ================================================================
     // MONTHLY REVENUE CHART
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         var ctx = document.getElementById('monthlyRevenueChart');
-        if (ctx) {
-            var labels = [];
-            var prescribeData = [];
-            var otcData = [];
-            
-            <?php 
-            $month_labels = [];
-            $prescribe_values = [];
-            $otc_values = [];
-            foreach ($monthly_revenue as $month) {
-                $month_labels[] = $month['month_name'] ?? 'N/A';
-                $prescribe_values[] = (float)$month['prescribe_revenue'] ?? 0;
-                $otc_values[] = (float)$month['otc_revenue'] ?? 0;
-            }
-            ?>
-            
-            labels = <?= json_encode($month_labels) ?>;
-            prescribeData = <?= json_encode($prescribe_values) ?>;
-            otcData = <?= json_encode($otc_values) ?>;
+        if (ctx && typeof Chart !== 'undefined') {
+            var labels = <?= json_encode(array_column($monthly_revenue, 'month_name')) ?>;
+            var prescribeData = <?= json_encode(array_map('floatval', array_column($monthly_revenue, 'prescribe_revenue'))) ?>;
+            var otcData = <?= json_encode(array_map('floatval', array_column($monthly_revenue, 'otc_revenue'))) ?>;
             
             new Chart(ctx, {
                 type: 'bar',
@@ -1540,10 +1212,7 @@ include_once '../../components/admin_sidebar.php';
                         legend: {
                             position: 'top',
                             labels: {
-                                font: {
-                                    size: 12,
-                                    weight: '600'
-                                },
+                                font: { size: 12, weight: '600' },
                                 padding: 20,
                                 usePointStyle: true,
                                 pointStyle: 'rectRounded'
@@ -1565,14 +1234,10 @@ include_once '../../components/admin_sidebar.php';
                                     return 'TSh ' + value.toLocaleString();
                                 }
                             },
-                            grid: {
-                                color: 'rgba(0,0,0,0.05)'
-                            }
+                            grid: { color: 'rgba(0,0,0,0.05)' }
                         },
                         x: {
-                            grid: {
-                                display: false
-                            }
+                            grid: { display: false }
                         }
                     }
                 }
@@ -1580,14 +1245,24 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
+    // ================================================================
+    // FOOTER TIME
+    // ================================================================
+    setInterval(function() {
+        var now = new Date();
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var ftEl = document.getElementById('footerTime');
+        if (ftEl) ftEl.textContent = timeStr;
+    }, 1000);
+
     console.log('%c💊 Braick Dispensary - Pharmacy Revenue', 'font-size:18px; font-weight:bold; color:#7C3AED;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch['name'] ?? 'Dodoma') ?>', 'font-size:13px; color:#059669;');
     console.log('%c💵 Total Revenue: <?= formatCurrency($pharmacy_total) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c💊 Prescriptions: <?= formatCurrency($prescription_stats['total_revenue'] ?? 0) ?> (<?= $prescription_stats['total_prescriptions'] ?? 0 ?> sales)', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🛒 OTC Sales: <?= formatCurrency($otc_stats['total_revenue'] ?? 0) ?> (<?= $otc_stats['total_otc_sales'] ?? 0 ?> sales)', 'font-size:13px; color:#D97706;');
-    console.log('%c📊 Tables: bills, bill_items, otc_sales, otc_sale_items, prescriptions, prescription_items', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Fixed: WHITE TEXT on all stat cards', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Fixed: Branch name shows correctly', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ No duplicate CSS/JS', 'font-size:13px; color:#34D399;');
+    console.log('%c🌙 Dark mode: Handled by header (shared)', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

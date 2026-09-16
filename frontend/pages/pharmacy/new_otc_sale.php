@@ -2,27 +2,22 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/new_otc_sale.php
 // PHARMACY - NEW OTC SALE
-// ✅ FIXED: Stock deduction for BOTH payment options
-// ✅ "Send to Cashier" = Reserve stock (quantity held)
-// ✅ "Pay Now (Self)" = Deduct stock immediately
+// ✅ BLUE THEME
+// ✅ FIXED: Multiple items stock deduction
+// ✅ FIXED: Quantity input starts empty, no scroll change
+// ✅ FIXED: Better FIFO - handles all expiry dates correctly
 // ✅ Auto-format money with commas
-// ✅ Instructions with suggestions
-// ✅ NEW: Premium/Extra Bill feature
+// ✅ Premium/Extra Bill feature
+// ✅ Search bar + Checkbox + Quantity/Dosage/Frequency/Route
 // ================================================================
 
 session_start();
 
-// ================================================================
-// CHECK SESSION
-// ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// GET USER DATA
-// ================================================================
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
@@ -30,9 +25,6 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
 $user_username = $_SESSION['username'] ?? 'pharmacy';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// DATABASE CONNECTION
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
@@ -42,8 +34,29 @@ try {
 }
 
 // ================================================================
-// PRE-DEFINED INSTRUCTIONS (for suggestions)
+// PRE-DEFINED OPTIONS
 // ================================================================
+$predefined_frequencies = [
+    '1x daily', '2x daily', '3x daily', '4x daily',
+    'Twice a day', 'Thrice a day', 'Once a week',
+    'Every 4 hours', 'Every 6 hours', 'Every 8 hours', 'Every 12 hours',
+    'Morning only', 'Evening only', 'Night only', 'As needed', 'SOS'
+];
+
+$predefined_routes = [
+    'Oral', 'Topical', 'Injection (IM)', 'Injection (IV)', 'Injection (SC)',
+    'Sublingual', 'Rectal', 'Vaginal', 'Nasal', 'Ophthalmic (Eye)',
+    'Otic (Ear)', 'Inhalation', 'Transdermal', 'Subcutaneous'
+];
+
+$predefined_dosages = [
+    '1 tablet', '2 tablets', '1 capsule', '2 capsules',
+    '5ml', '10ml', '15ml', '20ml',
+    '1 teaspoon', '2 teaspoons', '1 tablespoon',
+    '1 drop', '2 drops', '1 puff', '2 puffs',
+    '1 sachet', '1 vial', '1 ampoule', 'Apply thin layer', 'Apply generously'
+];
+
 $predefined_instructions = [
     '1x daily', '2x daily', '3x daily', '4x daily',
     'After meals', 'Before meals', 'With food', 'Empty stomach',
@@ -61,20 +74,18 @@ $predefined_instructions = [
 ];
 
 // ================================================================
-// GET MEDICINES INVENTORY - GROUPED BY NAME
+// GET ALL MEDICINES
 // ================================================================
-$medicines = [];
-$stmt = $db->prepare("
+$stmt_meds = $db->prepare("
     SELECT id, medication_name, quantity, selling_price, batch_number, expiry_date,
            DATEDIFF(expiry_date, CURDATE()) as days_remaining
     FROM medications_inventory 
-    WHERE branch_id = ? AND status = 'active' AND quantity > 0
+    WHERE branch_id = ? AND status = 'active'
     ORDER BY medication_name, expiry_date ASC
 ");
-$stmt->execute([$user_branch_id]);
-$all_medicines = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$stmt_meds->execute([$user_branch_id]);
+$all_medicines = $stmt_meds->fetchAll(PDO::FETCH_ASSOC);
 
-// Group by medication_name - for dropdown
 $medicines_grouped = [];
 foreach ($all_medicines as $med) {
     $name = $med['medication_name'];
@@ -84,53 +95,49 @@ foreach ($all_medicines as $med) {
     $medicines_grouped[$name][] = $med;
 }
 
-// For dropdown - simple list
 $medicines_list = [];
 foreach ($medicines_grouped as $name => $batches) {
     $total_qty = array_sum(array_column($batches, 'quantity'));
+    $first_batch = $batches[0];
     $medicines_list[] = [
+        'id' => $first_batch['id'],
         'name' => $name,
         'total_qty' => $total_qty,
         'batches' => $batches,
-        'price' => $batches[0]['selling_price'] ?? 0
+        'price' => $first_batch['selling_price'] ?? 0,
+        'batch_number' => $first_batch['batch_number'] ?? '',
+        'expiry_date' => $first_batch['expiry_date'] ?? '',
+        'days_remaining' => $first_batch['days_remaining'] ?? null,
+        'is_available' => $total_qty > 0
     ];
 }
 
+usort($medicines_list, function($a, $b) {
+    if ($a['is_available'] !== $b['is_available']) {
+        return $b['is_available'] - $a['is_available'];
+    }
+    return strcasecmp($a['name'], $b['name']);
+});
+
 // ================================================================
-// GET LOW STOCK COUNT
+// STATISTICS
 // ================================================================
 $low_stock_count = 0;
 try {
-    $stmt = $db->prepare("
+    $stmt_low = $db->prepare("
         SELECT COUNT(*) as count 
         FROM medications_inventory 
         WHERE branch_id = ? AND quantity <= reorder_level AND quantity > 0 AND status = 'active'
     ");
-    $stmt->execute([$user_branch_id]);
-    $low_stock_count = $stmt->fetch()['count'] ?? 0;
-} catch (Exception $e) {
-    $low_stock_count = 0;
-}
+    $stmt_low->execute([$user_branch_id]);
+    $low_stock_count = $stmt_low->fetch()['count'] ?? 0;
+} catch (Exception $e) { $low_stock_count = 0; }
 
 // ================================================================
-// GET PENDING PRESCRIPTIONS COUNT
-// ================================================================
-$pending_prescriptions = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
-    $stmt->execute([$user_branch_id]);
-    $pending_prescriptions = $stmt->fetch()['count'] ?? 0;
-} catch (Exception $e) {
-    $pending_prescriptions = 0;
-}
-
-// ================================================================
-// PROCESS OTC SALE - WITH STOCK DEDUCTION & PREMIUM
+// PROCESS OTC SALE
 // ================================================================
 $message = '';
 $message_type = '';
-$sale_id = 0;
-$sale_number = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'complete_sale') {
     $customer_name = trim($_POST['customer_name'] ?? 'Walk-in Customer');
@@ -140,56 +147,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $payment_option = $_POST['payment_option'] ?? 'cashier';
     $items = json_decode($_POST['items_json'] ?? '[]', true);
     
-    // ================================================================
-    // PREMIUM / EXTRA BILL
-    // ================================================================
     $premium_amount = (float)str_replace(',', '', $_POST['premium_amount'] ?? 0);
     $premium_note = trim($_POST['premium_note'] ?? '');
     
-    // Premium cannot be negative
-    if ($premium_amount < 0) {
-        $premium_amount = 0;
-    }
+    if ($premium_amount < 0) $premium_amount = 0;
     
     $subtotal = 0;
     foreach ($items as &$item) {
         $item['total'] = $item['quantity'] * $item['price'];
         $subtotal += $item['total'];
     }
+    unset($item);
     
-    if ($discount_amount > $subtotal) {
-        $discount_amount = $subtotal;
-    }
+    if ($discount_amount > $subtotal) $discount_amount = $subtotal;
     
-    // Grand Total = Subtotal - Discount + Premium
     $grand_total = $subtotal - $discount_amount + $premium_amount;
     if ($grand_total < 0) $grand_total = 0;
     
     $errors = [];
-    if (empty($items)) {
-        $errors[] = 'Please add at least one medicine';
-    }
+    if (empty($items)) $errors[] = 'Please add at least one medicine';
     
-    // Check stock for each item - GET TOTAL AVAILABLE STOCK
     $stock_errors = [];
     foreach ($items as $item) {
-        $stmt = $db->prepare("
+        $stmt_check_stock = $db->prepare("
             SELECT SUM(quantity) as total_qty 
             FROM medications_inventory 
-            WHERE medication_name = ? AND branch_id = ? AND status = 'active' AND quantity > 0
+            WHERE medication_name = ? 
+              AND branch_id = ? 
+              AND status = 'active' 
+              AND quantity > 0
         ");
-        $stmt->execute([$item['name'], $user_branch_id]);
-        $stock = $stmt->fetch(PDO::FETCH_ASSOC);
-        $available = $stock['total_qty'] ?? 0;
+        $stmt_check_stock->execute([$item['name'], $user_branch_id]);
+        $stock = $stmt_check_stock->fetch(PDO::FETCH_ASSOC);
+        $available = (int)($stock['total_qty'] ?? 0);
         
         if ($available < $item['quantity']) {
-            $stock_errors[] = "Insufficient stock for {$item['name']} (Available: " . $available . ")";
+            $stock_errors[] = "Insufficient stock for {$item['name']} (Available: $available, Requested: {$item['quantity']})";
         }
     }
     
-    if (!empty($stock_errors)) {
-        $errors = array_merge($errors, $stock_errors);
-    }
+    if (!empty($stock_errors)) $errors = array_merge($errors, $stock_errors);
     
     if (empty($errors)) {
         try {
@@ -198,16 +195,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $sale_number = 'OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
             $bill_number = 'BILL-OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
             
-            // OTC CUSTOMER - NO PATIENT TABLE
             $patient_id = null;
-            
-            // Determine status based on payment option
-            $payment_status = ($payment_option === 'self') ? 'paid' : 'pending';
             $bill_status = ($payment_option === 'self') ? 'paid' : 'pending';
             $balance = ($payment_option === 'self') ? 0 : $grand_total;
             
-            // CREATE BILL
-            $stmt = $db->prepare("
+            $stmt_bill = $db->prepare("
                 INSERT INTO bills (
                     bill_number, patient_id, visit_id,
                     branch_id, created_by,
@@ -215,28 +207,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     status, payment_method, notes, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ");
-            $stmt->execute([
-                $bill_number,
-                $patient_id,
-                null,
-                $user_branch_id,
-                $user_id,
-                $subtotal,
-                $discount_amount,
-                $grand_total,
+            $stmt_bill->execute([
+                $bill_number, $patient_id, null, $user_branch_id, $user_id,
+                $subtotal, $discount_amount, $grand_total,
                 ($payment_option === 'self') ? $grand_total : 0,
-                $balance,
-                $bill_status,
-                $payment_method,
+                $balance, $bill_status, $payment_method,
                 'OTC Sale - ' . ($payment_option === 'self' ? 'Paid by Pharmacy' : 'Pending Cashier Payment') . ' - Customer: ' . $customer_name . ($premium_amount > 0 ? ' | Premium: TSh ' . number_format($premium_amount) : '')
             ]);
             $bill_id = $db->lastInsertId();
             
-            // CREATE BILL ITEMS
             foreach ($items as $item) {
                 $item_payment_status = ($payment_option === 'self') ? 'paid' : 'pending';
                 
-                $stmt = $db->prepare("
+                $stmt_bill_item = $db->prepare("
                     INSERT INTO bill_items (
                         bill_id, patient_id, branch_id,
                         item_type, item_id, item_name,
@@ -244,242 +227,181 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         status, reference_type, created_at
                     ) VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, ?, ?, 'otc_sale', NOW())
                 ");
-                $stmt->execute([
-                    $bill_id,
-                    $patient_id,
-                    $user_branch_id,
-                    null,
-                    $item['name'],
-                    $item['quantity'],
-                    $item['price'],
-                    $item['total'],
+                $stmt_bill_item->execute([
+                    $bill_id, $patient_id, $user_branch_id, null,
+                    $item['name'], $item['quantity'], $item['price'], $item['total'],
                     $item_payment_status
                 ]);
             }
             
-            // CREATE OTC SALE WITH PREMIUM
             $otc_payment_status = ($payment_option === 'self') ? 'paid' : 'pending';
             $payment_notes = ($payment_option === 'self') ? 'Paid by Pharmacy (Self)' : 'OTC Sale - Bill sent to Cashier';
             
-            $stmt = $db->prepare("
+            $stmt_otc = $db->prepare("
                 INSERT INTO otc_sales (
                     sale_number, customer_name, customer_phone, 
                     patient_id, subtotal, discount_amount, premium_amount, premium_note, total_amount, bill_id,
                     payment_method, payment_status, sold_by, branch_id, notes, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ");
-            $stmt->execute([
-                $sale_number,
-                $customer_name,
-                $customer_phone,
-                $patient_id,
-                $subtotal,
-                $discount_amount,
-                $premium_amount,
-                $premium_note,
-                $grand_total,
-                $bill_id,
-                $payment_method,
-                $otc_payment_status,
-                $user_id,
-                $user_branch_id,
+            $stmt_otc->execute([
+                $sale_number, $customer_name, $customer_phone, $patient_id,
+                $subtotal, $discount_amount, $premium_amount, $premium_note, $grand_total, $bill_id,
+                $payment_method, $otc_payment_status, $user_id, $user_branch_id,
                 $payment_notes . ' - Customer: ' . $customer_name . ($premium_amount > 0 ? ' | Premium: TSh ' . number_format($premium_amount) . ' - ' . $premium_note : '')
             ]);
             $sale_id = $db->lastInsertId();
             
-            // CREATE OTC SALE ITEMS WITH INSTRUCTIONS
             foreach ($items as $item) {
-                $instructions = $item['instructions'] ?? '';
-                
-                $stmt = $db->prepare("
+                $stmt_otc_item = $db->prepare("
                     INSERT INTO otc_sale_items (
                         sale_id, patient_id, branch_id,
-                        item_name, quantity, unit_price, total_price, instructions, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                        item_name, quantity, unit_price, total_price, 
+                        dosage, frequency, route, instructions, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                 ");
-                $stmt->execute([
-                    $sale_id,
-                    $patient_id,
-                    $user_branch_id,
-                    $item['name'],
-                    $item['quantity'],
-                    $item['price'],
-                    $item['total'],
-                    $instructions
+                $stmt_otc_item->execute([
+                    $sale_id, $patient_id, $user_branch_id,
+                    $item['name'], $item['quantity'], $item['price'], $item['total'],
+                    $item['dosage'] ?? '', $item['frequency'] ?? '', $item['route'] ?? '', $item['instructions'] ?? ''
                 ]);
             }
             
-            // ================================================================
-            // ✅ FIXED: STOCK DEDUCTION FOR BOTH PAYMENT OPTIONS
-            // ================================================================
+            $movement_type = ($payment_option === 'self') ? 'out' : 'reserved';
+            $ref_type = ($payment_option === 'self') ? 'otc' : 'otc_pending';
+            $note_prefix = ($payment_option === 'self') ? 'OTC Sale - PAID: ' : 'OTC Sale - PENDING: ';
             
-            // ✅ OPTION 1: "Pay Now (Self)" - DEDUCT STOCK IMMEDIATELY
-            if ($payment_option === 'self') {
-                foreach ($items as $item) {
-                    $remaining_qty = $item['quantity'];
+            error_log("=== STOCK DEDUCTION START ===");
+            error_log("Sale #$sale_id ($sale_number) | Payment: $payment_option | Branch: $user_branch_id");
+            error_log("Total items: " . count($items));
+            
+            foreach ($items as $item_index => $item) {
+                $remaining_qty = (int)$item['quantity'];
+                $item_name = $item['name'];
+                
+                error_log("--- ITEM " . ($item_index + 1) . ": $item_name | Need: $remaining_qty ---");
+                
+                $stmt_fetch_batches = $db->prepare("
+                    SELECT id, medication_name, quantity, batch_number, expiry_date
+                    FROM medications_inventory 
+                    WHERE medication_name = ? 
+                      AND branch_id = ? 
+                      AND status = 'active' 
+                      AND quantity > 0
+                    ORDER BY 
+                        CASE 
+                            WHEN expiry_date IS NULL THEN 2
+                            WHEN expiry_date = '0000-00-00' THEN 2
+                            ELSE 1
+                        END ASC,
+                        expiry_date ASC,
+                        id ASC
+                ");
+                $stmt_fetch_batches->execute([$item_name, $user_branch_id]);
+                $batches = $stmt_fetch_batches->fetchAll(PDO::FETCH_ASSOC);
+                $stmt_fetch_batches->closeCursor();
+                
+                error_log("    Batches found: " . count($batches));
+                
+                if (empty($batches)) {
+                    error_log("    ⚠️ NO BATCHES FOUND for $item_name!");
+                    continue;
+                }
+                
+                $total_deducted = 0;
+                $batch_index = 0;
+                
+                foreach ($batches as $batch) {
+                    if ($remaining_qty <= 0) break;
                     
-                    // Get batches with FIFO (earliest expiry first)
-                    $stmt = $db->prepare("
-                        SELECT id, medication_name, quantity, batch_number, expiry_date
-                        FROM medications_inventory 
-                        WHERE medication_name = ? AND branch_id = ? AND status = 'active' AND quantity > 0
-                        ORDER BY expiry_date ASC
+                    $batch_index++;
+                    $batch_id = (int)$batch['id'];
+                    $batch_qty_available = (int)$batch['quantity'];
+                    $deduct_qty = min($remaining_qty, $batch_qty_available);
+                    
+                    error_log("    Batch #$batch_index (ID: $batch_id): deducting $deduct_qty from $batch_qty_available");
+                    
+                    $stmt_deduct = $db->prepare("
+                        UPDATE medications_inventory 
+                        SET quantity = quantity - ?, updated_at = NOW()
+                        WHERE id = ? AND branch_id = ?
                     ");
-                    $stmt->execute([$item['name'], $user_branch_id]);
-                    $batches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    $stmt_deduct->execute([$deduct_qty, $batch_id, $user_branch_id]);
+                    $rows_affected = $stmt_deduct->rowCount();
+                    $stmt_deduct->closeCursor();
                     
-                    foreach ($batches as $batch) {
-                        if ($remaining_qty <= 0) break;
-                        
-                        $deduct_qty = min($remaining_qty, $batch['quantity']);
-                        
-                        // Deduct stock
-                        $stmt_update = $db->prepare("
-                            UPDATE medications_inventory 
-                            SET quantity = quantity - ?, updated_at = NOW()
-                            WHERE id = ? AND branch_id = ?
-                        ");
-                        $stmt_update->execute([$deduct_qty, $batch['id'], $user_branch_id]);
-                        
-                        // Log stock movement
-                        $stmt_log = $db->prepare("
-                            INSERT INTO stock_movements (
-                                inventory_id, patient_id,
-                                movement_type, quantity,
-                                reference_type, reference_id,
-                                performed_by, branch_id, notes, created_at
-                            ) VALUES (?, ?, 'out', ?, 'otc', ?, ?, ?, ?, NOW())
-                        ");
-                        $stmt_log->execute([
-                            $batch['id'],
-                            $patient_id,
-                            $deduct_qty,
-                            $sale_id,
-                            $user_id,
-                            $user_branch_id,
-                            'OTC Sale - PAID: ' . $sale_number . ' - Customer: ' . $customer_name . ($premium_amount > 0 ? ' | Premium: TSh ' . number_format($premium_amount) : '')
-                        ]);
-                        
-                        $remaining_qty -= $deduct_qty;
+                    error_log("       UPDATE rows affected: $rows_affected");
+                    
+                    $stmt_verify = $db->prepare("SELECT quantity, medication_name FROM medications_inventory WHERE id = ?");
+                    $stmt_verify->execute([$batch_id]);
+                    $verified = $stmt_verify->fetch(PDO::FETCH_ASSOC);
+                    $stmt_verify->closeCursor();
+                    
+                    if ($verified) {
+                        error_log("       ✅ VERIFIED: {$verified['medication_name']} now has qty = {$verified['quantity']}");
                     }
                     
-                    // If not fully deducted, log error
-                    if ($remaining_qty > 0) {
-                        error_log("⚠️ OTC Sale #$sale_id: Not enough stock for {$item['name']}. Remaining: $remaining_qty");
-                    }
+                    $stmt_log_move = $db->prepare("
+                        INSERT INTO stock_movements (
+                            inventory_id, patient_id,
+                            movement_type, quantity,
+                            reference_type, reference_id,
+                            performed_by, branch_id, notes, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                    ");
+                    $stmt_log_move->execute([
+                        $batch_id, $patient_id,
+                        $movement_type, $deduct_qty,
+                        $ref_type, $sale_id,
+                        $user_id, $user_branch_id,
+                        $note_prefix . $sale_number . ' - Customer: ' . $customer_name
+                    ]);
+                    $stmt_log_move->closeCursor();
+                    
+                    $remaining_qty -= $deduct_qty;
+                    $total_deducted += $deduct_qty;
+                }
+                
+                error_log("    ✅ TOTAL DEDUCTED for $item_name: $total_deducted");
+                
+                if ($remaining_qty > 0) {
+                    error_log("    ⚠️ WARNING: Could not fully deduct for $item_name. Remaining: $remaining_qty");
                 }
             }
             
-            // ✅ OPTION 2: "Send to Cashier" - RESERVE STOCK (HOLD UNTIL PAYMENT)
-            // Stock is held/reserved - quantity is reduced but marked as reserved
-            if ($payment_option === 'cashier') {
-                foreach ($items as $item) {
-                    $remaining_qty = $item['quantity'];
-                    
-                    // Get batches with FIFO
-                    $stmt = $db->prepare("
-                        SELECT id, medication_name, quantity, batch_number, expiry_date
-                        FROM medications_inventory 
-                        WHERE medication_name = ? AND branch_id = ? AND status = 'active' AND quantity > 0
-                        ORDER BY expiry_date ASC
-                    ");
-                    $stmt->execute([$item['name'], $user_branch_id]);
-                    $batches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                    
-                    foreach ($batches as $batch) {
-                        if ($remaining_qty <= 0) break;
-                        
-                        $reserve_qty = min($remaining_qty, $batch['quantity']);
-                        
-                        // ✅ DEDUCT stock from inventory (reserve it)
-                        $stmt_update = $db->prepare("
-                            UPDATE medications_inventory 
-                            SET quantity = quantity - ?, updated_at = NOW()
-                            WHERE id = ? AND branch_id = ?
-                        ");
-                        $stmt_update->execute([$reserve_qty, $batch['id'], $user_branch_id]);
-                        
-                        // ✅ Log as RESERVED (not sold yet)
-                        $stmt_log = $db->prepare("
-                            INSERT INTO stock_movements (
-                                inventory_id, patient_id,
-                                movement_type, quantity,
-                                reference_type, reference_id,
-                                performed_by, branch_id, notes, created_at
-                            ) VALUES (?, ?, 'reserved', ?, 'otc_pending', ?, ?, ?, ?, NOW())
-                        ");
-                        $stmt_log->execute([
-                            $batch['id'],
-                            $patient_id,
-                            $reserve_qty,
-                            $sale_id,
-                            $user_id,
-                            $user_branch_id,
-                            'OTC Sale - PENDING: ' . $sale_number . ' - Customer: ' . $customer_name . ($premium_amount > 0 ? ' | Premium: TSh ' . number_format($premium_amount) : '')
-                        ]);
-                        
-                        $remaining_qty -= $reserve_qty;
-                    }
-                    
-                    // Log if any quantity couldn't be reserved
-                    if ($remaining_qty > 0) {
-                        error_log("⚠️ OTC Sale #$sale_id: Not enough stock for {$item['name']}. Remaining: $remaining_qty");
-                    }
-                }
-            }
+            error_log("=== STOCK DEDUCTION END ===");
             
-            // IF SELF PAYMENT, CREATE PAYMENT RECORD
             if ($payment_option === 'self' && $grand_total > 0) {
                 $receipt_number = 'RCP-OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                 
-                $stmt = $db->prepare("
+                $stmt_pay = $db->prepare("
                     INSERT INTO payments (
                         receipt_number, bill_id, patient_id, amount, 
                         payment_method, received_by, branch_id, received_at, notes
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)
                 ");
-                $stmt->execute([
-                    $receipt_number,
-                    $bill_id,
-                    $patient_id,
-                    $grand_total,
-                    $payment_method,
-                    $user_id,
-                    $user_branch_id,
-                    'OTC Sale - Paid by Pharmacy (Self) - Customer: ' . $customer_name . ($premium_amount > 0 ? ' | Premium: TSh ' . number_format($premium_amount) : '')
+                $stmt_pay->execute([
+                    $receipt_number, $bill_id, $patient_id, $grand_total,
+                    $payment_method, $user_id, $user_branch_id,
+                    'OTC Sale - Paid by Pharmacy (Self) - Customer: ' . $customer_name
                 ]);
                 
-                $stmt = $db->prepare("
-                    UPDATE bill_items 
-                    SET status = 'paid', updated_at = NOW()
-                    WHERE bill_id = ?
-                ");
-                $stmt->execute([$bill_id]);
+                $stmt_upd_items = $db->prepare("UPDATE bill_items SET status = 'paid', updated_at = NOW() WHERE bill_id = ?");
+                $stmt_upd_items->execute([$bill_id]);
                 
-                $stmt = $db->prepare("
-                    UPDATE bills 
-                    SET status = 'paid', paid_amount = ?, updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([$grand_total, $bill_id]);
+                $stmt_upd_bill = $db->prepare("UPDATE bills SET status = 'paid', paid_amount = ?, updated_at = NOW() WHERE id = ?");
+                $stmt_upd_bill->execute([$grand_total, $bill_id]);
             }
             
             $db->commit();
             
-            // MESSAGES
             if ($payment_option === 'self') {
-                $message = "✅ OTC Sale completed successfully! Stock deducted. Bill Paid.";
-                if ($premium_amount > 0) {
-                    $message .= " Premium TSh " . number_format($premium_amount) . " added.";
-                }
-                $message_type = 'success';
+                $message = "✅ OTC Sale completed! Stock deducted for all items. Bill Paid.";
             } else {
-                $message = "✅ OTC Sale completed successfully! Stock reserved. Bill sent to Cashier.";
-                if ($premium_amount > 0) {
-                    $message .= " Premium TSh " . number_format($premium_amount) . " added.";
-                }
-                $message_type = 'success';
+                $message = "✅ OTC Sale completed! Stock reserved for all items. Bill sent to Cashier.";
             }
+            if ($premium_amount > 0) $message .= " Premium TSh " . number_format($premium_amount) . " added.";
+            $message_type = 'success';
             
             $_SESSION['otc_sale_message'] = $message;
             $_SESSION['otc_sale_message_type'] = $message_type;
@@ -500,9 +422,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 }
 
-// ================================================================
-// CHECK FOR SESSION MESSAGES
-// ================================================================
 if (isset($_SESSION['otc_sale_message'])) {
     $message = $_SESSION['otc_sale_message'];
     $message_type = $_SESSION['otc_sale_message_type'] ?? 'success';
@@ -511,30 +430,19 @@ if (isset($_SESSION['otc_sale_message'])) {
     unset($_SESSION['otc_sale_message_time']);
 }
 
-// ================================================================
-// GET STATISTICS FOR SIDEBAR
-// ================================================================
 $unread_notifications = 0;
 try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch()['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
+    $stmt_notif = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt_notif->execute([$user_id]);
+    $unread_notifications = $stmt_notif->fetch()['total'] ?? 0;
+} catch (Exception $e) { $unread_notifications = 0; }
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
 include_once __DIR__ . '/../../components/pharmacy_header.php';
 include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 ?>
@@ -545,1433 +453,299 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>New OTC Sale - Braick Dispensary</title>
-    
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
-    
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
         :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A3D8A;
-            --primary-light: #E8F0FE;
-            --success: #059669;
-            --success-dark: #047857;
-            --success-light: #D1FAE5;
-            --warning: #D97706;
-            --warning-light: #FEF3C7;
-            --danger: #DC2626;
-            --danger-light: #FEE2E2;
-            --purple: #7C3AED;
-            --purple-light: #EDE9FE;
-            --gold: #F59E0B;
-            --gold-light: #FEF3C7;
-            
-            --bg-body: #F1F5F9;
-            --bg-card: #FFFFFF;
-            --border-color: #E2E8F0;
-            --text-primary: #0F172A;
-            --text-secondary: #475569;
-            --text-muted: #94A3B8;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
+            --primary: #0B5ED7; --primary-dark: #0A3D8A; --primary-light: #E8F0FE;
+            --success: #059669; --success-dark: #047857; --success-light: #D1FAE5;
+            --warning: #D97706; --warning-light: #FEF3C7;
+            --danger: #DC2626; --danger-light: #FEE2E2;
+            --purple: #7C3AED; --purple-light: #EDE9FE;
+            --gold: #F59E0B; --gold-light: #FEF3C7;
+            --sky: #0288D1; --sky-light: #E1F5FE;
+            --bg-body: #F1F5F9; --bg-card: #FFFFFF; --border-color: #E2E8F0;
+            --text-primary: #0F172A; --text-secondary: #475569; --text-muted: #94A3B8;
         }
-        
         [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --border-color: #334155;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --text-muted: #64748B;
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 8px 30px rgba(0,0,0,0.4);
-            --primary-light: #1E3A5F;
-            --success-light: #1A3A2A;
-            --warning-light: #3D2E0A;
-            --danger-light: #3A1A1A;
+            --bg-body: #0F172A; --bg-card: #1E293B; --border-color: #334155;
+            --text-primary: #F1F5F9; --text-secondary: #94A3B8; --text-muted: #64748B;
+            --primary-light: #1E3A5F; --success-light: #1A3A2A;
+            --warning-light: #3D2E0A; --danger-light: #3A1A1A;
+            --purple-light: #2A1A3A; --sky-light: #0A2A3A;
         }
-        
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif; background: var(--bg-body); color: var(--text-primary); transition: background 0.3s ease; }
+        .main-content { margin-left: 270px; margin-top: 68px; padding: 28px 32px; min-height: calc(100vh - 68px); }
         
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-        }
-        
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
+        /* ✅ PAGE HEADER - BLUE THEME */
         .page-header {
-            background: linear-gradient(135deg, #7C3AED, #6D28D9);
-            border-radius: 16px;
-            padding: 24px 32px;
-            margin-bottom: 24px;
-            box-shadow: 0 8px 32px rgba(124, 58, 237, 0.25);
-            position: relative;
-            overflow: hidden;
-            color: white;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
+            background: linear-gradient(135deg, #0B5ED7, #0A3D8A);
+            border-radius: 16px; padding: 24px 32px; margin-bottom: 24px;
+            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.25);
+            color: white; display: flex; flex-wrap: wrap;
+            justify-content: space-between; align-items: center; gap: 16px;
+            position: relative; overflow: hidden;
         }
-        
         .page-header::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 400px;
-            height: 400px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
+            content: ''; position: absolute; top: -60%; right: -10%;
+            width: 400px; height: 400px;
+            background: rgba(255,255,255,0.05); border-radius: 50%;
             pointer-events: none;
         }
+        .page-header .page-title { color: white; font-size: 1.6rem; font-weight: 700; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; position: relative; z-index: 1; }
+        .page-header .page-title i { font-size: 1.8rem; opacity: 0.9; }
+        .page-header .page-subtitle { color: rgba(255,255,255,0.85); font-size: 0.9rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; position: relative; z-index: 1; }
+        .page-header .stat-chip { background: rgba(255,255,255,0.12); padding: 4px 14px; border-radius: 20px; font-size: 0.7rem; font-weight: 500; color: rgba(255,255,255,0.9); border: 1px solid rgba(255,255,255,0.1); display: inline-flex; align-items: center; gap: 6px; backdrop-filter: blur(4px); }
+        .page-header .btn-outline-light { background: rgba(255,255,255,0.12); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 8px 16px; border-radius: 10px; font-weight: 500; font-size: 0.82rem; transition: all 0.3s; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; backdrop-filter: blur(4px); position: relative; z-index: 1; }
+        .page-header .btn-outline-light:hover { background: rgba(255,255,255,0.25); transform: translateY(-2px); }
         
-        .page-header .page-title {
-            color: white;
-            font-size: 1.6rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
+        /* ✅ STATS - BLUE THEME CARDS */
+        .stats-2-cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px; }
+        .stat-card-2 { border-radius: 14px; padding: 18px 22px; display: flex; align-items: center; gap: 16px; color: white; min-height: 100px; transition: all 0.4s; }
+        .stat-card-2:hover { transform: translateY(-4px) scale(1.01); }
+        .stat-card-2 .stat-icon { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink: 0; background: rgba(255,255,255,0.18); }
+        .stat-card-2 .stat-label { font-size: 0.65rem; color: rgba(255,255,255,0.85); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin: 0; }
+        .stat-card-2 .stat-number { font-size: 2.2rem; font-weight: 800; color: white; margin: 0; line-height: 1.1; }
         
-        .page-header .page-title i {
-            font-size: 1.8rem;
-            opacity: 0.9;
-        }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.9rem;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-            margin-top: 4px;
-        }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
-        .page-header .stat-chip {
-            background: rgba(255,255,255,0.12);
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            color: rgba(255,255,255,0.9);
-            border: 1px solid rgba(255,255,255,0.1);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            backdrop-filter: blur(4px);
-        }
-        
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 16px;
-            border-radius: 10px;
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        
-        /* ================================================================
-           STATS CARDS
-           ================================================================ */
-        .stats-2-cards {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        
-        .stat-card-2 {
-            border-radius: 14px;
-            padding: 18px 22px;
-            border: none;
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-            color: white;
-            position: relative;
-            overflow: hidden;
-            min-height: 100px;
-            cursor: default;
-        }
-        
-        .stat-card-2::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 160px;
-            height: 160px;
-            background: rgba(255,255,255,0.06);
-            border-radius: 50%;
-            pointer-events: none;
-            transition: all 0.5s ease;
-        }
-        
-        .stat-card-2:hover {
-            transform: translateY(-4px) scale(1.01);
-            box-shadow: 0 10px 32px rgba(0,0,0,0.2);
-        }
-        
-        .stat-card-2 .stat-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
-            flex-shrink: 0;
-            background: rgba(255,255,255,0.18);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.12);
-            backdrop-filter: blur(8px);
-            transition: all 0.3s ease;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .stat-card-2:hover .stat-icon {
-            transform: scale(1.05) rotate(-2deg);
-            background: rgba(255,255,255,0.3);
-        }
-        
-        .stat-card-2 .stat-content {
-            position: relative;
-            z-index: 1;
-            flex: 1;
-        }
-        
-        .stat-card-2 .stat-label {
-            font-size: 0.65rem;
-            color: rgba(255,255,255,0.85);
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            margin: 0;
-        }
-        
-        .stat-card-2 .stat-number {
-            font-size: 2.2rem;
-            font-weight: 800;
-            color: white;
-            margin: 0;
-            line-height: 1.1;
-            letter-spacing: -0.02em;
-        }
-        
+        /* ✅ BLUE THEME CARD VARIANTS */
         .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
-        
-        /* ================================================================
-           SALE FORM CARD
-           ================================================================ */
-        .sale-form-card {
-            background: var(--bg-card);
-            border-radius: 16px;
-            padding: 28px 32px;
-            border: 2px solid var(--border-color);
-            margin-bottom: 20px;
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .sale-form-card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .section-title {
-            font-size: 0.85rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            padding-bottom: 10px;
-            margin-bottom: 16px;
-            border-bottom: 2px solid var(--border-color);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .section-title i {
-            color: var(--primary);
-            font-size: 1.1rem;
-        }
-        
-        .section-title .badge-count {
-            background: var(--primary);
-            color: white;
-            font-size: 0.6rem;
-            padding: 1px 10px;
-            border-radius: 12px;
-            margin-left: auto;
-        }
-        
-        .form-label {
-            font-size: 0.78rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 4px;
-            display: block;
-        }
-        
-        .form-label .required {
-            color: var(--danger);
-            margin-left: 2px;
-        }
-        
-        .form-control {
-            width: 100%;
-            padding: 10px 16px;
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            font-size: 0.88rem;
-            transition: all 0.3s ease;
-            outline: none;
-            background: var(--bg-card);
-            color: var(--text-primary);
-        }
-        
-        .form-control:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
-        }
-        
-        .form-control::placeholder {
-            color: var(--text-secondary);
-            opacity: 0.5;
-        }
-        
-        .form-row {
-            margin-bottom: 16px;
-        }
-        
-        .medicine-select-row {
-            display: flex;
-            gap: 12px;
-            flex-wrap: wrap;
-            align-items: flex-end;
-        }
-        
-        .medicine-select-row .form-group {
-            flex: 1;
-            min-width: 160px;
-        }
-        
-        .medicine-select-row .form-group.qty-group {
-            max-width: 120px;
-        }
-        
-        .medicine-select-row .form-group.price-group {
-            max-width: 160px;
-        }
-        
-        .btn-add-medicine {
-            background: var(--primary);
-            color: white;
-            padding: 10px 24px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 0.88rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            height: 44px;
-            white-space: nowrap;
-        }
-        
-        .btn-add-medicine:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(11, 94, 215, 0.3);
-        }
-        
-        /* ================================================================
-           CART
-           ================================================================ */
-        .cart-container {
-            border: 2px solid var(--border-color);
-            border-radius: 12px;
-            overflow: hidden;
-            min-height: 80px;
-        }
-        
-        .cart-item {
-            display: flex;
-            flex-direction: column;
-            padding: 12px 16px;
-            border-bottom: 1px solid var(--border-color);
-            transition: background 0.2s ease;
-            gap: 8px;
-        }
-        
-        .cart-item:hover {
-            background: var(--primary-light);
-        }
-        
-        .cart-item:last-child {
-            border-bottom: none;
-        }
-        
-        .cart-item .item-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 6px;
-        }
-        
-        .cart-item .item-info {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            flex: 1;
-        }
-        
-        .cart-item .item-info .item-name {
-            font-weight: 600;
-            font-size: 0.9rem;
-            color: var(--text-primary);
-        }
-        
-        .cart-item .item-info .item-meta {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            background: var(--bg-body);
-            padding: 2px 10px;
-            border-radius: 6px;
-        }
-        
-        .cart-item .item-info .item-price {
-            font-weight: 600;
-            color: var(--primary);
-            font-size: 0.85rem;
-        }
-        
-        .cart-item .item-total {
-            font-weight: 700;
-            color: var(--success);
-            font-size: 0.95rem;
-            min-width: 80px;
-            text-align: right;
-        }
-        
-        .cart-item .btn-remove {
-            background: var(--danger);
-            color: white;
-            border: none;
-            border-radius: 6px;
-            padding: 4px 12px;
-            cursor: pointer;
-            font-size: 0.7rem;
-            font-weight: 600;
-            transition: all 0.3s ease;
-        }
-        
-        .cart-item .btn-remove:hover {
-            background: #B91C1C;
-            transform: scale(1.05);
-        }
-        
-        /* ================================================================
-           INSTRUCTIONS - LARGE TEXT AREA WITH SUGGESTIONS
-           ================================================================ */
-        .instructions-section {
-            margin-top: 8px;
-            padding-top: 8px;
-            border-top: 1px dashed var(--border-color);
-            width: 100%;
-        }
-        
-        .instructions-section .instr-label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            margin-bottom: 4px;
-        }
-        
-        .instructions-section .instr-label i {
-            color: var(--primary);
-        }
-        
-        .instructions-section .instr-label .instr-count {
-            font-size: 0.6rem;
-            background: var(--primary-light);
-            color: var(--primary);
-            padding: 0 8px;
-            border-radius: 10px;
-            font-weight: 600;
-        }
-        
-        .instructions-section .instr-textarea-wrapper {
-            position: relative;
-        }
-        
-        .instructions-section .instr-textarea-wrapper textarea {
-            width: 100%;
-            padding: 8px 12px;
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            font-size: 0.85rem;
-            font-family: 'Inter', 'Segoe UI', sans-serif;
-            background: var(--bg-card);
-            color: var(--text-primary);
-            outline: none;
-            transition: all 0.3s ease;
-            resize: vertical;
-            min-height: 55px;
-            max-height: 120px;
-            line-height: 1.5;
-        }
-        
-        .instructions-section .instr-textarea-wrapper textarea:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
-        }
-        
-        .instructions-section .instr-textarea-wrapper textarea::placeholder {
-            color: var(--text-muted);
-            font-size: 0.8rem;
-        }
-        
-        .instructions-section .instr-suggestions {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px;
-            margin-top: 6px;
-        }
-        
-        .instructions-section .instr-suggestions .suggestion-btn {
-            padding: 3px 12px;
-            border: 1px solid var(--border-color);
-            border-radius: 14px;
-            font-size: 0.65rem;
-            background: var(--bg-body);
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: all 0.2s ease;
-            white-space: nowrap;
-        }
-        
-        .instructions-section .instr-suggestions .suggestion-btn:hover {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-            transform: translateY(-1px);
-        }
-        
-        .instructions-section .instr-suggestions .suggestion-btn.active {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        .instructions-section .instr-tags {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px;
-            margin-top: 6px;
-        }
-        
-        .instructions-section .instr-tags .instr-tag {
-            background: var(--primary-light);
-            color: var(--primary);
-            padding: 2px 10px;
-            border-radius: 12px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid var(--primary);
-        }
-        
-        .instructions-section .instr-tags .instr-tag .remove-instr {
-            cursor: pointer;
-            font-size: 0.7rem;
-            color: var(--danger);
-            font-weight: 700;
-            padding: 0 2px;
-        }
-        
-        .instructions-section .instr-tags .instr-tag .remove-instr:hover {
-            color: #B91C1C;
-            transform: scale(1.2);
-        }
-        
-        .empty-cart {
-            text-align: center;
-            padding: 40px 20px;
-            color: var(--text-secondary);
-        }
-        
-        .empty-cart i {
-            font-size: 3rem;
-            color: var(--border-color);
-            display: block;
-            margin-bottom: 12px;
-        }
-        
-        .empty-cart p {
-            font-size: 0.95rem;
-        }
-        
-        .empty-cart .sub-text {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            margin-top: 4px;
-        }
-        
-        /* ================================================================
-           DISCOUNT SECTION - WITH MONEY FORMAT
-           ================================================================ */
-        .discount-section {
-            background: var(--bg-body);
-            border-radius: 12px;
-            padding: 18px 22px;
-            border: 2px solid var(--border-color);
-            margin-top: 16px;
-            transition: all 0.3s ease;
-        }
-        
-        .discount-section:hover {
-            border-color: var(--gold);
-        }
-        
-        .discount-section .discount-row {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 14px;
-        }
-        
-        .discount-section .discount-label {
-            font-weight: 700;
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            min-width: 120px;
-        }
-        
-        .discount-section .discount-label i {
-            color: var(--gold);
-            font-size: 1.1rem;
-        }
-        
-        .discount-section .discount-input-group {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex: 1;
-            flex-wrap: wrap;
-        }
-        
-        .discount-section .discount-input-group .discount-input {
-            width: 250px;
-            max-width: 350px;
-            padding: 10px 16px;
-            font-size: 1.2rem;
-            font-weight: 700;
-            text-align: right;
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            background: var(--bg-card);
-            color: var(--text-primary);
-            outline: none;
-            transition: all 0.3s ease;
-            font-family: 'Courier New', monospace;
-            letter-spacing: 1px;
-        }
-        
-        .discount-section .discount-input-group .discount-input:focus {
-            border-color: var(--gold);
-            box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.15);
-        }
-        
-        .discount-section .discount-input-group .discount-input::placeholder {
-            font-weight: 400;
-            font-size: 0.9rem;
-            color: var(--text-muted);
-            letter-spacing: 0;
-        }
-        
-        .btn-apply-discount {
-            background: var(--gold);
-            color: white;
-            padding: 10px 24px;
-            border-radius: 10px;
-            font-weight: 700;
-            font-size: 0.85rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            white-space: nowrap;
-        }
-        
-        .btn-apply-discount:hover {
-            background: #D97706;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(217, 119, 6, 0.35);
-        }
-        
-        .btn-remove-discount {
-            background: var(--danger);
-            color: white;
-            padding: 10px 18px;
-            border-radius: 10px;
-            font-weight: 700;
-            font-size: 0.85rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            white-space: nowrap;
-        }
-        
-        .btn-remove-discount:hover {
-            background: #B91C1C;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(220, 38, 38, 0.3);
-        }
-        
-        .discount-display {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 20px;
-            margin-top: 14px;
-            padding-top: 14px;
-            border-top: 2px dashed var(--border-color);
-        }
-        
-        .discount-display .info-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 0.9rem;
-            background: var(--bg-card);
-            padding: 6px 16px;
-            border-radius: 8px;
-            border: 1px solid var(--border-color);
-        }
-        
-        .discount-display .info-item .label {
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .discount-display .info-item .value {
-            font-weight: 700;
-            color: var(--text-primary);
-            font-family: 'Courier New', monospace;
-            font-size: 1rem;
-        }
-        
-        .discount-display .info-item .value.grand-total {
-            color: var(--success);
-            font-size: 1.15rem;
-            font-weight: 800;
-        }
-        
-        /* ================================================================
-           PREMIUM SECTION
-           ================================================================ */
-        .premium-section {
-            background: var(--bg-body);
-            border-radius: 12px;
-            padding: 18px 22px;
-            border: 2px solid var(--border-color);
-            margin-top: 12px;
-            transition: all 0.3s ease;
-        }
-        
-        .premium-section:hover {
-            border-color: var(--purple);
-        }
-        
-        .premium-section .premium-row {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 14px;
-        }
-        
-        .premium-section .premium-label {
-            font-weight: 700;
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            min-width: 140px;
-        }
-        
-        .premium-section .premium-label i {
-            color: var(--purple);
-            font-size: 1.1rem;
-        }
-        
-        .premium-section .premium-input-group {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex: 1;
-            flex-wrap: wrap;
-        }
-        
-        .premium-section .premium-input-group .premium-input {
-            width: 200px;
-            max-width: 350px;
-            padding: 10px 16px;
-            font-size: 1.2rem;
-            font-weight: 700;
-            text-align: right;
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            background: var(--bg-card);
-            color: var(--text-primary);
-            outline: none;
-            transition: all 0.3s ease;
-            font-family: 'Courier New', monospace;
-            letter-spacing: 1px;
-        }
-        
-        .premium-section .premium-input-group .premium-input:focus {
-            border-color: var(--purple);
-            box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.15);
-        }
-        
-        .premium-section .premium-input-group .premium-input::placeholder {
-            font-weight: 400;
-            font-size: 0.9rem;
-            color: var(--text-muted);
-            letter-spacing: 0;
-        }
-        
-        .btn-add-premium {
-            background: linear-gradient(135deg, #7C3AED, #6D28D9);
-            color: white;
-            padding: 10px 24px;
-            border-radius: 10px;
-            font-weight: 700;
-            font-size: 0.85rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            white-space: nowrap;
-        }
-        
-        .btn-add-premium:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(124, 58, 237, 0.35);
-        }
-        
-        .btn-add-premium:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-        
-        .btn-remove-premium {
-            background: var(--danger);
-            color: white;
-            padding: 10px 18px;
-            border-radius: 10px;
-            font-weight: 700;
-            font-size: 0.85rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            white-space: nowrap;
-        }
-        
-        .btn-remove-premium:hover {
-            background: #B91C1C;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(220, 38, 38, 0.3);
-        }
-        
-        .premium-display {
-            display: none;
-            margin-top: 10px;
-            padding-top: 10px;
-            border-top: 2px dashed var(--border-color);
-        }
-        
-        .premium-display .premium-info {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 12px;
-        }
-        
-        .premium-display .premium-info .premium-label-display {
-            font-size: 0.8rem;
-            font-weight: 600;
-            color: var(--purple);
-        }
-        
-        .premium-display .premium-info .premium-amount {
-            font-weight: 700;
-            color: var(--purple);
-            font-size: 1.1rem;
-            font-family: 'Courier New', monospace;
-        }
-        
-        .premium-display .premium-info .premium-note-display {
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            background: var(--bg-body);
-            padding: 2px 12px;
-            border-radius: 6px;
-        }
-        
-        .premium-display .premium-info .btn-remove-premium-small {
-            background: transparent;
-            border: none;
-            color: var(--danger);
-            cursor: pointer;
-            font-size: 0.8rem;
-            font-weight: 600;
-            transition: all 0.3s ease;
-        }
-        
-        .premium-display .premium-info .btn-remove-premium-small:hover {
-            color: #B91C1C;
-            transform: scale(1.1);
-        }
-        
-        /* ================================================================
-           PAYMENT OPTIONS
-           ================================================================ */
-        .payment-options {
-            display: flex;
-            gap: 16px;
-            flex-wrap: wrap;
-            margin-top: 8px;
-        }
-        
-        .payment-option-card {
-            flex: 1;
-            min-width: 200px;
-            padding: 16px 20px;
-            border: 2px solid var(--border-color);
-            border-radius: 12px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            background: var(--bg-card);
-            display: flex;
-            align-items: center;
-            gap: 14px;
-        }
-        
-        .payment-option-card:hover {
-            border-color: var(--primary);
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .payment-option-card.active {
-            border-color: var(--primary);
-            background: var(--primary-light);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
-        }
-        
-        .payment-option-card .option-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
-            flex-shrink: 0;
-        }
-        
-        .payment-option-card .option-icon.cashier {
-            background: var(--purple-light);
-            color: var(--purple);
-        }
-        
-        .payment-option-card .option-icon.self {
-            background: var(--success-light);
-            color: var(--success);
-        }
-        
-        .payment-option-card .option-content h4 {
-            font-size: 0.9rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            margin: 0;
-        }
-        
-        .payment-option-card .option-content p {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            margin: 2px 0 0 0;
-        }
-        
-        .payment-option-card .option-radio {
-            margin-left: auto;
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            border: 2px solid var(--border-color);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.3s ease;
-            flex-shrink: 0;
-        }
-        
-        .payment-option-card.active .option-radio {
-            border-color: var(--primary);
-            background: var(--primary);
-        }
-        
-        .payment-option-card.active .option-radio::after {
-            content: '✓';
-            color: white;
-            font-size: 12px;
-            font-weight: 700;
-        }
-        
-        .payment-methods {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        
-        .payment-methods .method-btn {
-            padding: 8px 18px;
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            background: var(--bg-card);
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            font-size: 0.82rem;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .payment-methods .method-btn:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-            transform: translateY(-2px);
-        }
-        
-        .payment-methods .method-btn.active {
-            border-color: var(--primary);
-            background: var(--primary-light);
-            color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
-        }
-        
-        /* ================================================================
-           ACTION BUTTONS
-           ================================================================ */
-        .action-buttons {
-            display: flex;
-            gap: 12px;
-            flex-wrap: wrap;
-            margin-top: 16px;
-            padding-top: 16px;
-            border-top: 2px solid var(--border-color);
-        }
-        
-        .btn-complete-sale {
-            padding: 12px 36px;
-            border-radius: 12px;
-            font-weight: 700;
-            font-size: 1rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 10px;
-            color: white;
-        }
-        
-        .btn-complete-sale:hover:not(:disabled) {
-            transform: translateY(-3px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
-        }
-        
-        .btn-complete-sale:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-            transform: none !important;
-        }
-        
-        .btn-complete-sale.cashier-mode {
-            background: linear-gradient(135deg, #7C3AED, #6D28D9);
-        }
-        
-        .btn-complete-sale.self-mode {
-            background: linear-gradient(135deg, #059669, #047857);
-        }
-        
-        .btn-clear-cart {
-            background: var(--danger);
-            color: white;
-            padding: 12px 24px;
-            border-radius: 12px;
-            font-weight: 600;
-            font-size: 0.9rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .btn-clear-cart:hover {
-            background: #B91C1C;
-            transform: translateY(-3px);
-            box-shadow: 0 8px 25px rgba(220, 38, 38, 0.3);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-            padding: 10px 24px;
-            border-radius: 12px;
-            font-weight: 600;
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .btn-outline:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-            transform: translateY(-2px);
-        }
-        
-        /* ================================================================
-           MESSAGE BOX - WITH AUTO-DISMISS
-           ================================================================ */
-        .message-box {
-            padding: 14px 20px;
-            border-radius: 12px;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-weight: 500;
-            animation: slideDown 0.4s ease;
-            position: relative;
-            transition: opacity 0.5s ease, transform 0.5s ease;
-        }
-        
-        .message-box.hide {
-            opacity: 0;
-            transform: translateY(-20px);
-            display: none;
-        }
-        
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .message-box.success {
-            background: var(--success-light);
-            color: #065F46;
-            border: 2px solid #6EE7B7;
-        }
-        
-        .message-box.error {
-            background: var(--danger-light);
-            color: #991B1B;
-            border: 2px solid #FCA5A5;
-        }
-        
-        .message-box i {
-            font-size: 1.3rem;
-        }
-        
-        .message-box .message-close {
-            margin-left: auto;
-            cursor: pointer;
-            font-size: 1.2rem;
-            font-weight: 700;
-            opacity: 0.6;
-            transition: opacity 0.3s ease;
-            padding: 0 4px;
-        }
-        
-        .message-box .message-close:hover {
-            opacity: 1;
-        }
-        
-        .message-box .message-timer {
-            font-size: 0.6rem;
-            opacity: 0.6;
-            margin-left: 8px;
-        }
-        
-        [data-theme="dark"] .message-box.success {
-            background: #1A3A2A;
-            color: #34D399;
-            border-color: #34D399;
-        }
-        
-        [data-theme="dark"] .message-box.error {
-            background: #3A1A1A;
-            color: #F87171;
-            border-color: #F87171;
-        }
-        
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .main-content { margin-left: 0; padding: 16px; }
-        }
-        
-        @media (max-width: 768px) {
-            .sale-form-card { padding: 16px 18px; }
-            .medicine-select-row { flex-direction: column; }
-            .medicine-select-row .form-group { max-width: 100% !important; }
-            .stats-2-cards { grid-template-columns: 1fr; }
-            .page-header { padding: 18px 20px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .action-buttons { flex-direction: column; align-items: stretch; }
-            .action-buttons .btn-complete-sale,
-            .action-buttons .btn-clear-cart,
-            .action-buttons .btn-outline { width: 100%; justify-content: center; }
-            .cart-item .item-row { flex-direction: column; align-items: flex-start; }
-            .cart-item .item-total { text-align: left; width: 100%; }
-            .discount-section .discount-row { flex-direction: column; align-items: stretch; }
-            .discount-section .discount-input-group { flex-wrap: wrap; }
-            .discount-section .discount-input-group .discount-input { width: 100%; max-width: 100%; }
-            .discount-display { flex-direction: column; align-items: stretch; gap: 8px; }
-            .discount-display .info-item { justify-content: space-between; }
-            .payment-options { flex-direction: column; }
-            .payment-option-card { min-width: unset; }
-            .payment-methods { justify-content: center; }
-            .instructions-section .instr-suggestions { gap: 3px; }
-            .instructions-section .instr-suggestions .suggestion-btn { font-size: 0.55rem; padding: 2px 8px; }
-            .premium-section .premium-row { flex-direction: column; align-items: stretch; }
-            .premium-section .premium-input-group { flex-wrap: wrap; }
-            .premium-section .premium-input-group .premium-input { width: 100%; max-width: 100%; }
-            .premium-display .premium-info { flex-direction: column; align-items: flex-start; }
-        }
-        
-        @media (max-width: 480px) {
-            .payment-methods .method-btn { font-size: 0.7rem; padding: 4px 10px; }
-            .stats-2-cards { grid-template-columns: 1fr; }
-            .page-header .page-title { font-size: 1.1rem; }
-            .page-header .page-subtitle { font-size: 0.8rem; }
-            .page-header .stat-chip { font-size: 0.6rem; padding: 2px 10px; }
-        }
-        
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 20px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            transition: all 0.3s ease;
-        }
+        .card-blue-dark { background: linear-gradient(135deg, #0A4CA8, #083A80); }
+        .card-blue-light { background: linear-gradient(135deg, #1E88E5, #1565C0); }
+        .card-sky { background: linear-gradient(135deg, #0288D1, #01579B); }
+        
+        .sale-form-card { background: var(--bg-card); border-radius: 16px; padding: 28px 32px; border: 2px solid var(--border-color); margin-bottom: 20px; transition: all 0.3s; }
+        .sale-form-card:hover { border-color: var(--primary); box-shadow: 0 8px 30px rgba(0,0,0,0.12); }
+        .section-title { font-size: 0.85rem; font-weight: 700; color: var(--text-primary); padding-bottom: 10px; margin-bottom: 16px; border-bottom: 2px solid var(--border-color); display: flex; align-items: center; gap: 10px; }
+        .section-title i { color: var(--primary); font-size: 1.1rem; }
+        .section-title .badge-count { background: var(--primary); color: white; font-size: 0.6rem; padding: 1px 10px; border-radius: 12px; margin-left: auto; }
+        .form-label { font-size: 0.78rem; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; display: block; }
+        .form-label .required { color: var(--danger); margin-left: 2px; }
+        .form-control { width: 100%; padding: 10px 16px; border: 2px solid var(--border-color); border-radius: 10px; font-size: 0.88rem; outline: none; background: var(--bg-card); color: var(--text-primary); }
+        .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1); }
+        .form-row { margin-bottom: 16px; }
+        
+        .medicine-picker { position: relative; }
+        .medicine-picker .picker-trigger { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 10px 16px; border: 2px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-primary); font-size: 0.88rem; cursor: pointer; min-height: 44px; }
+        .medicine-picker .picker-trigger:hover { border-color: var(--primary); }
+        .medicine-picker .picker-trigger .picker-label { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); }
+        .medicine-picker .picker-trigger .picker-label.has-selection { color: var(--primary); font-weight: 600; }
+        .medicine-picker .picker-trigger .picker-arrow { transition: transform 0.3s; color: var(--text-secondary); }
+        .medicine-picker .picker-trigger.open .picker-arrow { transform: rotate(180deg); }
+        .medicine-picker .picker-dropdown { position: absolute; top: calc(100% + 6px); left: 0; right: 0; background: var(--bg-card); border: 2px solid var(--primary); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.2); z-index: 1000; display: none; max-height: 480px; overflow: hidden; flex-direction: column; }
+        .medicine-picker .picker-dropdown.show { display: flex; }
+        .medicine-picker .picker-search { padding: 12px 14px; border-bottom: 2px solid var(--border-color); background: var(--bg-body); position: relative; }
+        .medicine-picker .picker-search input { width: 100%; padding: 10px 14px 10px 38px; border: 2px solid var(--border-color); border-radius: 8px; font-size: 0.85rem; background: var(--bg-card); color: var(--text-primary); outline: none; }
+        .medicine-picker .picker-search input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12); }
+        .medicine-picker .picker-search .search-icon { position: absolute; left: 24px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
+        .medicine-picker .picker-search .clear-search { position: absolute; right: 24px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 1rem; cursor: pointer; padding: 4px 8px; border-radius: 50%; display: none; }
+        .medicine-picker .picker-search .clear-search.show { display: block; }
+        .medicine-picker .picker-actions { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border-color); background: var(--bg-body); flex-wrap: wrap; }
+        .medicine-picker .picker-actions .action-chip { font-size: 0.65rem; padding: 3px 12px; border-radius: 12px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; }
+        .medicine-picker .picker-actions .action-chip:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-light); }
+        .medicine-picker .picker-actions .selected-count { margin-left: auto; font-size: 0.7rem; font-weight: 700; color: var(--primary); background: var(--primary-light); padding: 3px 12px; border-radius: 12px; }
+        .medicine-picker .picker-list { overflow-y: auto; flex: 1; padding: 6px; min-height: 100px; max-height: 300px; }
+        .medicine-picker .picker-list::-webkit-scrollbar { width: 6px; }
+        .medicine-picker .picker-list::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+        .medicine-picker .med-option { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; margin-bottom: 3px; }
+        .medicine-picker .med-option:hover { background: var(--primary-light); border-color: var(--primary); }
+        .medicine-picker .med-option.selected { background: var(--primary-light); border-color: var(--primary); }
+        .medicine-picker .med-option.out-of-stock { opacity: 0.6; cursor: not-allowed; background: var(--danger-light); }
+        .medicine-picker .med-option .med-checkbox { width: 20px; height: 20px; border-radius: 6px; border: 2px solid var(--border-color); display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: var(--bg-card); }
+        .medicine-picker .med-option.selected .med-checkbox { background: var(--primary); border-color: var(--primary); }
+        .medicine-picker .med-option.selected .med-checkbox::after { content: '✓'; color: white; font-size: 12px; font-weight: 700; }
+        .medicine-picker .med-option .med-info { flex: 1; min-width: 0; }
+        .medicine-picker .med-option .med-name { font-size: 0.85rem; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .medicine-picker .med-option .med-meta { font-size: 0.68rem; color: var(--text-secondary); display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+        .medicine-picker .med-option .med-price { font-size: 0.85rem; font-weight: 700; color: var(--success); white-space: nowrap; font-family: 'Courier New', monospace; }
+        .stock-badge-pill { display: inline-flex; align-items: center; gap: 3px; font-size: 0.58rem; padding: 1px 8px; border-radius: 10px; font-weight: 700; }
+        .stock-badge-pill.ok { background: var(--success-light); color: var(--success); }
+        .stock-badge-pill.low { background: var(--warning-light); color: var(--warning); }
+        .stock-badge-pill.out { background: var(--danger-light); color: var(--danger); }
+        .picker-footer { padding: 10px 14px; border-top: 2px solid var(--border-color); background: var(--bg-body); display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+        .picker-footer .footer-info { font-size: 0.7rem; color: var(--text-secondary); }
+        .btn-add-selected { background: var(--primary); color: white; padding: 8px 20px; border-radius: 8px; font-weight: 700; font-size: 0.8rem; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+        .btn-add-selected:hover:not(:disabled) { background: var(--primary-dark); transform: translateY(-2px); }
+        .btn-add-selected:disabled { opacity: 0.4; cursor: not-allowed; }
+        .no-med-results { text-align: center; padding: 24px 16px; color: var(--text-secondary); }
+        .no-med-results i { font-size: 2rem; color: var(--border-color); display: block; margin-bottom: 8px; }
+        
+        .cart-container { border: 2px solid var(--border-color); border-radius: 12px; overflow: hidden; min-height: 80px; }
+        .cart-item { padding: 18px 20px; border-bottom: 2px solid var(--border-color); background: var(--bg-card); }
+        .cart-item:last-child { border-bottom: none; }
+        .cart-item:hover { background: var(--primary-light); }
+        .cart-item .item-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px dashed var(--border-color); }
+        .cart-item .item-header .item-info { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 1; }
+        .cart-item .item-header .item-name { font-weight: 700; font-size: 1rem; color: var(--primary); display: flex; align-items: center; gap: 8px; }
+        .cart-item .item-header .item-price-badge { font-size: 0.75rem; background: var(--success-light); color: var(--success); padding: 3px 12px; border-radius: 12px; font-weight: 700; font-family: 'Courier New', monospace; }
+        .cart-item .item-header .item-total { font-weight: 800; color: var(--success); font-size: 1.1rem; font-family: 'Courier New', monospace; background: var(--success-light); padding: 4px 14px; border-radius: 8px; }
+        .cart-item .item-header .btn-remove { background: var(--danger); color: white; border: none; border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 0.72rem; font-weight: 700; display: inline-flex; align-items: center; gap: 5px; }
+        .cart-item .item-header .btn-remove:hover { background: #B91C1C; transform: scale(1.05); }
+        
+        .cart-item .item-details-grid { display: grid; grid-template-columns: 110px 1fr 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+        @media (max-width: 1024px) { .cart-item .item-details-grid { grid-template-columns: 1fr 1fr; } }
+        @media (max-width: 640px) { .cart-item .item-details-grid { grid-template-columns: 1fr; } }
+        .cart-item .detail-field { display: flex; flex-direction: column; gap: 4px; }
+        .cart-item .detail-field label { font-size: 0.65rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; display: flex; align-items: center; gap: 4px; }
+        .cart-item .detail-field label i { color: var(--primary); font-size: 0.7rem; }
+        .cart-item .detail-field input, .cart-item .detail-field select { padding: 8px 12px; border: 2px solid var(--border-color); border-radius: 8px; font-size: 0.82rem; background: var(--bg-card); color: var(--text-primary); outline: none; width: 100%; height: 38px; }
+        .cart-item .detail-field input:focus, .cart-item .detail-field select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1); }
+        .cart-item .detail-field input.qty-input { text-align: center; font-weight: 700; font-size: 1rem; color: var(--primary); -moz-appearance: textfield; }
+        .cart-item .detail-field input.qty-input::-webkit-outer-spin-button,
+        .cart-item .detail-field input.qty-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        .cart-item .detail-field .select-with-manual { display: flex; gap: 4px; align-items: center; }
+        .cart-item .detail-field .select-with-manual select, .cart-item .detail-field .select-with-manual input { flex: 1; }
+        .cart-item .detail-field .btn-manual-toggle { background: var(--primary); color: white; border: none; border-radius: 8px; width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; font-size: 0.7rem; }
+        .cart-item .detail-field .manual-input { display: none; }
+        .cart-item .detail-field .manual-input.show { display: block; }
+        
+        .instructions-section { margin-top: 10px; padding-top: 12px; border-top: 1px dashed var(--border-color); }
+        .instructions-section .instr-label { font-size: 0.72rem; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-weight: 700; text-transform: uppercase; }
+        .instructions-section .instr-label i { color: var(--primary); }
+        .instructions-section .instr-textarea-wrapper textarea { width: 100%; padding: 10px 14px; border: 2px solid var(--border-color); border-radius: 10px; font-size: 0.85rem; background: var(--bg-card); color: var(--text-primary); outline: none; resize: vertical; min-height: 55px; max-height: 120px; line-height: 1.5; }
+        .instructions-section .instr-textarea-wrapper textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1); }
+        .instructions-section .instr-suggestions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+        .instructions-section .instr-suggestions .suggestion-btn { padding: 3px 12px; border: 1px solid var(--border-color); border-radius: 14px; font-size: 0.65rem; background: var(--bg-body); color: var(--text-secondary); cursor: pointer; }
+        .instructions-section .instr-suggestions .suggestion-btn:hover { background: var(--primary); color: white; border-color: var(--primary); }
+        .instructions-section .instr-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+        .instructions-section .instr-tags .instr-tag { background: var(--primary-light); color: var(--primary); padding: 2px 10px; border-radius: 12px; font-size: 0.7rem; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--primary); }
+        .instructions-section .instr-tags .instr-tag .remove-instr { cursor: pointer; font-size: 0.7rem; color: var(--danger); font-weight: 700; }
+        
+        .empty-cart { text-align: center; padding: 40px 20px; color: var(--text-secondary); }
+        .empty-cart i { font-size: 3rem; color: var(--border-color); display: block; margin-bottom: 12px; }
+        
+        .discount-section, .premium-section { background: var(--bg-body); border-radius: 12px; padding: 18px 22px; border: 2px solid var(--border-color); margin-top: 16px; }
+        .discount-section:hover { border-color: var(--gold); }
+        .premium-section:hover { border-color: var(--purple); }
+        .discount-section .discount-row, .premium-section .premium-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+        .discount-section .discount-label, .premium-section .premium-label { font-weight: 700; color: var(--text-secondary); font-size: 0.9rem; display: flex; align-items: center; gap: 8px; min-width: 120px; }
+        .discount-section .discount-label i { color: var(--gold); font-size: 1.1rem; }
+        .premium-section .premium-label i { color: var(--purple); font-size: 1.1rem; }
+        .discount-section .discount-input-group, .premium-section .premium-input-group { display: flex; align-items: center; gap: 8px; flex: 1; flex-wrap: wrap; }
+        .discount-section .discount-input-group .discount-input, .premium-section .premium-input-group .premium-input { width: 250px; max-width: 350px; padding: 10px 16px; font-size: 1.2rem; font-weight: 700; text-align: right; border: 2px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-primary); outline: none; font-family: 'Courier New', monospace; }
+        .discount-section .discount-input-group .discount-input:focus { border-color: var(--gold); }
+        .premium-section .premium-input-group .premium-input:focus { border-color: var(--purple); }
+        .btn-apply-discount { background: var(--gold); color: white; padding: 10px 24px; border-radius: 10px; font-weight: 700; font-size: 0.85rem; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+        .btn-remove-discount, .btn-remove-premium { background: var(--danger); color: white; padding: 10px 18px; border-radius: 10px; font-weight: 700; font-size: 0.85rem; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+        .btn-add-premium { background: linear-gradient(135deg, #0B5ED7, #0A3D8A); color: white; padding: 10px 24px; border-radius: 10px; font-weight: 700; font-size: 0.85rem; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+        
+        .discount-display { display: flex; flex-wrap: wrap; align-items: center; gap: 20px; margin-top: 14px; padding-top: 14px; border-top: 2px dashed var(--border-color); }
+        .discount-display .info-item { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; background: var(--bg-card); padding: 6px 16px; border-radius: 8px; border: 1px solid var(--border-color); }
+        .discount-display .info-item .label { color: var(--text-secondary); font-weight: 500; }
+        .discount-display .info-item .value { font-weight: 700; color: var(--text-primary); font-family: 'Courier New', monospace; font-size: 1rem; }
+        .discount-display .info-item .value.grand-total { color: var(--success); font-size: 1.15rem; font-weight: 800; }
+        
+        .premium-display { display: none; margin-top: 10px; padding-top: 10px; border-top: 2px dashed var(--border-color); }
+        .premium-display .premium-info { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+        
+        .payment-options { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; }
+        .payment-option-card { flex: 1; min-width: 200px; padding: 16px 20px; border: 2px solid var(--border-color); border-radius: 12px; cursor: pointer; background: var(--bg-card); display: flex; align-items: center; gap: 14px; }
+        .payment-option-card:hover { border-color: var(--primary); transform: translateY(-2px); }
+        .payment-option-card.active { border-color: var(--primary); background: var(--primary-light); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1); }
+        .payment-option-card .option-icon { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink: 0; }
+        .payment-option-card .option-icon.cashier { background: var(--sky-light); color: var(--sky); }
+        .payment-option-card .option-icon.self { background: var(--success-light); color: var(--success); }
+        .payment-option-card .option-content h4 { font-size: 0.9rem; font-weight: 700; margin: 0; }
+        .payment-option-card .option-content p { font-size: 0.7rem; color: var(--text-secondary); margin: 2px 0 0 0; }
+        .payment-option-card .option-radio { margin-left: auto; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--border-color); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .payment-option-card.active .option-radio { border-color: var(--primary); background: var(--primary); }
+        .payment-option-card.active .option-radio::after { content: '✓'; color: white; font-size: 12px; font-weight: 700; }
+        
+        .payment-methods { display: flex; gap: 8px; flex-wrap: wrap; }
+        .payment-methods .method-btn { padding: 8px 18px; border: 2px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-secondary); cursor: pointer; font-weight: 500; font-size: 0.82rem; display: flex; align-items: center; gap: 6px; }
+        .payment-methods .method-btn:hover { border-color: var(--primary); color: var(--primary); }
+        .payment-methods .method-btn.active { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
+        
+        .action-buttons { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 2px solid var(--border-color); }
+        .btn-complete-sale { padding: 12px 36px; border-radius: 12px; font-weight: 700; font-size: 1rem; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 10px; color: white; }
+        .btn-complete-sale:hover:not(:disabled) { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,0,0,0.3); }
+        .btn-complete-sale:disabled { opacity: 0.4; cursor: not-allowed; }
+        .btn-complete-sale.cashier-mode { background: linear-gradient(135deg, #0B5ED7, #0A3D8A); }
+        .btn-complete-sale.self-mode { background: linear-gradient(135deg, #059669, #047857); }
+        .btn-clear-cart { background: var(--danger); color: white; padding: 12px 24px; border-radius: 12px; font-weight: 600; font-size: 0.9rem; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+        .btn-outline { background: transparent; color: var(--text-secondary); border: 2px solid var(--border-color); padding: 10px 24px; border-radius: 12px; font-weight: 600; font-size: 0.9rem; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
+        .btn-outline:hover { border-color: var(--primary); color: var(--primary); }
+        
+        .message-box { padding: 14px 20px; border-radius: 12px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; font-weight: 500; animation: slideDown 0.4s ease; }
+        @keyframes slideDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
+        .message-box.success { background: var(--success-light); color: #065F46; border: 2px solid #6EE7B7; }
+        .message-box.error { background: var(--danger-light); color: #991B1B; border: 2px solid #FCA5A5; }
+        .message-box .message-close { margin-left: auto; cursor: pointer; font-size: 1.2rem; opacity: 0.6; }
+        
+        .footer { padding: 14px 0; border-top: 2px solid var(--border-color); margin-top: 20px; text-align: center; font-size: 0.7rem; color: var(--text-secondary); }
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 14px 20px;
-            border-radius: 12px;
-            z-index: 999;
-            max-width: 400px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: white;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
-        }
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
+        .toast-custom { position: fixed; bottom: 24px; right: 24px; padding: 14px 20px; border-radius: 12px; z-index: 999; max-width: 400px; transform: translateY(100px); opacity: 0; transition: all 0.4s; display: flex; align-items: center; gap: 12px; color: white; box-shadow: 0 10px 40px rgba(0,0,0,0.15); }
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
         .toast-custom.success { background: var(--success); }
         .toast-custom.error { background: var(--danger); }
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ✅ Stock status badges */
-        .stock-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            font-size: 0.55rem;
-            padding: 2px 10px;
-            border-radius: 12px;
-            font-weight: 600;
+        @media (max-width: 1024px) { .main-content { margin-left: 0; padding: 16px; } }
+        @media (max-width: 768px) {
+            .stats-2-cards { grid-template-columns: 1fr; }
+            .action-buttons { flex-direction: column; }
+            .action-buttons .btn-complete-sale, .action-buttons .btn-clear-cart, .action-buttons .btn-outline { width: 100%; justify-content: center; }
+            .payment-options { flex-direction: column; }
         }
-        .stock-badge.success { background: var(--success-light); color: var(--success); }
-        .stock-badge.warning { background: var(--warning-light); color: var(--warning); }
-        .stock-badge.danger { background: var(--danger-light); color: var(--danger); }
     </style>
 </head>
 <body>
 
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
+    <!-- ✅ PAGE HEADER - BLUE THEME -->
     <div class="page-header">
         <div>
-            <h1 class="page-title">
-                <i class="fas fa-plus-circle"></i>
-                New OTC Sale
-            </h1>
+            <h1 class="page-title"><i class="fas fa-plus-circle"></i> New OTC Sale</h1>
             <p class="page-subtitle">
                 Sell medicines over-the-counter
                 <strong><?= htmlspecialchars($user_branch_name) ?></strong>
-                <span class="stat-chip">
-                    <i class="fas fa-pills"></i> <?= count($medicines_list) ?> medicines
+                <span class="stat-chip"><i class="fas fa-pills"></i> <?= count($medicines_list) ?> medicines</span>
+                <span class="stat-chip"><i class="fas fa-cash-register"></i> 2 Payment Options</span>
+                <span class="stat-chip" style="background:rgba(251,191,36,0.2);color:#FCD34D;">
+                    <i class="fas fa-boxes"></i> Stock: <span id="stockModeDisplay">Reserve/Held</span>
                 </span>
-                <span class="stat-chip">
-                    <i class="fas fa-cash-register"></i> 2 Payment Options
-                </span>
-                <span class="stat-chip" style="background:rgba(255,255,255,0.2);">
-                    <i class="fas fa-user-slash"></i> No Patient Registration
-                </span>
-                <span class="stat-chip" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.2);color:#FCD34D;">
-                    <i class="fas fa-boxes"></i> Stock Deduction: <span id="stockModeDisplay">Reserve/Held</span>
-                </span>
-                <span class="stat-chip" style="background:rgba(124,58,237,0.2);border-color:rgba(124,58,237,0.2);color:#C084FC;">
+                <span class="stat-chip" style="background:rgba(255,255,255,0.15);color:white;">
                     <i class="fas fa-star"></i> Premium: Optional
                 </span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="otc_history.php" class="btn-outline-light">
-                <i class="fas fa-history"></i> History
-            </a>
-            <a href="dashboard.php" class="btn-outline-light">
-                <i class="fas fa-arrow-left"></i> Back
-            </a>
+            <a href="otc_history.php" class="btn-outline-light"><i class="fas fa-history"></i> History</a>
+            <a href="dashboard.php" class="btn-outline-light"><i class="fas fa-arrow-left"></i> Back</a>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- MESSAGE WITH AUTO-DISMISS -->
-    <!-- ================================================================ -->
     <?php if ($message): ?>
         <div class="message-box <?= $message_type ?>" id="messageBox">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
             <?= htmlspecialchars($message) ?>
-            <span class="message-timer">(auto-dismiss in 5s)</span>
             <span class="message-close" onclick="dismissMessage()">&times;</span>
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- 2 STATS CARDS -->
-    <!-- ================================================================ -->
+    <!-- ✅ STATS - BLUE THEME -->
     <div class="stats-2-cards">
         <div class="stat-card-2 card-blue">
             <div class="stat-icon"><i class="fas fa-pills"></i></div>
-            <div class="stat-content">
+            <div>
                 <p class="stat-label">Medicines in Stock</p>
-                <p class="stat-number"><?= count($medicines_list) ?></p>
+                <p class="stat-number"><?= count(array_filter($medicines_list, function($m) { return $m['is_available']; })) ?></p>
             </div>
         </div>
-        <div class="stat-card-2 card-orange">
+        <div class="stat-card-2 card-blue-light">
             <div class="stat-icon"><i class="fas fa-exclamation-triangle"></i></div>
-            <div class="stat-content">
+            <div>
                 <p class="stat-label">Low Stock Alerts</p>
                 <p class="stat-number"><?= $low_stock_count ?></p>
             </div>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- OTC SALE FORM -->
-    <!-- ================================================================ -->
     <div class="sale-form-card">
         <form method="POST" action="" id="otcSaleForm">
             <input type="hidden" name="action" value="complete_sale">
@@ -1981,73 +755,110 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <input type="hidden" name="premium_amount" id="premiumAmountHidden" value="0">
             <input type="hidden" name="premium_note" id="premiumNoteHidden" value="">
             
-            <!-- Customer Information -->
             <div class="section-title">
-                <i class="fas fa-user"></i>
-                Customer Information
+                <i class="fas fa-user"></i> Customer Information
                 <span class="badge-count" style="background:var(--warning);">OTC Only</span>
             </div>
             
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div class="form-row">
                     <label class="form-label">Customer Name <span class="required">*</span></label>
-                    <input type="text" name="customer_name" class="form-control" 
-                           placeholder="Walk-in Customer" value="Walk-in Customer" required>
+                    <input type="text" name="customer_name" class="form-control" value="Walk-in Customer" required>
                 </div>
                 <div class="form-row">
                     <label class="form-label">Phone Number</label>
-                    <input type="tel" name="customer_phone" class="form-control" 
-                           placeholder="e.g. 0759 154 160">
+                    <input type="tel" name="customer_phone" class="form-control" placeholder="e.g. 0759 154 160">
                 </div>
             </div>
             
-            <!-- Add Medicine Section -->
             <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
                 <div class="section-title">
-                    <i class="fas fa-pills"></i>
-                    Add Medicine
+                    <i class="fas fa-pills"></i> Add Medicine
                     <span class="badge-count"><?= count($medicines_list) ?> available</span>
                 </div>
                 
-                <div class="medicine-select-row">
-                    <div class="form-group">
-                        <label class="form-label">Select Medicine <span class="required">*</span></label>
-                        <select id="medicineSelect" class="form-control">
-                            <option value="">-- Select Medicine --</option>
+                <div class="medicine-picker" id="medicinePicker">
+                    <div class="picker-trigger" id="pickerTrigger" onclick="toggleMedicinePicker()">
+                        <div class="picker-label" id="pickerLabel">
+                            <i class="fas fa-search"></i>
+                            <span id="pickerLabelText">Click to select medicine(s)...</span>
+                        </div>
+                        <i class="fas fa-chevron-down picker-arrow"></i>
+                    </div>
+                    
+                    <div class="picker-dropdown" id="pickerDropdown">
+                        <div class="picker-search">
+                            <i class="fas fa-search search-icon"></i>
+                            <input type="text" id="medSearchInput" placeholder="Search medicine..." autocomplete="off" oninput="filterMedicineList(this.value)">
+                            <span class="clear-search" id="clearSearchBtn" onclick="clearSearch()">&times;</span>
+                        </div>
+                        
+                        <div class="picker-actions">
+                            <button type="button" class="action-chip" onclick="selectAllAvailable()"><i class="fas fa-check-double"></i> Select All Available</button>
+                            <button type="button" class="action-chip" onclick="clearAllSelected()"><i class="fas fa-times"></i> Clear Selection</button>
+                            <button type="button" class="action-chip" onclick="showOnlyAvailable()"><i class="fas fa-filter"></i> Available Only</button>
+                            <button type="button" class="action-chip" onclick="showAllMedicines()"><i class="fas fa-list"></i> Show All</button>
+                            <span class="selected-count" id="selectedCount">0 selected</span>
+                        </div>
+                        
+                        <div class="picker-list" id="pickerList">
                             <?php foreach ($medicines_list as $med): ?>
-                                <option value="<?= htmlspecialchars($med['name']) ?>" 
-                                        data-name="<?= htmlspecialchars($med['name']) ?>"
-                                        data-total-stock="<?= $med['total_qty'] ?>"
-                                        data-price="<?= $med['price'] ?>">
-                                    <?= htmlspecialchars($med['name']) ?> 
-                                    (Stock: <?= $med['total_qty'] ?>) 
-                                    - TSh <?= number_format($med['price'] ?? 0) ?>
-                                </option>
+                                <?php
+                                    $is_available = $med['is_available'];
+                                    $stock_class = 'out'; $stock_text = 'Out of Stock';
+                                    if ($is_available) {
+                                        if ($med['total_qty'] <= 10) { $stock_class = 'low'; $stock_text = 'Low: ' . $med['total_qty']; }
+                                        else { $stock_class = 'ok'; $stock_text = 'In Stock: ' . $med['total_qty']; }
+                                    }
+                                    $search_text = strtolower($med['name'] . ' ' . ($med['batch_number'] ?? '') . ' ' . ($med['price'] ?? ''));
+                                ?>
+                                <div class="med-option <?= $is_available ? '' : 'out-of-stock' ?>" 
+                                     data-med-id="<?= $med['id'] ?>"
+                                     data-med-name="<?= htmlspecialchars($med['name']) ?>"
+                                     data-med-price="<?= $med['price'] ?>"
+                                     data-med-stock="<?= $med['total_qty'] ?>"
+                                     data-med-available="<?= $is_available ? '1' : '0' ?>"
+                                     data-search-text="<?= htmlspecialchars($search_text) ?>"
+                                     onclick="toggleMedicineSelection(this)">
+                                    <div class="med-checkbox"></div>
+                                    <div class="med-info">
+                                        <div class="med-name">
+                                            <?= htmlspecialchars($med['name']) ?>
+                                            <span class="stock-badge-pill <?= $stock_class ?>">
+                                                <i class="fas <?= $stock_class === 'ok' ? 'fa-check-circle' : ($stock_class === 'low' ? 'fa-exclamation-triangle' : 'fa-times-circle') ?>"></i>
+                                                <?= $stock_text ?>
+                                            </span>
+                                        </div>
+                                        <div class="med-meta">
+                                            <span><i class="fas fa-tag"></i> <?= htmlspecialchars($med['batch_number'] ?: 'No batch') ?></span>
+                                            <?php if ($med['expiry_date'] && $med['expiry_date'] !== '0000-00-00'): ?>
+                                                <span><i class="fas fa-calendar"></i> Exp: <?= date('d/m/Y', strtotime($med['expiry_date'])) ?></span>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                    <div class="med-price">TSh <?= number_format($med['price'] ?? 0) ?></div>
+                                </div>
                             <?php endforeach; ?>
-                        </select>
+                            
+                            <div class="no-med-results" id="noMedResults" style="display:none;">
+                                <i class="fas fa-search-minus"></i>
+                                <p style="font-size:0.85rem;font-weight:600;">No medicines match your search</p>
+                            </div>
+                        </div>
+                        
+                        <div class="picker-footer">
+                            <div class="footer-info"><i class="fas fa-info-circle"></i> <span id="footerInfoText">Select medicines and click "Add Selected"</span></div>
+                            <button type="button" class="btn-add-selected" id="addSelectedBtn" onclick="addSelectedToCart()" disabled>
+                                <i class="fas fa-cart-plus"></i> Add Selected to Cart
+                            </button>
+                        </div>
                     </div>
-                    
-                    <div class="form-group qty-group">
-                        <label class="form-label">Qty <span class="required">*</span></label>
-                        <input type="number" id="medicineQty" class="form-control" value="1" min="1">
-                    </div>
-                    
-                    <div class="form-group price-group">
-                        <label class="form-label">Price (TSh)</label>
-                        <input type="number" id="medicinePrice" class="form-control" value="0" step="100" readonly>
-                    </div>
-                    
-                    <button type="button" onclick="addToCart()" class="btn-add-medicine">
-                        <i class="fas fa-plus"></i> Add to Cart
-                    </button>
                 </div>
             </div>
             
-            <!-- Cart Items -->
             <div class="mt-4">
                 <div class="section-title">
-                    <i class="fas fa-shopping-cart"></i>
-                    Cart
+                    <i class="fas fa-shopping-cart"></i> Cart
                     <span class="badge-count" id="cartCount">0 items</span>
                 </div>
                 
@@ -2055,48 +866,28 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                     <div class="empty-cart" id="emptyCart">
                         <i class="fas fa-shopping-cart"></i>
                         <p>No items added yet</p>
-                        <p class="sub-text">Select a medicine and click "Add to Cart"</p>
                     </div>
                     <div id="cartItems" style="display:none;"></div>
                 </div>
             </div>
             
-            <!-- Discount Section -->
             <div class="discount-section">
                 <div class="discount-row">
-                    <span class="discount-label">
-                        <i class="fas fa-tags"></i> Discount (TSh)
-                    </span>
+                    <span class="discount-label"><i class="fas fa-tags"></i> Discount (TSh)</span>
                     <div class="discount-input-group">
-                        <span class="currency-prefix" style="font-weight:700;color:var(--text-secondary);font-size:1rem;font-family:'Courier New',monospace;">TSh</span>
-                        <input type="text" id="discountAmountInput" class="form-control discount-input" 
-                               placeholder="0" value="0"
-                               oninput="formatMoneyInput(this)" 
-                               onfocus="this.select()"
-                               autocomplete="off">
-                        <button type="button" class="btn-apply-discount" onclick="applyDiscount()">
-                            <i class="fas fa-check"></i> Apply
-                        </button>
-                        <button type="button" class="btn-remove-discount" onclick="removeDiscount()">
-                            <i class="fas fa-times"></i> Remove
-                        </button>
+                        <span style="font-weight:700;color:var(--text-secondary);font-size:1rem;font-family:'Courier New',monospace;">TSh</span>
+                        <input type="text" id="discountAmountInput" class="form-control discount-input" placeholder="0" value="0" oninput="formatMoneyInput(this)" onfocus="this.select()">
+                        <button type="button" class="btn-apply-discount" onclick="applyDiscount()"><i class="fas fa-check"></i> Apply</button>
+                        <button type="button" class="btn-remove-discount" onclick="removeDiscount()"><i class="fas fa-times"></i> Remove</button>
                     </div>
                 </div>
                 
-                <div class="discount-display" id="discountDisplay">
-                    <div class="info-item">
-                        <span class="label">Subtotal:</span>
-                        <span class="value subtotal-value" id="displaySubtotal">TSh 0</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="label">Discount:</span>
-                        <span class="value discount-value" id="displayDiscount">TSh 0</span>
-                    </div>
-                    <div class="info-item" style="border-color: var(--purple); background: var(--purple-light);">
-                        <span class="label" style="font-weight:700; color:var(--purple);">
-                            <i class="fas fa-star"></i> Premium:
-                        </span>
-                        <span class="value" id="displayPremium" style="color:var(--purple); font-weight:700; font-family:'Courier New',monospace;">TSh 0</span>
+                <div class="discount-display">
+                    <div class="info-item"><span class="label">Subtotal:</span> <span class="value" id="displaySubtotal">TSh 0</span></div>
+                    <div class="info-item"><span class="label">Discount:</span> <span class="value" id="displayDiscount">TSh 0</span></div>
+                    <div class="info-item" style="border-color: var(--primary); background: var(--primary-light);">
+                        <span class="label" style="color:var(--primary);font-weight:700;"><i class="fas fa-star"></i> Premium:</span>
+                        <span class="value" id="displayPremium" style="color:var(--primary);font-weight:700;">TSh 0</span>
                     </div>
                     <div class="info-item" style="border-color: var(--success); background: var(--success-light);">
                         <span class="label" style="font-weight:700;">Grand Total:</span>
@@ -2105,298 +896,317 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 </div>
             </div>
             
-            <!-- ================================================================ -->
-            <!-- PREMIUM SECTION - NEW -->
-            <!-- ================================================================ -->
             <div class="premium-section">
                 <div class="premium-row">
                     <span class="premium-label">
-                        <i class="fas fa-plus-circle"></i>
-                        Premium / Extra Bill
-                        <span style="font-size:0.55rem; background:var(--purple-light); color:var(--purple); padding:1px 10px; border-radius:10px; font-weight:600;">Optional</span>
+                        <i class="fas fa-plus-circle"></i> Premium / Extra Bill
+                        <span style="font-size:0.55rem; background:var(--primary-light); color:var(--primary); padding:1px 10px; border-radius:10px; font-weight:600;">Optional</span>
                     </span>
                     <div class="premium-input-group">
-                        <span class="currency-prefix" style="font-weight:700;color:var(--text-secondary);font-size:1rem;font-family:'Courier New',monospace;">TSh</span>
-                        <input type="text" id="premiumAmountInput" class="form-control premium-input" 
-                               placeholder="0" value="0"
-                               oninput="formatMoneyInput(this)" 
-                               onfocus="this.select()"
-                               autocomplete="off">
+                        <span style="font-weight:700;color:var(--text-secondary);font-size:1rem;font-family:'Courier New',monospace;">TSh</span>
+                        <input type="text" id="premiumAmountInput" class="form-control premium-input" placeholder="0" value="0" oninput="formatMoneyInput(this)" onfocus="this.select()">
                     </div>
-                    <button type="button" class="btn-add-premium" onclick="applyPremium()">
-                        <i class="fas fa-plus"></i> Add Premium
-                    </button>
-                    <button type="button" class="btn-remove-premium" onclick="removePremium()">
-                        <i class="fas fa-times"></i> Remove
-                    </button>
+                    <button type="button" class="btn-add-premium" onclick="applyPremium()"><i class="fas fa-plus"></i> Add Premium</button>
+                    <button type="button" class="btn-remove-premium" onclick="removePremium()"><i class="fas fa-times"></i> Remove</button>
                 </div>
                 
-                <!-- Premium Note -->
                 <div style="margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;">
-                    <span style="font-size:0.75rem; color:var(--text-secondary); font-weight:500; min-width:100px;">
-                        <i class="fas fa-pen"></i> Note:
-                    </span>
-                    <input type="text" id="premiumNoteInput" class="form-control" 
-                           placeholder="e.g. Premium consultation, Extra service, Lab fees..."
-                           style="flex:1; min-width:200px; padding: 8px 14px; border: 2px solid var(--border-color); border-radius: 8px; font-size:0.85rem; background: var(--bg-card); color: var(--text-primary); outline: none; transition: all 0.3s ease;">
+                    <span style="font-size:0.75rem; color:var(--text-secondary); font-weight:500; min-width:100px;"><i class="fas fa-pen"></i> Note:</span>
+                    <input type="text" id="premiumNoteInput" class="form-control" placeholder="e.g. Premium consultation, Extra service..." style="flex:1; min-width:200px; padding: 8px 14px; border: 2px solid var(--border-color); border-radius: 8px; font-size:0.85rem; background: var(--bg-card); color: var(--text-primary); outline: none;">
                 </div>
                 
-                <!-- Premium Display -->
                 <div class="premium-display" id="premiumDisplay">
                     <div class="premium-info">
-                        <span class="premium-label-display">
-                            <i class="fas fa-star"></i> Premium Added:
-                        </span>
-                        <span class="premium-amount" id="premiumDisplayAmount">TSh 0</span>
-                        <span class="premium-note-display" id="premiumDisplayNote"></span>
-                        <button type="button" class="btn-remove-premium-small" onclick="removePremium()">
-                            <i class="fas fa-times-circle"></i> Remove
-                        </button>
+                        <span style="font-size:0.8rem; font-weight:600; color:var(--primary);"><i class="fas fa-star"></i> Premium Added:</span>
+                        <span style="font-weight:700; color:var(--primary); font-size:1.1rem; font-family:'Courier New',monospace;" id="premiumDisplayAmount">TSh 0</span>
+                        <span style="font-size:0.75rem; color:var(--text-secondary); background:var(--bg-body); padding:2px 12px; border-radius:6px;" id="premiumDisplayNote"></span>
+                        <button type="button" style="background:transparent;border:none;color:var(--danger);cursor:pointer;font-size:0.8rem;font-weight:600;" onclick="removePremium()"><i class="fas fa-times-circle"></i> Remove</button>
                     </div>
                 </div>
             </div>
             
-            <!-- ================================================================ -->
-            <!-- PAYMENT OPTIONS -->
-            <!-- ================================================================ -->
             <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-                <div class="section-title">
-                    <i class="fas fa-credit-card"></i>
-                    Payment Option
-                    <span class="badge-count">Choose</span>
-                </div>
+                <div class="section-title"><i class="fas fa-credit-card"></i> Payment Option <span class="badge-count">Choose</span></div>
                 
                 <div class="payment-options">
-                    <!-- Option 1: Send to Cashier - RESERVES STOCK -->
                     <div class="payment-option-card active" data-option="cashier" onclick="selectPaymentOption('cashier')">
-                        <div class="option-icon cashier">
-                            <i class="fas fa-cash-register"></i>
-                        </div>
+                        <div class="option-icon cashier"><i class="fas fa-cash-register"></i></div>
                         <div class="option-content">
                             <h4>Send to Cashier</h4>
                             <p>Bill sent to Cashier for payment</p>
-                            <p style="font-size:0.6rem;color:var(--warning);margin-top:2px;">
-                                <i class="fas fa-info-circle"></i> Stock reserved until payment
-                            </p>
+                            <p style="font-size:0.6rem;color:var(--warning);margin-top:2px;"><i class="fas fa-info-circle"></i> Stock reserved until payment</p>
                         </div>
                         <div class="option-radio"></div>
                     </div>
                     
-                    <!-- Option 2: Pay Now (Self) - DEDUCTS STOCK -->
                     <div class="payment-option-card" data-option="self" onclick="selectPaymentOption('self')">
-                        <div class="option-icon self">
-                            <i class="fas fa-hand-holding-usd"></i>
-                        </div>
+                        <div class="option-icon self"><i class="fas fa-hand-holding-usd"></i></div>
                         <div class="option-content">
                             <h4>Pay Now (Self)</h4>
                             <p>Pharmacy collects payment immediately</p>
-                            <p style="font-size:0.6rem;color:var(--success);margin-top:2px;">
-                                <i class="fas fa-check-circle"></i> Stock deducted instantly
-                            </p>
+                            <p style="font-size:0.6rem;color:var(--success);margin-top:2px;"><i class="fas fa-check-circle"></i> Stock deducted instantly</p>
                         </div>
                         <div class="option-radio"></div>
                     </div>
                 </div>
             </div>
             
-            <!-- Payment Method -->
-            <div class="mt-3" id="paymentMethodSection">
+            <div class="mt-3">
                 <div class="section-title" style="border-bottom: none; padding-bottom: 4px; margin-bottom: 8px;">
-                    <i class="fas fa-money-bill-wave"></i>
-                    Payment Method
-                    <span class="badge-count" style="background:var(--success);">Optional</span>
+                    <i class="fas fa-money-bill-wave"></i> Payment Method <span class="badge-count" style="background:var(--success);">Optional</span>
                 </div>
                 
                 <div class="payment-methods">
-                    <button type="button" class="method-btn active" data-method="cash" onclick="selectPaymentMethod('cash')">
-                        <i class="fas fa-money-bill-wave"></i> Cash
-                    </button>
-                    <button type="button" class="method-btn" data-method="m-pesa" onclick="selectPaymentMethod('m-pesa')">
-                        <i class="fas fa-mobile-alt"></i> M-Pesa
-                    </button>
-                    <button type="button" class="method-btn" data-method="airtel_money" onclick="selectPaymentMethod('airtel_money')">
-                        <i class="fas fa-mobile-alt"></i> Airtel Money
-                    </button>
-                    <button type="button" class="method-btn" data-method="tigo_pesa" onclick="selectPaymentMethod('tigo_pesa')">
-                        <i class="fas fa-mobile-alt"></i> Tigo Pesa
-                    </button>
-                    <button type="button" class="method-btn" data-method="halopesa" onclick="selectPaymentMethod('halopesa')">
-                        <i class="fas fa-mobile-alt"></i> Halopesa
-                    </button>
-                    <button type="button" class="method-btn" data-method="bank" onclick="selectPaymentMethod('bank')">
-                        <i class="fas fa-university"></i> Bank
-                    </button>
-                    <button type="button" class="method-btn" data-method="card" onclick="selectPaymentMethod('card')">
-                        <i class="fas fa-credit-card"></i> Card
-                    </button>
+                    <button type="button" class="method-btn active" data-method="cash" onclick="selectPaymentMethod('cash')"><i class="fas fa-money-bill-wave"></i> Cash</button>
+                    <button type="button" class="method-btn" data-method="m-pesa" onclick="selectPaymentMethod('m-pesa')"><i class="fas fa-mobile-alt"></i> M-Pesa</button>
+                    <button type="button" class="method-btn" data-method="airtel_money" onclick="selectPaymentMethod('airtel_money')"><i class="fas fa-mobile-alt"></i> Airtel Money</button>
+                    <button type="button" class="method-btn" data-method="tigo_pesa" onclick="selectPaymentMethod('tigo_pesa')"><i class="fas fa-mobile-alt"></i> Tigo Pesa</button>
+                    <button type="button" class="method-btn" data-method="halopesa" onclick="selectPaymentMethod('halopesa')"><i class="fas fa-mobile-alt"></i> Halopesa</button>
+                    <button type="button" class="method-btn" data-method="bank" onclick="selectPaymentMethod('bank')"><i class="fas fa-university"></i> Bank</button>
+                    <button type="button" class="method-btn" data-method="card" onclick="selectPaymentMethod('card')"><i class="fas fa-credit-card"></i> Card</button>
                 </div>
                 <input type="hidden" name="payment_method" id="selectedPaymentMethod" value="cash">
-                <p class="text-xs text-gray-400 mt-2">
-                    <i class="fas fa-info-circle"></i> Payment method is used when "Pay Now (Self)" is selected
-                </p>
             </div>
             
-            <!-- Action Buttons -->
             <div class="action-buttons">
                 <button type="submit" class="btn-complete-sale cashier-mode" id="completeSaleBtn" disabled>
                     <i class="fas fa-receipt"></i> Send to Cashier (Reserve Stock)
                 </button>
-                <button type="button" class="btn-clear-cart" onclick="clearCart()">
-                    <i class="fas fa-trash"></i> Clear Cart
-                </button>
-                <a href="dashboard.php" class="btn-outline">
-                    <i class="fas fa-times"></i> Cancel
-                </a>
+                <button type="button" class="btn-clear-cart" onclick="clearCart()"><i class="fas fa-trash"></i> Clear Cart</button>
+                <a href="dashboard.php" class="btn-outline"><i class="fas fa-times"></i> Cancel</a>
             </div>
-            
         </form>
     </div>
 
-    <!-- Footer -->
-    <footer class="footer mt-5">
+    <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
-            New OTC Sale
-            <span class="text-gray-300 mx-2">|</span>
-            <span style="color:var(--purple);font-size:0.6rem;">
-                <i class="fas fa-star"></i> Premium: Optional
-            </span>
-            <span class="text-gray-300 mx-2">|</span>
-            <span style="color:var(--warning);font-size:0.6rem;">
-                <i class="fas fa-boxes"></i> Stock: 
-                <span id="stockStatusDisplay">Reserve/Hold</span>
-            </span>
-            <span class="text-gray-300 mx-2">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
+            <span>|</span> New OTC Sale
+            <span>|</span>
+            <span style="color:var(--primary);font-size:0.6rem;"><i class="fas fa-star"></i> Premium: Optional</span>
+            <span>|</span>
+            <span style="color:var(--warning);font-size:0.6rem;"><i class="fas fa-boxes"></i> Stock: <span id="stockStatusDisplay">Reserve/Hold</span></span>
+            <span>|</span> &copy; <?= date('Y') ?>
         </p>
     </footer>
 
 </main>
 
-<!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle"></i>
     <div>
-        <p id="toastTitle">Notification</p>
-        <p id="toastMessage"></p>
+        <p id="toastTitle" style="font-weight:700;">Notification</p>
+        <p id="toastMessage" style="font-size:0.85rem;"></p>
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
-    // ================================================================
-    // MONEY FORMAT
-    // ================================================================
     function formatMoneyInput(input) {
-        var raw = input.value.replace(/,/g, '');
-        raw = raw.replace(/[^0-9.]/g, '');
-        
-        if (raw === '' || raw === '.') {
-            input.value = '0';
-            return;
-        }
-        
+        var raw = input.value.replace(/,/g, '').replace(/[^0-9.]/g, '');
+        if (raw === '' || raw === '.') { input.value = '0'; return; }
         var num = parseFloat(raw);
-        if (isNaN(num)) {
-            input.value = '0';
-            return;
-        }
-        
-        var formatted = num.toLocaleString('en-US', {
-            minimumFractionDigits: 0,
-            maximumFractionDigits: 0
-        });
-        
-        input.value = formatted;
+        if (isNaN(num)) { input.value = '0'; return; }
+        input.value = num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
     }
     
     function getRawNumber(value) {
-        return parseFloat(value.replace(/,/g, '')) || 0;
+        return parseFloat(String(value).replace(/,/g, '')) || 0;
     }
 
-    // ================================================================
-    // AUTO-DISMISS MESSAGES
-    // ================================================================
     function dismissMessage() {
-        var messageBox = document.getElementById('messageBox');
-        if (messageBox) {
-            messageBox.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
-            messageBox.style.opacity = '0';
-            messageBox.style.transform = 'translateY(-20px)';
-            setTimeout(function() {
-                messageBox.style.display = 'none';
-            }, 500);
-        }
+        var mb = document.getElementById('messageBox');
+        if (mb) { mb.style.opacity = '0'; setTimeout(function() { mb.style.display = 'none'; }, 500); }
     }
-
+    
     document.addEventListener('DOMContentLoaded', function() {
-        var messageBox = document.getElementById('messageBox');
-        if (messageBox) {
-            var dismissTimer = setTimeout(function() {
-                dismissMessage();
-            }, 5000);
-            
-            messageBox.addEventListener('click', function(e) {
-                if (e.target.classList.contains('message-close') || e.target === this) {
-                    clearTimeout(dismissTimer);
-                    dismissMessage();
-                }
-            });
-            
-            messageBox.addEventListener('mouseenter', function() {
-                clearTimeout(dismissTimer);
-            });
-            
-            messageBox.addEventListener('mouseleave', function() {
-                dismissTimer = setTimeout(function() {
-                    dismissMessage();
-                }, 3000);
-            });
-        }
+        var mb = document.getElementById('messageBox');
+        if (mb) setTimeout(dismissMessage, 5000);
     });
 
-    // ================================================================
-    // CART DATA
-    // ================================================================
     var cart = [];
     var itemIdCounter = 0;
     var currentDiscountAmount = 0;
     var subtotal = 0;
     var grandTotal = 0;
     var selectedPaymentOption = 'cashier';
-    
-    // ================================================================
-    // PREMIUM DATA
-    // ================================================================
     var currentPremiumAmount = 0;
     var currentPremiumNote = '';
+    var selectedMedicines = {};
+    var showOnlyAvailableFilter = false;
+    
+    var predefinedFrequencies = <?= json_encode($predefined_frequencies) ?>;
+    var predefinedRoutes = <?= json_encode($predefined_routes) ?>;
+    var predefinedDosages = <?= json_encode($predefined_dosages) ?>;
+    var predefinedInstructions = <?= json_encode($predefined_instructions) ?>;
 
-    // ================================================================
-    // MEDICINE SELECT - UPDATE PRICE
-    // ================================================================
-    document.getElementById('medicineSelect')?.addEventListener('change', function() {
-        var option = this.options[this.selectedIndex];
-        if (option.value) {
-            var price = parseFloat(option.dataset.price) || 0;
-            document.getElementById('medicinePrice').value = price;
+    function toggleMedicinePicker() {
+        var trigger = document.getElementById('pickerTrigger');
+        var dropdown = document.getElementById('pickerDropdown');
+        trigger.classList.toggle('open');
+        dropdown.classList.toggle('show');
+        if (dropdown.classList.contains('show')) {
+            setTimeout(function() { document.getElementById('medSearchInput').focus(); }, 100);
+        }
+    }
+    
+    document.addEventListener('click', function(e) {
+        var picker = document.getElementById('medicinePicker');
+        if (picker && !picker.contains(e.target)) {
+            document.getElementById('pickerTrigger').classList.remove('open');
+            document.getElementById('pickerDropdown').classList.remove('show');
         }
     });
+    
+    function filterMedicineList(query) {
+        query = query.toLowerCase().trim();
+        var options = document.querySelectorAll('.med-option');
+        var visibleCount = 0;
+        var clearBtn = document.getElementById('clearSearchBtn');
+        
+        if (query.length > 0) clearBtn.classList.add('show');
+        else clearBtn.classList.remove('show');
+        
+        options.forEach(function(opt) {
+            var searchText = (opt.dataset.searchText || '').toLowerCase();
+            var matches = query === '' || searchText.includes(query);
+            if (showOnlyAvailableFilter && opt.dataset.medAvailable !== '1') matches = false;
+            
+            if (matches) { opt.style.display = ''; visibleCount++; }
+            else opt.style.display = 'none';
+        });
+        
+        document.getElementById('noMedResults').style.display = (visibleCount === 0) ? 'block' : 'none';
+        
+        var footerText = document.getElementById('footerInfoText');
+        if (query) footerText.textContent = 'Found ' + visibleCount + ' medicine(s)';
+        else footerText.textContent = 'Select medicines and click "Add Selected"';
+    }
+    
+    function clearSearch() {
+        var input = document.getElementById('medSearchInput');
+        input.value = '';
+        filterMedicineList('');
+        input.focus();
+    }
+    
+    function toggleMedicineSelection(element) {
+        var medId = element.dataset.medId;
+        var isAvailable = element.dataset.medAvailable === '1';
+        var medName = element.dataset.medName;
+        
+        if (!isAvailable) {
+            showToast('Warning', medName + ' is out of stock', 'warning');
+            return;
+        }
+        
+        if (selectedMedicines[medId]) {
+            delete selectedMedicines[medId];
+            element.classList.remove('selected');
+        } else {
+            selectedMedicines[medId] = true;
+            element.classList.add('selected');
+        }
+        updateSelectedCount();
+    }
+    
+    function updateSelectedCount() {
+        var count = Object.keys(selectedMedicines).length;
+        document.getElementById('selectedCount').textContent = count + ' selected';
+        document.getElementById('addSelectedBtn').disabled = count === 0;
+        
+        var label = document.getElementById('pickerLabel');
+        var labelText = document.getElementById('pickerLabelText');
+        
+        if (count > 0) {
+            label.classList.add('has-selection');
+            labelText.textContent = count + ' medicine(s) selected';
+        } else {
+            label.classList.remove('has-selection');
+            labelText.textContent = 'Click to select medicine(s)...';
+        }
+    }
+    
+    function selectAllAvailable() {
+        document.querySelectorAll('.med-option').forEach(function(opt) {
+            if (opt.dataset.medAvailable === '1' && opt.style.display !== 'none') {
+                selectedMedicines[opt.dataset.medId] = true;
+                opt.classList.add('selected');
+            }
+        });
+        updateSelectedCount();
+        showToast('Success', 'All available medicines selected', 'success');
+    }
+    
+    function clearAllSelected() {
+        selectedMedicines = {};
+        document.querySelectorAll('.med-option').forEach(function(opt) { opt.classList.remove('selected'); });
+        updateSelectedCount();
+    }
+    
+    function showOnlyAvailable() {
+        showOnlyAvailableFilter = true;
+        document.querySelectorAll('.action-chip').forEach(function(chip) { chip.classList.remove('active'); });
+        event.target.closest('.action-chip').classList.add('active');
+        filterMedicineList(document.getElementById('medSearchInput').value);
+    }
+    
+    function showAllMedicines() {
+        showOnlyAvailableFilter = false;
+        document.querySelectorAll('.action-chip').forEach(function(chip) { chip.classList.remove('active'); });
+        event.target.closest('.action-chip').classList.add('active');
+        filterMedicineList(document.getElementById('medSearchInput').value);
+    }
+    
+    function addSelectedToCart() {
+        var selectedIds = Object.keys(selectedMedicines);
+        if (selectedIds.length === 0) { showToast('Warning', 'Please select at least one medicine', 'warning'); return; }
+        
+        var addedCount = 0, skippedCount = 0;
+        
+        selectedIds.forEach(function(medId) {
+            var opt = document.querySelector('.med-option[data-med-id="' + medId + '"]');
+            if (!opt) return;
+            
+            var name = opt.dataset.medName;
+            var price = parseFloat(opt.dataset.medPrice) || 0;
+            var totalStock = parseInt(opt.dataset.medStock) || 0;
+            var isAvailable = opt.dataset.medAvailable === '1';
+            
+            if (!isAvailable || totalStock <= 0) { skippedCount++; return; }
+            var existing = cart.find(function(item) { return item.name === name; });
+            if (existing) { skippedCount++; return; }
+            if (price <= 0) { skippedCount++; return; }
+            
+            cart.push({
+                id: ++itemIdCounter, name: name, price: price,
+                quantity: '',
+                maxStock: totalStock, total: 0,
+                dosage: '', frequency: '', route: '', instructions: ''
+            });
+            addedCount++;
+        });
+        
+        clearAllSelected();
+        renderCart();
+        updateTotals();
+        
+        document.getElementById('pickerTrigger').classList.remove('open');
+        document.getElementById('pickerDropdown').classList.remove('show');
+        
+        if (addedCount > 0) {
+            var msg = addedCount + ' medicine(s) added to cart - Please enter quantity';
+            if (skippedCount > 0) msg += ' | ' + skippedCount + ' skipped';
+            showToast('Success', msg, 'success');
+        } else {
+            showToast('Error', 'No medicines were added', 'error');
+        }
+    }
 
-    // ================================================================
-    // SELECT PAYMENT OPTION
-    // ================================================================
     function selectPaymentOption(option) {
         selectedPaymentOption = option;
         document.getElementById('paymentOptionHidden').value = option;
         
-        document.querySelectorAll('.payment-option-card').forEach(function(card) {
-            card.classList.remove('active');
-        });
+        document.querySelectorAll('.payment-option-card').forEach(function(card) { card.classList.remove('active'); });
         document.querySelector('[data-option="' + option + '"]').classList.add('active');
         
         var btn = document.getElementById('completeSaleBtn');
@@ -2415,86 +1225,179 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             if (stockModeDisplay) stockModeDisplay.textContent = 'Reserve/Held';
         }
     }
-
-    // ================================================================
-    // SELECT PAYMENT METHOD
-    // ================================================================
+    
     function selectPaymentMethod(method) {
-        document.querySelectorAll('.method-btn').forEach(function(btn) {
-            btn.classList.remove('active');
-        });
+        document.querySelectorAll('.method-btn').forEach(function(btn) { btn.classList.remove('active'); });
         var btn = document.querySelector('[data-method="' + method + '"]');
         if (btn) btn.classList.add('active');
         document.getElementById('selectedPaymentMethod').value = method;
     }
 
-    // ================================================================
-    // INSTRUCTION FUNCTIONS
-    // ================================================================
-    function getInstructionText(id) {
-        var textarea = document.getElementById('instr_textarea_' + id);
-        return textarea ? textarea.value : '';
+    function updateQuantity(id, value) {
+        var item = cart.find(function(i) { return i.id === id; });
+        if (!item) return;
+        
+        if (value === '' || value === null || value === undefined) {
+            item.quantity = '';
+            item.total = 0;
+            var totalEl = document.getElementById('item_total_' + id);
+            if (totalEl) totalEl.textContent = 'TSh 0';
+            updateTotals();
+            return;
+        }
+        
+        var cleanValue = String(value).replace(/[^0-9]/g, '');
+        var qty = parseInt(cleanValue) || 0;
+        
+        if (qty > item.maxStock) {
+            qty = item.maxStock;
+            showToast('Warning', 'Only ' + item.maxStock + ' available in stock', 'warning');
+            var input = document.getElementById('qty_input_' + id);
+            if (input) input.value = qty;
+        }
+        
+        item.quantity = qty;
+        item.total = item.price * qty;
+        
+        var totalEl = document.getElementById('item_total_' + id);
+        if (totalEl) totalEl.textContent = 'TSh ' + item.total.toLocaleString();
+        
+        updateTotals();
     }
     
-    function setInstructionText(id, value) {
-        var textarea = document.getElementById('instr_textarea_' + id);
-        if (textarea) {
-            textarea.value = value;
+    function attachQuantityWheelBlocker() {
+        document.querySelectorAll('.qty-input').forEach(function(input) {
+            if (input.dataset.wheelBlocked === '1') return;
+            input.dataset.wheelBlocked = '1';
+            
+            input.addEventListener('wheel', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                this.blur();
+                return false;
+            }, { passive: false });
+        });
+    }
+    
+    function attachQuantityInputHandler() {
+        document.querySelectorAll('.qty-input').forEach(function(input) {
+            if (input.dataset.inputHandlerAttached === '1') return;
+            input.dataset.inputHandlerAttached = '1';
+            
+            input.addEventListener('input', function() {
+                this.value = this.value.replace(/[^0-9]/g, '');
+            });
+            
+            input.addEventListener('focus', function() {
+                this.select();
+            });
+        });
+    }
+    
+    function updateDosage(id, value) {
+        var item = cart.find(function(i) { return i.id === id; });
+        if (item) item.dosage = value;
+    }
+    
+    function updateFrequency(id, value) {
+        var item = cart.find(function(i) { return i.id === id; });
+        if (!item) return;
+        if (value === '__manual__') {
+            document.getElementById('freq_select_' + id).style.display = 'none';
+            document.getElementById('freq_manual_' + id).style.display = 'block';
+            document.getElementById('freq_manual_' + id).focus();
+            item.frequency = '';
+        } else { item.frequency = value; }
+    }
+    
+    function updateFrequencyManual(id, value) {
+        var item = cart.find(function(i) { return i.id === id; });
+        if (item) item.frequency = value;
+    }
+    
+    function toggleFreqManual(id, showManual) {
+        var sel = document.getElementById('freq_select_' + id);
+        var man = document.getElementById('freq_manual_' + id);
+        var toggleBtn = document.getElementById('freq_toggle_' + id);
+        
+        if (showManual) {
+            sel.style.display = 'none'; man.style.display = 'block'; man.focus();
+            toggleBtn.innerHTML = '<i class="fas fa-list"></i>';
+        } else {
+            sel.style.display = 'block'; man.style.display = 'none'; man.value = '';
+            toggleBtn.innerHTML = '<i class="fas fa-edit"></i>';
             var item = cart.find(function(i) { return i.id === id; });
-            if (item) {
-                item.instructions = value;
-            }
+            if (item) item.frequency = sel.value;
+        }
+    }
+    
+    function updateRoute(id, value) {
+        var item = cart.find(function(i) { return i.id === id; });
+        if (!item) return;
+        if (value === '__manual__') {
+            document.getElementById('route_select_' + id).style.display = 'none';
+            document.getElementById('route_manual_' + id).style.display = 'block';
+            document.getElementById('route_manual_' + id).focus();
+            item.route = '';
+        } else { item.route = value; }
+    }
+    
+    function updateRouteManual(id, value) {
+        var item = cart.find(function(i) { return i.id === id; });
+        if (item) item.route = value;
+    }
+    
+    function toggleRouteManual(id, showManual) {
+        var sel = document.getElementById('route_select_' + id);
+        var man = document.getElementById('route_manual_' + id);
+        var toggleBtn = document.getElementById('route_toggle_' + id);
+        
+        if (showManual) {
+            sel.style.display = 'none'; man.style.display = 'block'; man.focus();
+            toggleBtn.innerHTML = '<i class="fas fa-list"></i>';
+        } else {
+            sel.style.display = 'block'; man.style.display = 'none'; man.value = '';
+            toggleBtn.innerHTML = '<i class="fas fa-edit"></i>';
+            var item = cart.find(function(i) { return i.id === id; });
+            if (item) item.route = sel.value;
         }
     }
     
     function addSuggestionToInstruction(id, suggestion) {
         var textarea = document.getElementById('instr_textarea_' + id);
         if (!textarea) return;
-        
-        var currentValue = textarea.value;
         var item = cart.find(function(i) { return i.id === id; });
         if (!item) return;
         
+        var currentValue = textarea.value;
         if (currentValue.toLowerCase().includes(suggestion.toLowerCase())) {
-            showToast('Info', 'Instruction already added: ' + suggestion, 'info');
+            showToast('Info', 'Already added: ' + suggestion, 'info');
             return;
         }
         
-        if (currentValue.length > 0 && !currentValue.endsWith(' ')) {
-            textarea.value = currentValue + ', ' + suggestion;
-        } else if (currentValue.length > 0) {
-            textarea.value = currentValue + suggestion;
-        } else {
-            textarea.value = suggestion;
-        }
-        
+        textarea.value = currentValue.length > 0 ? currentValue + ', ' + suggestion : suggestion;
         item.instructions = textarea.value;
         updateInstructionDisplay(id);
-        autoResizeTextarea(textarea);
-        showToast('Success', 'Added instruction: ' + suggestion, 'success');
     }
     
     function removeInstructionPart(id, partToRemove) {
         var textarea = document.getElementById('instr_textarea_' + id);
         if (!textarea) return;
         
-        var currentValue = textarea.value;
-        var parts = currentValue.split(',').map(function(s) { return s.trim(); });
-        
-        var newParts = parts.filter(function(p) { 
-            return p.toLowerCase() !== partToRemove.toLowerCase().trim();
-        });
-        
+        var parts = textarea.value.split(',').map(function(s) { return s.trim(); });
+        var newParts = parts.filter(function(p) { return p.toLowerCase() !== partToRemove.toLowerCase().trim(); });
         textarea.value = newParts.join(', ');
         
         var item = cart.find(function(i) { return i.id === id; });
-        if (item) {
-            item.instructions = textarea.value;
-        }
-        
+        if (item) item.instructions = textarea.value;
         updateInstructionDisplay(id);
-        autoResizeTextarea(textarea);
-        showToast('Info', 'Removed instruction: ' + partToRemove, 'info');
+    }
+    
+    function updateInstructionsFromTextarea(id, value) {
+        var item = cart.find(function(i) { return i.id === id; });
+        if (!item) return;
+        item.instructions = value;
+        updateInstructionDisplay(id);
     }
     
     function updateInstructionDisplay(id) {
@@ -2504,99 +1407,25 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         var displayDiv = document.getElementById('instr_display_' + id);
         if (!displayDiv) return;
         
-        var text = item.instructions || '';
-        var parts = text.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        var parts = (item.instructions || '').split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
         
         if (parts.length === 0) {
             displayDiv.innerHTML = '<span style="font-size:0.7rem;color:var(--text-muted);">No instructions added</span>';
             return;
         }
         
-        var html = '';
-        parts.forEach(function(part) {
+        displayDiv.innerHTML = parts.map(function(part) {
             var escapedPart = part.replace(/'/g, "\\'");
-            html += '<span class="instr-tag">' + part + ' <span class="remove-instr" onclick="removeInstructionPart(' + id + ', \'' + escapedPart + '\')">&times;</span></span>';
-        });
-        displayDiv.innerHTML = html;
-    }
-    
-    function autoResizeTextarea(textarea) {
-        if (!textarea) return;
-        textarea.style.height = 'auto';
-        textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+            return '<span class="instr-tag">' + part + ' <span class="remove-instr" onclick="removeInstructionPart(' + id + ', \'' + escapedPart + '\')">&times;</span></span>';
+        }).join('');
     }
 
-    // ================================================================
-    // ADD TO CART
-    // ================================================================
-    function addToCart() {
-        var select = document.getElementById('medicineSelect');
-        var qtyInput = document.getElementById('medicineQty');
-        var priceInput = document.getElementById('medicinePrice');
-        
-        var option = select.options[select.selectedIndex];
-        if (!option.value) {
-            showToast('Error', 'Please select a medicine', 'error');
-            return;
-        }
-        
-        var qty = parseInt(qtyInput.value) || 1;
-        var price = parseFloat(priceInput.value) || 0;
-        var totalStock = parseInt(option.dataset.totalStock) || 0;
-        var name = option.dataset.name;
-        
-        if (qty <= 0) {
-            showToast('Error', 'Quantity must be greater than 0', 'error');
-            return;
-        }
-        
-        if (qty > totalStock) {
-            showToast('Error', 'Not enough stock! Available: ' + totalStock, 'error');
-            return;
-        }
-        
-        if (price <= 0) {
-            showToast('Error', 'Price must be greater than 0', 'error');
-            return;
-        }
-        
-        var existing = cart.find(function(item) { return item.name === name; });
-        if (existing) {
-            var newQty = existing.quantity + qty;
-            if (newQty > totalStock) {
-                showToast('Error', 'Not enough stock! Available: ' + totalStock + ', Already in cart: ' + existing.quantity, 'error');
-                return;
-            }
-            existing.quantity = newQty;
-            existing.total = existing.quantity * existing.price;
-        } else {
-            cart.push({
-                id: ++itemIdCounter,
-                name: name,
-                price: price,
-                quantity: qty,
-                total: price * qty,
-                instructions: ''
-            });
-        }
-        
-        renderCart();
-        updateTotals();
-        showToast('Success', name + ' added to cart', 'success');
-    }
-
-    // ================================================================
-    // REMOVE FROM CART
-    // ================================================================
     function removeFromCart(id) {
         cart = cart.filter(function(item) { return item.id !== id; });
         renderCart();
         updateTotals();
     }
-
-    // ================================================================
-    // CLEAR CART
-    // ================================================================
+    
     function clearCart() {
         if (cart.length === 0) return;
         if (!confirm('Clear all items from cart?')) return;
@@ -2609,9 +1438,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         showToast('Info', 'Cart cleared', 'info');
     }
 
-    // ================================================================
-    // RENDER CART
-    // ================================================================
     function renderCart() {
         var itemsDiv = document.getElementById('cartItems');
         var emptyDiv = document.getElementById('emptyCart');
@@ -2621,67 +1447,103 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         countEl.textContent = cart.length + ' items';
         
         if (cart.length === 0) {
-            emptyDiv.style.display = 'block';
-            itemsDiv.style.display = 'none';
-            btn.disabled = true;
-            return;
+            emptyDiv.style.display = 'block'; itemsDiv.style.display = 'none'; btn.disabled = true; return;
         }
         
-        emptyDiv.style.display = 'none';
-        itemsDiv.style.display = 'block';
+        emptyDiv.style.display = 'none'; itemsDiv.style.display = 'block';
         
         var html = '';
-        var suggestions = <?= json_encode($predefined_instructions) ?>;
         
         cart.forEach(function(item) {
             var instrText = item.instructions || '';
             
+            var freqOptions = '<option value="">-- Select Frequency --</option>';
+            predefinedFrequencies.forEach(function(f) {
+                var sel = (item.frequency === f) ? 'selected' : '';
+                freqOptions += '<option value="' + f + '" ' + sel + '>' + f + '</option>';
+            });
+            freqOptions += '<option value="__manual__">✏️ Type manually...</option>';
+            
+            var routeOptions = '<option value="">-- Select Route --</option>';
+            predefinedRoutes.forEach(function(r) {
+                var sel = (item.route === r) ? 'selected' : '';
+                routeOptions += '<option value="' + r + '" ' + sel + '>' + r + '</option>';
+            });
+            routeOptions += '<option value="__manual__">✏️ Type manually...</option>';
+            
+            var dosageListId = 'dosage_list_' + item.id;
+            var dosageOptions = '';
+            predefinedDosages.forEach(function(d) { dosageOptions += '<option value="' + d + '">'; });
+            
             var suggestionHtml = '';
-            var displaySuggestions = suggestions.slice(0, 15);
-            displaySuggestions.forEach(function(sug) {
+            predefinedInstructions.slice(0, 15).forEach(function(sug) {
                 var escapedSug = sug.replace(/'/g, "\\'");
                 suggestionHtml += '<button type="button" class="suggestion-btn" onclick="addSuggestionToInstruction(' + item.id + ', \'' + escapedSug + '\')">' + sug + '</button>';
             });
             
+            var qtyValue = (item.quantity === '' || item.quantity === 0) ? '' : item.quantity;
+            var totalDisplay = item.total > 0 ? item.total.toLocaleString() : '0';
+            
             html += `
                 <div class="cart-item">
-                    <div class="item-row">
+                    <div class="item-header">
                         <div class="item-info">
-                            <span class="item-name">${item.name}</span>
-                            <span class="item-meta">Qty: ${item.quantity}</span>
-                            <span class="item-price">TSh ${item.price.toLocaleString()}</span>
+                            <div class="item-name"><i class="fas fa-pills" style="color:var(--primary);"></i> ${item.name}</div>
+                            <span class="item-price-badge">TSh ${item.price.toLocaleString()} / unit</span>
+                            <span style="font-size:0.7rem;color:var(--text-secondary);"><i class="fas fa-boxes"></i> Max: ${item.maxStock}</span>
                         </div>
                         <div style="display:flex;align-items:center;gap:10px;">
-                            <span class="item-total">TSh ${item.total.toLocaleString()}</span>
-                            <button class="btn-remove" onclick="removeFromCart(${item.id})">
-                                <i class="fas fa-times"></i> Remove
-                            </button>
+                            <span class="item-total" id="item_total_${item.id}">TSh ${totalDisplay}</span>
+                            <button class="btn-remove" onclick="removeFromCart(${item.id})"><i class="fas fa-times"></i> Remove</button>
+                        </div>
+                    </div>
+                    
+                    <div class="item-details-grid">
+                        <div class="detail-field">
+                            <label><i class="fas fa-sort-numeric-up"></i> Quantity</label>
+                            <input type="text" 
+                                   inputmode="numeric" 
+                                   pattern="[0-9]*"
+                                   id="qty_input_${item.id}" 
+                                   class="qty-input" 
+                                   value="${qtyValue}" 
+                                   placeholder="0"
+                                   maxlength="6"
+                                   onchange="updateQuantity(${item.id}, this.value)"
+                                   oninput="updateQuantity(${item.id}, this.value)">
+                        </div>
+                        <div class="detail-field">
+                            <label><i class="fas fa-prescription-bottle"></i> Dosage</label>
+                            <input type="text" id="dosage_input_${item.id}" value="${item.dosage || ''}" placeholder="e.g. 1 tablet, 5ml..." list="${dosageListId}" oninput="updateDosage(${item.id}, this.value)">
+                            <datalist id="${dosageListId}">${dosageOptions}</datalist>
+                        </div>
+                        <div class="detail-field">
+                            <label><i class="fas fa-clock"></i> Frequency</label>
+                            <div class="select-with-manual">
+                                <select id="freq_select_${item.id}" onchange="updateFrequency(${item.id}, this.value)">${freqOptions}</select>
+                                <input type="text" id="freq_manual_${item.id}" class="manual-input" placeholder="Type frequency..." value="${item.frequency || ''}" oninput="updateFrequencyManual(${item.id}, this.value)">
+                                <button type="button" class="btn-manual-toggle" id="freq_toggle_${item.id}" onclick="toggleFreqManual(${item.id}, document.getElementById('freq_manual_${item.id}').style.display === 'none')"><i class="fas fa-edit"></i></button>
+                            </div>
+                        </div>
+                        <div class="detail-field">
+                            <label><i class="fas fa-route"></i> Route</label>
+                            <div class="select-with-manual">
+                                <select id="route_select_${item.id}" onchange="updateRoute(${item.id}, this.value)">${routeOptions}</select>
+                                <input type="text" id="route_manual_${item.id}" class="manual-input" placeholder="Type route..." value="${item.route || ''}" oninput="updateRouteManual(${item.id}, this.value)">
+                                <button type="button" class="btn-manual-toggle" id="route_toggle_${item.id}" onclick="toggleRouteManual(${item.id}, document.getElementById('route_manual_${item.id}').style.display === 'none')"><i class="fas fa-edit"></i></button>
+                            </div>
                         </div>
                     </div>
                     
                     <div class="instructions-section">
-                        <div class="instr-label">
-                            <i class="fas fa-sticky-note"></i> Instructions
-                            <span class="instr-count" id="instr_count_${item.id}">0</span>
-                            <span style="font-size:0.6rem;color:var(--text-muted);margin-left:4px;">(Click suggestions or type manually)</span>
-                        </div>
-                        
+                        <div class="instr-label"><i class="fas fa-sticky-note"></i> Instructions</div>
                         <div class="instr-textarea-wrapper">
-                            <textarea 
-                                id="instr_textarea_${item.id}"
-                                class="form-control"
-                                placeholder="e.g. 2x daily, After meals, With water..."
-                                oninput="updateInstructionsFromTextarea(${item.id}, this.value)"
-                                onfocus="this.select()"
-                                style="min-height:55px;max-height:120px;resize:vertical;font-size:0.85rem;padding:8px 12px;"
-                            >${instrText}</textarea>
+                            <textarea id="instr_textarea_${item.id}" placeholder="e.g. 2x daily, After meals..." oninput="updateInstructionsFromTextarea(${item.id}, this.value)" style="min-height:55px;max-height:120px;">${instrText}</textarea>
                         </div>
-                        
                         <div class="instr-suggestions">
                             ${suggestionHtml}
                             <button type="button" class="suggestion-btn" style="background:var(--success);color:white;border-color:var(--success);" onclick="addSuggestionToInstruction(${item.id}, 'Custom')">+ Custom</button>
                         </div>
-                        
                         <div class="instr-tags" id="instr_display_${item.id}">
                             ${instrText ? instrText.split(',').map(function(p) { 
                                 var part = p.trim();
@@ -2694,73 +1556,41 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 </div>
             `;
         });
+        
         itemsDiv.innerHTML = html;
         btn.disabled = false;
+        
+        setTimeout(function() {
+            attachQuantityWheelBlocker();
+            attachQuantityInputHandler();
+        }, 50);
     }
 
-    // ================================================================
-    // UPDATE INSTRUCTIONS FROM TEXTAREA
-    // ================================================================
-    function updateInstructionsFromTextarea(id, value) {
-        var item = cart.find(function(i) { return i.id === id; });
-        if (!item) return;
-        
-        if (value.length > 500) {
-            value = value.substring(0, 500);
-            var textarea = document.getElementById('instr_textarea_' + id);
-            if (textarea) textarea.value = value;
-        }
-        
-        item.instructions = value;
-        
-        var parts = value.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
-        var countEl = document.getElementById('instr_count_' + id);
-        if (countEl) {
-            countEl.textContent = parts.length;
-        }
-        
-        updateInstructionDisplay(id);
-    }
-
-    // ================================================================
-    // PREMIUM FUNCTIONS
-    // ================================================================
     function applyPremium() {
         var input = document.getElementById('premiumAmountInput');
         var noteInput = document.getElementById('premiumNoteInput');
         var premium = getRawNumber(input.value);
         
-        if (premium < 0) {
-            showToast('Error', 'Premium cannot be negative', 'error');
-            return;
-        }
-        if (premium === 0) {
-            showToast('Warning', 'Enter a valid amount', 'warning');
-            return;
-        }
+        if (premium <= 0) { showToast('Warning', 'Enter a valid amount', 'warning'); return; }
         
         currentPremiumAmount = premium;
         currentPremiumNote = noteInput.value.trim() || 'Premium added';
         
-        // Show premium display
-        var display = document.getElementById('premiumDisplay');
-        display.style.display = 'block';
+        document.getElementById('premiumDisplay').style.display = 'block';
         document.getElementById('premiumDisplayAmount').textContent = 'TSh ' + premium.toLocaleString();
         document.getElementById('premiumDisplayNote').textContent = currentPremiumNote;
         
-        // Disable input and buttons
         input.disabled = true;
         document.querySelector('.btn-add-premium').disabled = true;
         noteInput.disabled = true;
         
-        // Update hidden fields
         document.getElementById('premiumAmountHidden').value = premium;
         document.getElementById('premiumNoteHidden').value = currentPremiumNote;
         
         updateTotals();
         showToast('Success', 'Premium TSh ' + premium.toLocaleString() + ' added!', 'success');
     }
-
+    
     function removePremium() {
         currentPremiumAmount = 0;
         currentPremiumNote = '';
@@ -2782,90 +1612,58 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         showToast('Info', 'Premium removed', 'info');
     }
 
-    // ================================================================
-    // UPDATE TOTALS
-    // ================================================================
     function updateTotals() {
         subtotal = 0;
-        cart.forEach(function(item) {
-            subtotal += item.total;
-        });
+        cart.forEach(function(item) { subtotal += item.total; });
         
         var discountInput = document.getElementById('discountAmountInput');
         var discountAmount = getRawNumber(discountInput.value);
-        
         if (discountAmount > subtotal) {
             discountAmount = subtotal;
             discountInput.value = discountAmount.toLocaleString();
         }
-        
         currentDiscountAmount = discountAmount;
         
-        // PREMIUM
         var premiumAmount = currentPremiumAmount || 0;
-        
-        // Calculate grand total: Subtotal - Discount + Premium
         grandTotal = subtotal - discountAmount + premiumAmount;
         if (grandTotal < 0) grandTotal = 0;
         
         document.getElementById('displaySubtotal').textContent = 'TSh ' + subtotal.toLocaleString();
         document.getElementById('displayDiscount').textContent = 'TSh ' + discountAmount.toLocaleString();
-        
-        // Show premium in display
-        var premiumDisplayEl = document.getElementById('displayPremium');
-        if (premiumDisplayEl) {
-            if (premiumAmount > 0) {
-                premiumDisplayEl.textContent = 'TSh ' + premiumAmount.toLocaleString();
-                premiumDisplayEl.style.display = 'inline';
-            } else {
-                premiumDisplayEl.textContent = 'TSh 0';
-                premiumDisplayEl.style.display = 'inline';
-            }
-        }
-        
+        document.getElementById('displayPremium').textContent = 'TSh ' + premiumAmount.toLocaleString();
         document.getElementById('displayGrandTotal').textContent = 'TSh ' + grandTotal.toLocaleString();
         
         var itemsForJson = cart.map(function(item) {
             return {
-                name: item.name,
-                price: item.price,
-                quantity: item.quantity,
+                name: item.name, price: item.price, 
+                quantity: parseInt(item.quantity) || 0,
                 total: item.total,
-                instructions: item.instructions || ''
+                dosage: item.dosage || '', frequency: item.frequency || '',
+                route: item.route || '', instructions: item.instructions || ''
             };
         });
         document.getElementById('itemsJson').value = JSON.stringify(itemsForJson);
         document.getElementById('discountAmountHidden').value = discountAmount;
-        
-        // Premium hidden fields already updated in applyPremium/removePremium
     }
 
-    // ================================================================
-    // DISCOUNT FUNCTIONS
-    // ================================================================
     function applyDiscount() {
         var input = document.getElementById('discountAmountInput');
         var discount = getRawNumber(input.value);
         
-        if (discount < 0) {
-            showToast('Error', 'Discount cannot be negative', 'error');
-            return;
-        }
-        if (cart.length === 0) {
-            showToast('Error', 'Cart is empty! Add items first.', 'error');
-            return;
-        }
+        if (cart.length === 0) { showToast('Error', 'Cart is empty!', 'error'); return; }
+        if (discount < 0) { showToast('Error', 'Discount cannot be negative', 'error'); return; }
         if (discount > subtotal) {
-            showToast('Warning', 'Discount cannot exceed subtotal. Adjusted to ' + subtotal.toLocaleString(), 'warning');
             discount = subtotal;
             input.value = discount.toLocaleString();
+            showToast('Warning', 'Discount adjusted to subtotal', 'warning');
         }
+        
         currentDiscountAmount = discount;
         document.getElementById('discountAmountHidden').value = discount;
         updateTotals();
         showToast('Success', 'Discount TSh ' + discount.toLocaleString() + ' applied!', 'success');
     }
-
+    
     function removeDiscount() {
         currentDiscountAmount = 0;
         document.getElementById('discountAmountInput').value = '0';
@@ -2874,72 +1672,35 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         showToast('Info', 'Discount removed', 'info');
     }
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    
-    if (sidebarToggle) {
-        sidebarToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('open');
-        });
-    }
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (sidebar && sidebarToggle) {
-                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                    sidebar.classList.remove('open');
-                }
-            }
-        }
-    });
-
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
+        document.getElementById('toastTitle').textContent = title;
+        document.getElementById('toastMessage').textContent = message;
         toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
         toast.style.display = 'flex';
-        
         toast.classList.add('show');
+        
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
+            setTimeout(function() { toast.style.display = 'none'; }, 400);
         }, 3500);
     }
 
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter' && document.activeElement?.id === 'discountAmountInput') {
-            e.preventDefault();
-            applyDiscount();
+        if (e.key === 'Escape') {
+            document.getElementById('pickerTrigger').classList.remove('open');
+            document.getElementById('pickerDropdown').classList.remove('show');
         }
-        if (e.key === 'Enter' && document.activeElement?.id === 'premiumAmountInput') {
-            e.preventDefault();
-            applyPremium();
-        }
+        if (e.key === 'Enter' && document.activeElement?.id === 'discountAmountInput') { e.preventDefault(); applyDiscount(); }
+        if (e.key === 'Enter' && document.activeElement?.id === 'premiumAmountInput') { e.preventDefault(); applyPremium(); }
     });
 
-    console.log('%c💊 Braick - New OTC Sale (STOCK DEDUCTION FIXED + PREMIUM)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
-    console.log('%c✅ FIXED: "Send to Cashier" = Stock RESERVED (deducted from inventory)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: "Pay Now (Self)" = Stock DEDUCTED immediately', 'font-size:13px; color:#34D399;');
-    console.log('%c📝 Instructions: Large text area with suggestions', 'font-size:13px; color:#34D399;');
-    console.log('%c💰 Auto-format money with commas', 'font-size:13px; color:#34D399;');
-    console.log('%c⭐ NEW: Premium/Extra Bill feature', 'font-size:13px; color:#C084FC;');
-    console.log('%c✅ Messages auto-dismiss after 5 seconds', 'font-size:13px; color:#34D399;');
+    console.log('%c💊 Braick OTC - BLUE THEME', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
+    console.log('%c✅ Blue theme applied', 'font-size:13px;color:#34D399;');
+    console.log('%c✅ Quantity starts EMPTY', 'font-size:13px;color:#34D399;');
+    console.log('%c✅ Scroll mouse DOES NOT change quantity', 'font-size:13px;color:#34D399;');
+    console.log('%c✅ Only numbers allowed in quantity', 'font-size:13px;color:#34D399;');
 </script>
 
 </body>

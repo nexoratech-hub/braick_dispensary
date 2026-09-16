@@ -4,6 +4,9 @@
 // SUPER ADMIN - EXPORT BILLS (VIEW & EXCEL)
 // PDF: Display in new window first with Braick Logo
 // BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
+// ✅ Uses SHARED header & sidebar (view/pdf format)
+// ✅ Page-specific CSS only
+// ✅ Dark mode via header toggle
 // ================================================================
 
 // ================================================================
@@ -32,6 +35,7 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../../auth/login.php'); break;
     }
     exit;
@@ -45,6 +49,7 @@ $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // INCLUDE DATABASE
@@ -98,7 +103,7 @@ $period_labels = [
 $period_label = $period_labels[$time_period] ?? 'All Time';
 
 // ================================================================
-// BUILD TIME PERIOD FILTER - FIXED: Using bills table
+// BUILD TIME PERIOD FILTER
 // ================================================================
 $date_condition = '';
 
@@ -128,24 +133,21 @@ switch ($time_period) {
 }
 
 // ================================================================
-// BUILD QUERY CONDITIONS - FIXED: Using bills table
+// BUILD QUERY CONDITIONS
 // ================================================================
 $conditions = [$date_condition];
 $params = [];
 
-// Branch filter
 if ($selected_branch_id !== 'all') {
     $conditions[] = "b.branch_id = ?";
     $params[] = (int)$selected_branch_id;
 }
 
-// Status filter
 if (!empty($status_filter)) {
     $conditions[] = "b.status = ?";
     $params[] = $status_filter;
 }
 
-// Search filter
 if (!empty($search_filter)) {
     $conditions[] = "(b.bill_number LIKE ? OR p.full_name LIKE ? OR p.patient_id LIKE ?)";
     $params[] = "%$search_filter%";
@@ -169,7 +171,7 @@ $sort_map = [
 $order_by = $sort_map[$sort_by] ?? 'b.created_at DESC';
 
 // ================================================================
-// FETCH BILLS - FIXED: Using bills table
+// FETCH BILLS
 // ================================================================
 $sql = "
     SELECT 
@@ -248,536 +250,780 @@ function getLogoBase64() {
 
 $logo_base64 = getLogoBase64();
 $logo_available = !empty($logo_base64);
+$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // ================================================================
-// VIEW / PDF FORMAT
+// EXCEL EXPORT (CSV) - HAITUMII HTML
+// ================================================================
+if ($format === 'excel') {
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="bills_report_' . date('Y-m-d') . '.csv"');
+    
+    $output = fopen('php://output', 'w');
+    fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
+    
+    fputcsv($output, [
+        'Bill Number',
+        'Patient Name',
+        'Patient ID',
+        'Total Amount',
+        'Paid Amount',
+        'Balance',
+        'Status',
+        'Branch',
+        'Items',
+        'Created By',
+        'Date Created'
+    ]);
+    
+    foreach ($bills as $bill) {
+        fputcsv($output, [
+            $bill['bill_number'],
+            $bill['patient_name'] ?? 'N/A',
+            $bill['patient_id_number'] ?? 'N/A',
+            'TSh ' . number_format($bill['total_amount'], 0),
+            'TSh ' . number_format($bill['paid_amount'], 0),
+            'TSh ' . number_format($bill['balance'], 0),
+            getStatusLabel($bill['status']),
+            $bill['branch_name'] ?? 'N/A',
+            $bill['item_count'] ?? 0,
+            $bill['created_by_name'] ?? 'N/A',
+            date('Y-m-d H:i', strtotime($bill['created_at']))
+        ]);
+    }
+    
+    fputcsv($output, []);
+    fputcsv($output, ['SUMMARY']);
+    fputcsv($output, ['Total Bills', number_format($total_bills)]);
+    fputcsv($output, ['Total Amount', 'TSh ' . number_format($total_amount, 0)]);
+    fputcsv($output, ['Total Paid', 'TSh ' . number_format($total_paid, 0)]);
+    fputcsv($output, ['Total Balance', 'TSh ' . number_format($total_balance, 0)]);
+    fputcsv($output, ['Paid Bills', number_format($status_counts['paid'] ?? 0)]);
+    fputcsv($output, ['Pending Bills', number_format($status_counts['pending'] ?? 0)]);
+    fputcsv($output, ['Partial Bills', number_format($status_counts['partial'] ?? 0)]);
+    fputcsv($output, ['Cancelled Bills', number_format($status_counts['cancelled'] ?? 0)]);
+    fputcsv($output, []);
+    fputcsv($output, ['Generated on', date('Y-m-d H:i:s')]);
+    fputcsv($output, ['Branch', $branch_name]);
+    fputcsv($output, ['Period', $period_label]);
+    
+    fclose($output);
+    exit;
+}
+
+// ================================================================
+// VIEW / PDF FORMAT - INAHITAJI HTML
 // ================================================================
 if ($format === 'pdf' || $format === 'view') {
     $is_pdf_view = ($format === 'pdf');
+    
+    // ================================================================
+    // INCLUDE SHARED HEADER & SIDEBAR
+    // ================================================================
+    include_once __DIR__ . '/../../components/admin_header.php';
+    include_once __DIR__ . '/../../components/admin_sidebar.php';
     ?>
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Bills Report - Braick Dispensary</title>
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-        <style>
-            * {
-                margin: 0;
-                padding: 0;
-                box-sizing: border-box;
+
+    <!-- ================================================================ -->
+    <!-- PAGE-SPECIFIC CSS -->
+    <!-- ================================================================ -->
+    <style>
+        /* ================================================================
+           PAGE VARIABLES
+           ================================================================ */
+        :root {
+            --exp-primary: #0B5ED7;
+            --exp-primary-dark: #0A4CA8;
+            --exp-success: #059669;
+            --exp-success-dark: #047857;
+            --exp-danger: #DC2626;
+            --exp-warning: #D97706;
+            --exp-purple: #7C3AED;
+            --exp-bg-body: #F1F5F9;
+            --exp-bg-card: #FFFFFF;
+            --exp-text-primary: #1E293B;
+            --exp-text-secondary: #64748B;
+            --exp-border-color: #E2E8F0;
+            --exp-radius: 12px;
+            --exp-radius-lg: 16px;
+            --exp-shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+            --exp-shadow-md: 0 4px 20px rgba(0,0,0,0.08);
+        }
+
+        [data-theme="dark"] {
+            --exp-bg-body: #0F172A;
+            --exp-bg-card: #1E293B;
+            --exp-text-primary: #F1F5F9;
+            --exp-text-secondary: #94A3B8;
+            --exp-border-color: #334155;
+            --exp-shadow-md: 0 4px 20px rgba(0,0,0,0.4);
+        }
+
+        /* ================================================================
+           DARK MODE - PAGE YOTE
+           ================================================================ */
+        html[data-theme="dark"] body {
+            background: #0F172A !important;
+        }
+
+        html[data-theme="dark"] .main-content {
+            background: #0F172A !important;
+            color: #F1F5F9;
+        }
+
+        /* ================================================================
+           PAGE HEADER CARD
+           ================================================================ */
+        .page-header-card {
+            background: linear-gradient(135deg, #0B5ED7 0%, #0A4FB0 50%, #083D8A 100%);
+            border-radius: 20px;
+            padding: 28px 32px;
+            margin-bottom: 24px;
+            color: white;
+            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.35);
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .page-header-card::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -10%;
+            width: 400px;
+            height: 400px;
+            background: radial-gradient(circle, rgba(255,255,255,0.12) 0%, transparent 70%);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+
+        .page-header-card:hover {
+            transform: translateY(-2px);
+            transition: all 0.3s ease;
+        }
+
+        .page-header-left {
+            position: relative;
+            z-index: 2;
+            flex: 1;
+            min-width: 280px;
+        }
+
+        .page-header-title {
+            font-size: 1.6rem;
+            font-weight: 800;
+            margin: 0 0 8px 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            flex-wrap: wrap;
+        }
+
+        .page-header-title i {
+            width: 44px;
+            height: 44px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+            flex-shrink: 0;
+        }
+
+        .page-header-subtitle {
+            font-size: 0.9rem;
+            color: rgba(255,255,255,0.9);
+            margin: 0 0 16px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .page-header-branch {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 16px;
+            background: rgba(255,255,255,0.18);
+            border: 1.5px solid rgba(255,255,255,0.3);
+            border-radius: 20px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: white;
+            backdrop-filter: blur(10px);
+        }
+
+        .page-header-stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            position: relative;
+            z-index: 2;
+        }
+
+        .page-header-stat {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            background: rgba(255,255,255,0.15);
+            border: 1px solid rgba(255,255,255,0.25);
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: white;
+            backdrop-filter: blur(10px);
+        }
+
+        .page-header-stat i { font-size: 0.85rem; opacity: 0.9; }
+
+        .page-header-stat .stat-count {
+            background: rgba(255,255,255,0.25);
+            padding: 1px 8px;
+            border-radius: 10px;
+            font-size: 0.72rem;
+            margin-left: 2px;
+        }
+
+        .page-header-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 2;
+        }
+
+        .page-header-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            background: rgba(255,255,255,0.15);
+            border: 1.5px solid rgba(255,255,255,0.3);
+            border-radius: 12px;
+            color: white;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+            white-space: nowrap;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        .page-header-btn:hover {
+            background: rgba(255,255,255,0.28);
+            transform: translateY(-2px);
+            color: white;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+
+        .page-header-btn.primary {
+            background: rgba(255,255,255,0.95);
+            color: #0B5ED7;
+            border-color: white;
+            font-weight: 700;
+        }
+
+        .page-header-btn.primary:hover {
+            background: white;
+            color: #0A4CA8;
+        }
+
+        /* ================================================================
+           REPORT CONTAINER
+           ================================================================ */
+        .report-container {
+            max-width: 100%;
+            margin: 0 auto;
+            background: var(--exp-bg-card);
+            border-radius: var(--exp-radius-lg);
+            padding: 30px 35px;
+            box-shadow: var(--exp-shadow-md);
+            border: 1px solid var(--exp-border-color);
+            margin-bottom: 24px;
+        }
+
+        .report-header {
+            text-align: center;
+            border-bottom: 4px solid var(--exp-success);
+            padding-bottom: 20px;
+            margin-bottom: 25px;
+        }
+
+        .report-header .logo-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 8px;
+        }
+
+        .report-header .logo-container .logo-img {
+            max-height: 70px;
+            width: auto;
+            max-width: 120px;
+            object-fit: contain;
+        }
+
+        .report-header .logo-container .logo-text {
+            text-align: left;
+        }
+
+        .report-header .logo-container .logo-text h1 {
+            font-size: 28px;
+            color: var(--exp-success);
+            font-weight: 800;
+            letter-spacing: 1px;
+            margin: 0;
+            line-height: 1.1;
+        }
+
+        .report-header .logo-container .logo-text .subtitle {
+            font-size: 14px;
+            color: var(--exp-success);
+            font-weight: 600;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        .report-header .logo-container .logo-text .tagline {
+            font-size: 10px;
+            color: var(--exp-text-secondary);
+            font-weight: 400;
+        }
+
+        .report-header .info {
+            font-size: 12px;
+            color: var(--exp-text-secondary);
+            margin-top: 10px;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .report-header .info span {
+            background: var(--exp-bg-body);
+            padding: 4px 14px;
+            border-radius: 20px;
+            border: 1px solid var(--exp-border-color);
+        }
+
+        .report-header .info strong {
+            color: var(--exp-success);
+        }
+
+        /* ================================================================
+           SUMMARY GRID
+           ================================================================ */
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 14px;
+            margin-bottom: 25px;
+        }
+
+        .summary-card {
+            background: var(--exp-bg-body);
+            border: 2px solid var(--exp-border-color);
+            border-radius: 12px;
+            padding: 14px 16px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .summary-card:hover {
+            border-color: var(--exp-success);
+            transform: translateY(-2px);
+        }
+
+        .summary-card .number {
+            font-size: 24px;
+            font-weight: 800;
+            line-height: 1.2;
+        }
+
+        .summary-card .number.green { color: var(--exp-success); }
+        .summary-card .number.orange { color: #F59E0B; }
+        .summary-card .number.red { color: #EF4444; }
+        .summary-card .number.blue { color: var(--exp-primary); }
+
+        .summary-card .label {
+            font-size: 10px;
+            color: var(--exp-text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 700;
+            margin-top: 4px;
+        }
+
+        /* ================================================================
+           FINANCIAL SUMMARY
+           ================================================================ */
+        .financial-summary {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 14px;
+            margin-bottom: 25px;
+        }
+
+        .financial-card {
+            padding: 14px 18px;
+            border-radius: 12px;
+            text-align: center;
+            border: 2px solid var(--exp-border-color);
+        }
+
+        .financial-card.blue { background: #E8F0FE; border-color: #0B5ED7; }
+        .financial-card.blue .amount { color: #0B5ED7; }
+
+        .financial-card.green { background: #D1FAE5; border-color: #059669; }
+        .financial-card.green .amount { color: #059669; }
+
+        .financial-card.orange { background: #FEF3C7; border-color: #F59E0B; }
+        .financial-card.orange .amount { color: #D97706; }
+
+        [data-theme="dark"] .financial-card.blue { background: #1E3A5F; border-color: #3B82F6; }
+        [data-theme="dark"] .financial-card.blue .amount { color: #6EA8FE; }
+
+        [data-theme="dark"] .financial-card.green { background: #1A3A2A; border-color: #34D399; }
+        [data-theme="dark"] .financial-card.green .amount { color: #34D399; }
+
+        [data-theme="dark"] .financial-card.orange { background: #3D2E0A; border-color: #FBBF24; }
+        [data-theme="dark"] .financial-card.orange .amount { color: #FBBF24; }
+
+        .financial-card .label {
+            font-size: 10px;
+            color: var(--exp-text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 700;
+        }
+
+        .financial-card .amount {
+            font-size: 22px;
+            font-weight: 800;
+            margin-top: 2px;
+        }
+
+        /* ================================================================
+           TABLE
+           ================================================================ */
+        .table-wrapper {
+            overflow-x: auto;
+            margin-top: 5px;
+            border-radius: 8px;
+        }
+
+        .data-table-exp {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 11px;
+        }
+
+        .data-table-exp thead th {
+            background: var(--exp-success);
+            color: white;
+            padding: 10px 12px;
+            text-align: left;
+            font-weight: 700;
+            text-transform: uppercase;
+            font-size: 9px;
+            letter-spacing: 0.05em;
+            border-bottom: 3px solid var(--exp-success-dark);
+            white-space: nowrap;
+        }
+
+        .data-table-exp thead th:first-child {
+            border-radius: 8px 0 0 0;
+        }
+
+        .data-table-exp thead th:last-child {
+            border-radius: 0 8px 0 0;
+        }
+
+        .data-table-exp tbody td {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--exp-border-color);
+            vertical-align: middle;
+            color: var(--exp-text-primary);
+        }
+
+        .data-table-exp tbody tr:nth-child(even) {
+            background: var(--exp-bg-body);
+        }
+
+        .data-table-exp tbody tr:hover {
+            background: #D1FAE5;
+        }
+
+        [data-theme="dark"] .data-table-exp tbody tr:hover {
+            background: #1A3A2A;
+        }
+
+        .text-right { text-align: right; }
+        .text-center { text-align: center; }
+
+        .bill-number {
+            font-weight: 700;
+            font-family: monospace;
+            font-size: 11px;
+            color: var(--exp-success);
+        }
+
+        .patient-name {
+            font-weight: 600;
+            font-size: 11px;
+        }
+
+        /* ================================================================
+           STATUS BADGES
+           ================================================================ */
+        .status-badge-exp {
+            display: inline-block;
+            padding: 3px 12px;
+            border-radius: 20px;
+            font-size: 8px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .status-badge-exp.paid {
+            background: #D1FAE5;
+            color: #059669;
+            border: 1px solid #059669;
+        }
+
+        .status-badge-exp.pending {
+            background: #FEF3C7;
+            color: #D97706;
+            border: 1px solid #D97706;
+        }
+
+        .status-badge-exp.partial {
+            background: #EDE9FE;
+            color: #7B2FBE;
+            border: 1px solid #7B2FBE;
+        }
+
+        .status-badge-exp.cancelled {
+            background: #FEE2E2;
+            color: #DC2626;
+            border: 1px solid #DC2626;
+        }
+
+        [data-theme="dark"] .status-badge-exp.paid { background: #1A3A2A; color: #34D399; border-color: #34D399; }
+        [data-theme="dark"] .status-badge-exp.pending { background: #3D2E0A; color: #FBBF24; border-color: #FBBF24; }
+        [data-theme="dark"] .status-badge-exp.partial { background: #2D1B4E; color: #A78BFA; border-color: #A78BFA; }
+        [data-theme="dark"] .status-badge-exp.cancelled { background: #3A1A1A; color: #F87171; border-color: #F87171; }
+
+        /* ================================================================
+           REPORT FOOTER
+           ================================================================ */
+        .report-footer-exp {
+            margin-top: 25px;
+            padding-top: 20px;
+            border-top: 3px solid var(--exp-success);
+            text-align: center;
+            font-size: 10px;
+            color: var(--exp-text-secondary);
+        }
+
+        .report-footer-exp .brand {
+            color: var(--exp-success);
+            font-weight: 700;
+            font-size: 12px;
+        }
+
+        .report-footer-exp .brand span {
+            font-weight: 300;
+            color: var(--exp-text-secondary);
+        }
+
+        /* ================================================================
+           PDF HINT
+           ================================================================ */
+        .pdf-hint {
+            text-align: center;
+            margin-top: 20px;
+            padding: 12px;
+            background: var(--exp-bg-body);
+            border: 2px dashed var(--exp-success);
+            border-radius: 10px;
+            font-size: 13px;
+            color: var(--exp-success);
+            max-width: 100%;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .pdf-hint i { margin-right: 8px; }
+        .pdf-hint strong { font-weight: 700; }
+
+        /* ================================================================
+           PRINT STYLES
+           ================================================================ */
+        @media print {
+            .top-nav, .sidebar, #sidebarToggle, .dark-toggle-btn,
+            .page-header-card, .pdf-hint, .footer,
+            .main-content > *:not(.report-container) {
+                display: none !important;
             }
-            
+
             body {
-                font-family: 'Helvetica', 'Arial', sans-serif;
-                background: #f0f4f8;
-                padding: 20px;
-                min-height: 100vh;
+                background: white !important;
+                padding: 0 !important;
             }
-            
-            .control-bar {
-                max-width: 1200px;
-                margin: 0 auto 20px auto;
-                background: white;
-                border-radius: 16px;
-                padding: 16px 24px;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                flex-wrap: wrap;
-                gap: 12px;
-                border: 2px solid #059669;
+
+            .main-content {
+                margin: 0 !important;
+                padding: 0 !important;
+                background: white !important;
             }
-            
-            .control-bar .title-section h2 {
-                font-size: 18px;
-                font-weight: 700;
-                color: #059669;
-                margin: 0;
-            }
-            
-            .control-bar .title-section p {
-                font-size: 12px;
-                color: #64748B;
-                margin: 2px 0 0 0;
-            }
-            
-            .control-bar .button-group {
-                display: flex;
-                gap: 10px;
-                flex-wrap: wrap;
-            }
-            
-            .btn {
-                display: inline-flex;
-                align-items: center;
-                gap: 8px;
-                padding: 10px 20px;
-                border-radius: 10px;
-                font-size: 14px;
-                font-weight: 600;
-                cursor: pointer;
-                transition: all 0.3s ease;
-                border: none;
-                text-decoration: none;
-                font-family: 'Helvetica', 'Arial', sans-serif;
-            }
-            
-            .btn-download {
-                background: #059669;
-                color: white;
-                box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-            }
-            
-            .btn-download:hover {
-                background: #047857;
-                transform: translateY(-2px);
-                box-shadow: 0 8px 20px rgba(5, 150, 105, 0.4);
-            }
-            
-            .btn-print {
-                background: #0B5ED7;
-                color: white;
-                box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-            }
-            
-            .btn-print:hover {
-                background: #0A4CA8;
-                transform: translateY(-2px);
-                box-shadow: 0 8px 20px rgba(11, 94, 215, 0.4);
-            }
-            
-            .btn-close {
-                background: #EF4444;
-                color: white;
-                box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
-            }
-            
-            .btn-close:hover {
-                background: #DC2626;
-                transform: translateY(-2px);
-                box-shadow: 0 8px 20px rgba(239, 68, 68, 0.4);
-            }
-            
-            .btn i {
-                font-size: 16px;
-            }
-            
+
             .report-container {
-                max-width: 1200px;
-                margin: 0 auto;
-                background: white;
-                border-radius: 16px;
-                padding: 30px 35px;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-                border: 1px solid #E2E8F0;
+                box-shadow: none !important;
+                border-radius: 0 !important;
+                padding: 20px !important;
+                max-width: 100% !important;
+                border: none !important;
+                margin: 0 !important;
             }
-            
-            .report-header {
-                text-align: center;
-                border-bottom: 4px solid #059669;
-                padding-bottom: 20px;
-                margin-bottom: 25px;
-            }
-            
-            .report-header .logo-container {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 15px;
-                margin-bottom: 8px;
-            }
-            
+
             .report-header .logo-container .logo-img {
-                max-height: 70px;
-                width: auto;
-                max-width: 120px;
-                object-fit: contain;
+                max-height: 50px !important;
             }
-            
-            .report-header .logo-container .logo-text {
-                text-align: left;
+
+            .data-table-exp thead th {
+                background: #059669 !important;
+                color: white !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
             }
-            
-            .report-header .logo-container .logo-text h1 {
-                font-size: 28px;
-                color: #059669;
-                font-weight: 800;
-                letter-spacing: 1px;
-                margin: 0;
-                line-height: 1.1;
-            }
-            
-            .report-header .logo-container .logo-text .subtitle {
-                font-size: 14px;
-                color: #059669;
-                font-weight: 600;
-                letter-spacing: 2px;
-                text-transform: uppercase;
-            }
-            
-            .report-header .logo-container .logo-text .tagline {
-                font-size: 10px;
-                color: #64748B;
-                font-weight: 400;
-            }
-            
-            .report-header .info {
-                font-size: 12px;
-                color: #64748B;
-                margin-top: 10px;
-                display: flex;
-                justify-content: center;
-                gap: 20px;
-                flex-wrap: wrap;
-            }
-            
-            .report-header .info span {
-                background: #F8FAFC;
-                padding: 4px 14px;
-                border-radius: 20px;
-                border: 1px solid #E2E8F0;
-            }
-            
-            .report-header .info strong {
-                color: #059669;
-            }
-            
-            .summary-grid {
-                display: grid;
-                grid-template-columns: repeat(4, 1fr);
-                gap: 14px;
-                margin-bottom: 25px;
-            }
-            
+
+            .status-badge-exp,
+            .financial-card,
             .summary-card {
-                background: #F8FAFC;
-                border: 2px solid #E2E8F0;
-                border-radius: 12px;
-                padding: 14px 16px;
-                text-align: center;
-                transition: all 0.3s ease;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
             }
-            
-            .summary-card:hover {
-                border-color: #059669;
-                transform: translateY(-2px);
-                box-shadow: 0 4px 12px rgba(5, 150, 105, 0.1);
+        }
+
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 768px) {
+            .summary-grid {
+                grid-template-columns: repeat(2, 1fr);
             }
-            
-            .summary-card .number {
-                font-size: 24px;
-                font-weight: 800;
-                line-height: 1.2;
-            }
-            
-            .summary-card .number.green { color: #059669; }
-            .summary-card .number.orange { color: #F59E0B; }
-            .summary-card .number.red { color: #EF4444; }
-            .summary-card .number.blue { color: #0B5ED7; }
-            
-            .summary-card .label {
-                font-size: 10px;
-                color: #64748B;
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-                font-weight: 700;
-                margin-top: 4px;
-            }
-            
             .financial-summary {
-                display: grid;
-                grid-template-columns: repeat(3, 1fr);
-                gap: 14px;
-                margin-bottom: 25px;
+                grid-template-columns: 1fr;
             }
-            
-            .financial-card {
-                padding: 14px 18px;
-                border-radius: 12px;
+            .report-container {
+                padding: 16px 18px;
+            }
+            .report-header .logo-container {
+                flex-direction: column;
                 text-align: center;
-                border: 2px solid #E2E8F0;
             }
-            
-            .financial-card.blue { background: #E8F0FE; border-color: #0B5ED7; }
-            .financial-card.blue .amount { color: #0B5ED7; }
-            
-            .financial-card.green { background: #D1FAE5; border-color: #059669; }
-            .financial-card.green .amount { color: #059669; }
-            
-            .financial-card.orange { background: #FEF3C7; border-color: #F59E0B; }
-            .financial-card.orange .amount { color: #D97706; }
-            
-            .financial-card .label {
-                font-size: 10px;
-                color: #64748B;
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-                font-weight: 700;
+            .report-header .logo-container .logo-text {
+                text-align: center;
             }
-            
-            .financial-card .amount {
+            .report-header .logo-container .logo-text h1 {
                 font-size: 22px;
-                font-weight: 800;
-                margin-top: 2px;
             }
-            
-            .table-wrapper {
-                overflow-x: auto;
-                margin-top: 5px;
+            .report-header .logo-container .logo-img {
+                max-height: 50px;
             }
-            
-            table {
-                width: 100%;
-                border-collapse: collapse;
-                font-size: 11px;
-            }
-            
-            table thead th {
-                background: #059669;
-                color: white;
-                padding: 10px 12px;
-                text-align: left;
-                font-weight: 700;
-                text-transform: uppercase;
+            .data-table-exp {
                 font-size: 9px;
-                letter-spacing: 0.05em;
-                border-bottom: 3px solid #047857;
-                white-space: nowrap;
             }
-            
-            table thead th:first-child {
-                border-radius: 8px 0 0 0;
+            .data-table-exp thead th,
+            .data-table-exp tbody td {
+                padding: 5px 8px;
             }
-            
-            table thead th:last-child {
-                border-radius: 0 8px 0 0;
-            }
-            
-            table tbody td {
-                padding: 8px 12px;
-                border-bottom: 1px solid #E2E8F0;
-                vertical-align: middle;
-            }
-            
-            table tbody tr:nth-child(even) {
-                background: #F8FAFC;
-            }
-            
-            table tbody tr:hover {
-                background: #D1FAE5;
-            }
-            
-            .text-right {
-                text-align: right;
-            }
-            
-            .text-center {
-                text-align: center;
-            }
-            
-            .bill-number {
-                font-weight: 700;
-                font-family: monospace;
-                font-size: 11px;
-                color: #059669;
-            }
-            
-            .patient-name {
-                font-weight: 600;
-                font-size: 11px;
-            }
-            
-            .status-badge {
-                display: inline-block;
-                padding: 3px 12px;
-                border-radius: 20px;
-                font-size: 8px;
-                font-weight: 700;
-                text-transform: uppercase;
-                letter-spacing: 0.03em;
-            }
-            
-            .status-badge.paid {
-                background: #D1FAE5;
-                color: #059669;
-                border: 1px solid #059669;
-            }
-            
-            .status-badge.pending {
-                background: #FEF3C7;
-                color: #D97706;
-                border: 1px solid #D97706;
-            }
-            
-            .status-badge.partial {
-                background: #EDE9FE;
-                color: #7B2FBE;
-                border: 1px solid #7B2FBE;
-            }
-            
-            .status-badge.cancelled {
-                background: #FEE2E2;
-                color: #DC2626;
-                border: 1px solid #DC2626;
-            }
-            
-            .report-footer {
-                margin-top: 25px;
-                padding-top: 20px;
-                border-top: 3px solid #059669;
-                text-align: center;
-                font-size: 10px;
-                color: #94A3B8;
-            }
-            
-            .report-footer .brand {
-                color: #059669;
-                font-weight: 700;
-                font-size: 12px;
-            }
-            
-            .report-footer .brand span {
-                font-weight: 300;
-                color: #94A3B8;
-            }
-            
-            .pdf-hint {
-                text-align: center;
-                margin-top: 20px;
-                padding: 12px;
-                background: #F8FAFC;
-                border: 2px dashed #059669;
-                border-radius: 10px;
-                font-size: 13px;
-                color: #059669;
-            }
-            
-            .pdf-hint i {
-                margin-right: 8px;
-            }
-            
-            .pdf-hint strong {
-                font-weight: 700;
-            }
-            
-            @media print {
-                body {
-                    background: white !important;
-                    padding: 0 !important;
-                }
-                
-                .control-bar {
-                    display: none !important;
-                }
-                
-                .pdf-hint {
-                    display: none !important;
-                }
-                
-                .report-container {
-                    box-shadow: none !important;
-                    border-radius: 0 !important;
-                    padding: 20px !important;
-                    max-width: 100% !important;
-                    border: none !important;
-                }
-                
-                .report-header .logo-container .logo-img {
-                    max-height: 50px !important;
-                }
-                
-                table thead th {
-                    background: #059669 !important;
-                    color: white !important;
-                    -webkit-print-color-adjust: exact !important;
-                    print-color-adjust: exact !important;
-                }
-                
-                .status-badge {
-                    -webkit-print-color-adjust: exact !important;
-                    print-color-adjust: exact !important;
-                }
-                
-                .financial-card {
-                    -webkit-print-color-adjust: exact !important;
-                    print-color-adjust: exact !important;
-                }
-                
-                .summary-card {
-                    border-color: #ddd !important;
-                }
-            }
-            
-            @media (max-width: 768px) {
-                .summary-grid {
-                    grid-template-columns: repeat(2, 1fr);
-                }
-                .financial-summary {
-                    grid-template-columns: 1fr;
-                }
-                .control-bar {
-                    flex-direction: column;
-                    align-items: stretch;
-                    text-align: center;
-                }
-                .control-bar .button-group {
-                    justify-content: center;
-                }
-                .report-container {
-                    padding: 16px 18px;
-                }
-                .report-header .logo-container {
-                    flex-direction: column;
-                    text-align: center;
-                }
-                .report-header .logo-container .logo-text {
-                    text-align: center;
-                }
-                .report-header .logo-container .logo-text h1 {
-                    font-size: 22px;
-                }
-                .report-header .logo-container .logo-img {
-                    max-height: 50px;
-                }
-                table {
-                    font-size: 9px;
-                }
-                table thead th,
-                table tbody td {
-                    padding: 5px 8px;
-                }
-                .btn {
-                    padding: 8px 14px;
-                    font-size: 12px;
-                }
-            }
-        </style>
-    </head>
-    <body>
-        
-        <!-- Control Bar -->
-        <div class="control-bar">
-            <div class="title-section">
-                <h2><i class="fas fa-file-invoice" style="color:#059669;margin-right:8px;"></i>Bills Report</h2>
-                <p><?= htmlspecialchars($branch_name) ?> &bull; <?= $period_label ?> &bull; <?= number_format($total_bills) ?> bills</p>
+        }
+
+        @media (max-width: 480px) {
+            .page-header-card { flex-direction: column; align-items: flex-start !important; }
+            .page-header-title { font-size: 1.2rem; }
+            .summary-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+
+    <!-- ================================================================ -->
+    <!-- MAIN CONTENT -->
+    <!-- ================================================================ -->
+    <main class="main-content">
+
+        <!-- ================================================================ -->
+        <!-- PAGE HEADER CARD -->
+        <!-- ================================================================ -->
+        <div class="page-header-card">
+            <div class="page-header-left">
+                <h1 class="page-header-title">
+                    <i class="fas fa-file-invoice"></i>
+                    Bills Report
+                </h1>
+                <p class="page-header-subtitle">
+                    <i class="fas fa-chart-line"></i>
+                    Financial report for <?= htmlspecialchars($branch_name) ?> &bull; <?= $period_label ?>
+                    <span class="page-header-branch">
+                        <i class="fas fa-store-alt"></i>
+                        <?= htmlspecialchars($branch_name) ?>
+                    </span>
+                </p>
+                <div class="page-header-stats">
+                    <span class="page-header-stat">
+                        <i class="fas fa-file-invoice"></i>
+                        Total Bills
+                        <span class="stat-count"><?= number_format($total_bills) ?></span>
+                    </span>
+                    <span class="page-header-stat">
+                        <i class="fas fa-money-bill-wave"></i>
+                        Total Amount
+                        <span class="stat-count">TSh <?= number_format($total_amount, 0) ?></span>
+                    </span>
+                    <span class="page-header-stat">
+                        <i class="fas fa-check-circle"></i>
+                        Paid
+                        <span class="stat-count"><?= number_format($status_counts['paid'] ?? 0) ?></span>
+                    </span>
+                </div>
             </div>
-            <div class="button-group">
-                <button onclick="window.print()" class="btn btn-download">
+            <div class="page-header-actions">
+                <button onclick="window.print()" class="page-header-btn primary">
                     <i class="fas fa-file-pdf"></i> Save as PDF
                 </button>
-                <button onclick="window.print()" class="btn btn-print">
+                <button onclick="window.print()" class="page-header-btn">
                     <i class="fas fa-print"></i> Print
                 </button>
-                <button onclick="window.close()" class="btn btn-close">
-                    <i class="fas fa-times"></i> Close
-                </button>
+                <a href="bills.php?branch=<?= $selected_branch_id ?>" class="page-header-btn">
+                    <i class="fas fa-arrow-left"></i> Back
+                </a>
             </div>
         </div>
-        
-        <!-- Report -->
+
+        <!-- ================================================================ -->
+        <!-- REPORT CONTAINER -->
+        <!-- ================================================================ -->
         <div class="report-container" id="reportContainer">
             
             <!-- Report Header -->
@@ -839,7 +1085,7 @@ if ($format === 'pdf' || $format === 'view') {
             
             <!-- Bills Table -->
             <div class="table-wrapper">
-                <table>
+                <table class="data-table-exp">
                     <thead>
                         <tr>
                             <th style="width:30px;">#</th>
@@ -861,20 +1107,20 @@ if ($format === 'pdf' || $format === 'view') {
                                     <td>
                                         <span class="bill-number"><?= htmlspecialchars($bill['bill_number']) ?></span>
                                         <?php if ($bill['item_count'] > 0): ?>
-                                            <br><span style="font-size:8px;color:#94A3B8;"><?= $bill['item_count'] ?> items</span>
+                                            <br><span style="font-size:8px;color:var(--exp-text-secondary);"><?= $bill['item_count'] ?> items</span>
                                         <?php endif; ?>
                                     </td>
                                     <td>
                                         <span class="patient-name"><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></span>
-                                        <br><span style="font-size:8px;color:#94A3B8;"><?= htmlspecialchars($bill['patient_id_number'] ?? '') ?></span>
+                                        <br><span style="font-size:8px;color:var(--exp-text-secondary);"><?= htmlspecialchars($bill['patient_id_number'] ?? '') ?></span>
                                     </td>
                                     <td class="text-right" style="font-weight:700;">TSh <?= number_format($bill['total_amount'], 0) ?></td>
-                                    <td class="text-right" style="color:#059669;font-weight:600;">TSh <?= number_format($bill['paid_amount'], 0) ?></td>
-                                    <td class="text-right" style="font-weight:700;color:<?= $bill['balance'] > 0 ? '#EF4444' : '#059669' ?>;">
+                                    <td class="text-right" style="color:var(--exp-success);font-weight:600;">TSh <?= number_format($bill['paid_amount'], 0) ?></td>
+                                    <td class="text-right" style="font-weight:700;color:<?= $bill['balance'] > 0 ? '#EF4444' : 'var(--exp-success)' ?>;">
                                         TSh <?= number_format($bill['balance'], 0) ?>
                                     </td>
                                     <td>
-                                        <span class="status-badge <?= $bill['status'] ?>">
+                                        <span class="status-badge-exp <?= $bill['status'] ?>">
                                             <?= getStatusLabel($bill['status']) ?>
                                         </span>
                                     </td>
@@ -884,8 +1130,8 @@ if ($format === 'pdf' || $format === 'view') {
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="9" style="text-align:center;padding:30px;color:#94A3B8;font-size:14px;">
-                                    <i class="fas fa-inbox" style="font-size:24px;display:block;margin-bottom:8px;color:#D1D5DB;"></i>
+                                <td colspan="9" style="text-align:center;padding:30px;color:var(--exp-text-secondary);font-size:14px;">
+                                    <i class="fas fa-inbox" style="font-size:24px;display:block;margin-bottom:8px;"></i>
                                     No bills found
                                 </td>
                             </tr>
@@ -895,113 +1141,88 @@ if ($format === 'pdf' || $format === 'view') {
             </div>
             
             <!-- Footer -->
-            <div class="report-footer">
+            <div class="report-footer-exp">
                 <span class="brand">Braick Dispensary <span>&bull; Quality Healthcare Services</span></span>
                 <br>
-                <span style="font-size:9px;color:#CBD5E1;">
+                <span style="font-size:9px;">
                     Report generated on <?= date('F d, Y h:i:s A') ?> &bull; 
                     <?= number_format($total_bills) ?> bills
                 </span>
             </div>
             
         </div>
-        
+
         <!-- PDF Hint -->
         <div class="pdf-hint">
             <i class="fas fa-info-circle"></i>
             <strong>To save as PDF:</strong> Click "Save as PDF" button, then choose <strong>"Save as PDF"</strong> in the print dialog
         </div>
+
+        <!-- FOOTER -->
+        <footer style="padding:14px 0;border-top:1px solid var(--exp-border-color);margin-top:24px;text-align:center;font-size:0.7rem;color:var(--exp-text-secondary);">
+            <p>
+                <span style="color:#0B5ED7;font-weight:600;">Braick Dispensary</span> Management System
+                <span>|</span>
+                Bills Report
+                <span>|</span>
+                <span id="footerTime"><?= date('H:i:s') ?></span>
+                <span>|</span>
+                &copy; <?= date('Y') ?> All rights reserved
+            </p>
+        </footer>
+
+    </main>
+
+    <!-- ================================================================ -->
+    <!-- PAGE-SPECIFIC JAVASCRIPT -->
+    <!-- ================================================================ -->
+    <script>
+        // ================================================================
+        // AUTO PRINT FOR PDF VIEW
+        // ================================================================
+        <?php if ($is_pdf_view): ?>
+        window.onload = function() {
+            setTimeout(function() {
+                window.print();
+            }, 1500);
+        };
+        <?php endif; ?>
         
-        <script>
-            <?php if ($is_pdf_view): ?>
-            window.onload = function() {
-                setTimeout(function() {
-                    window.print();
-                }, 1500);
-            };
-            <?php endif; ?>
-            
-            document.addEventListener('keydown', function(e) {
-                if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
-                    e.preventDefault();
-                    window.print();
-                }
-                if (e.key === 'Escape') {
-                    window.close();
-                }
+        // ================================================================
+        // KEYBOARD SHORTCUTS
+        // ================================================================
+        document.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+                e.preventDefault();
+                window.print();
+            }
+        });
+        
+        // ================================================================
+        // FOOTER TIME
+        // ================================================================
+        setInterval(function() {
+            var now = new Date();
+            var timeStr = now.toLocaleTimeString('en-US', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
             });
-            
-            console.log('%c📄 Braick Dispensary - Bills Report', 'font-size:18px; font-weight:bold; color:#059669;');
-            console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-            console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-            console.log('%c📊 Total Bills: <?= number_format($total_bills) ?>', 'font-size:13px; color:#0B5ED7;');
-            console.log('%c💰 Total Amount: TSh <?= number_format($total_amount, 0) ?>', 'font-size:13px; color:#7B2FBE;');
-            console.log('%c🖼️ Logo: <?= $logo_available ? '✅ Loaded' : '❌ Not found' ?>', 'font-size:13px; color:#059669;');
-            console.log('%c✅ Using bills table (not patient_bills)', 'font-size:13px; color:#34D399;');
-        </script>
-        
+            var ftEl = document.getElementById('footerTime');
+            if (ftEl) ftEl.textContent = timeStr;
+        }, 1000);
+
+        console.log('%c📄 Braick Dispensary - Bills Report', 'font-size:18px; font-weight:bold; color:#059669;');
+        console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+        console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
+        console.log('%c📊 Total Bills: <?= number_format($total_bills) ?>', 'font-size:13px; color:#0B5ED7;');
+        console.log('%c💰 Total Amount: TSh <?= number_format($total_amount, 0) ?>', 'font-size:13px; color:#7B2FBE;');
+        console.log('%c🖼️ Logo: <?= $logo_available ? '✅ Loaded' : '❌ Not found' ?>', 'font-size:13px; color:#059669;');
+        console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#34D399;');
+        console.log('%c🌙 Dark mode: Handled by header (shared)', 'font-size:13px; color:#34D399;');
+    </script>
+
     </body>
     </html>
     <?php
-    exit;
-}
-
-// ================================================================
-// EXCEL EXPORT (CSV)
-// ================================================================
-if ($format === 'excel') {
-    header('Content-Type: text/csv; charset=utf-8');
-    header('Content-Disposition: attachment; filename="bills_report_' . date('Y-m-d') . '.csv"');
-    
-    $output = fopen('php://output', 'w');
-    fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
-    
-    fputcsv($output, [
-        'Bill Number',
-        'Patient Name',
-        'Patient ID',
-        'Total Amount',
-        'Paid Amount',
-        'Balance',
-        'Status',
-        'Branch',
-        'Items',
-        'Created By',
-        'Date Created'
-    ]);
-    
-    foreach ($bills as $bill) {
-        fputcsv($output, [
-            $bill['bill_number'],
-            $bill['patient_name'] ?? 'N/A',
-            $bill['patient_id_number'] ?? 'N/A',
-            'TSh ' . number_format($bill['total_amount'], 0),
-            'TSh ' . number_format($bill['paid_amount'], 0),
-            'TSh ' . number_format($bill['balance'], 0),
-            getStatusLabel($bill['status']),
-            $bill['branch_name'] ?? 'N/A',
-            $bill['item_count'] ?? 0,
-            $bill['created_by_name'] ?? 'N/A',
-            date('Y-m-d H:i', strtotime($bill['created_at']))
-        ]);
-    }
-    
-    fputcsv($output, []);
-    fputcsv($output, ['SUMMARY']);
-    fputcsv($output, ['Total Bills', number_format($total_bills)]);
-    fputcsv($output, ['Total Amount', 'TSh ' . number_format($total_amount, 0)]);
-    fputcsv($output, ['Total Paid', 'TSh ' . number_format($total_paid, 0)]);
-    fputcsv($output, ['Total Balance', 'TSh ' . number_format($total_balance, 0)]);
-    fputcsv($output, ['Paid Bills', number_format($status_counts['paid'] ?? 0)]);
-    fputcsv($output, ['Pending Bills', number_format($status_counts['pending'] ?? 0)]);
-    fputcsv($output, ['Partial Bills', number_format($status_counts['partial'] ?? 0)]);
-    fputcsv($output, ['Cancelled Bills', number_format($status_counts['cancelled'] ?? 0)]);
-    fputcsv($output, []);
-    fputcsv($output, ['Generated on', date('Y-m-d H:i:s')]);
-    fputcsv($output, ['Branch', $branch_name]);
-    fputcsv($output, ['Period', $period_label]);
-    
-    fclose($output);
     exit;
 }
 

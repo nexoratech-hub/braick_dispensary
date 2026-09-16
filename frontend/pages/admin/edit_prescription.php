@@ -2,13 +2,11 @@
 // ================================================================
 // FILE: frontend/pages/admin/edit_prescription.php
 // SUPER ADMIN - EDIT PRESCRIPTION
-// BRAICK DISPENSARY - FIXED: Shows patient name, doctors & medications by branch
-// FIXED: Uses correct database columns
+// ✅ Uses SHARED header & sidebar (NO DUPLICATES)
+// ✅ Blue theme + full dark mode support via --page-* variables
+// ✅ Shows patient name, doctors & medications by branch
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -21,9 +19,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     exit;
 }
 
-// ================================================================
-// CHECK IF USER IS ADMIN
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -32,6 +27,7 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
@@ -48,22 +44,14 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
-$profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
-    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
-
-$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-$dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'false';
-
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET PARAMETERS
@@ -129,7 +117,7 @@ try {
 }
 
 // ================================================================
-// GET PATIENTS FOR DROPDOWN - Ordered by name
+// GET PATIENTS FOR DROPDOWN
 // ================================================================
 $patients = [];
 try {
@@ -145,7 +133,7 @@ try {
 }
 
 // ================================================================
-// ✅ GET DOCTORS FOR DROPDOWN - ONLY FROM SELECTED BRANCH
+// GET DOCTORS FOR DROPDOWN - ONLY FROM SELECTED BRANCH
 // ================================================================
 $doctors = [];
 try {
@@ -162,7 +150,7 @@ try {
 }
 
 // ================================================================
-// ✅ GET MEDICATIONS INVENTORY - ONLY FROM SELECTED BRANCH
+// GET MEDICATIONS INVENTORY - ONLY FROM SELECTED BRANCH
 // ================================================================
 $medications = [];
 try {
@@ -211,29 +199,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $status = trim($_POST['status'] ?? 'pending');
     $is_indoor = isset($_POST['is_indoor']) ? 1 : 0;
     
-    // Validation
     $errors = [];
-    if ($patient_id <= 0) {
-        $errors[] = 'Please select a patient';
-    }
-    if (empty($medication)) {
-        $errors[] = 'Medication name is required';
-    }
-    if (empty($dosage)) {
-        $errors[] = 'Dosage is required';
-    }
-    if (empty($frequency)) {
-        $errors[] = 'Frequency is required';
-    }
-    if ($duration <= 0) {
-        $errors[] = 'Duration is required';
-    }
-    if (empty($route)) {
-        $errors[] = 'Route is required';
-    }
-    if ($quantity <= 0) {
-        $errors[] = 'Quantity must be greater than 0';
-    }
+    if ($patient_id <= 0) $errors[] = 'Please select a patient';
+    if (empty($medication)) $errors[] = 'Medication name is required';
+    if (empty($dosage)) $errors[] = 'Dosage is required';
+    if (empty($frequency)) $errors[] = 'Frequency is required';
+    if ($duration <= 0) $errors[] = 'Duration is required';
+    if (empty($route)) $errors[] = 'Route is required';
+    if ($quantity <= 0) $errors[] = 'Quantity must be greater than 0';
     
     if (empty($errors)) {
         try {
@@ -241,42 +214,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             
             $stmt = $db->prepare("
                 UPDATE prescriptions SET
-                    patient_id = ?,
-                    doctor_id = ?,
-                    branch_id = ?,
-                    diagnosis = ?,
-                    medication = ?,
-                    dosage = ?,
-                    frequency = ?,
-                    duration = ?,
-                    route = ?,
-                    quantity = ?,
-                    instructions = ?,
-                    notes = ?,
-                    status = ?,
-                    is_indoor = ?,
-                    updated_at = NOW()
+                    patient_id = ?, doctor_id = ?, branch_id = ?, diagnosis = ?,
+                    medication = ?, dosage = ?, frequency = ?, duration = ?,
+                    route = ?, quantity = ?, instructions = ?, notes = ?,
+                    status = ?, is_indoor = ?, updated_at = NOW()
                 WHERE id = ?
             ");
             $stmt->execute([
-                $patient_id,
-                $doctor_id,
-                $branch_id_update,
-                $diagnosis,
-                $medication,
-                $dosage,
-                $frequency,
-                $duration,
-                $route,
-                $quantity,
-                $instructions,
-                $notes,
-                $status,
-                $is_indoor,
-                $prescription_id
+                $patient_id, $doctor_id, $branch_id_update, $diagnosis,
+                $medication, $dosage, $frequency, $duration,
+                $route, $quantity, $instructions, $notes,
+                $status, $is_indoor, $prescription_id
             ]);
             
-            // Update prescription items if any
+            // Update prescription items
             if (isset($_POST['item_id']) && is_array($_POST['item_id'])) {
                 foreach ($_POST['item_id'] as $index => $item_id) {
                     $item_medication = trim($_POST['item_medication'][$index] ?? '');
@@ -291,30 +242,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     if ($item_id > 0 && !empty($item_medication)) {
                         $stmt = $db->prepare("
                             UPDATE prescription_items SET
-                                medication_name = ?,
-                                dosage = ?,
-                                frequency = ?,
-                                quantity = ?,
-                                duration = ?,
-                                route = ?,
-                                instructions = ?,
-                                unit_price = ?,
+                                medication_name = ?, dosage = ?, frequency = ?, quantity = ?,
+                                duration = ?, route = ?, instructions = ?, unit_price = ?,
                                 total_price = ? * ?
                             WHERE id = ? AND prescription_id = ?
                         ");
                         $stmt->execute([
-                            $item_medication,
-                            $item_dosage,
-                            $item_frequency,
-                            $item_quantity,
-                            $item_duration,
-                            $item_route,
-                            $item_instructions,
-                            $item_unit_price,
-                            $item_quantity,
-                            $item_unit_price,
-                            $item_id,
-                            $prescription_id
+                            $item_medication, $item_dosage, $item_frequency, $item_quantity,
+                            $item_duration, $item_route, $item_instructions, $item_unit_price,
+                            $item_quantity, $item_unit_price, $item_id, $prescription_id
                         ]);
                     }
                 }
@@ -325,12 +261,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $message = '✅ Prescription updated successfully!';
             $message_type = 'success';
             
-            // Refresh data
             $stmt = $db->prepare($sql);
             $stmt->execute([$prescription_id]);
             $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
             
-            // Refresh items
             $stmt = $db->prepare("SELECT * FROM prescription_items WHERE prescription_id = ? ORDER BY id ASC");
             $stmt->execute([$prescription_id]);
             $prescription_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -357,7 +291,6 @@ if (isset($_GET['delete']) && (int)$_GET['delete'] === $prescription_id) {
         $message = '✅ Prescription cancelled successfully!';
         $message_type = 'success';
         
-        // Refresh data
         $stmt = $db->prepare($sql);
         $stmt->execute([$prescription_id]);
         $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -375,23 +308,11 @@ if (isset($_GET['delete']) && (int)$_GET['delete'] === $prescription_id) {
 }
 
 // ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
-$unread_notifications = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
-
-// ================================================================
 // STATUS OPTIONS
 // ================================================================
 $status_options = ['pending', 'confirmed', 'dispensed', 'cancelled'];
 
-function getStatusBadge($status) {
+function getStatusBadgeClass($status) {
     $classes = [
         'pending' => 'warning',
         'confirmed' => 'info',
@@ -399,13 +320,6 @@ function getStatusBadge($status) {
         'cancelled' => 'danger'
     ];
     return $classes[$status] ?? 'secondary';
-}
-
-function format_currency($amount) {
-    if ($amount == 0) {
-        return 'TSh 0';
-    }
-    return 'TSh ' . number_format($amount, 0);
 }
 
 // ================================================================
@@ -422,7 +336,6 @@ $patient_phone = $prescription['patient_phone'] ?? '';
 $patient_gender = $prescription['patient_gender'] ?? '';
 $patient_dob = $prescription['patient_dob'] ?? '';
 
-// Calculate age if DOB exists
 $patient_age = '';
 if (!empty($patient_dob)) {
     $dob = new DateTime($patient_dob);
@@ -431,865 +344,547 @@ if (!empty($patient_dob)) {
     $patient_age = $age->y . ' yrs';
 }
 
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// ✅ SHARED HEADER & SIDEBAR
+// ================================================================
+include_once __DIR__ . '/../../components/admin_header.php';
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= $dark_mode === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Edit Prescription - <?= htmlspecialchars($patient_display_name) ?> - Braick Dispensary</title>
-    
-    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
-    <style>
-        :root {
-            --bg-body: #F1F5F9;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #3B82F6;
-            --primary-bg: #EFF6FF;
-            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #083C8A);
-            --success: #059669;
-            --danger: #DC2626;
-            --warning: #D97706;
-        }
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-light: #60A5FA;
-            --primary-bg: #1E3A5F;
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Inter', 'Segoe UI', sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: background 0.3s ease, border-color 0.3s ease;
-        }
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        .top-nav .branch-selector {
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            background: var(--bg-card);
-            font-size: 0.82rem;
-            font-weight: 500;
-            cursor: pointer;
-            outline: none;
-            min-width: 160px;
-            color: var(--text-primary);
-            transition: all 0.3s;
-        }
-        .top-nav .branch-selector:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            background: #059669;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        .notif-dot.has-notif { background: #EF4444; }
-        .notif-dot.no-notif { background: #94A3B8; animation: none; }
-        @keyframes pulse-dot { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.2); } }
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 24px 28px;
-            min-height: calc(100vh - 68px);
-            transition: background 0.3s ease;
-        }
-        
-        /* ================================================================
-           SIDEBAR
-           ================================================================ */
-        .sidebar {
-            position: fixed;
-            top: 0;
-            left: 0;
-            bottom: 0;
-            width: 270px;
-            background: #0B4EA8;
-            color: white;
-            z-index: 50;
-            overflow-y: auto;
-            overflow-x: hidden;
-            transition: transform 0.3s ease-in-out;
-            transform: translateX(0);
-            box-shadow: 4px 0 20px rgba(0,0,0,0.15);
-        }
-        .sidebar-brand {
-            padding: 18px 16px 14px;
-            border-bottom: 2px solid #0B3D8A;
-            background: #0B4EA8;
-            position: sticky;
-            top: 0;
-            z-index: 5;
-        }
-        .sidebar-brand .logo {
-            width: 42px;
-            height: 42px;
-            border-radius: 10px;
-            object-fit: cover;
-            background: white;
-            padding: 4px;
-            border: 2px solid rgba(255,255,255,0.1);
-        }
-        .sidebar-brand .brand-text { color: white; font-weight: 700; font-size: 0.95rem; line-height: 1.2; }
-        .sidebar-brand .brand-sub { color: #9EC5FE; font-size: 0.65rem; font-weight: 500; }
-        .sidebar-nav { padding: 10px 8px 20px; }
-        .sidebar-nav .nav-label {
-            font-size: 0.5rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: #6EA8FE;
-            padding: 0 10px;
-            margin: 12px 0 4px;
-            font-weight: 700;
-        }
-        .sidebar-link {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 12px;
-            border-radius: 8px;
-            color: #D2E3FC;
-            text-decoration: none;
-            transition: all 0.25s ease;
-            font-size: 0.8rem;
-            font-weight: 500;
-            margin: 1px 0;
-            background: transparent;
-            cursor: pointer;
-            border: none;
-            width: 100%;
-            text-align: left;
-            position: relative;
-        }
-        .sidebar-link:hover {
-            background: #0AA84F;
-            color: white;
-            box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
-            transform: translateX(4px);
-        }
-        .sidebar-link.active {
-            background: #0AA84F;
-            color: white;
-            box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
-        }
-        .sidebar-link.logout-link {
-            border-top: 2px solid rgba(255,255,255,0.08);
-            padding-top: 10px;
-            margin-top: 6px;
-            color: #FCA5A5;
-        }
-        .sidebar-link.logout-link:hover {
-            background: #DC2626;
-            color: white;
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
-        }
-        
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 20px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            transition: border-color 0.3s ease, color 0.3s ease;
-        }
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
-        .page-header-box {
-            background: var(--primary-gradient);
-            border-radius: 16px;
-            padding: 20px 28px;
-            margin-bottom: 24px;
-            box-shadow: 0 6px 24px rgba(11, 94, 215, 0.2);
-            position: relative;
-            overflow: hidden;
-        }
-        .page-header-box::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 350px;
-            height: 350px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        .page-header-box .page-title {
-            color: white;
-            font-size: 1.6rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        .page-header-box .page-title .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        .page-header-box .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.85rem;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-            margin-top: 4px;
-        }
-        .page-header-box .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        .page-header-box .header-badge {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        .page-header-box .header-badge i { opacity: 0.8; }
-        .page-header-box .header-badge.status {
-            background: rgba(251, 191, 36, 0.2);
-            border-color: rgba(251, 191, 36, 0.3);
-            color: #FBBF24;
-        }
-        .page-header-box .header-badge.success {
-            background: rgba(52, 211, 153, 0.2);
-            border-color: rgba(52, 211, 153, 0.3);
-            color: #34D399;
-        }
-        .page-header-box .header-badge.info {
-            background: rgba(96, 165, 250, 0.2);
-            border-color: rgba(96, 165, 250, 0.3);
-            color: #60A5FA;
-        }
-        .page-header-box .header-badge.danger {
-            background: rgba(248, 113, 113, 0.2);
-            border-color: rgba(248, 113, 113, 0.3);
-            color: #F87171;
-        }
-        
-        /* ================================================================
-           FORM STYLES
-           ================================================================ */
-        .form-card {
-            background: var(--bg-card);
-            border-radius: 16px;
-            padding: 24px 28px;
-            border: 2px solid var(--border-color);
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-            transition: all 0.3s ease;
-            margin-bottom: 24px;
-        }
-        .form-card:hover {
-            border-color: var(--primary);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        }
-        .form-card .form-title {
-            font-size: 0.85rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            padding-bottom: 12px;
-            margin-bottom: 18px;
-            border-bottom: 2px solid var(--border-color);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .form-card .form-title i {
-            color: var(--primary);
-        }
-        .form-label {
-            font-size: 0.78rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 4px;
-            display: block;
-        }
-        .form-label .required {
-            color: var(--danger);
-            margin-left: 2px;
-        }
-        .form-control {
-            width: 100%;
-            padding: 10px 14px;
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            font-size: 0.88rem;
-            transition: all 0.3s ease;
-            outline: none;
-            background: var(--bg-card);
-            color: var(--text-primary);
-        }
-        .form-control:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
-        }
-        .form-control::placeholder {
-            color: var(--text-secondary);
-            opacity: 0.5;
-        }
-        .form-control:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-        .form-row { margin-bottom: 16px; }
-        .form-row:last-child { margin-bottom: 0; }
-        select.form-control { appearance: auto; cursor: pointer; }
-        textarea.form-control { resize: vertical; min-height: 80px; }
-        
-        .form-grid {
-            display: grid;
+
+<!-- ================================================================
+     PAGE-SPECIFIC CSS - TUMIA VARIABLES ZA HEADER (--page-*)
+     ================================================================ -->
+<style>
+    /* ================================================================
+       PAGE HEADER
+       ================================================================ */
+    .page-header-rx {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        border-radius: 16px;
+        padding: 20px 28px;
+        margin-bottom: 24px;
+        box-shadow: 0 6px 24px rgba(11, 94, 215, 0.2);
+        position: relative;
+        overflow: hidden;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+    }
+
+    .page-header-rx::before {
+        content: '';
+        position: absolute;
+        top: -60%;
+        right: -10%;
+        width: 350px;
+        height: 350px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .page-header-rx .page-title-rx {
+        color: white;
+        font-size: 1.6rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+    }
+
+    .page-header-rx .role-badge-display {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.6rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        backdrop-filter: blur(4px);
+    }
+
+    .page-header-rx .page-subtitle-rx {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.85rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 4px;
+    }
+
+    .page-header-rx .page-subtitle-rx strong {
+        color: white;
+        font-weight: 600;
+    }
+
+    .page-header-rx .header-badge-rx {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 500;
+        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .page-header-rx .header-badge-rx.status {
+        background: rgba(251, 191, 36, 0.2);
+        border-color: rgba(251, 191, 36, 0.3);
+        color: #FBBF24;
+    }
+
+    .page-header-rx .header-badge-rx.success {
+        background: rgba(52, 211, 153, 0.2);
+        border-color: rgba(52, 211, 153, 0.3);
+        color: #34D399;
+    }
+
+    .page-header-rx .header-badge-rx.danger {
+        background: rgba(248, 113, 113, 0.2);
+        border-color: rgba(248, 113, 113, 0.3);
+        color: #F87171;
+    }
+
+    .page-header-rx .btn-outline-light-rx {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.2);
+        padding: 8px 18px;
+        border-radius: 12px;
+        font-weight: 500;
+        font-size: 0.82rem;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        backdrop-filter: blur(4px);
+        position: relative;
+        z-index: 1;
+        transition: all 0.3s ease;
+    }
+
+    .page-header-rx .btn-outline-light-rx:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        color: white;
+    }
+
+    /* ================================================================
+       FORM CARD
+       ================================================================ */
+    .form-card-rx {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        padding: 24px 28px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        box-shadow: var(--page-shadow-sm, 0 1px 3px rgba(0,0,0,0.08));
+        transition: all 0.3s ease;
+        margin-bottom: 24px;
+    }
+
+    .form-card-rx:hover {
+        border-color: var(--page-primary, #0B5ED7);
+        box-shadow: var(--page-shadow-md, 0 4px 12px rgba(0,0,0,0.1));
+    }
+
+    .form-card-rx .form-title-rx {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: var(--page-text-primary, #1E293B);
+        padding-bottom: 12px;
+        margin-bottom: 18px;
+        border-bottom: 2px solid var(--page-border, #E2E8F0);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .form-card-rx .form-title-rx i {
+        color: var(--page-primary, #0B5ED7);
+    }
+
+    /* ================================================================
+       FORM CONTROLS
+       ================================================================ */
+    .form-label-rx {
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: var(--page-text-primary, #1E293B);
+        margin-bottom: 4px;
+        display: block;
+    }
+
+    .form-label-rx .required {
+        color: #DC2626;
+        margin-left: 2px;
+    }
+
+    .form-control-rx {
+        width: 100%;
+        padding: 10px 14px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        border-radius: 10px;
+        font-size: 0.88rem;
+        transition: all 0.3s ease;
+        outline: none;
+        background: var(--page-input-bg, #FFFFFF);
+        color: var(--page-text-primary, #1E293B);
+        font-family: inherit;
+    }
+
+    .form-control-rx:focus {
+        border-color: var(--page-primary, #0B5ED7);
+        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
+    }
+
+    .form-control-rx::placeholder {
+        color: var(--page-text-muted, #94A3B8);
+        opacity: 0.7;
+    }
+
+    select.form-control-rx { appearance: auto; cursor: pointer; }
+    textarea.form-control-rx { resize: vertical; min-height: 80px; }
+
+    .form-row-rx { margin-bottom: 16px; }
+    .form-row-rx:last-child { margin-bottom: 0; }
+
+    .form-grid-rx {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+    }
+
+    .form-grid-rx .full-width { grid-column: 1 / -1; }
+
+    .help-text-rx {
+        font-size: 0.65rem;
+        color: var(--page-text-secondary, #64748B);
+        margin-top: 4px;
+        display: block;
+    }
+
+    /* ================================================================
+       MEDICATION DROPDOWN
+       ================================================================ */
+    .medication-select-wrapper-rx {
+        position: relative;
+    }
+
+    .medication-select-wrapper-rx select {
+        width: 100%;
+        padding: 10px 40px 10px 14px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        border-radius: 10px;
+        font-size: 0.88rem;
+        background: var(--page-input-bg, #FFFFFF);
+        color: var(--page-text-primary, #1E293B);
+        transition: all 0.3s ease;
+        outline: none;
+        cursor: pointer;
+        appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748B' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 14px center;
+    }
+
+    .medication-select-wrapper-rx select:focus {
+        border-color: var(--page-primary, #0B5ED7);
+        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
+    }
+
+    /* ================================================================
+       ITEM ROWS
+       ================================================================ */
+    .item-header-rx {
+        display: grid;
+        grid-template-columns: 2fr 1fr 1fr 0.8fr 0.8fr 0.8fr 1fr 0.8fr 0.5fr;
+        gap: 6px;
+        padding: 4px 12px;
+        font-size: 0.55rem;
+        font-weight: 700;
+        color: var(--page-text-secondary, #64748B);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .item-row-rx {
+        display: grid;
+        grid-template-columns: 2fr 1fr 1fr 0.8fr 0.8fr 0.8fr 1fr 0.8fr 0.5fr;
+        gap: 6px;
+        align-items: center;
+        padding: 8px 12px;
+        background: var(--page-hover, #F8FAFC);
+        border-radius: 8px;
+        border: 1px solid var(--page-border, #E2E8F0);
+        margin-bottom: 6px;
+    }
+
+    [data-theme="dark"] .item-row-rx {
+        background: #0F172A;
+        border-color: #334155;
+    }
+
+    .item-row-rx .form-control-rx {
+        padding: 6px 8px;
+        font-size: 0.75rem;
+        min-height: 32px;
+    }
+
+    /* ================================================================
+       BUTTONS
+       ================================================================ */
+    .btn-rx {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 24px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.88rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+        min-height: 44px;
+        font-family: inherit;
+    }
+
+    .btn-rx:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    }
+
+    .btn-primary-rx {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+    }
+
+    .btn-primary-rx:hover {
+        box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
+        color: white;
+    }
+
+    .btn-success-rx {
+        background: #059669;
+        color: white;
+    }
+
+    .btn-success-rx:hover {
+        background: #047857;
+        box-shadow: 0 4px 16px rgba(5, 150, 105, 0.35);
+        color: white;
+    }
+
+    .btn-danger-rx {
+        background: #DC2626;
+        color: white;
+    }
+
+    .btn-danger-rx:hover {
+        background: #B91C1C;
+        box-shadow: 0 4px 16px rgba(220, 38, 38, 0.35);
+        color: white;
+    }
+
+    .btn-outline-rx {
+        background: transparent;
+        color: var(--page-text-secondary, #64748B);
+        border: 2px solid var(--page-border, #E2E8F0);
+    }
+
+    .btn-outline-rx:hover {
+        border-color: var(--page-primary, #0B5ED7);
+        color: var(--page-primary, #0B5ED7);
+    }
+
+    [data-theme="dark"] .btn-outline-rx {
+        color: #94A3B8;
+        border-color: #334155;
+    }
+
+    [data-theme="dark"] .btn-outline-rx:hover {
+        border-color: #6EA8FE;
+        color: #6EA8FE;
+    }
+
+    .action-buttons-rx {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding-top: 16px;
+        border-top: 2px solid var(--page-border, #E2E8F0);
+        margin-top: 16px;
+    }
+
+    .action-buttons-rx .btn-rx {
+        min-width: 140px;
+        justify-content: center;
+    }
+
+    /* ================================================================
+       MESSAGE BOX
+       ================================================================ */
+    .message-box-rx {
+        padding: 14px 20px;
+        border-radius: 12px;
+        margin-bottom: 16px;
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        font-weight: 500;
+        animation: slideDownRx 0.4s ease;
+    }
+
+    @keyframes slideDownRx {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .message-box-rx.success {
+        background: #D1FAE5;
+        color: #065F46;
+        border: 2px solid #6EE7B7;
+    }
+
+    .message-box-rx.error {
+        background: #FEE2E2;
+        color: #991B1B;
+        border: 2px solid #FCA5A5;
+    }
+
+    [data-theme="dark"] .message-box-rx.success {
+        background: #1A3A2A;
+        color: #34D399;
+        border-color: #34D399;
+    }
+
+    [data-theme="dark"] .message-box-rx.error {
+        background: #3A1A1A;
+        color: #F87171;
+        border-color: #F87171;
+    }
+
+    /* ================================================================
+       BADGES
+       ================================================================ */
+    .badge-rx {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: white;
+        letter-spacing: 0.02em;
+    }
+
+    .badge-success-rx { background: #059669; }
+    .badge-danger-rx { background: #DC2626; }
+    .badge-warning-rx { background: #D97706; color: #1E293B; }
+    .badge-info-rx { background: #0B5ED7; }
+    .badge-secondary-rx { background: #64748B; }
+
+    [data-theme="dark"] .badge-warning-rx { color: #1E293B; }
+
+    /* ================================================================
+       PATIENT INFO GRID
+       ================================================================ */
+    .patient-info-grid-rx {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+    }
+
+    .patient-info-item-rx {
+        padding: 10px 14px;
+        background: var(--page-hover, #F8FAFC);
+        border-radius: 8px;
+        border: 1px solid var(--page-border, #E2E8F0);
+    }
+
+    [data-theme="dark"] .patient-info-item-rx {
+        background: #0F172A;
+        border-color: #334155;
+    }
+
+    .patient-info-item-rx .label-rx {
+        font-size: 0.55rem;
+        color: var(--page-text-secondary, #64748B);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .patient-info-item-rx .value-rx {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--page-text-primary, #1E293B);
+        margin-top: 2px;
+    }
+
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer-rx {
+        padding: 14px 0;
+        border-top: 2px solid var(--page-border, #E2E8F0);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .footer-rx .footer-brand-rx {
+        color: var(--page-primary, #0B5ED7);
+        font-weight: 600;
+    }
+
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 768px) {
+        .form-grid-rx { grid-template-columns: 1fr; }
+        .page-header-rx .page-title-rx { font-size: 1.3rem; }
+        .page-header-rx { padding: 16px 18px; }
+        .form-card-rx { padding: 16px 18px; }
+        .action-buttons-rx { flex-direction: column; align-items: stretch; }
+        .action-buttons-rx .btn-rx { min-width: unset; width: 100%; }
+        .item-row-rx, .item-header-rx {
             grid-template-columns: 1fr 1fr;
-            gap: 16px;
-        }
-        .form-grid .full-width { grid-column: 1 / -1; }
-        
-        /* ================================================================
-           ✅ MEDICATION DROPDOWN - BEAUTIFUL CSS
-           ================================================================ */
-        .medication-select-wrapper {
-            position: relative;
-        }
-        .medication-select-wrapper select {
-            width: 100%;
-            padding: 10px 14px;
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            font-size: 0.88rem;
-            background: var(--bg-card);
-            color: var(--text-primary);
-            transition: all 0.3s ease;
-            outline: none;
-            cursor: pointer;
-            appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748B' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: right 14px center;
-            padding-right: 40px;
-        }
-        .medication-select-wrapper select:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
-        }
-        .medication-select-wrapper select option {
-            padding: 8px 12px;
-            font-size: 0.85rem;
-        }
-        .medication-select-wrapper select option:checked {
-            background: var(--primary);
-            color: white;
-        }
-        .medication-select-wrapper select optgroup {
-            font-weight: 600;
-            color: var(--text-secondary);
-        }
-        .medication-select-wrapper .select-icon {
-            position: absolute;
-            right: 14px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: var(--text-secondary);
-            pointer-events: none;
-        }
-        
-        /* ================================================================
-           ITEM ROWS
-           ================================================================ */
-        .item-row {
-            display: grid;
-            grid-template-columns: 2fr 1fr 1fr 0.8fr 0.8fr 0.8fr 1fr 0.8fr 0.5fr;
-            gap: 6px;
-            align-items: center;
-            padding: 8px 12px;
-            background: var(--bg-body);
-            border-radius: 8px;
-            border: 1px solid var(--border-color);
-            margin-bottom: 6px;
-        }
-        .item-row .form-control {
-            padding: 6px 8px;
-            font-size: 0.75rem;
-            min-height: 32px;
-        }
-        .item-row .item-label {
-            font-size: 0.6rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.03em;
-        }
-        .item-header {
-            display: grid;
-            grid-template-columns: 2fr 1fr 1fr 0.8fr 0.8fr 0.8fr 1fr 0.8fr 0.5fr;
-            gap: 6px;
-            padding: 4px 12px;
-            font-size: 0.55rem;
-            font-weight: 700;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-        
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 24px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 0.88rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-        }
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        .btn-primary {
-            background: var(--primary-gradient);
-            color: white;
-        }
-        .btn-primary:hover {
-            background: var(--primary-gradient-strong);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
-        }
-        .btn-success {
-            background: var(--success);
-            color: white;
-        }
-        .btn-success:hover {
-            background: #047857;
-            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.35);
-        }
-        .btn-danger {
-            background: var(--danger);
-            color: white;
-        }
-        .btn-danger:hover {
-            background: #B91C1C;
-            box-shadow: 0 4px 16px rgba(220, 38, 38, 0.35);
-        }
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        .btn-outline:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        .btn-sm { padding: 6px 14px; font-size: 0.75rem; }
-        .btn-xs { padding: 4px 10px; font-size: 0.65rem; border-radius: 6px; }
-        
-        .action-buttons {
-            display: flex;
-            gap: 12px;
-            flex-wrap: wrap;
-            padding-top: 16px;
-            border-top: 2px solid var(--border-color);
-            margin-top: 16px;
-        }
-        .action-buttons .btn { min-width: 140px; justify-content: center; }
-        
-        /* ================================================================
-           MESSAGE BOX
-           ================================================================ */
-        .message-box {
-            padding: 14px 20px;
-            border-radius: 12px;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-weight: 500;
-            animation: slideDown 0.4s ease;
-        }
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .message-box.success {
-            background: #D1FAE5;
-            color: #065F46;
-            border: 2px solid #6EE7B7;
-        }
-        .message-box.error {
-            background: #FEE2E2;
-            color: #991B1B;
-            border: 2px solid #FCA5A5;
-        }
-        [data-theme="dark"] .message-box.success {
-            background: #1A3A2A;
-            color: #34D399;
-            border-color: #34D399;
-        }
-        [data-theme="dark"] .message-box.error {
-            background: #3A1A1A;
-            color: #F87171;
-            border-color: #F87171;
-        }
-        .message-box i { font-size: 1.3rem; }
-        
-        /* ================================================================
-           BADGE
-           ================================================================ */
-        .badge {
-            display: inline-flex;
-            align-items: center;
             gap: 4px;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            color: white;
-            letter-spacing: 0.02em;
         }
-        .badge-success { background: #059669; }
-        .badge-danger { background: #DC2626; }
-        .badge-warning { background: #D97706; color: #1E293B; }
-        .badge-info { background: #0B5ED7; }
-        .badge-secondary { background: #64748B; }
-        
-        /* ================================================================
-           PATIENT INFO
-           ================================================================ */
-        .patient-info-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 12px;
-        }
-        .patient-info-item {
-            padding: 10px 14px;
-            background: var(--bg-body);
-            border-radius: 8px;
-            border: 1px solid var(--border-color);
-        }
-        .patient-info-item .label {
-            font-size: 0.55rem;
-            color: var(--text-secondary);
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-        }
-        .patient-info-item .value {
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-top: 2px;
-        }
-        [data-theme="dark"] .patient-info-item {
-            background: #0F172A;
-        }
-        
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .sidebar { transform: translateX(-100%); }
-            .sidebar.open { transform: translateX(0); }
-        }
-        @media (max-width: 768px) {
-            .form-grid { grid-template-columns: 1fr; }
-            .page-header-box .page-title { font-size: 1.3rem; }
-            .page-header-box { padding: 16px 18px; }
-            .form-card { padding: 16px 18px; }
-            .action-buttons { flex-direction: column; align-items: stretch; }
-            .action-buttons .btn { min-width: unset; width: 100%; }
-            .item-row, .item-header {
-                grid-template-columns: 1fr 1fr;
-                gap: 4px;
-            }
-            .item-header { display: none; }
-            .item-row .form-control { font-size: 0.7rem; padding: 4px 6px; }
-        }
-        @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .page-header-box .page-title { font-size: 1rem; flex-direction: column; align-items: flex-start; }
-            .page-header-box .page-subtitle { font-size: 0.75rem; flex-direction: column; align-items: flex-start; gap: 4px; }
-            .form-card { padding: 12px 14px; }
-            .item-row { grid-template-columns: 1fr; gap: 4px; }
-        }
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        #sidebarOverlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 45;
-            display: none;
-            backdrop-filter: blur(2px);
-        }
-        @media (max-width: 1024px) {
-            #sidebarOverlay.show { display: block; }
-        }
-    </style>
-</head>
-<body>
+        .item-header-rx { display: none; }
+        .item-row-rx .form-control-rx { font-size: 0.7rem; padding: 4px 6px; }
+    }
 
-<div id="sidebarOverlay"></div>
-
-<!-- ================================================================ -->
-<!-- SIDEBAR -->
-<!-- ================================================================ -->
-<aside class="sidebar" id="sidebar">
-    <div class="sidebar-brand">
-        <div style="display:flex;align-items:center;gap:12px;">
-            <img src="<?= $logo_path ?>" alt="Braick Logo" class="logo" 
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
-            <div>
-                <p class="brand-text">Braick Dispensary</p>
-                <p class="brand-sub">Super Admin</p>
-            </div>
-        </div>
-    </div>
-    
-    <nav class="sidebar-nav">
-        <div class="nav-label">Main Menu</div>
-        <a href="/dispensary_system/frontend/pages/admin/dashboard.php" class="sidebar-link"><i class="fas fa-home"></i> Dashboard</a>
-        <a href="/dispensary_system/frontend/pages/admin/employees.php" class="sidebar-link"><i class="fas fa-users"></i> Employees</a>
-        <a href="/dispensary_system/frontend/pages/admin/patients.php" class="sidebar-link"><i class="fas fa-user-injured"></i> Patients</a>
-        
-        <div class="nav-label">Modules</div>
-        <a href="/dispensary_system/frontend/pages/admin/doctors_list.php" class="sidebar-link"><i class="fas fa-user-md"></i> Doctors</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_pharmacy.php" class="sidebar-link"><i class="fas fa-prescription"></i> Pharmacy</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_reception.php" class="sidebar-link"><i class="fas fa-headset"></i> Reception</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_laboratory.php" class="sidebar-link"><i class="fas fa-flask"></i> Laboratory</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_cashier.php" class="sidebar-link"><i class="fas fa-cash-register"></i> Cashier</a>
-        
-        <div class="nav-label">Management</div>
-        <a href="/dispensary_system/frontend/pages/admin/branches.php" class="sidebar-link"><i class="fas fa-store-alt"></i> Branches</a>
-        <a href="/dispensary_system/frontend/pages/admin/reports.php" class="sidebar-link"><i class="fas fa-chart-bar"></i> Reports</a>
-        
-        <div class="nav-label">Account</div>
-        <a href="/dispensary_system/frontend/pages/admin/profile.php" class="sidebar-link"><i class="fas fa-user-circle"></i> Profile</a>
-        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
-    </nav>
-</aside>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="icon-btn lg:hidden">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all">🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+    @media (max-width: 480px) {
+        .page-header-rx .page-title-rx { font-size: 1rem; }
+        .form-card-rx { padding: 12px 14px; }
+        .item-row-rx { grid-template-columns: 1fr; gap: 4px; }
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -1297,66 +892,66 @@ if (!empty($patient_dob)) {
 <main class="main-content">
 
     <!-- ================================================================ -->
-    <!-- PAGE HEADER - Shows patient name -->
+    <!-- PAGE HEADER -->
     <!-- ================================================================ -->
-    <div class="page-header-box animate-fade-in-up" style="animation-delay:0.05s;">
+    <div class="page-header-rx">
         <div>
-            <h1 class="page-title">
+            <h1 class="page-title-rx">
                 <i class="fas fa-prescription"></i>
                 Edit Prescription
                 <span class="role-badge-display">ADMIN</span>
                 <span style="background:rgba(255,255,255,0.15);padding:3px 14px;border-radius:20px;font-size:0.75rem;font-weight:500;">
                     <i class="fas fa-hashtag"></i> <?= htmlspecialchars($prescription_number) ?>
                 </span>
-                <span class="header-badge <?= $status_display === 'Dispensed' ? 'success' : ($status_display === 'Cancelled' ? 'danger' : 'status') ?>">
-                    <i class="fas fa-circle"></i>
+                <span class="header-badge-rx <?= $status_display === 'Dispensed' ? 'success' : ($status_display === 'Cancelled' ? 'danger' : 'status') ?>">
+                    <i class="fas fa-circle" style="font-size:8px;"></i>
                     <?= $status_display ?>
                 </span>
             </h1>
-            <p class="page-subtitle">
-                <strong style="font-size:1.1rem;color:#ffffff;">
+            <p class="page-subtitle-rx">
+                <strong style="font-size:1.1rem;">
                     <i class="fas fa-user"></i> <?= htmlspecialchars($patient_display_name) ?>
                 </strong>
                 <?php if (!empty($patient_id_display)): ?>
-                    <span class="header-badge" style="background:rgba(255,255,255,0.15);">
+                    <span class="header-badge-rx">
                         <i class="fas fa-id-card"></i> <?= htmlspecialchars($patient_id_display) ?>
                     </span>
                 <?php endif; ?>
                 <?php if (!empty($patient_phone)): ?>
-                    <span class="header-badge" style="background:rgba(255,255,255,0.12);">
+                    <span class="header-badge-rx">
                         <i class="fas fa-phone"></i> <?= htmlspecialchars($patient_phone) ?>
                     </span>
                 <?php endif; ?>
                 <?php if (!empty($patient_age)): ?>
-                    <span class="header-badge" style="background:rgba(255,255,255,0.12);">
+                    <span class="header-badge-rx">
                         <i class="fas fa-calendar"></i> <?= htmlspecialchars($patient_age) ?>
                     </span>
                 <?php endif; ?>
                 <?php if (!empty($patient_gender)): ?>
-                    <span class="header-badge" style="background:rgba(255,255,255,0.12);">
+                    <span class="header-badge-rx">
                         <i class="fas fa-<?= strtolower($patient_gender) === 'male' ? 'mars' : 'venus' ?>"></i>
                         <?= htmlspecialchars($patient_gender) ?>
                     </span>
                 <?php endif; ?>
-                <span class="header-badge">
+                <span class="header-badge-rx">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name_display) ?>
                 </span>
                 <?php if ($doctor_name_display !== 'Not assigned'): ?>
-                    <span class="header-badge" style="background:rgba(52,211,153,0.15);border-color:rgba(52,211,153,0.2);color:#34D399;">
+                    <span class="header-badge-rx success">
                         <i class="fas fa-user-md"></i> <?= htmlspecialchars($doctor_name_display) ?>
                         <?php if (!empty($doctor_specialty)): ?>
                             (<?= htmlspecialchars($doctor_specialty) ?>)
                         <?php endif; ?>
                     </span>
                 <?php else: ?>
-                    <span class="header-badge" style="background:rgba(248,113,113,0.15);border-color:rgba(248,113,113,0.2);color:#F87171;">
+                    <span class="header-badge-rx danger">
                         <i class="fas fa-user-md"></i> No doctor assigned
                     </span>
                 <?php endif; ?>
             </p>
         </div>
         <div style="position:relative;z-index:1;">
-            <a href="view_prescription.php?id=<?= $prescription_id ?>&branch=<?= $branch_id ?>" class="btn" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.2);">
+            <a href="view_prescription.php?id=<?= $prescription_id ?>&branch=<?= $branch_id ?>" class="btn-outline-light-rx">
                 <i class="fas fa-arrow-left"></i> Back to View
             </a>
         </div>
@@ -1365,47 +960,47 @@ if (!empty($patient_dob)) {
     <!-- ================================================================ -->
     <!-- PATIENT INFO CARD -->
     <!-- ================================================================ -->
-    <div class="form-card animate-fade-in-up" style="animation-delay:0.08s;">
-        <div class="form-title">
+    <div class="form-card-rx">
+        <div class="form-title-rx">
             <i class="fas fa-user-circle"></i>
             Patient Information
-            <span style="margin-left:auto;font-size:0.7rem;font-weight:400;color:var(--text-secondary);">
+            <span style="margin-left:auto;font-size:0.7rem;font-weight:400;color:var(--page-text-secondary);">
                 Prescription #<?= htmlspecialchars($prescription_number) ?>
             </span>
         </div>
-        <div class="patient-info-grid">
-            <div class="patient-info-item">
-                <div class="label">Full Name</div>
-                <div class="value"><?= htmlspecialchars($patient_display_name) ?></div>
+        <div class="patient-info-grid-rx">
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Full Name</div>
+                <div class="value-rx"><?= htmlspecialchars($patient_display_name) ?></div>
             </div>
-            <div class="patient-info-item">
-                <div class="label">Patient ID</div>
-                <div class="value"><?= htmlspecialchars($patient_id_display ?: 'N/A') ?></div>
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Patient ID</div>
+                <div class="value-rx"><?= htmlspecialchars($patient_id_display ?: 'N/A') ?></div>
             </div>
-            <div class="patient-info-item">
-                <div class="label">Phone</div>
-                <div class="value"><?= htmlspecialchars($patient_phone ?: 'N/A') ?></div>
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Phone</div>
+                <div class="value-rx"><?= htmlspecialchars($patient_phone ?: 'N/A') ?></div>
             </div>
-            <div class="patient-info-item">
-                <div class="label">Gender</div>
-                <div class="value"><?= htmlspecialchars($patient_gender ?: 'N/A') ?></div>
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Gender</div>
+                <div class="value-rx"><?= htmlspecialchars($patient_gender ?: 'N/A') ?></div>
             </div>
-            <div class="patient-info-item">
-                <div class="label">Age</div>
-                <div class="value"><?= htmlspecialchars($patient_age ?: 'N/A') ?></div>
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Age</div>
+                <div class="value-rx"><?= htmlspecialchars($patient_age ?: 'N/A') ?></div>
             </div>
-            <div class="patient-info-item">
-                <div class="label">Branch</div>
-                <div class="value"><?= htmlspecialchars($branch_name_display) ?></div>
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Branch</div>
+                <div class="value-rx"><?= htmlspecialchars($branch_name_display) ?></div>
             </div>
-            <div class="patient-info-item">
-                <div class="label">Doctor</div>
-                <div class="value"><?= htmlspecialchars($doctor_name_display) ?></div>
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Doctor</div>
+                <div class="value-rx"><?= htmlspecialchars($doctor_name_display) ?></div>
             </div>
-            <div class="patient-info-item">
-                <div class="label">Status</div>
-                <div class="value">
-                    <span class="badge badge-<?= getStatusBadge($prescription['status'] ?? 'pending') ?>" style="font-size:0.7rem;">
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Status</div>
+                <div class="value-rx">
+                    <span class="badge-rx badge-<?= getStatusBadgeClass($prescription['status'] ?? 'pending') ?>-rx">
                         <?= $status_display ?>
                     </span>
                 </div>
@@ -1417,20 +1012,20 @@ if (!empty($patient_dob)) {
     <!-- MESSAGE -->
     <!-- ================================================================ -->
     <?php if ($message): ?>
-        <div class="message-box <?= $message_type === 'success' ? 'success' : 'error' ?> animate-fade-in-up">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
-            <?= $message ?>
+        <div class="message-box-rx <?= $message_type === 'success' ? 'success' : 'error' ?>">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>" style="font-size:1.3rem;flex-shrink:0;"></i>
+            <div><?= $message ?></div>
         </div>
     <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- EDIT FORM -->
     <!-- ================================================================ -->
-    <div class="form-card animate-fade-in-up" style="animation-delay:0.1s;">
-        <div class="form-title">
+    <div class="form-card-rx">
+        <div class="form-title-rx">
             <i class="fas fa-edit"></i>
             Edit Prescription Details
-            <span style="margin-left:auto;font-size:0.7rem;font-weight:400;color:var(--text-secondary);">
+            <span style="margin-left:auto;font-size:0.7rem;font-weight:400;color:var(--page-text-secondary);">
                 Created: <?= date('M d, Y h:i A', strtotime($prescription['created_at'] ?? 'now')) ?>
                 <?php if (!empty($prescription['updated_at']) && $prescription['updated_at'] != $prescription['created_at']): ?>
                     · Updated: <?= date('M d, Y h:i A', strtotime($prescription['updated_at'])) ?>
@@ -1442,11 +1037,11 @@ if (!empty($patient_dob)) {
             <input type="hidden" name="action" value="update">
             <input type="hidden" name="branch_id" value="<?= $branch_id ?>">
             
-            <div class="form-grid">
-                <!-- ✅ Patient -->
-                <div class="form-row">
-                    <label class="form-label">Patient <span class="required">*</span></label>
-                    <select name="patient_id" class="form-control" required>
+            <div class="form-grid-rx">
+                <!-- Patient -->
+                <div class="form-row-rx">
+                    <label class="form-label-rx">Patient <span class="required">*</span></label>
+                    <select name="patient_id" class="form-control-rx" required>
                         <?php foreach ($patients as $patient): ?>
                             <option value="<?= $patient['id'] ?>" <?= $patient['id'] == $prescription['patient_id'] ? 'selected' : '' ?>>
                                 <?= htmlspecialchars($patient['full_name']) ?> (<?= htmlspecialchars($patient['patient_id']) ?>)
@@ -1458,10 +1053,10 @@ if (!empty($patient_dob)) {
                     </select>
                 </div>
                 
-                <!-- ✅ Doctor - Only from selected branch -->
-                <div class="form-row">
-                    <label class="form-label">Doctor</label>
-                    <select name="doctor_id" class="form-control">
+                <!-- Doctor -->
+                <div class="form-row-rx">
+                    <label class="form-label-rx">Doctor</label>
+                    <select name="doctor_id" class="form-control-rx">
                         <option value="">-- No Doctor --</option>
                         <?php foreach ($doctors as $doctor): ?>
                             <option value="<?= $doctor['id'] ?>" <?= $doctor['id'] == $prescription['doctor_id'] ? 'selected' : '' ?>>
@@ -1475,24 +1070,24 @@ if (!empty($patient_dob)) {
                             <option value="" disabled>No doctors available in this branch</option>
                         <?php endif; ?>
                     </select>
-                    <small style="font-size:0.65rem;color:var(--text-secondary);">
+                    <span class="help-text-rx">
                         <i class="fas fa-info-circle"></i> Showing doctors from <?= htmlspecialchars($branch_name_display) ?> branch
-                    </small>
+                    </span>
                 </div>
                 
                 <!-- Diagnosis -->
-                <div class="form-row full-width">
-                    <label class="form-label">Diagnosis</label>
-                    <input type="text" name="diagnosis" class="form-control" 
+                <div class="form-row-rx full-width">
+                    <label class="form-label-rx">Diagnosis</label>
+                    <input type="text" name="diagnosis" class="form-control-rx" 
                            placeholder="e.g. Hypertension, Malaria, Diabetes, etc." 
                            value="<?= htmlspecialchars($prescription['diagnosis'] ?? '') ?>">
                 </div>
                 
-                <!-- ✅ Medication - Beautiful Dropdown -->
-                <div class="form-row full-width">
-                    <label class="form-label">Medication <span class="required">*</span></label>
-                    <div class="medication-select-wrapper">
-                        <select name="medication" class="form-control" required id="medicationSelect" style="padding-right:40px;">
+                <!-- Medication Dropdown -->
+                <div class="form-row-rx full-width">
+                    <label class="form-label-rx">Medication <span class="required">*</span></label>
+                    <div class="medication-select-wrapper-rx">
+                        <select name="medication" class="form-control-rx" required id="medicationSelect">
                             <option value="">-- Select Medication --</option>
                             <?php if (!empty($medications)): ?>
                                 <?php 
@@ -1517,9 +1112,7 @@ if (!empty($patient_dob)) {
                                             (<?= htmlspecialchars($med['unit']) ?>)
                                         <?php endif; ?>
                                         - TSh <?= number_format($med['selling_price'] ?? 0, 0) ?>
-                                        <span style="font-weight:400;color:var(--text-secondary);font-size:0.7rem;">
-                                            (Stock: <?= $med['quantity'] ?? 0 ?>)
-                                        </span>
+                                        (Stock: <?= $med['quantity'] ?? 0 ?>)
                                     </option>
                                 <?php endforeach; ?>
                                 <?php if ($current_category !== ''): ?>
@@ -1529,60 +1122,59 @@ if (!empty($patient_dob)) {
                                 <option value="" disabled>No medications available in this branch</option>
                             <?php endif; ?>
                         </select>
-                        <span class="select-icon"><i class="fas fa-chevron-down"></i></span>
                     </div>
-                    <small style="font-size:0.65rem;color:var(--text-secondary);">
+                    <span class="help-text-rx" id="medicationHelp">
                         <i class="fas fa-info-circle"></i> Showing medications from <?= htmlspecialchars($branch_name_display) ?> branch
                         <?php if (!empty($medications)): ?>
                             · <?= count($medications) ?> medication(s) available
                         <?php endif; ?>
-                    </small>
+                    </span>
                 </div>
                 
                 <!-- Dosage -->
-                <div class="form-row">
-                    <label class="form-label">Dosage <span class="required">*</span></label>
-                    <input type="text" name="dosage" class="form-control" 
+                <div class="form-row-rx">
+                    <label class="form-label-rx">Dosage <span class="required">*</span></label>
+                    <input type="text" name="dosage" class="form-control-rx" 
                            placeholder="e.g. 500mg" 
                            value="<?= htmlspecialchars($prescription['dosage'] ?? '') ?>" required>
                 </div>
                 
                 <!-- Frequency -->
-                <div class="form-row">
-                    <label class="form-label">Frequency <span class="required">*</span></label>
-                    <input type="text" name="frequency" class="form-control" 
+                <div class="form-row-rx">
+                    <label class="form-label-rx">Frequency <span class="required">*</span></label>
+                    <input type="text" name="frequency" class="form-control-rx" 
                            placeholder="e.g. Twice Daily, Every 6 hours" 
                            value="<?= htmlspecialchars($prescription['frequency'] ?? '') ?>" required>
                 </div>
                 
                 <!-- Duration -->
-                <div class="form-row">
-                    <label class="form-label">Duration (days) <span class="required">*</span></label>
-                    <input type="number" name="duration" class="form-control" 
+                <div class="form-row-rx">
+                    <label class="form-label-rx">Duration (days) <span class="required">*</span></label>
+                    <input type="number" name="duration" class="form-control-rx" 
                            placeholder="e.g. 7" min="1" 
                            value="<?= htmlspecialchars($prescription['duration'] ?? 0) ?>" required>
                 </div>
                 
                 <!-- Route -->
-                <div class="form-row">
-                    <label class="form-label">Route <span class="required">*</span></label>
-                    <input type="text" name="route" class="form-control" 
+                <div class="form-row-rx">
+                    <label class="form-label-rx">Route <span class="required">*</span></label>
+                    <input type="text" name="route" class="form-control-rx" 
                            placeholder="e.g. Oral, Topical, IV, IM" 
                            value="<?= htmlspecialchars($prescription['route'] ?? '') ?>" required>
                 </div>
                 
                 <!-- Quantity -->
-                <div class="form-row">
-                    <label class="form-label">Quantity <span class="required">*</span></label>
-                    <input type="number" name="quantity" class="form-control" 
+                <div class="form-row-rx">
+                    <label class="form-label-rx">Quantity <span class="required">*</span></label>
+                    <input type="number" name="quantity" class="form-control-rx" 
                            placeholder="e.g. 60" min="1" 
                            value="<?= htmlspecialchars($prescription['quantity'] ?? 0) ?>" required>
                 </div>
                 
                 <!-- Status -->
-                <div class="form-row">
-                    <label class="form-label">Status <span class="required">*</span></label>
-                    <select name="status" class="form-control" required>
+                <div class="form-row-rx">
+                    <label class="form-label-rx">Status <span class="required">*</span></label>
+                    <select name="status" class="form-control-rx" required>
                         <?php foreach ($status_options as $status): ?>
                             <option value="<?= $status ?>" <?= $status == $prescription['status'] ? 'selected' : '' ?>>
                                 <?= ucfirst($status) ?>
@@ -1592,8 +1184,8 @@ if (!empty($patient_dob)) {
                 </div>
                 
                 <!-- Is Indoor -->
-                <div class="form-row">
-                    <label class="form-label">Is Indoor</label>
+                <div class="form-row-rx">
+                    <label class="form-label-rx">Is Indoor</label>
                     <div style="display:flex;align-items:center;gap:10px;padding-top:8px;">
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.85rem;">
                             <input type="checkbox" name="is_indoor" value="1" 
@@ -1604,17 +1196,17 @@ if (!empty($patient_dob)) {
                 </div>
                 
                 <!-- Instructions -->
-                <div class="form-row full-width">
-                    <label class="form-label">Instructions</label>
-                    <textarea name="instructions" class="form-control" 
+                <div class="form-row-rx full-width">
+                    <label class="form-label-rx">Instructions</label>
+                    <textarea name="instructions" class="form-control-rx" 
                               placeholder="e.g. Take after meals, Take with water, Avoid alcohol" 
                               rows="2"><?= htmlspecialchars($prescription['instructions'] ?? '') ?></textarea>
                 </div>
                 
                 <!-- Notes -->
-                <div class="form-row full-width">
-                    <label class="form-label">Notes</label>
-                    <textarea name="notes" class="form-control" 
+                <div class="form-row-rx full-width">
+                    <label class="form-label-rx">Notes</label>
+                    <textarea name="notes" class="form-control-rx" 
                               placeholder="Additional notes about the prescription" 
                               rows="2"><?= htmlspecialchars($prescription['notes'] ?? '') ?></textarea>
                 </div>
@@ -1622,16 +1214,16 @@ if (!empty($patient_dob)) {
             
             <!-- Prescription Items Section -->
             <?php if (count($prescription_items) > 0): ?>
-            <div class="form-row full-width" style="margin-top:20px;padding-top:20px;border-top:2px solid var(--border-color);">
-                <div class="form-title" style="border-bottom:none;padding-bottom:0;margin-bottom:12px;">
+            <div class="form-row-rx full-width" style="margin-top:20px;padding-top:20px;border-top:2px solid var(--page-border);">
+                <div class="form-title-rx" style="border-bottom:none;padding-bottom:0;margin-bottom:12px;">
                     <i class="fas fa-list"></i>
                     Prescription Items
-                    <span style="margin-left:auto;font-size:0.7rem;font-weight:400;color:var(--text-secondary);">
+                    <span style="margin-left:auto;font-size:0.7rem;font-weight:400;color:var(--page-text-secondary);">
                         <?= count($prescription_items) ?> item(s)
                     </span>
                 </div>
                 
-                <div class="item-header">
+                <div class="item-header-rx">
                     <span>Medication</span>
                     <span>Dosage</span>
                     <span>Frequency</span>
@@ -1644,25 +1236,25 @@ if (!empty($patient_dob)) {
                 </div>
                 
                 <?php foreach ($prescription_items as $index => $item): ?>
-                    <div class="item-row">
+                    <div class="item-row-rx">
                         <input type="hidden" name="item_id[]" value="<?= $item['id'] ?>">
-                        <input type="text" name="item_medication[]" class="form-control" 
+                        <input type="text" name="item_medication[]" class="form-control-rx" 
                                value="<?= htmlspecialchars($item['medication_name'] ?? '') ?>" placeholder="Medication">
-                        <input type="text" name="item_dosage[]" class="form-control" 
+                        <input type="text" name="item_dosage[]" class="form-control-rx" 
                                value="<?= htmlspecialchars($item['dosage'] ?? '') ?>" placeholder="Dosage">
-                        <input type="text" name="item_frequency[]" class="form-control" 
+                        <input type="text" name="item_frequency[]" class="form-control-rx" 
                                value="<?= htmlspecialchars($item['frequency'] ?? '') ?>" placeholder="Frequency">
-                        <input type="number" name="item_quantity[]" class="form-control" 
+                        <input type="number" name="item_quantity[]" class="form-control-rx" 
                                value="<?= $item['quantity'] ?? 0 ?>" placeholder="Qty" min="1">
-                        <input type="text" name="item_duration[]" class="form-control" 
+                        <input type="text" name="item_duration[]" class="form-control-rx" 
                                value="<?= htmlspecialchars($item['duration'] ?? '') ?>" placeholder="Duration">
-                        <input type="text" name="item_route[]" class="form-control" 
+                        <input type="text" name="item_route[]" class="form-control-rx" 
                                value="<?= htmlspecialchars($item['route'] ?? '') ?>" placeholder="Route">
-                        <input type="text" name="item_instructions[]" class="form-control" 
+                        <input type="text" name="item_instructions[]" class="form-control-rx" 
                                value="<?= htmlspecialchars($item['instructions'] ?? '') ?>" placeholder="Instructions">
-                        <input type="number" name="item_unit_price[]" class="form-control" 
+                        <input type="number" name="item_unit_price[]" class="form-control-rx" 
                                value="<?= $item['unit_price'] ?? 0 ?>" placeholder="Price" step="0.01" min="0">
-                        <span style="font-weight:600;font-size:0.8rem;color:var(--primary);text-align:center;">
+                        <span style="font-weight:600;font-size:0.8rem;color:var(--page-primary);text-align:center;">
                             TSh <?= number_format(($item['unit_price'] ?? 0) * ($item['quantity'] ?? 0), 0) ?>
                         </span>
                     </div>
@@ -1671,20 +1263,20 @@ if (!empty($patient_dob)) {
             <?php endif; ?>
             
             <!-- Action Buttons -->
-            <div class="action-buttons">
-                <button type="submit" class="btn btn-primary">
+            <div class="action-buttons-rx">
+                <button type="submit" class="btn-rx btn-primary-rx">
                     <i class="fas fa-save"></i> Update Prescription
                 </button>
-                <a href="view_prescription.php?id=<?= $prescription_id ?>&branch=<?= $branch_id ?>" class="btn btn-outline">
+                <a href="view_prescription.php?id=<?= $prescription_id ?>&branch=<?= $branch_id ?>" class="btn-rx btn-outline-rx">
                     <i class="fas fa-times"></i> Cancel
                 </a>
                 <?php if ($prescription['status'] === 'pending'): ?>
-                    <a href="dispense_prescription.php?id=<?= $prescription_id ?>&branch=<?= $branch_id ?>" class="btn btn-success">
+                    <a href="dispense_prescription.php?id=<?= $prescription_id ?>&branch=<?= $branch_id ?>" class="btn-rx btn-success-rx">
                         <i class="fas fa-check-circle"></i> Dispense
                     </a>
                 <?php endif; ?>
                 <?php if ($prescription['status'] !== 'cancelled'): ?>
-                    <a href="?delete=<?= $prescription_id ?>&branch=<?= $branch_id ?>" class="btn btn-danger" 
+                    <a href="?delete=<?= $prescription_id ?>&branch=<?= $branch_id ?>" class="btn-rx btn-danger-rx" 
                        onclick="return confirm('⚠️ Are you sure you want to cancel this prescription?\n\nPatient: <?= htmlspecialchars($patient_display_name) ?>\nPrescription: <?= htmlspecialchars($prescription_number) ?>\n\nThis action CANNOT be undone!')">
                         <i class="fas fa-trash"></i> Cancel Prescription
                     </a>
@@ -1696,187 +1288,86 @@ if (!empty($patient_dob)) {
     <!-- ================================================================ -->
     <!-- PRESCRIPTION INFO CARD -->
     <!-- ================================================================ -->
-    <div class="form-card animate-fade-in-up" style="animation-delay:0.15s;">
-        <div class="form-title">
+    <div class="form-card-rx">
+        <div class="form-title-rx">
             <i class="fas fa-info-circle"></i>
             Prescription Information
         </div>
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div>
-                <p class="text-xs text-gray-400 font-medium">Prescription #</p>
-                <p class="font-mono text-sm font-bold text-primary"><?= htmlspecialchars($prescription_number) ?></p>
+        <div class="patient-info-grid-rx">
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Prescription #</div>
+                <div class="value-rx" style="font-family:monospace;color:var(--page-primary);"><?= htmlspecialchars($prescription_number) ?></div>
             </div>
-            <div>
-                <p class="text-xs text-gray-400 font-medium">Created</p>
-                <p class="text-sm"><?= date('F d, Y h:i A', strtotime($prescription['created_at'] ?? 'now')) ?></p>
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Created</div>
+                <div class="value-rx"><?= date('F d, Y h:i A', strtotime($prescription['created_at'] ?? 'now')) ?></div>
             </div>
-            <div>
-                <p class="text-xs text-gray-400 font-medium">Last Updated</p>
-                <p class="text-sm"><?= date('F d, Y h:i A', strtotime($prescription['updated_at'] ?? 'now')) ?></p>
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Last Updated</div>
+                <div class="value-rx"><?= date('F d, Y h:i A', strtotime($prescription['updated_at'] ?? 'now')) ?></div>
             </div>
-            <div>
-                <p class="text-xs text-gray-400 font-medium">Status</p>
-                <p><span class="badge badge-<?= getStatusBadge($prescription['status'] ?? 'pending') ?>">
-                    <?= $status_display ?>
-                </span></p>
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Status</div>
+                <div class="value-rx">
+                    <span class="badge-rx badge-<?= getStatusBadgeClass($prescription['status'] ?? 'pending') ?>-rx">
+                        <?= $status_display ?>
+                    </span>
+                </div>
             </div>
-            <div>
-                <p class="text-xs text-gray-400 font-medium">Doctor</p>
-                <p class="text-sm"><?= htmlspecialchars($doctor_name_display) ?></p>
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Doctor</div>
+                <div class="value-rx"><?= htmlspecialchars($doctor_name_display) ?></div>
             </div>
-            <div>
-                <p class="text-xs text-gray-400 font-medium">Patient</p>
-                <p class="text-sm font-semibold"><?= htmlspecialchars($patient_display_name) ?></p>
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Patient</div>
+                <div class="value-rx"><?= htmlspecialchars($patient_display_name) ?></div>
             </div>
-            <div>
-                <p class="text-xs text-gray-400 font-medium">Branch</p>
-                <p class="text-sm"><?= htmlspecialchars($branch_name_display) ?></p>
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Branch</div>
+                <div class="value-rx"><?= htmlspecialchars($branch_name_display) ?></div>
             </div>
-            <div>
-                <p class="text-xs text-gray-400 font-medium">Indoor</p>
-                <p class="text-sm"><?= ($prescription['is_indoor'] ?? 0) == 1 ? '✅ Yes' : '❌ No' ?></p>
+            <div class="patient-info-item-rx">
+                <div class="label-rx">Indoor</div>
+                <div class="value-rx"><?= ($prescription['is_indoor'] ?? 0) == 1 ? '✅ Yes' : '❌ No' ?></div>
             </div>
         </div>
     </div>
 
-    <!-- Footer -->
-    <footer class="footer">
+    <!-- ================================================================ -->
+    <!-- FOOTER -->
+    <!-- ================================================================ -->
+    <footer class="footer-rx">
         <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="footer-brand-rx">Braick Dispensary</span> Management System
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             Edit Prescription - <?= htmlspecialchars($prescription_number) ?>
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
 
 </main>
 
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC JAVASCRIPT (NO dark mode, NO sidebar, NO date-time) -->
+<!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // ✅ FOOTER TIME ONLY (header ina date/time yake)
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
-        }
-    });
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    var overlay = document.getElementById('sidebarOverlay');
-    
-    function toggleSidebar() {
-        sidebar.classList.toggle('open');
-        overlay.classList.toggle('show');
-        document.body.style.overflow = sidebar.classList.contains('open') ? 'hidden' : '';
-    }
-    
-    sidebarToggle?.addEventListener('click', function(e) {
-        e.stopPropagation();
-        toggleSidebar();
-    });
-    
-    overlay?.addEventListener('click', function() {
-        sidebar.classList.remove('open');
-        overlay.classList.remove('show');
-        document.body.style.overflow = '';
-    });
-    
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && sidebar.classList.contains('open')) {
-            sidebar.classList.remove('open');
-            overlay.classList.remove('show');
-            document.body.style.overflow = '';
-        }
-    });
-    
-    window.addEventListener('resize', function() {
-        if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
-            sidebar.classList.remove('open');
-            overlay.classList.remove('show');
-            document.body.style.overflow = '';
-        }
-    });
-
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        url.searchParams.delete('error');
-        window.location.href = url.toString();
-    }
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            var branch = '<?= $branch_id ?>';
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
+    setInterval(function() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
         var ftEl = document.getElementById('footerTime');
         if (ftEl) ftEl.textContent = timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    }, 1000);
 
     // ================================================================
-    // ✅ MEDICATION SELECT - Auto fill dosage & quantity
+    // ✅ MEDICATION SELECT - Auto fill stock info
     // ================================================================
     var medicationSelect = document.getElementById('medicationSelect');
     if (medicationSelect) {
@@ -1885,31 +1376,97 @@ if (!empty($patient_dob)) {
             var price = selected.dataset.price || 0;
             var quantity = selected.dataset.quantity || 0;
             var unit = selected.dataset.unit || '';
+            var helpEl = document.getElementById('medicationHelp');
             
-            // Auto-fill quantity with 1
-            var qtyInput = document.querySelector('input[name="quantity"]');
-            if (qtyInput && qtyInput.value == 0) {
-                qtyInput.value = 1;
-            }
-            
-            // Show stock info
-            var stockInfo = document.querySelector('.medication-select-wrapper small');
-            if (stockInfo && quantity > 0) {
-                stockInfo.innerHTML = '<i class="fas fa-check-circle" style="color:#059669;"></i> Stock: ' + quantity + ' ' + unit + ' available · Price: TSh ' + parseFloat(price).toLocaleString();
+            if (helpEl && quantity > 0) {
+                helpEl.innerHTML = '<i class="fas fa-check-circle" style="color:#059669;"></i> Stock: ' + quantity + ' ' + unit + ' available · Price: TSh ' + parseFloat(price).toLocaleString();
             }
         });
     }
 
-    console.log('%c🏥 Braick Dispensary - Edit Prescription (FULL FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ USING: prescriptions, patients, users, branches, medications_inventory, prescription_items', 'font-size:13px; color:#34D399;');
+    // ================================================================
+    // ✅ FORM VALIDATION
+    // ================================================================
+    document.getElementById('editForm')?.addEventListener('submit', function(e) {
+        var medication = document.getElementById('medicationSelect').value;
+        var dosage = document.querySelector('input[name="dosage"]').value.trim();
+        var frequency = document.querySelector('input[name="frequency"]').value.trim();
+        var duration = document.querySelector('input[name="duration"]').value;
+        var route = document.querySelector('input[name="route"]').value.trim();
+        var quantity = document.querySelector('input[name="quantity"]').value;
+        
+        var errors = [];
+        if (!medication) errors.push('Medication is required');
+        if (!dosage) errors.push('Dosage is required');
+        if (!frequency) errors.push('Frequency is required');
+        if (!duration || parseInt(duration) <= 0) errors.push('Duration is required');
+        if (!route) errors.push('Route is required');
+        if (!quantity || parseInt(quantity) <= 0) errors.push('Quantity must be greater than 0');
+        
+        if (errors.length > 0) {
+            e.preventDefault();
+            showToast('⚠️ Validation Error', errors[0], 'warning');
+            return false;
+        }
+    });
+
+    // ================================================================
+    // ✅ TOAST NOTIFICATION
+    // ================================================================
+    function showToast(title, message, type) {
+        var existing = document.getElementById('pageToast');
+        if (existing) existing.remove();
+        
+        var toast = document.createElement('div');
+        toast.id = 'pageToast';
+        var bgColor = type === 'success' ? '#059669' : 
+                      type === 'error' ? '#DC2626' : 
+                      type === 'warning' ? '#D97706' : '#0B5ED7';
+        var icon = type === 'success' ? 'fa-check-circle' : 
+                   type === 'error' ? 'fa-exclamation-circle' : 
+                   type === 'warning' ? 'fa-exclamation-triangle' : 'fa-info-circle';
+        
+        toast.style.cssText = `
+            position: fixed; bottom: 24px; right: 24px; padding: 14px 20px;
+            border-radius: 12px; z-index: 99999; max-width: 400px;
+            display: flex; align-items: center; gap: 12px; color: white;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+            animation: slideInRx 0.4s ease; font-size: 0.85rem;
+            font-weight: 500; background: ${bgColor};
+        `;
+        toast.innerHTML = `
+            <i class="fas ${icon}" style="font-size:1.1rem;"></i>
+            <div>
+                <p style="font-weight:600;font-size:0.85rem;margin:0;">${title}</p>
+                <p style="font-size:0.75rem;opacity:0.9;margin:2px 0 0 0;">${message}</p>
+            </div>
+        `;
+        document.body.appendChild(toast);
+        
+        setTimeout(function() {
+            toast.style.animation = 'slideOutRx 0.4s ease';
+            setTimeout(function() { toast.remove(); }, 400);
+        }, 3500);
+    }
+
+    if (!document.getElementById('toastAnimationsRx')) {
+        var style = document.createElement('style');
+        style.id = 'toastAnimationsRx';
+        style.textContent = `
+            @keyframes slideInRx { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+            @keyframes slideOutRx { from { transform: translateX(0); opacity: 1; } to { transform: translateX(120%); opacity: 0; } }
+        `;
+        document.head.appendChild(style);
+    }
+
+    console.log('%c🏥 Braick - Edit Prescription', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#059669;');
+    console.log('%c✅ NO duplicate dark mode JavaScript', 'font-size:13px; color:#059669;');
+    console.log('%c🌙 Dark mode: Handled by header', 'font-size:13px; color:#7C3AED;');
     console.log('%c📋 Prescription: <?= htmlspecialchars($prescription_number) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient_display_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👨‍⚕️ Doctor: <?= htmlspecialchars($doctor_name_display) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Status: <?= $status_display ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ Patient name visible in header', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Doctors filtered by branch: <?= count($doctors) ?> doctors', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Medications filtered by branch: <?= count($medications) ?> medications', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Beautiful medication dropdown with categories', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Doctors filtered by branch: <?= count($doctors) ?>', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Medications filtered by branch: <?= count($medications) ?>', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

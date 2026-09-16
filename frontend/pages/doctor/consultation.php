@@ -3,6 +3,8 @@
 // FILE: frontend/pages/doctor/consultation.php
 // COMPLETE CONSULTATION - FULLY FIXED WITH ALL SECTIONS
 // WITH 7 VITAL SIGNS (INCLUDING OXYGEN SATURATION - SpO2)
+// ✅ FIXED: Manual disease code inatumika kama user ameijaza
+// ✅ FIXED: Auto-generate code kama user hajajaza
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -256,7 +258,7 @@ try {
 }
 
 // ================================================================
-// BILL TOTAL FUNCTION - WITH PREMIUM INCLUDED
+// BILL TOTAL FUNCTION
 // ================================================================
 function updateBillTotal($db, $bill_id) {
     $stmt = $db->prepare("
@@ -477,11 +479,14 @@ function checkLabResultsAndUpdateStatus($db, $visit_id) {
 }
 
 // ================================================================
-// SAVE DIAGNOSIS
+// ✅ FIXED: SAVE DIAGNOSIS - MANUAL DISEASE CODE INATUMIKA
 // ================================================================
 function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, $data) {
     $selected_diseases = isset($data['diagnosis_ids']) ? $data['diagnosis_ids'] : [];
     $manual_diseases = isset($data['manual_diseases']) ? $data['manual_diseases'] : [];
+    // ✅ MPYA: Chukua manual disease codes
+    $manual_disease_codes = isset($data['manual_disease_codes']) ? $data['manual_disease_codes'] : [];
+    
     $treatment = trim($data['treatment'] ?? '');
     $symptoms = trim($data['symptoms'] ?? '');
     $hpi = trim($data['hpi'] ?? '');
@@ -500,8 +505,16 @@ function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, 
         else $manual_diseases = array_map('trim', explode(',', $manual_diseases));
     }
     
+    // ✅ MPYA: Decode manual_disease_codes
+    if (is_string($manual_disease_codes)) {
+        $decoded = json_decode($manual_disease_codes, true);
+        if (is_array($decoded)) $manual_disease_codes = $decoded;
+        else $manual_disease_codes = array_map('trim', explode(',', $manual_disease_codes));
+    }
+    
     if (!is_array($selected_diseases)) $selected_diseases = [];
     if (!is_array($manual_diseases)) $manual_diseases = [];
+    if (!is_array($manual_disease_codes)) $manual_disease_codes = [];
     
     $clean_selected = [];
     foreach ($selected_diseases as $disease_id) {
@@ -521,10 +534,20 @@ function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, 
         }
     }
     
+    // ✅ MPYA: Clean manual codes (sambamba na manual diseases)
+    $clean_manual_codes = [];
+    foreach ($manual_disease_codes as $code) {
+        $code = trim($code);
+        $code = str_replace(['[', ']', '"', '\\', "'"], '', $code);
+        $code = trim($code);
+        $clean_manual_codes[] = $code;
+    }
+    
     $saved_diseases = [];
     $disease_names = [];
     $disease_codes = [];
     
+    // Existing diseases (kutoka checkbox)
     foreach ($clean_selected as $disease_id) {
         if ($disease_id > 0) {
             $stmt = $db->prepare("SELECT id, disease_name, disease_code FROM diseases WHERE id = ? AND is_active = 1");
@@ -544,39 +567,83 @@ function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, 
         }
     }
     
-    foreach ($clean_manual as $manual) {
+    // ✅ Manual diseases - HAPA NDIPO TATIZO LILIPOKUWA
+    foreach ($clean_manual as $index => $manual) {
         $manual = trim($manual);
-        if (!empty($manual) && !in_array($manual, $disease_names)) {
-            $stmt = $db->prepare("SELECT id, disease_name, disease_code FROM diseases WHERE disease_name = ? AND branch_id = ?");
-            $stmt->execute([$manual, $doctor_branch_id]);
-            $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($existing) {
-                if (!in_array($existing['disease_name'], $disease_names)) {
-                    $saved_diseases[] = $existing['id'];
-                    $disease_names[] = $existing['disease_name'];
-                    $disease_codes[] = $existing['disease_code'] ?? '';
+        if (empty($manual)) continue;
+        if (in_array($manual, $disease_names)) continue;
+        
+        // ✅ Chukua code ya user kwa index hii (kama ipo)
+        $user_code = '';
+        if (isset($clean_manual_codes[$index])) {
+            $user_code = $clean_manual_codes[$index];
+        }
+        
+        // Angalia kama disease ipo tayari kwa jina
+        $stmt = $db->prepare("SELECT id, disease_name, disease_code FROM diseases WHERE disease_name = ? AND branch_id = ?");
+        $stmt->execute([$manual, $doctor_branch_id]);
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($existing) {
+            // Disease ipo tayari
+            if (!in_array($existing['disease_name'], $disease_names)) {
+                $saved_diseases[] = $existing['id'];
+                $disease_names[] = $existing['disease_name'];
+                
+                // ✅ Kama user amejaza code, TUMIA. Kama haipo, tumia ya existing
+                $final_code = !empty($user_code) ? $user_code : ($existing['disease_code'] ?? '');
+                $disease_codes[] = $final_code;
+                
+                // ✅ Update code kama user amejaza tofauti
+                if (!empty($user_code) && $user_code !== $existing['disease_code']) {
+                    $stmt_update = $db->prepare("UPDATE diseases SET disease_code = ?, updated_at = NOW() WHERE id = ?");
+                    $stmt_update->execute([$user_code, $existing['id']]);
                 }
-                if (!empty($treatment)) {
-                    $stmt = $db->prepare("UPDATE diseases SET treatment = ?, updated_at = NOW() WHERE id = ?");
-                    $stmt->execute([$treatment, $existing['id']]);
+            }
+            
+            if (!empty($treatment)) {
+                $stmt = $db->prepare("UPDATE diseases SET treatment = ?, updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$treatment, $existing['id']]);
+            }
+        } else {
+            // ✅ Disease ni MPYA - TUMIA CODE YA USER KAMA IPO, LA SIVYO GENERATE
+            if (!empty($user_code)) {
+                // User amejaza code - tumia yake
+                $disease_code = $user_code;
+                
+                // Hakikisha code haipo tayari
+                $stmt_check = $db->prepare("SELECT COUNT(*) FROM diseases WHERE disease_code = ? AND branch_id = ?");
+                $stmt_check->execute([$disease_code, $doctor_branch_id]);
+                if ($stmt_check->fetchColumn() > 0) {
+                    // Code imechukuliwa - ongeza suffix
+                    $disease_code = $user_code . '-' . rand(10, 99);
                 }
             } else {
+                // User hakujaza code - GENERATE
                 $clean_code_name = preg_replace('/[^a-zA-Z0-9]/', '', $manual);
                 $clean_code_prefix = strtoupper(substr($clean_code_name, 0, 6));
                 if (empty($clean_code_prefix)) $clean_code_prefix = 'DISEASE';
-                $disease_code = 'D-' . $clean_code_prefix . '-' . rand(100, 999);
                 
-                $stmt = $db->prepare("
-                    INSERT INTO diseases (disease_name, disease_code, branch_id, treatment, is_active, created_at)
-                    VALUES (?, ?, ?, ?, 1, NOW())
-                ");
-                $stmt->execute([$manual, $disease_code, $doctor_branch_id, $treatment]);
-                $new_id = $db->lastInsertId();
-                $saved_diseases[] = $new_id;
-                $disease_names[] = $manual;
-                $disease_codes[] = $disease_code;
+                $attempts = 0;
+                do {
+                    $disease_code = 'D-' . $clean_code_prefix . '-' . rand(100, 999);
+                    $stmt_check = $db->prepare("SELECT COUNT(*) FROM diseases WHERE disease_code = ?");
+                    $stmt_check->execute([$disease_code]);
+                    $exists = $stmt_check->fetchColumn();
+                    $attempts++;
+                } while ($exists > 0 && $attempts < 10);
             }
+            
+            // Insert disease mpya
+            $stmt = $db->prepare("
+                INSERT INTO diseases (disease_name, disease_code, branch_id, treatment, is_active, created_at)
+                VALUES (?, ?, ?, ?, 1, NOW())
+            ");
+            $stmt->execute([$manual, $disease_code, $doctor_branch_id, $treatment]);
+            $new_id = $db->lastInsertId();
+            $saved_diseases[] = $new_id;
+            $disease_names[] = $manual;
+            $disease_codes[] = $disease_code;
         }
     }
     
@@ -727,7 +794,7 @@ try {
 } catch (Exception $e) { $equipment_list = []; }
 
 // ================================================================
-// GET VITAL SIGNS - 7 SIGNS WITH OXYGEN SATURATION
+// GET VITAL SIGNS
 // ================================================================
 $vital_signs = null;
 if ($visit_id > 0) {
@@ -744,7 +811,6 @@ if ($visit_id > 0) {
     $stmt->execute([$visit_id]);
     $vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    // Fallback: get latest vital signs for this patient if not tied to visit
     if (!$vital_signs) {
         $stmt = $db->prepare("
             SELECT temperature, blood_pressure_systolic, blood_pressure_diastolic,
@@ -837,7 +903,7 @@ try {
 } catch (Exception $e) { $procedures = []; }
 
 // ================================================================
-// GET BILL ITEMS - WITH PREMIUM
+// GET BILL ITEMS
 // ================================================================
 $bill_items = [];
 $lab_total = 0;
@@ -945,9 +1011,6 @@ function getStatusBadgeClass($status) {
     return $map[$status] ?? 'badge-purple';
 }
 
-// ================================================================
-// HELPER: SpO2 STATUS COLOR
-// ================================================================
 function getSpO2Status($spo2) {
     if ($spo2 === null || $spo2 === '') return ['label' => 'N/A', 'color' => '#64748B', 'bg' => '#F1F5F9', 'class' => 'unknown'];
     $spo2 = (int)$spo2;
@@ -964,6 +1027,11 @@ $manual_diseases_saved = [];
 if (!empty($visit['diagnosis'])) {
     $manual_diseases_saved = array_map('trim', explode(',', $visit['diagnosis']));
 }
+// ✅ MPYA: Pata codes zilizohifadhiwa
+$saved_codes_array = [];
+if (!empty($visit['disease_code'])) {
+    $saved_codes_array = array_map('trim', explode(',', $visit['disease_code']));
+}
 
 // ================================================================
 // HANDLE FORM SUBMISSIONS
@@ -979,7 +1047,6 @@ unset($_SESSION['auto_refresh_needed']);
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     $action = $_POST['action'] ?? '';
     
-    // AJAX: GET VISIT STATUS
     if ($action === 'get_visit_status') {
         header('Content-Type: application/json');
         $visit_id_input = (int)($_POST['visit_id'] ?? 0);
@@ -998,7 +1065,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // AJAX: SAVE DIAGNOSIS
     if ($action === 'save_diagnosis') {
         header('Content-Type: application/json');
         $input = json_decode(file_get_contents('php://input'), true);
@@ -1029,7 +1095,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // AJAX: GET BILL TOTALS
     if ($action === 'get_bill_totals') {
         header('Content-Type: application/json');
         
@@ -1115,7 +1180,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // AJAX: GET FULL STATE
     if ($action === 'get_full_state') {
         header('Content-Type: application/json');
         
@@ -1286,7 +1350,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // AJAX: GET LAB STATUS
     if ($action === 'get_lab_status') {
         header('Content-Type: application/json');
         
@@ -1323,7 +1386,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // CHECK LAB RESULTS
     if ($action === 'check_lab_results') {
         header('Content-Type: application/json');
         
@@ -1360,7 +1422,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // ADD LAB TEST TO CART
     if ($action === 'add_lab_test_cart') {
         header('Content-Type: application/json');
         $test_id = (int)($_POST['test_id'] ?? 0);
@@ -1422,7 +1483,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // REMOVE LAB TEST FROM CART
     if ($action === 'remove_lab_test_cart') {
         header('Content-Type: application/json');
         $test_id = (int)($_POST['test_id'] ?? 0);
@@ -1450,7 +1510,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // REMOVE LAB TEST
     if ($action === 'remove_lab_test') {
         header('Content-Type: application/json');
         $test_id = (int)($_POST['test_id'] ?? 0);
@@ -1488,7 +1547,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // ADD MEDICATION
     if ($action === 'add_medication') {
         header('Content-Type: application/json');
         
@@ -1497,8 +1555,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             exit;
         }
         
+        // ✅ Chukua data zote ikiwa na manual_disease_codes
         $raw_diagnosis_ids = isset($_POST['diagnosis_ids']) ? $_POST['diagnosis_ids'] : [];
         $raw_manual_diseases = isset($_POST['manual_diseases']) ? $_POST['manual_diseases'] : [];
+        $raw_manual_disease_codes = isset($_POST['manual_disease_codes']) ? $_POST['manual_disease_codes'] : []; // ✅ MPYA
+        
         $treatment = trim($_POST['treatment'] ?? '');
         $symptoms = trim($_POST['symptoms'] ?? '');
         $hpi = trim($_POST['hpi'] ?? '');
@@ -1523,6 +1584,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $manual_diseases = $raw_manual_diseases;
         }
         
+        // ✅ MPYA: Decode manual disease codes
+        $manual_disease_codes = [];
+        if (is_string($raw_manual_disease_codes)) {
+            $decoded = json_decode($raw_manual_disease_codes, true);
+            if (is_array($decoded)) $manual_disease_codes = $decoded;
+            else $manual_disease_codes = array_map('trim', explode(',', $raw_manual_disease_codes));
+        } elseif (is_array($raw_manual_disease_codes)) {
+            $manual_disease_codes = $raw_manual_disease_codes;
+        }
+        
         $clean_diagnosis_ids = [];
         foreach ($diagnosis_ids as $disease_id) {
             $disease_id = (int)$disease_id;
@@ -1545,6 +1616,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $result = saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, [
                     'diagnosis_ids' => $clean_diagnosis_ids,
                     'manual_diseases' => $clean_manual_diseases,
+                    'manual_disease_codes' => $manual_disease_codes, // ✅ MPYA
                     'treatment' => $treatment,
                     'symptoms' => $symptoms,
                     'hpi' => $hpi,
@@ -1668,7 +1740,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // REMOVE MEDICATION
     if ($action === 'remove_medication') {
         header('Content-Type: application/json');
         $prescription_id = (int)($_POST['prescription_id'] ?? 0);
@@ -1730,7 +1801,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // ADD PROCEDURES BATCH
     if ($action === 'add_procedures_batch') {
         header('Content-Type: application/json');
         
@@ -1739,8 +1809,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             exit;
         }
         
+        // ✅ Chukua data zote
         $raw_diagnosis_ids = isset($_POST['diagnosis_ids']) ? $_POST['diagnosis_ids'] : [];
         $raw_manual_diseases = isset($_POST['manual_diseases']) ? $_POST['manual_diseases'] : [];
+        $raw_manual_disease_codes = isset($_POST['manual_disease_codes']) ? $_POST['manual_disease_codes'] : []; // ✅ MPYA
+        
         $treatment = trim($_POST['treatment'] ?? '');
         $symptoms = trim($_POST['symptoms'] ?? '');
         $hpi = trim($_POST['hpi'] ?? '');
@@ -1765,6 +1838,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $manual_diseases = $raw_manual_diseases;
         }
         
+        // ✅ MPYA: Decode codes
+        $manual_disease_codes = [];
+        if (is_string($raw_manual_disease_codes)) {
+            $decoded = json_decode($raw_manual_disease_codes, true);
+            if (is_array($decoded)) $manual_disease_codes = $decoded;
+            else $manual_disease_codes = array_map('trim', explode(',', $raw_manual_disease_codes));
+        } elseif (is_array($raw_manual_disease_codes)) {
+            $manual_disease_codes = $raw_manual_disease_codes;
+        }
+        
         $clean_diagnosis_ids = [];
         foreach ($diagnosis_ids as $disease_id) {
             $disease_id = (int)$disease_id;
@@ -1787,6 +1870,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $result = saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, [
                     'diagnosis_ids' => $clean_diagnosis_ids,
                     'manual_diseases' => $clean_manual_diseases,
+                    'manual_disease_codes' => $manual_disease_codes, // ✅ MPYA
                     'treatment' => $treatment,
                     'symptoms' => $symptoms,
                     'hpi' => $hpi,
@@ -1886,7 +1970,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // ADD EQUIPMENT BATCH
     if ($action === 'add_equipment_batch') {
         header('Content-Type: application/json');
         
@@ -1895,8 +1978,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             exit;
         }
         
+        // ✅ Chukua data zote
         $raw_diagnosis_ids = isset($_POST['diagnosis_ids']) ? $_POST['diagnosis_ids'] : [];
         $raw_manual_diseases = isset($_POST['manual_diseases']) ? $_POST['manual_diseases'] : [];
+        $raw_manual_disease_codes = isset($_POST['manual_disease_codes']) ? $_POST['manual_disease_codes'] : []; // ✅ MPYA
+        
         $treatment = trim($_POST['treatment'] ?? '');
         $symptoms = trim($_POST['symptoms'] ?? '');
         $hpi = trim($_POST['hpi'] ?? '');
@@ -1921,6 +2007,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $manual_diseases = $raw_manual_diseases;
         }
         
+        // ✅ MPYA: Decode codes
+        $manual_disease_codes = [];
+        if (is_string($raw_manual_disease_codes)) {
+            $decoded = json_decode($raw_manual_disease_codes, true);
+            if (is_array($decoded)) $manual_disease_codes = $decoded;
+            else $manual_disease_codes = array_map('trim', explode(',', $raw_manual_disease_codes));
+        } elseif (is_array($raw_manual_disease_codes)) {
+            $manual_disease_codes = $raw_manual_disease_codes;
+        }
+        
         $clean_diagnosis_ids = [];
         foreach ($diagnosis_ids as $disease_id) {
             $disease_id = (int)$disease_id;
@@ -1943,6 +2039,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $result = saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, [
                     'diagnosis_ids' => $clean_diagnosis_ids,
                     'manual_diseases' => $clean_manual_diseases,
+                    'manual_disease_codes' => $manual_disease_codes, // ✅ MPYA
                     'treatment' => $treatment,
                     'symptoms' => $symptoms,
                     'hpi' => $hpi,
@@ -2038,7 +2135,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // REMOVE ADDED ITEM
     if ($action === 'remove_added_item') {
         header('Content-Type: application/json');
         
@@ -2127,7 +2223,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // SEND LAB REQUESTS
     if (isset($_POST['send_lab'])) {
         $lab_cart = isset($_SESSION['lab_cart']) ? $_SESSION['lab_cart'] : [];
         
@@ -2145,6 +2240,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         
         $diagnosis_ids = isset($_POST['diagnosis_ids']) ? (array)$_POST['diagnosis_ids'] : [];
         $manual_diseases = isset($_POST['manual_diseases']) ? (array)$_POST['manual_diseases'] : [];
+        $manual_disease_codes = isset($_POST['manual_disease_codes']) ? (array)$_POST['manual_disease_codes'] : []; // ✅ MPYA
         $treatment = trim($_POST['treatment'] ?? '');
         
         $stmt = $db->prepare("
@@ -2159,6 +2255,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, [
                     'diagnosis_ids' => $diagnosis_ids,
                     'manual_diseases' => $manual_diseases,
+                    'manual_disease_codes' => $manual_disease_codes, // ✅ MPYA
                     'treatment' => $treatment,
                     'symptoms' => $symptoms,
                     'hpi' => $hpi,
@@ -2297,10 +2394,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // SAVE CONSULTATION
     if (isset($_POST['save_consultation'])) {
         $diagnosis_ids = isset($_POST['diagnosis_ids']) ? (array)$_POST['diagnosis_ids'] : [];
         $manual_diseases = isset($_POST['manual_diseases']) ? (array)$_POST['manual_diseases'] : [];
+        $manual_disease_codes = isset($_POST['manual_disease_codes']) ? (array)$_POST['manual_disease_codes'] : []; // ✅ MPYA
         $treatment = trim($_POST['treatment'] ?? '');
         $symptoms = trim($_POST['symptoms'] ?? '');
         $hpi = trim($_POST['hpi'] ?? '');
@@ -2318,6 +2415,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, [
                 'diagnosis_ids' => $diagnosis_ids,
                 'manual_diseases' => $manual_diseases,
+                'manual_disease_codes' => $manual_disease_codes, // ✅ MPYA
                 'treatment' => $treatment,
                 'symptoms' => $symptoms,
                 'hpi' => $hpi,
@@ -2871,9 +2969,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .chief-complaint-grid .left-col { grid-column: 1; }
         .chief-complaint-grid .right-col { grid-column: 2; }
 
-        /* ============================================================ */
-        /* VITAL SIGNS - COMPACT 7 SIGNS WITH SpO2                       */
-        /* ============================================================ */
         .vital-signs-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -2907,7 +3002,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .vital-sign-item.pulse-item::before { background: linear-gradient(90deg, #EC4899, #F472B6); }
         .vital-sign-item.pulse-item .vital-icon, .vital-sign-item.pulse-item .vital-value { color: #EC4899; }
 
-        /* SpO2 SPECIAL STYLING - SKY BLUE */
         .vital-sign-item.spo2-item::before { background: linear-gradient(90deg, #0EA5E9, #38BDF8); }
         .vital-sign-item.spo2-item .vital-icon, .vital-sign-item.spo2-item .vital-value { color: #0284C7; }
         .vital-sign-item.spo2-item {
@@ -3642,7 +3736,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     </div>
 
-    <!-- ✅ VITAL SIGNS - 7 SIGNS (COMPACT) -->
+    <!-- VITAL SIGNS -->
     <div class="consultation-card mb-6">
         <h3 class="card-title">
             <i class="fas fa-heartbeat"></i> Vital Signs (7 Signs)
@@ -3651,27 +3745,22 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php if ($vital_signs): 
             $spo2_status = getSpO2Status($vital_signs['oxygen_saturation'] ?? null);
         ?>
-            <!-- Row 1: Temp, BP, Pulse, SpO2 -->
             <div class="vital-signs-grid" style="margin-bottom:12px;">
-                <!-- 1. Temperature -->
                 <div class="vital-sign-item temp-item">
                     <span class="vital-icon">🌡️</span>
                     <span class="vital-label">Temperature</span>
                     <span class="vital-value"><?= $vital_signs['temperature'] ?? '--' ?> <span class="vital-unit">°C</span></span>
                 </div>
-                <!-- 2. Blood Pressure -->
                 <div class="vital-sign-item bp-item">
                     <span class="vital-icon">💓</span>
                     <span class="vital-label">Blood Pressure</span>
                     <span class="vital-value"><?= ($vital_signs['blood_pressure_systolic'] ?? '--') . '/' . ($vital_signs['blood_pressure_diastolic'] ?? '--') ?> <span class="vital-unit">mmHg</span></span>
                 </div>
-                <!-- 3. Pulse Rate -->
                 <div class="vital-sign-item pulse-item">
                     <span class="vital-icon">💓</span>
                     <span class="vital-label">Pulse Rate</span>
                     <span class="vital-value"><?= $vital_signs['pulse_rate'] ?? '--' ?> <span class="vital-unit">bpm</span></span>
                 </div>
-                <!-- 4. OXYGEN SATURATION (SpO2) - 7TH VITAL SIGN -->
                 <div class="vital-sign-item spo2-item">
                     <span class="vital-icon">🫁</span>
                     <span class="vital-label">Oxygen (SpO2)</span>
@@ -3682,31 +3771,25 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
             
-            <!-- Row 2: Weight, Height, BMI, (empty) -->
             <div class="vital-signs-grid">
-                <!-- 5. Weight -->
                 <div class="vital-sign-item weight-item">
                     <span class="vital-icon">⚖️</span>
                     <span class="vital-label">Weight</span>
                     <span class="vital-value"><?= $vital_signs['weight'] ?? '--' ?> <span class="vital-unit">kg</span></span>
                 </div>
-                <!-- 6. Height -->
                 <div class="vital-sign-item height-item">
                     <span class="vital-icon">📏</span>
                     <span class="vital-label">Height</span>
                     <span class="vital-value"><?= $vital_signs['height'] ?? '--' ?> <span class="vital-unit">cm</span></span>
                 </div>
-                <!-- 7. BMI -->
                 <div class="vital-sign-item bmi-item">
                     <span class="vital-icon">📊</span>
                     <span class="vital-label">BMI</span>
                     <span class="vital-value"><?= $vital_signs['bmi'] ?? '--' ?> <span class="vital-unit">kg/m²</span></span>
                 </div>
-                <!-- Empty slot -->
                 <div style="visibility:hidden;"></div>
             </div>
             
-            <!-- SpO2 Info Footer -->
             <div class="vital-signs-footer">
                 <i class="fas fa-lungs" style="color:#0EA5E9;"></i>
                 <span style="color:#0284C7;">SpO2 (Oxygen Saturation) Normal Range: <strong>95-100%</strong></span>
@@ -4023,20 +4106,29 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <label class="form-label">Manual Disease Entry</label>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;">
                     <input type="text" class="form-control" id="manualDiseaseInput" placeholder="Enter disease name..." style="flex:1;min-width:200px;" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
-                    <input type="text" class="form-control" id="manualDiseaseCodeInput" placeholder="Code (optional)" style="flex:0.5;min-width:150px;" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                    <input type="text" class="form-control" id="manualDiseaseCodeInput" placeholder="Code (optional - kama unaijaza itatumika, kama haipo ita-generate)" style="flex:0.7;min-width:200px;" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
                     <button type="button" class="btn btn-primary" onclick="addManualDisease()" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
                         <i class="fas fa-plus"></i> Add
                     </button>
                 </div>
                 <div id="manualDiseasesContainer" class="mt-2" style="display:flex;flex-wrap:wrap;gap:8px;">
-                    <?php foreach ($manual_diseases_saved as $manual_disease): ?>
+                    <?php foreach ($manual_diseases_saved as $idx => $manual_disease): ?>
                         <?php $manual_disease = trim($manual_disease); ?>
-                        <?php if (!empty($manual_disease)): ?>
-                            <span class="manual-disease-tag" data-disease="<?= htmlspecialchars($manual_disease) ?>">
+                        <?php if (!empty($manual_disease)): 
+                            // ✅ Chukua code kwa index hii (kama ipo)
+                            $saved_code = $saved_codes_array[$idx] ?? '';
+                        ?>
+                            <span class="manual-disease-tag" data-disease="<?= htmlspecialchars($manual_disease) ?>" <?= $saved_code ? 'data-disease-code="' . htmlspecialchars($saved_code) . '"' : '' ?>>
                                 <i class="fas fa-user-md" style="color:var(--primary);font-size:0.6rem;"></i>
                                 <?= htmlspecialchars($manual_disease) ?>
+                                <?php if ($saved_code): ?>
+                                    <small style="font-family:monospace;background:var(--gray-200);padding:0 6px;border-radius:6px;font-size:0.65rem;"><?= htmlspecialchars($saved_code) ?></small>
+                                <?php endif; ?>
                                 <button type="button" class="btn-remove-tag" onclick="removeManualDisease(this, '<?= htmlspecialchars($manual_disease) ?>')">×</button>
                                 <input type="hidden" name="manual_diseases[]" value="<?= htmlspecialchars($manual_disease) ?>">
+                                <?php if ($saved_code): ?>
+                                    <input type="hidden" name="manual_disease_codes[]" value="<?= htmlspecialchars($saved_code) ?>" data-for="<?= htmlspecialchars($manual_disease) ?>">
+                                <?php endif; ?>
                             </span>
                         <?php endif; ?>
                     <?php endforeach; ?>
@@ -4430,11 +4522,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
     <?php else: ?>
     
-    <!-- ============================================================ -->
-    <!-- COMPLETED VIEW - ALL SECTIONS                                 -->
-    <!-- ============================================================ -->
-    
-    <!-- 1. CHIEF COMPLAINT & HISTORY -->
+    <!-- COMPLETED VIEW -->
     <div class="consultation-card mb-6">
         <h3 class="card-title"><i class="fas fa-list-ul"></i> Chief Complaint & History</h3>
         <div class="row-2col">
@@ -4467,7 +4555,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     </div>
 
-    <!-- 2. LAB RESULTS -->
     <div class="consultation-card mb-6">
         <h3 class="card-title">
             <i class="fas fa-flask"></i> Laboratory Results
@@ -4503,7 +4590,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- 3. DIAGNOSIS & TREATMENT -->
     <div class="consultation-card mb-6">
         <h3 class="card-title"><i class="fas fa-diagnoses"></i> Diagnosis & Treatment</h3>
         <?php if (!empty($visit['diagnosis']) || !empty($visit['disease_name'])): ?>
@@ -4532,7 +4618,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- 4. MEDICATIONS -->
     <div class="consultation-card mb-6">
         <h3 class="card-title">
             <i class="fas fa-prescription"></i> Prescribed Medications
@@ -4581,7 +4666,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- 5. PROCEDURES & EQUIPMENT -->
     <div class="consultation-card mb-6">
         <h3 class="card-title">
             <i class="fas fa-syringe"></i> Procedures & Equipment
@@ -4630,7 +4714,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- 6. BILL ITEMS SUMMARY -->
     <div class="consultation-card mb-6">
         <h3 class="card-title">
             <i class="fas fa-receipt"></i> Bill Items Summary
@@ -4748,6 +4831,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 <script>
 // ================================================================
 // CONSULTATION JAVASCRIPT - WITH PREMIUM SUPPORT & SpO2
+// ✅ FIXED: Manual disease code inatumika kama user ameijaza
 // ================================================================
 
 var AUTO_UPDATE_INTERVAL = 3000;
@@ -5126,6 +5210,7 @@ function addMedicationAjax() {
         if (diagnosisData) {
             formData.append('diagnosis_ids', JSON.stringify(diagnosisData.diagnosis_ids || []));
             formData.append('manual_diseases', JSON.stringify(diagnosisData.manual_diseases || []));
+            formData.append('manual_disease_codes', JSON.stringify(diagnosisData.manual_disease_codes || []));
             formData.append('treatment', diagnosisData.treatment || '');
             formData.append('symptoms', diagnosisData.symptoms || '');
             formData.append('hpi', diagnosisData.hpi || '');
@@ -5237,6 +5322,7 @@ function updateMedicationTotals() {
     }
 }
 
+// ✅ FIXED: saveDiseasesToVisit inatuma manual_disease_codes pia
 function saveDiseasesToVisit() {
     if (isCompleted || isWaiting) return;
     
@@ -5247,10 +5333,26 @@ function saveDiseasesToVisit() {
     });
     
     var manual_diseases = [];
-    document.querySelectorAll('.manual-disease-tag input[name="manual_diseases[]"]').forEach(function(input) {
-        var val = input.value.trim();
-        val = val.replace(/[\[\]"]/g, '').trim();
-        if (val && !manual_diseases.includes(val)) manual_diseases.push(val);
+    var manual_disease_codes = []; // ✅ MPYA
+    
+    // ✅ Chukua jina NA code kwa kila manual disease tag
+    document.querySelectorAll('.manual-disease-tag').forEach(function(tag) {
+        var nameInput = tag.querySelector('input[name="manual_diseases[]"]');
+        if (!nameInput) return;
+        
+        var name = nameInput.value.trim().replace(/[\[\]"]/g, '').trim();
+        if (!name || manual_diseases.includes(name)) return;
+        
+        manual_diseases.push(name);
+        
+        var codeInput = tag.querySelector('input[name="manual_disease_codes[]"]');
+        var code = '';
+        if (codeInput) {
+            code = codeInput.value.trim().replace(/[\[\]"]/g, '').trim();
+        } else {
+            code = tag.getAttribute('data-disease-code') || '';
+        }
+        manual_disease_codes.push(code);
     });
     
     var treatment = document.getElementById('treatmentTextarea')?.value || '';
@@ -5262,7 +5364,9 @@ function saveDiseasesToVisit() {
     if (diagnosis_ids.length === 0 && manual_diseases.length === 0 && !treatment && !symptoms && !hpi && !physical_exam && !notes) return;
     
     var currentHash = JSON.stringify({
-        d: diagnosis_ids.sort(), m: manual_diseases.sort(),
+        d: diagnosis_ids.sort(), 
+        m: manual_diseases.sort(),
+        mc: manual_disease_codes, // ✅ MPYA
         t: treatment, s: symptoms, h: hpi, p: physical_exam, n: notes
     });
     
@@ -5282,6 +5386,7 @@ function saveDiseasesToVisit() {
             visit_id: visitId,
             diagnosis_ids: diagnosis_ids,
             manual_diseases: manual_diseases,
+            manual_disease_codes: manual_disease_codes, // ✅ MPYA
             treatment: treatment,
             symptoms: symptoms,
             hpi: hpi,
@@ -5309,8 +5414,10 @@ function saveDiseasesToVisit() {
     .catch(function(error) { if (saveIndicator) saveIndicator.style.display = 'none'; });
 }
 
+// ✅ FIXED: addManualDisease inachukua code kutoka input
 function addManualDisease() {
     var input = document.getElementById('manualDiseaseInput');
+    var codeInput = document.getElementById('manualDiseaseCodeInput');
     var container = document.getElementById('manualDiseasesContainer');
     var name = input.value.trim();
     
@@ -5318,12 +5425,17 @@ function addManualDisease() {
     name = name.replace(/[\[\]"]/g, '').trim();
     if (!name) { showToast('⚠️ Warning', 'Please enter a valid disease name', 'warning'); return; }
     
+    // ✅ CHUKUA CODE KUTOKA INPUT (optional)
+    var customCode = codeInput ? codeInput.value.trim() : '';
+    customCode = customCode.replace(/[\[\]"]/g, '').trim();
+    
     var existing = container.querySelectorAll('.manual-disease-tag');
     for (var i = 0; i < existing.length; i++) {
         var tagName = existing[i].getAttribute('data-disease') || '';
         if (tagName.toLowerCase() === name.toLowerCase()) {
             showToast('⚠️ Warning', 'Disease already added', 'warning');
             input.value = '';
+            if (codeInput) codeInput.value = '';
             return;
         }
     }
@@ -5331,13 +5443,17 @@ function addManualDisease() {
     var tag = document.createElement('span');
     tag.className = 'manual-disease-tag';
     tag.setAttribute('data-disease', name);
-    tag.innerHTML = '<i class="fas fa-user-md" style="color:var(--primary);font-size:0.6rem;"></i> ' + escapeHtml(name) + 
+    if (customCode) tag.setAttribute('data-disease-code', customCode);
+    
+    var codeDisplay = customCode ? ' <small style="font-family:monospace;background:var(--gray-200);padding:0 6px;border-radius:6px;font-size:0.65rem;">' + escapeHtml(customCode) + '</small>' : '';
+    
+    tag.innerHTML = '<i class="fas fa-user-md" style="color:var(--primary);font-size:0.6rem;"></i> ' + escapeHtml(name) + codeDisplay +
                     '<button type="button" class="btn-remove-tag" onclick="removeManualDisease(this)">×</button>' +
-                    '<input type="hidden" name="manual_diseases[]" value="' + escapeHtml(name) + '">';
+                    '<input type="hidden" name="manual_diseases[]" value="' + escapeHtml(name) + '">' +
+                    (customCode ? '<input type="hidden" name="manual_disease_codes[]" value="' + escapeHtml(customCode) + '" data-for="' + escapeHtml(name) + '">' : '');
     container.appendChild(tag);
     
     input.value = '';
-    var codeInput = document.getElementById('manualDiseaseCodeInput');
     if (codeInput) codeInput.value = '';
     manualDiseaseCount++;
     saveDiseasesToVisit();
@@ -5349,6 +5465,7 @@ function removeManualDisease(btn) {
     saveDiseasesToVisit();
 }
 
+// ✅ FIXED: getDiagnosisData inarudisha manual_disease_codes pia
 function getDiagnosisData() {
     var diagnosis_ids = [];
     document.querySelectorAll('input[name="diagnosis_ids[]"]:checked').forEach(function(cb) {
@@ -5357,15 +5474,31 @@ function getDiagnosisData() {
     });
     
     var manual_diseases = [];
-    document.querySelectorAll('.manual-disease-tag input[name="manual_diseases[]"]').forEach(function(input) {
-        var val = input.value.trim();
-        val = val.replace(/[\[\]"]/g, '').trim();
-        if (val && !manual_diseases.includes(val)) manual_diseases.push(val);
+    var manual_disease_codes = []; // ✅ MPYA
+    
+    document.querySelectorAll('.manual-disease-tag').forEach(function(tag) {
+        var nameInput = tag.querySelector('input[name="manual_diseases[]"]');
+        if (!nameInput) return;
+        
+        var name = nameInput.value.trim().replace(/[\[\]"]/g, '').trim();
+        if (!name || manual_diseases.includes(name)) return;
+        
+        manual_diseases.push(name);
+        
+        var codeInput = tag.querySelector('input[name="manual_disease_codes[]"]');
+        var code = '';
+        if (codeInput) {
+            code = codeInput.value.trim().replace(/[\[\]"]/g, '').trim();
+        } else {
+            code = tag.getAttribute('data-disease-code') || '';
+        }
+        manual_disease_codes.push(code);
     });
     
     return {
         diagnosis_ids: diagnosis_ids,
         manual_diseases: manual_diseases,
+        manual_disease_codes: manual_disease_codes, // ✅ MPYA
         treatment: document.getElementById('treatmentTextarea')?.value || '',
         symptoms: document.getElementById('symptomsTextarea')?.value || '',
         hpi: document.getElementById('hpiTextarea')?.value || '',
@@ -5613,6 +5746,7 @@ function addSelectedProcedures() {
     if (diagnosisData) {
         formData.append('diagnosis_ids', JSON.stringify(diagnosisData.diagnosis_ids || []));
         formData.append('manual_diseases', JSON.stringify(diagnosisData.manual_diseases || []));
+        formData.append('manual_disease_codes', JSON.stringify(diagnosisData.manual_disease_codes || []));
         formData.append('treatment', diagnosisData.treatment || '');
         formData.append('symptoms', diagnosisData.symptoms || '');
         formData.append('hpi', diagnosisData.hpi || '');
@@ -5700,6 +5834,7 @@ function addSelectedEquipment() {
     if (diagnosisData) {
         formData.append('diagnosis_ids', JSON.stringify(diagnosisData.diagnosis_ids || []));
         formData.append('manual_diseases', JSON.stringify(diagnosisData.manual_diseases || []));
+        formData.append('manual_disease_codes', JSON.stringify(diagnosisData.manual_disease_codes || []));
         formData.append('treatment', diagnosisData.treatment || '');
         formData.append('symptoms', diagnosisData.symptoms || '');
         formData.append('hpi', diagnosisData.hpi || '');
@@ -5869,6 +6004,7 @@ function startAutoUpdate() {
     
     console.log('🔄 Auto-update started');
     console.log('✅ 7 Vital Signs (SpO2 included)');
+    console.log('✅ Manual disease code inatumika kama user ameijaza');
 }
 
 function stopAutoUpdate() {
@@ -5910,8 +6046,8 @@ document.addEventListener('visibilitychange', function() {
 console.log('%c🩺 Braick Consultation (7 Vital Signs with SpO2)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
 console.log('%c❤️ 7 Vital Signs: Temp, BP, Pulse, SpO2, Weight, Height, BMI', 'font-size:12px; color:#DC2626;');
 console.log('%c🫁 SpO2 (Oxygen Saturation): Normal 95-100%', 'font-size:12px; color:#0EA5E9;');
-console.log('%c🫁 SpO2 Value: <?= $vital_signs['oxygen_saturation'] ?? "N/A" ?>%', 'font-size:12px; color:#0EA5E9;');
-console.log('%c📋 COMPLETED VIEW: All sections displayed (Complaint, Lab, Diagnosis, Medications, Procedures, Bill)', 'font-size:12px; color:#059669;');
+console.log('%c✅ FIXED: Manual disease code inatumika kama user ameijaza', 'font-size:12px; color:#059669;');
+console.log('%c✅ FIXED: Auto-generate code kama user hajajaza', 'font-size:12px; color:#059669;');
 </script>
 
 </body>

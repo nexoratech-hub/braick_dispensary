@@ -2,11 +2,11 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_pharmacy.php
 // SUPER ADMIN - VIEW PHARMACY BRANCH DETAILS
-// FIXED: Uses shared header, prescription revenue from bill_items
-// WITH DARK MODE, CLOCK, SHARED HEADER
+// ✅ Uses SHARED header & sidebar (NO DUPLICATES)
+// ✅ Blue theme + full dark mode support via --page-* variables
+// ✅ Prescription revenue from bill_items.total_price
 // ================================================================
 
-// Start session
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -19,9 +19,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     exit;
 }
 
-// ================================================================
-// CHECK IF USER IS ADMIN
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -30,6 +27,7 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
@@ -46,18 +44,12 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
@@ -79,7 +71,7 @@ if ($pharmacy_id <= 0) {
 }
 
 // ================================================================
-// FETCH PHARMACY DETAILS - FIXED PRESCRIPTION REVENUE
+// FETCH PHARMACY DETAILS
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
@@ -94,14 +86,12 @@ $stmt = $db->prepare("
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'confirmed') as confirmed_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'cancelled') as cancelled_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id) as total_prescriptions,
-        -- FIXED: Prescription revenue from bill_items.total_price (not final_price)
         (SELECT COALESCE(SUM(bi.total_price), 0) 
          FROM bill_items bi
          INNER JOIN bills bl ON bi.bill_id = bl.id
          WHERE bi.item_type = 'medication' 
          AND bl.branch_id = b.id 
          AND bl.status = 'paid') as prescription_revenue,
-        -- FIXED: Also get prescription discount total
         (SELECT COALESCE(SUM(bl.total_discount), 0) 
          FROM bills bl
          WHERE bl.branch_id = b.id 
@@ -126,22 +116,10 @@ if (!$pharmacy) {
     exit;
 }
 
-// Calculate total revenue (prescription + OTC)
 $prescription_revenue = $pharmacy['prescription_revenue'] ?? 0;
 $prescription_discount = $pharmacy['prescription_discount_total'] ?? 0;
 $otc_revenue = $pharmacy['otc_revenue'] ?? 0;
 $total_revenue = $prescription_revenue + $otc_revenue;
-
-// ================================================================
-// GET BRANCHES FOR FILTER
-// ================================================================
-$branches = [];
-try {
-    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $branches = [];
-}
 
 // ================================================================
 // GET PHARMACISTS
@@ -156,21 +134,16 @@ try {
     ");
     $stmt->execute([$pharmacy_id]);
     $pharmacists = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $pharmacists = [];
-}
+} catch (Exception $e) { $pharmacists = []; }
 
 // ================================================================
-// GET RECENT PRESCRIPTIONS - WITH ACTUAL AMOUNT FROM bill_items
+// GET RECENT PRESCRIPTIONS
 // ================================================================
 $recent_prescriptions = [];
 try {
     $stmt = $db->prepare("
         SELECT 
-            p.id,
-            p.prescription_number,
-            p.status,
-            p.created_at,
+            p.id, p.prescription_number, p.status, p.created_at,
             pat.full_name as patient_name,
             u.full_name as doctor_name,
             COALESCE((
@@ -197,9 +170,7 @@ try {
     ");
     $stmt->execute([$pharmacy_id]);
     $recent_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $recent_prescriptions = [];
-}
+} catch (Exception $e) { $recent_prescriptions = []; }
 
 // ================================================================
 // GET RECENT INVENTORY
@@ -207,16 +178,8 @@ try {
 $recent_inventory = [];
 try {
     $stmt = $db->prepare("
-        SELECT 
-            id,
-            medication_name,
-            category,
-            quantity,
-            reorder_level,
-            selling_price,
-            expiry_date,
-            status,
-            updated_at
+        SELECT id, medication_name, category, quantity, reorder_level,
+               selling_price, expiry_date, status, updated_at
         FROM medications_inventory
         WHERE branch_id = ?
         ORDER BY updated_at DESC
@@ -224,9 +187,7 @@ try {
     ");
     $stmt->execute([$pharmacy_id]);
     $recent_inventory = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $recent_inventory = [];
-}
+} catch (Exception $e) { $recent_inventory = []; }
 
 // ================================================================
 // GET RECENT OTC SALES
@@ -234,16 +195,8 @@ try {
 $recent_otc_sales = [];
 try {
     $stmt = $db->prepare("
-        SELECT 
-            id,
-            sale_number,
-            customer_name,
-            total_amount,
-            subtotal as net_amount,
-            discount_amount,
-            payment_method,
-            payment_status,
-            created_at
+        SELECT id, sale_number, customer_name, total_amount, subtotal as net_amount,
+               discount_amount, payment_method, payment_status, created_at
         FROM otc_sales
         WHERE branch_id = ?
         ORDER BY created_at DESC
@@ -251,9 +204,7 @@ try {
     ");
     $stmt->execute([$pharmacy_id]);
     $recent_otc_sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $recent_otc_sales = [];
-}
+} catch (Exception $e) { $recent_otc_sales = []; }
 
 // ================================================================
 // GET UNREAD NOTIFICATIONS
@@ -263,959 +214,663 @@ try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
     $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
+} catch (Exception $e) { $unread_notifications = 0; }
 
 // ================================================================
-// STATUS BADGE CLASS
+// HELPERS
 // ================================================================
 function getStatusBadge($status) {
     $classes = [
-        'active' => 'success',
-        'inactive' => 'danger',
-        'pending' => 'warning',
-        'dispensed' => 'success',
-        'confirmed' => 'info',
-        'cancelled' => 'danger',
-        'paid' => 'success',
-        'partial' => 'warning',
-        'unpaid' => 'danger'
+        'active' => 'success', 'inactive' => 'danger',
+        'pending' => 'warning', 'dispensed' => 'success',
+        'confirmed' => 'info', 'cancelled' => 'danger',
+        'paid' => 'success', 'partial' => 'warning', 'unpaid' => 'danger'
     ];
     return $classes[$status] ?? 'secondary';
 }
 
 function format_currency($amount) {
-    if ($amount == 0) {
-        return 'TSh 0';
-    }
+    if ($amount == 0) return 'TSh 0';
     return 'TSh ' . number_format($amount, 0);
 }
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// GET STATISTICS FOR SIDEBAR
+// ================================================================
+$total_employees = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
+$total_employees = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$total_doctors = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
+$total_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$total_branches = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
+$total_branches = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$pending_lab_tests = 0;
+try {
+    $stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests WHERE status = 'pending'");
+    $pending_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) { $pending_lab_tests = 0; }
+
+$pending_prescriptions = 0;
+try {
+    $stmt = $db->query("SELECT COUNT(*) as count FROM prescriptions WHERE status = 'pending'");
+    $pending_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) { $pending_prescriptions = 0; }
+
+// ================================================================
+// ✅ SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// Sidebar stats
-$total_employees_sidebar = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
-$total_employees_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-$total_doctors_sidebar = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
-$total_doctors_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-$total_branches_sidebar = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
-$total_branches_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 include_once '../../components/admin_sidebar.php';
 ?>
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>View Pharmacy - Braick Dispensary</title>
-    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    <style>
-        /* ================================================================ */
-        /* CSS VARIABLES - DARK MODE SUPPORT */
-        /* ================================================================ */
-        :root {
-            --bg-body: #F1F5F9;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #083C8A);
-            --primary-light: #6EA8FE;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            --table-hover: #F8FAFC;
-        }
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-light: #60A5FA;
-            --table-hover: #1E293B;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Inter', 'Segoe UI', sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-
-        /* ================================================================ */
-        /* TOP NAV - SHARED HEADER STYLES */
-        /* ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: #0B5ED7;
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .branch-selector {
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            background: var(--bg-card);
-            font-size: 0.82rem;
-            font-weight: 500;
-            cursor: pointer;
-            outline: none;
-            min-width: 160px;
-            color: var(--text-primary);
-            transition: all 0.3s;
-        }
-        
-        .top-nav .branch-selector:focus {
-            border-color: #0B5ED7;
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: #0B5ED7;
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: #0B5ED7;
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif {
-            background: #EF4444;
-        }
-        
-        .notif-dot.no-notif {
-            background: #94A3B8;
-            animation: none;
-        }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: #0B5ED7;
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i {
-            font-size: 0.9rem;
-        }
-
-        /* ================================================================ */
-        /* MAIN CONTENT */
-        /* ================================================================ */
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 24px 28px;
-            min-height: calc(100vh - 68px);
-            transition: background 0.3s ease;
-        }
-
-        /* ================================================================ */
-        /* PAGE HEADER */
-        /* ================================================================ */
-        .page-header {
-            background: var(--primary-gradient);
-            border-radius: 16px;
-            padding: 24px 32px;
-            margin-bottom: 28px;
-            position: relative;
-            overflow: visible;
-            z-index: 10;
-            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.25);
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-        }
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -10%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-            z-index: 0;
-        }
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -30%;
-            left: -5%;
-            width: 200px;
-            height: 200px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
-            z-index: 0;
-        }
-        .page-header .page-title {
-            color: white;
-            font-size: 1.8rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-            margin-top: 4px;
-        }
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        .page-header .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        .page-header .header-badge {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: 10px;
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-            cursor: pointer;
-        }
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        .page-header .header-actions {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-
-        /* ================================================================ */
-        /* STATS GRID */
-        /* ================================================================ */
-        .stats-grid-8 {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 14px;
-            margin-bottom: 24px;
-        }
-        
-        .stat-card-8 {
-            border-radius: 14px;
-            padding: 16px 18px;
-            border: none;
-            display: flex;
-            flex-direction: column;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-            color: white;
-            position: relative;
-            overflow: hidden;
-            min-height: 110px;
-            cursor: pointer;
-            text-decoration: none;
-        }
-        .stat-card-8::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 160px;
-            height: 160px;
-            background: rgba(255,255,255,0.06);
-            border-radius: 50%;
-            pointer-events: none;
-            transition: all 0.5s ease;
-        }
-        .stat-card-8::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -10%;
-            width: 120px;
-            height: 120px;
-            background: rgba(255,255,255,0.04);
-            border-radius: 50%;
-            pointer-events: none;
-            transition: all 0.5s ease;
-        }
-        .stat-card-8:hover {
-            transform: translateY(-4px) scale(1.01);
-            box-shadow: 0 10px 32px rgba(0,0,0,0.2);
-        }
-        .stat-card-8:hover::before { transform: scale(1.3); right: -10%; }
-        .stat-card-8:hover::after { transform: scale(1.4); bottom: -30%; }
-        
-        .stat-card-8 .stat-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.1rem;
-            flex-shrink: 0;
-            background: rgba(255,255,255,0.18);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.12);
-            backdrop-filter: blur(8px);
-            transition: all 0.3s ease;
-            position: relative;
-            z-index: 1;
-            margin-bottom: 4px;
-        }
-        .stat-card-8:hover .stat-icon {
-            transform: scale(1.05) rotate(-2deg);
-            background: rgba(255,255,255,0.3);
-        }
-        .stat-card-8 .stat-content {
-            position: relative;
-            z-index: 1;
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-        }
-        .stat-card-8 .stat-label {
-            font-size: 0.6rem;
-            color: rgba(255,255,255,0.85);
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            margin: 0 0 1px 0;
-        }
-        .stat-card-8 .stat-number-small {
-            font-size: 2.2rem;
-            font-weight: 800;
-            color: white;
-            margin: 0;
-            line-height: 1.1;
-            letter-spacing: -0.02em;
-        }
-        .stat-card-8 .stat-amount-large {
-            font-size: 1.6rem;
-            font-weight: 800;
-            color: white;
-            margin: 0;
-            line-height: 1.2;
-            letter-spacing: -0.02em;
-        }
-        .stat-card-8 .stat-currency {
-            font-size: 0.8rem;
-            font-weight: 600;
-            color: rgba(255,255,255,0.9);
-            margin-right: 3px;
-        }
-        .stat-card-8 .stat-sub {
-            font-size: 0.6rem;
-            color: rgba(255,255,255,0.9);
-            margin-top: 3px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            flex-wrap: wrap;
-        }
-        .stat-card-8 .stat-arrow {
-            position: absolute;
-            right: 12px;
-            bottom: 12px;
-            color: rgba(255,255,255,0.12);
-            font-size: 0.7rem;
-            transition: all 0.3s ease;
-            z-index: 1;
-        }
-        .stat-card-8:hover .stat-arrow {
-            transform: translateX(6px);
-            color: rgba(255,255,255,0.4);
-        }
-        
-        .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-        .card-green { background: linear-gradient(135deg, #059669, #047857); }
-        .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
-        
-        [data-theme="dark"] .card-blue { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
-        [data-theme="dark"] .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-        [data-theme="dark"] .card-green { background: linear-gradient(135deg, #059669, #047857); }
-        [data-theme="dark"] .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
-
-        /* ================================================================ */
-        /* DETAIL CARD */
-        /* ================================================================ */
-        .detail-card {
-            background: var(--bg-card);
-            border-radius: 16px;
-            padding: 20px 24px;
-            border: 2px solid var(--border-color);
-            box-shadow: var(--shadow-sm);
-            transition: all 0.3s ease;
-            margin-bottom: 24px;
-        }
-        .detail-card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-        }
-        .detail-label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-        }
-        .detail-value {
-            font-size: 0.95rem;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-
-        /* ================================================================ */
-        /* CARDS */
-        /* ================================================================ */
-        .card {
-            background: var(--bg-card);
-            border-radius: 16px;
-            border: 2px solid var(--border-color);
-            overflow: hidden;
-            box-shadow: var(--shadow-sm);
-            margin-bottom: 24px;
-        }
-        .card:hover {
-            border-color: var(--primary);
-        }
-        .card-header {
-            padding: 14px 20px;
-            background: var(--primary-gradient-strong);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        .card-header .card-title {
-            color: white;
-            font-size: 0.9rem;
-            font-weight: 600;
-        }
-        .card-header .card-title i { margin-right: 8px; }
-        .card-header .card-action {
-            color: rgba(255,255,255,0.7);
-            font-size: 0.7rem;
-            text-decoration: none;
-            transition: all 0.3s;
-        }
-        .card-header .card-action:hover { color: white; }
-        .card-body { padding: 0; overflow-x: auto; }
-
-        /* ================================================================ */
-        /* TABLES */
-        /* ================================================================ */
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.78rem;
-        }
-        .data-table thead {
-            background: var(--bg-body);
-        }
-        .data-table thead th {
-            padding: 10px 14px;
-            text-align: left;
-            font-weight: 600;
-            color: var(--text-secondary);
-            font-size: 0.6rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            border-bottom: 2px solid var(--border-color);
-            white-space: nowrap;
-        }
-        .data-table td {
-            padding: 10px 14px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-            vertical-align: middle;
-        }
-        .data-table tr:hover td {
-            background: var(--table-hover);
-        }
-        .data-table tr:last-child td { border-bottom: none; }
-
-        /* ================================================================ */
-        /* BADGES */
-        /* ================================================================ */
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            color: white;
-            letter-spacing: 0.02em;
-        }
-        .badge-success { background: #059669; }
-        .badge-danger { background: #DC2626; }
-        .badge-warning { background: #D97706; color: #1E293B; }
-        .badge-info { background: #0B5ED7; }
-        .badge-secondary { background: #64748B; }
-        
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 600;
-        }
-        .status-badge.success { background: #D1FAE5; color: #059669; }
-        .status-badge.danger { background: #FEE2E2; color: #DC2626; }
-        .status-badge.warning { background: #FEF3C7; color: #D97706; }
-        .status-badge.info { background: #EFF6FF; color: #0B5ED7; }
-        .status-badge.secondary { background: #F1F5F9; color: #64748B; }
-        [data-theme="dark"] .status-badge.success { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .status-badge.danger { background: #3A1A1A; color: #F87171; }
-        [data-theme="dark"] .status-badge.warning { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .status-badge.info { background: #1E3A5F; color: #3B82F6; }
-        [data-theme="dark"] .status-badge.secondary { background: #2D3748; color: #94A3B8; }
-
-        /* ================================================================ */
-        /* BUTTONS */
-        /* ================================================================ */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.8rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-        }
-        .btn-primary {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-        }
-        .btn-primary:hover {
-            background: rgba(255,255,255,0.3);
-            color: white;
-        }
-        
-        .btn-view {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 5px 14px;
-            border-radius: 8px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            text-decoration: none;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            border: 2px solid transparent;
-            cursor: pointer;
-            background: var(--primary-gradient);
-            color: white;
-            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.2);
-        }
-        .btn-view i {
-            font-size: 0.65rem;
-            transition: transform 0.3s ease;
-        }
-        .btn-view:hover {
-            transform: translateY(-2px) scale(1.02);
-            box-shadow: 0 6px 20px rgba(11, 94, 215, 0.35);
-            background: var(--primary-gradient-strong);
-            color: white;
-        }
-        .btn-view:hover i {
-            transform: translateX(3px);
-        }
-        .btn-view-outline {
-            background: transparent;
-            color: var(--primary);
-            border-color: var(--primary);
-            box-shadow: none;
-        }
-        .btn-view-outline:hover {
-            background: var(--primary-gradient);
-            color: white;
-            border-color: transparent;
-            box-shadow: 0 6px 20px rgba(11, 94, 215, 0.35);
-        }
-        .btn-view-sm {
-            padding: 3px 10px;
-            font-size: 0.6rem;
-            border-radius: 6px;
-        }
-        .btn-view-sm i {
-            font-size: 0.55rem;
-        }
-        .btn-view-success {
-            background: linear-gradient(135deg, #059669, #047857);
-            box-shadow: 0 2px 8px rgba(5, 150, 105, 0.2);
-        }
-        .btn-view-success:hover {
-            box-shadow: 0 6px 20px rgba(5, 150, 105, 0.35);
-            background: linear-gradient(135deg, #047857, #065F46);
-        }
-        [data-theme="dark"] .btn-view-outline {
-            color: #60A5FA;
-            border-color: #60A5FA;
-        }
-        [data-theme="dark"] .btn-view-outline:hover {
-            color: white;
-        }
-
-        /* ================================================================ */
-        /* EMPTY STATE & FOOTER */
-        /* ================================================================ */
-        .empty-state {
-            text-align: center;
-            padding: 40px 20px;
-            color: var(--text-secondary);
-        }
-        .empty-state i {
-            font-size: 2.5rem;
-            color: var(--border-color);
-            margin-bottom: 8px;
-        }
-        
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 20px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            transition: border-color 0.3s ease, color 0.3s ease;
-        }
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-
-        /* ================================================================ */
-        /* RESPONSIVE */
-        /* ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .stats-grid-8 { grid-template-columns: repeat(4, 1fr); }
-            .page-header { padding: 20px 24px; }
-            .page-header .page-title { font-size: 1.5rem; }
-        }
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .stats-grid-8 { grid-template-columns: 1fr 1fr; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .page-header { padding: 16px 18px; flex-direction: column; align-items: flex-start; }
-            .page-header .header-actions { width: 100%; }
-            .page-header .btn-outline-light { flex: 1; justify-content: center; }
-            .stat-card-8 { padding: 14px 16px; min-height: 90px; }
-            .stat-card-8 .stat-number-small { font-size: 1.8rem; }
-            .stat-card-8 .stat-amount-large { font-size: 1.4rem; }
-            .stat-card-8 .stat-icon { width: 38px; height: 38px; font-size: 1rem; }
-        }
-        @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .stats-grid-8 { grid-template-columns: 1fr; }
-            .stat-card-8 { padding: 12px 14px; min-height: 80px; }
-            .stat-card-8 .stat-number-small { font-size: 1.6rem; }
-            .stat-card-8 .stat-amount-large { font-size: 1.2rem; }
-            .stat-card-8 .stat-icon { width: 34px; height: 34px; font-size: 0.85rem; }
-            .page-header .page-title { font-size: 1.1rem; flex-direction: column; align-items: flex-start; }
-            .page-header .page-subtitle { font-size: 0.75rem; flex-direction: column; align-items: flex-start; gap: 4px; }
-            .page-header { padding: 12px 14px; }
-        }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        #sidebarOverlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 45;
-            display: none;
-            backdrop-filter: blur(2px);
-        }
-        @media (max-width: 1024px) {
-            #sidebarOverlay.show { display: block; }
-        }
-    </style>
-</head>
-<body>
 
 <!-- ================================================================ -->
-<!-- SIDEBAR OVERLAY -->
+<!-- PAGE-SPECIFIC CSS - TUMIA VARIABLES ZA HEADER (--page-*) -->
 <!-- ================================================================ -->
-<div id="sidebarOverlay"></div>
+<style>
+    /* ================================================================
+       PAGE HEADER - BLUE GRADIENT
+       ================================================================ */
+    .page-header-pharm {
+        background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
+        border-radius: 18px;
+        padding: 26px 34px;
+        margin-bottom: 26px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 8px 32px rgba(10, 76, 168, 0.35);
+        position: relative;
+        overflow: hidden;
+    }
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime">
-            <i class="fas fa-clock" style="color:var(--primary-light);"></i>
-            <span id="clockDisplay" style="font-weight:500;"><?= date('d M Y • h:i:s A') ?></span>
-        </span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+    .page-header-pharm::before {
+        content: '';
+        position: absolute;
+        top: -60%;
+        right: -10%;
+        width: 400px;
+        height: 400px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .page-header-pharm .page-title {
+        color: white;
+        font-size: 1.7rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+    }
+
+    .page-header-pharm .page-subtitle {
+        color: rgba(255,255,255,0.88);
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 6px;
+    }
+
+    .page-header-pharm .role-badge-display {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        backdrop-filter: blur(4px);
+    }
+
+    .page-header-pharm .header-badge {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255,255,255,0.1);
+        transition: all 0.3s ease;
+    }
+
+    .page-header-pharm .header-badge:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-1px);
+    }
+
+    .page-header-pharm .btn-outline-light {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.2);
+        padding: 8px 18px;
+        border-radius: 12px;
+        font-weight: 500;
+        font-size: 0.82rem;
+        transition: all 0.3s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        backdrop-filter: blur(4px);
+        position: relative;
+        z-index: 1;
+        cursor: pointer;
+    }
+
+    .page-header-pharm .btn-outline-light:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        color: white;
+    }
+
+    /* ================================================================
+       DETAIL CARD (Pharmacy Info)
+       ================================================================ */
+    .detail-card-pharm {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        padding: 20px 24px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        box-shadow: var(--page-shadow-sm, 0 1px 3px rgba(0,0,0,0.06));
+        transition: all 0.3s ease;
+        margin-bottom: 24px;
+    }
+
+    .detail-card-pharm:hover {
+        border-color: var(--page-primary, #0B5ED7);
+        box-shadow: var(--page-shadow-md, 0 4px 12px rgba(0,0,0,0.08));
+    }
+
+    .detail-grid-pharm {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 18px;
+    }
+
+    .detail-label-pharm {
+        font-size: 0.7rem;
+        color: var(--page-text-secondary, #64748B);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin: 0 0 4px 0;
+    }
+
+    .detail-value-pharm {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--page-text-primary, #1E293B);
+        margin: 0;
+    }
+
+    /* ================================================================
+       STATS GRID - 8 COLORED CARDS
+       ================================================================ */
+    .stats-grid-8-pharm {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 14px;
+        margin-bottom: 24px;
+    }
+
+    .stat-card-8-pharm {
+        border-radius: 14px;
+        padding: 16px 18px;
+        border: none;
+        display: flex;
+        flex-direction: column;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+        color: white;
+        position: relative;
+        overflow: hidden;
+        min-height: 110px;
+        cursor: pointer;
+        text-decoration: none;
+    }
+
+    .stat-card-8-pharm::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -20%;
+        width: 160px;
+        height: 160px;
+        background: rgba(255,255,255,0.06);
+        border-radius: 50%;
+        pointer-events: none;
+        transition: all 0.5s ease;
+    }
+
+    .stat-card-8-pharm:hover {
+        transform: translateY(-4px) scale(1.01);
+        box-shadow: 0 10px 32px rgba(0,0,0,0.2);
+    }
+
+    .stat-card-8-pharm:hover::before {
+        transform: scale(1.3);
+        right: -10%;
+    }
+
+    .stat-card-8-pharm .stat-icon-pharm {
+        width: 44px;
+        height: 44px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+        flex-shrink: 0;
+        background: rgba(255,255,255,0.18);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.12);
+        backdrop-filter: blur(8px);
+        transition: all 0.3s ease;
+        position: relative;
+        z-index: 1;
+        margin-bottom: 4px;
+    }
+
+    .stat-card-8-pharm:hover .stat-icon-pharm {
+        transform: scale(1.05) rotate(-2deg);
+        background: rgba(255,255,255,0.3);
+    }
+
+    .stat-card-8-pharm .stat-content-pharm {
+        position: relative;
+        z-index: 1;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .stat-card-8-pharm .stat-label-pharm {
+        font-size: 0.6rem;
+        color: rgba(255,255,255,0.85);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin: 0 0 1px 0;
+    }
+
+    .stat-card-8-pharm .stat-number-small {
+        font-size: 2.2rem;
+        font-weight: 800;
+        color: white;
+        margin: 0;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
+    }
+
+    .stat-card-8-pharm .stat-amount-large {
+        font-size: 1.6rem;
+        font-weight: 800;
+        color: white;
+        margin: 0;
+        line-height: 1.2;
+        letter-spacing: -0.02em;
+    }
+
+    .stat-card-8-pharm .stat-sub-pharm {
+        font-size: 0.6rem;
+        color: rgba(255,255,255,0.9);
+        margin-top: 3px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+
+    .stat-card-8-pharm .stat-arrow-pharm {
+        position: absolute;
+        right: 12px;
+        bottom: 12px;
+        color: rgba(255,255,255,0.12);
+        font-size: 0.7rem;
+        transition: all 0.3s ease;
+        z-index: 1;
+    }
+
+    .stat-card-8-pharm:hover .stat-arrow-pharm {
+        transform: translateX(6px);
+        color: rgba(255,255,255,0.4);
+    }
+
+    /* Card colors */
+    .card-blue-pharm { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+    .card-red-pharm { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+    .card-green-pharm { background: linear-gradient(135deg, #059669, #047857); }
+    .card-orange-pharm { background: linear-gradient(135deg, #D97706, #B45309); }
+
+    /* ================================================================
+       CARDS
+       ================================================================ */
+    .card-pharm {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        overflow: hidden;
+        box-shadow: var(--page-shadow-sm, 0 1px 3px rgba(0,0,0,0.06));
+        margin-bottom: 24px;
+        transition: border-color 0.3s ease;
+    }
+
+    .card-pharm:hover {
+        border-color: var(--page-primary, #0B5ED7);
+    }
+
+    .card-header-pharm {
+        padding: 14px 20px;
+        background: linear-gradient(135deg, #0A4CA8, #083C8A);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .card-header-pharm .card-title-pharm {
+        color: white;
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .card-header-pharm .card-action-pharm {
+        color: rgba(255,255,255,0.7);
+        font-size: 0.7rem;
+        text-decoration: none;
+        transition: all 0.3s;
+        font-weight: 500;
+    }
+
+    .card-header-pharm .card-action-pharm:hover {
+        color: white;
+    }
+
+    .card-body-pharm {
+        padding: 0;
+        overflow-x: auto;
+    }
+
+    /* ================================================================
+       TABLES
+       ================================================================ */
+    .data-table-pharm {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.78rem;
+    }
+
+    .data-table-pharm thead {
+        background: var(--page-hover, #F8FAFC);
+    }
+
+    [data-theme="dark"] .data-table-pharm thead {
+        background: #0F172A;
+    }
+
+    .data-table-pharm thead th {
+        padding: 10px 14px;
+        text-align: left;
+        font-weight: 600;
+        color: var(--page-text-secondary, #64748B);
+        font-size: 0.6rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-bottom: 2px solid var(--page-border, #E2E8F0);
+        white-space: nowrap;
+    }
+
+    .data-table-pharm td {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--page-border, #E2E8F0);
+        color: var(--page-text-primary, #1E293B);
+        vertical-align: middle;
+    }
+
+    .data-table-pharm tr:hover td {
+        background: var(--page-hover, #F8FAFC);
+    }
+
+    [data-theme="dark"] .data-table-pharm tr:hover td {
+        background: #0F172A;
+    }
+
+    .data-table-pharm tr:last-child td {
+        border-bottom: none;
+    }
+
+    .text-right { text-align: right; }
+    .text-center { text-align: center; }
+    .font-mono { font-family: 'Courier New', monospace; }
+    .font-semibold { font-weight: 600; }
+    .font-medium { font-weight: 500; }
+    .text-xs { font-size: 0.7rem; }
+    .text-blue-600 { color: #0B5ED7; }
+    .text-green-600 { color: #059669; }
+    .text-red-600 { color: #DC2626; }
+    .text-yellow-600 { color: #D97706; }
+    .text-gray-400 { color: #94A3B8; }
+    .text-gray-500 { color: #64748B; }
+    [data-theme="dark"] .text-blue-600 { color: #60A5FA; }
+    [data-theme="dark"] .text-green-600 { color: #34D399; }
+    [data-theme="dark"] .text-red-600 { color: #F87171; }
+    [data-theme="dark"] .text-yellow-600 { color: #FBBF24; }
+    [data-theme="dark"] .text-gray-400 { color: #64748B; }
+    [data-theme="dark"] .text-gray-500 { color: #94A3B8; }
+
+    /* ================================================================
+       STATUS BADGES
+       ================================================================ */
+    .status-badge-pharm {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.6rem;
+        font-weight: 600;
+    }
+
+    .status-badge-pharm.success { background: #D1FAE5; color: #059669; }
+    .status-badge-pharm.danger { background: #FEE2E2; color: #DC2626; }
+    .status-badge-pharm.warning { background: #FEF3C7; color: #D97706; }
+    .status-badge-pharm.info { background: #EFF6FF; color: #0B5ED7; }
+    .status-badge-pharm.secondary { background: #F1F5F9; color: #64748B; }
+
+    [data-theme="dark"] .status-badge-pharm.success { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .status-badge-pharm.danger { background: #3A1A1A; color: #F87171; }
+    [data-theme="dark"] .status-badge-pharm.warning { background: #3D2E0A; color: #FBBF24; }
+    [data-theme="dark"] .status-badge-pharm.info { background: #1E3A5F; color: #3B82F6; }
+    [data-theme="dark"] .status-badge-pharm.secondary { background: #2D3748; color: #94A3B8; }
+
+    /* ================================================================
+       BUTTONS
+       ================================================================ */
+    .btn-view-pharm {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 14px;
+        border-radius: 8px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-decoration: none;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        border: 2px solid transparent;
+        cursor: pointer;
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+        box-shadow: 0 2px 8px rgba(11, 94, 215, 0.2);
+    }
+
+    .btn-view-pharm:hover {
+        transform: translateY(-2px) scale(1.02);
+        box-shadow: 0 6px 20px rgba(11, 94, 215, 0.35);
+        background: linear-gradient(135deg, #0A4CA8, #083C8A);
+        color: white;
+    }
+
+    .btn-view-pharm i {
+        font-size: 0.65rem;
+    }
+
+    .btn-view-pharm.btn-view-sm {
+        padding: 3px 10px;
+        font-size: 0.6rem;
+        border-radius: 6px;
+    }
+
+    .btn-view-pharm.btn-view-sm i {
+        font-size: 0.55rem;
+    }
+
+    .btn-view-pharm.btn-view-success {
+        background: linear-gradient(135deg, #059669, #047857);
+    }
+
+    .btn-view-pharm.btn-view-success:hover {
+        background: linear-gradient(135deg, #047857, #065F46);
+        box-shadow: 0 6px 20px rgba(5, 150, 105, 0.35);
+    }
+
+    .btn-view-pharm.btn-view-outline {
+        background: transparent;
+        color: var(--page-primary, #0B5ED7);
+        border-color: var(--page-primary, #0B5ED7);
+        box-shadow: none;
+    }
+
+    .btn-view-pharm.btn-view-outline:hover {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+        border-color: transparent;
+    }
+
+    .btn-add-pharm {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 14px;
+        border-radius: 8px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-decoration: none;
+        background: rgba(255,255,255,0.2);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.3);
+        transition: all 0.3s ease;
+    }
+
+    .btn-add-pharm:hover {
+        background: rgba(255,255,255,0.35);
+        color: white;
+        transform: translateY(-2px);
+    }
+
+    /* ================================================================
+       EMPTY STATE
+       ================================================================ */
+    .empty-state-pharm {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .empty-state-pharm i {
+        font-size: 2.5rem;
+        color: var(--page-border, #E2E8F0);
+        margin-bottom: 8px;
+        display: block;
+    }
+
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer-pharm {
+        padding: 14px 0;
+        border-top: 2px solid var(--page-border, #E2E8F0);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .footer-pharm .footer-brand-pharm {
+        color: var(--page-primary, #0B5ED7);
+        font-weight: 700;
+    }
+
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 1024px) {
+        .stats-grid-8-pharm { grid-template-columns: repeat(4, 1fr); }
+    }
+
+    @media (max-width: 768px) {
+        .stats-grid-8-pharm { grid-template-columns: 1fr 1fr; }
+        .page-header-pharm { padding: 18px 20px; flex-direction: column; align-items: flex-start; }
+        .page-header-pharm .page-title { font-size: 1.3rem; }
+        .stat-card-8-pharm { padding: 14px 16px; min-height: 90px; }
+        .stat-card-8-pharm .stat-number-small { font-size: 1.8rem; }
+        .stat-card-8-pharm .stat-amount-large { font-size: 1.4rem; }
+        .stat-card-8-pharm .stat-icon-pharm { width: 38px; height: 38px; font-size: 1rem; }
+    }
+
+    @media (max-width: 480px) {
+        .stats-grid-8-pharm { grid-template-columns: 1fr; }
+        .stat-card-8-pharm { padding: 12px 14px; min-height: 80px; }
+        .stat-card-8-pharm .stat-number-small { font-size: 1.6rem; }
+        .stat-card-8-pharm .stat-amount-large { font-size: 1.2rem; }
+        .stat-card-8-pharm .stat-icon-pharm { width: 34px; height: 34px; font-size: 0.85rem; }
+        .page-header-pharm .page-title { font-size: 1.1rem; }
+    }
+
+    @keyframes fadeInUpPharm {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .animate-fade-in-up-pharm {
+        animation: fadeInUpPharm 0.5s ease forwards;
+        opacity: 0;
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
-    <div class="page-header animate-fade-in-up" style="animation-delay:0.05s;">
+    <div class="page-header-pharm animate-fade-in-up-pharm">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-prescription-bottle"></i>
@@ -1236,7 +891,7 @@ include_once '../../components/admin_sidebar.php';
                 </span>
             </p>
         </div>
-        <div class="header-actions">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="edit_pharmacy.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-edit"></i> Edit
             </a>
@@ -1246,136 +901,130 @@ include_once '../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- PHARMACY INFO -->
-    <!-- ================================================================ -->
-    <div class="detail-card animate-fade-in-up" style="animation-delay:0.1s;">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div class="detail-card-pharm animate-fade-in-up-pharm" style="animation-delay:0.05s;">
+        <div class="detail-grid-pharm">
             <div>
-                <p class="detail-label"><i class="fas fa-map-marker-alt mr-1"></i> Location</p>
-                <p class="detail-value"><?= htmlspecialchars($pharmacy['location'] ?? 'N/A') ?></p>
+                <p class="detail-label-pharm"><i class="fas fa-map-marker-alt" style="margin-right:4px;"></i> Location</p>
+                <p class="detail-value-pharm"><?= htmlspecialchars($pharmacy['location'] ?? 'N/A') ?></p>
             </div>
             <div>
-                <p class="detail-label"><i class="fas fa-phone mr-1"></i> Phone</p>
-                <p class="detail-value"><?= htmlspecialchars($pharmacy['phone'] ?? 'N/A') ?></p>
+                <p class="detail-label-pharm"><i class="fas fa-phone" style="margin-right:4px;"></i> Phone</p>
+                <p class="detail-value-pharm"><?= htmlspecialchars($pharmacy['phone'] ?? 'N/A') ?></p>
             </div>
             <div>
-                <p class="detail-label"><i class="fas fa-envelope mr-1"></i> Email</p>
-                <p class="detail-value"><?= htmlspecialchars($pharmacy['email'] ?? 'N/A') ?></p>
+                <p class="detail-label-pharm"><i class="fas fa-envelope" style="margin-right:4px;"></i> Email</p>
+                <p class="detail-value-pharm"><?= htmlspecialchars($pharmacy['email'] ?? 'N/A') ?></p>
             </div>
             <div>
-                <p class="detail-label"><i class="fas fa-calendar-plus mr-1"></i> Created</p>
-                <p class="detail-value"><?= date('M d, Y h:i A', strtotime($pharmacy['created_at'] ?? 'now')) ?></p>
+                <p class="detail-label-pharm"><i class="fas fa-calendar-plus" style="margin-right:4px;"></i> Created</p>
+                <p class="detail-value-pharm"><?= date('M d, Y h:i A', strtotime($pharmacy['created_at'] ?? 'now')) ?></p>
             </div>
             <div>
-                <p class="detail-label"><i class="fas fa-user-md mr-1"></i> Pharmacists</p>
-                <p class="detail-value"><?= $pharmacy['active_pharmacists'] ?? 0 ?> Active / <?= $pharmacy['total_pharmacists'] ?? 0 ?> Total</p>
+                <p class="detail-label-pharm"><i class="fas fa-user-md" style="margin-right:4px;"></i> Pharmacists</p>
+                <p class="detail-value-pharm"><?= $pharmacy['active_pharmacists'] ?? 0 ?> Active / <?= $pharmacy['total_pharmacists'] ?? 0 ?> Total</p>
             </div>
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- 8 STATS CARDS -->
-    <!-- ================================================================ -->
-    <div class="stats-grid-8 animate-fade-in-up" style="animation-delay:0.15s;">
-        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="stat-card-8 card-blue">
-            <div class="stat-icon"><i class="fas fa-pills"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Total Medicines</p>
+    <div class="stats-grid-8-pharm animate-fade-in-up-pharm" style="animation-delay:0.1s;">
+        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="stat-card-8-pharm card-blue-pharm">
+            <div class="stat-icon-pharm"><i class="fas fa-pills"></i></div>
+            <div class="stat-content-pharm">
+                <p class="stat-label-pharm">Total Medicines</p>
                 <p class="stat-number-small"><?= number_format($pharmacy['total_medicines'] ?? 0) ?></p>
-                <p class="stat-sub">Active inventory items</p>
+                <p class="stat-sub-pharm">Active inventory items</p>
             </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
+            <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
         
-        <a href="prescriptions.php?branch=<?= $pharmacy['id'] ?>&filter=all" class="stat-card-8 card-blue">
-            <div class="stat-icon"><i class="fas fa-prescription"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Total Prescriptions</p>
+        <a href="prescriptions.php?branch=<?= $pharmacy['id'] ?>&filter=all" class="stat-card-8-pharm card-blue-pharm">
+            <div class="stat-icon-pharm"><i class="fas fa-prescription"></i></div>
+            <div class="stat-content-pharm">
+                <p class="stat-label-pharm">Total Prescriptions</p>
                 <div>
                     <span class="stat-number-small"><?= number_format($pharmacy['total_prescriptions'] ?? 0) ?></span>
                     <span class="stat-amount-large" style="font-size:1.2rem;display:block;">TSh <?= number_format($prescription_revenue, 0) ?></span>
                 </div>
-                <p class="stat-sub"><?= $pharmacy['pending_prescriptions'] ?? 0 ?> pending · <?= $pharmacy['dispensed_prescriptions'] ?? 0 ?> dispensed</p>
+                <p class="stat-sub-pharm"><?= $pharmacy['pending_prescriptions'] ?? 0 ?> pending · <?= $pharmacy['dispensed_prescriptions'] ?? 0 ?> dispensed</p>
             </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
+            <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
         
-        <a href="otc_sales.php?branch=<?= $pharmacy['id'] ?>" class="stat-card-8 card-blue">
-            <div class="stat-icon"><i class="fas fa-shopping-cart"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">OTC Sales</p>
+        <a href="otc_sales.php?branch=<?= $pharmacy['id'] ?>" class="stat-card-8-pharm card-blue-pharm">
+            <div class="stat-icon-pharm"><i class="fas fa-shopping-cart"></i></div>
+            <div class="stat-content-pharm">
+                <p class="stat-label-pharm">OTC Sales</p>
                 <div>
                     <span class="stat-number-small"><?= number_format($pharmacy['total_otc_sales'] ?? 0) ?></span>
                     <span class="stat-amount-large" style="font-size:1.2rem;display:block;">TSh <?= number_format($otc_revenue, 0) ?></span>
                 </div>
-                <p class="stat-sub">💰 Paid OTC revenue</p>
+                <p class="stat-sub-pharm">💰 Paid OTC revenue</p>
             </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
+            <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
         
-        <a href="reports.php?branch=<?= $pharmacy['id'] ?>&type=pharmacy" class="stat-card-8 card-green">
-            <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Total Revenue</p>
-                <p class="stat-amount-large"><span class="stat-currency">TSh</span> <?= number_format($total_revenue, 0) ?></p>
-                <p class="stat-sub">Rx: TSh <?= number_format($prescription_revenue, 0) ?> · OTC: TSh <?= number_format($otc_revenue, 0) ?></p>
+        <a href="reports.php?branch=<?= $pharmacy['id'] ?>&type=pharmacy" class="stat-card-8-pharm card-green-pharm">
+            <div class="stat-icon-pharm"><i class="fas fa-money-bill-wave"></i></div>
+            <div class="stat-content-pharm">
+                <p class="stat-label-pharm">Total Revenue</p>
+                <p class="stat-amount-large">TSh <?= number_format($total_revenue, 0) ?></p>
+                <p class="stat-sub-pharm">Rx: TSh <?= number_format($prescription_revenue, 0) ?> · OTC: TSh <?= number_format($otc_revenue, 0) ?></p>
             </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
+            <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
         
-        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=outofstock" class="stat-card-8 card-orange">
-            <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Out of Stock</p>
+        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=outofstock" class="stat-card-8-pharm card-orange-pharm">
+            <div class="stat-icon-pharm"><i class="fas fa-times-circle"></i></div>
+            <div class="stat-content-pharm">
+                <p class="stat-label-pharm">Out of Stock</p>
                 <p class="stat-number-small"><?= number_format($pharmacy['out_of_stock_items'] ?? 0) ?></p>
-                <p class="stat-sub">❌ Items with zero quantity</p>
+                <p class="stat-sub-pharm">❌ Items with zero quantity</p>
             </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
+            <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
         
-        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=lowstock" class="stat-card-8 card-orange">
-            <div class="stat-icon"><i class="fas fa-exclamation-triangle"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Low Stock</p>
+        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=lowstock" class="stat-card-8-pharm card-orange-pharm">
+            <div class="stat-icon-pharm"><i class="fas fa-exclamation-triangle"></i></div>
+            <div class="stat-content-pharm">
+                <p class="stat-label-pharm">Low Stock</p>
                 <p class="stat-number-small"><?= number_format($pharmacy['low_stock_items'] ?? 0) ?></p>
-                <p class="stat-sub">⚠️ Below reorder level</p>
+                <p class="stat-sub-pharm">⚠️ Below reorder level</p>
             </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
+            <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
         
-        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=expired" class="stat-card-8 card-red">
-            <div class="stat-icon"><i class="fas fa-skull"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Expired</p>
+        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=expired" class="stat-card-8-pharm card-red-pharm">
+            <div class="stat-icon-pharm"><i class="fas fa-skull"></i></div>
+            <div class="stat-content-pharm">
+                <p class="stat-label-pharm">Expired</p>
                 <p class="stat-number-small"><?= number_format($pharmacy['expired_medicines'] ?? 0) ?></p>
-                <p class="stat-sub">💀 Past expiry date</p>
+                <p class="stat-sub-pharm">💀 Past expiry date</p>
             </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
+            <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
         
-        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=expiring" class="stat-card-8 card-red">
-            <div class="stat-icon"><i class="fas fa-hourglass-half"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Expiring Soon</p>
+        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=expiring" class="stat-card-8-pharm card-red-pharm">
+            <div class="stat-icon-pharm"><i class="fas fa-hourglass-half"></i></div>
+            <div class="stat-content-pharm">
+                <p class="stat-label-pharm">Expiring Soon</p>
                 <p class="stat-number-small"><?= number_format($pharmacy['expiring_soon_medicines'] ?? 0) ?></p>
-                <p class="stat-sub">⏰ Next 30 days</p>
+                <p class="stat-sub-pharm">⏰ Next 30 days</p>
             </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
+            <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- RECENT PRESCRIPTIONS - FIXED AMOUNT -->
-    <!-- ================================================================ -->
-    <div class="card animate-fade-in-up" style="animation-delay:0.2s;">
-        <div class="card-header">
-            <h3 class="card-title"><i class="fas fa-prescription"></i> Recent Prescriptions</h3>
-            <a href="prescriptions.php?branch=<?= $pharmacy['id'] ?>" class="card-action">View All →</a>
+    <!-- RECENT PRESCRIPTIONS -->
+    <div class="card-pharm animate-fade-in-up-pharm" style="animation-delay:0.15s;">
+        <div class="card-header-pharm">
+            <h3 class="card-title-pharm"><i class="fas fa-prescription"></i> Recent Prescriptions</h3>
+            <a href="prescriptions.php?branch=<?= $pharmacy['id'] ?>" class="card-action-pharm">View All →</a>
         </div>
-        <div class="card-body">
+        <div class="card-body-pharm">
             <?php if (count($recent_prescriptions) > 0): ?>
-                <table class="data-table">
+                <table class="data-table-pharm">
                     <thead>
                         <tr>
                             <th>#</th>
@@ -1393,21 +1042,20 @@ include_once '../../components/admin_sidebar.php';
                                 <td class="font-mono text-xs"><?= htmlspecialchars($rx['prescription_number'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($rx['patient_name'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($rx['doctor_name'] ?? 'N/A') ?></td>
-                                <td class="text-right font-semibold text-blue-600 dark:text-blue-400">
+                                <td class="text-right font-semibold text-blue-600">
                                     <?= format_currency($rx['total_amount'] ?? 0) ?>
                                     <?php if (($rx['discount_amount'] ?? 0) > 0): ?>
-                                        <span class="text-xs text-red-500 dark:text-red-400 block">(Discount: TSh <?= number_format($rx['discount_amount'], 0) ?>)</span>
+                                        <span class="text-xs text-red-600" style="display:block;">(Discount: TSh <?= number_format($rx['discount_amount'], 0) ?>)</span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <span class="status-badge <?= getStatusBadge($rx['status'] ?? 'pending') ?>">
+                                    <span class="status-badge-pharm <?= getStatusBadge($rx['status'] ?? 'pending') ?>">
                                         <?= ucfirst($rx['status'] ?? 'Pending') ?>
                                     </span>
                                 </td>
                                 <td class="text-xs"><?= date('M d, Y', strtotime($rx['created_at'] ?? 'now')) ?></td>
                                 <td class="text-center">
-                                    <a href="view_prescription.php?id=<?= $rx['id'] ?>&branch=<?= $pharmacy['id'] ?>" 
-                                       class="btn-view btn-view-sm">
+                                    <a href="view_prescription.php?id=<?= $rx['id'] ?>&branch=<?= $pharmacy['id'] ?>" class="btn-view-pharm btn-view-sm">
                                         <i class="fas fa-eye"></i> View
                                     </a>
                                 </td>
@@ -1416,22 +1064,23 @@ include_once '../../components/admin_sidebar.php';
                     </tbody>
                 </table>
             <?php else: ?>
-                <div class="empty-state"><i class="fas fa-prescription"></i><p>No prescriptions found</p></div>
+                <div class="empty-state-pharm">
+                    <i class="fas fa-prescription"></i>
+                    <p>No prescriptions found</p>
+                </div>
             <?php endif; ?>
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- RECENT INVENTORY -->
-    <!-- ================================================================ -->
-    <div class="card animate-fade-in-up" style="animation-delay:0.25s;">
-        <div class="card-header">
-            <h3 class="card-title"><i class="fas fa-boxes"></i> Recent Inventory Updates</h3>
-            <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="card-action">View All →</a>
+    <div class="card-pharm animate-fade-in-up-pharm" style="animation-delay:0.2s;">
+        <div class="card-header-pharm">
+            <h3 class="card-title-pharm"><i class="fas fa-boxes"></i> Recent Inventory Updates</h3>
+            <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="card-action-pharm">View All →</a>
         </div>
-        <div class="card-body">
+        <div class="card-body-pharm">
             <?php if (count($recent_inventory) > 0): ?>
-                <table class="data-table">
+                <table class="data-table-pharm">
                     <thead>
                         <tr>
                             <th>Medicine</th>
@@ -1454,15 +1103,15 @@ include_once '../../components/admin_sidebar.php';
                         ?>
                             <tr>
                                 <td class="font-medium"><?= htmlspecialchars($item['medication_name'] ?? 'N/A') ?></td>
-                                <td class="text-right font-semibold <?= $is_out ? 'text-red-600 dark:text-red-400' : ($is_low ? 'text-yellow-600 dark:text-yellow-400' : 'text-green-600 dark:text-green-400') ?>">
+                                <td class="text-right font-semibold <?= $is_out ? 'text-red-600' : ($is_low ? 'text-yellow-600' : 'text-green-600') ?>">
                                     <?= number_format($item['quantity'] ?? 0) ?>
                                 </td>
                                 <td class="text-right">TSh <?= number_format($item['selling_price'] ?? 0, 0) ?></td>
-                                <td class="<?= $is_expired ? 'text-red-600 dark:text-red-400 font-bold' : ($is_expiring ? 'text-yellow-600 dark:text-yellow-400' : 'text-gray-500 dark:text-gray-400') ?>">
+                                <td class="<?= $is_expired ? 'text-red-600 font-semibold' : ($is_expiring ? 'text-yellow-600' : 'text-gray-500') ?>">
                                     <?= !empty($item['expiry_date']) ? date('M d, Y', strtotime($item['expiry_date'])) : 'N/A' ?>
                                 </td>
                                 <td>
-                                    <span class="status-badge <?= $status_class ?>">
+                                    <span class="status-badge-pharm <?= $status_class ?>">
                                         <?php if ($is_out): ?><i class="fas fa-times-circle"></i> Out
                                         <?php elseif ($is_low): ?><i class="fas fa-exclamation-triangle"></i> Low
                                         <?php elseif ($is_expired): ?><i class="fas fa-skull"></i> Expired
@@ -1472,8 +1121,7 @@ include_once '../../components/admin_sidebar.php';
                                     </span>
                                 </td>
                                 <td class="text-center">
-                                    <a href="edit_inventory.php?id=<?= $item['id'] ?>&branch=<?= $pharmacy['id'] ?>" 
-                                       class="btn-view btn-view-sm btn-view-outline">
+                                    <a href="edit_inventory.php?id=<?= $item['id'] ?>&branch=<?= $pharmacy['id'] ?>" class="btn-view-pharm btn-view-sm btn-view-outline">
                                         <i class="fas fa-edit"></i> Edit
                                     </a>
                                 </td>
@@ -1482,28 +1130,29 @@ include_once '../../components/admin_sidebar.php';
                     </tbody>
                 </table>
             <?php else: ?>
-                <div class="empty-state"><i class="fas fa-boxes"></i><p>No inventory items found</p></div>
+                <div class="empty-state-pharm">
+                    <i class="fas fa-boxes"></i>
+                    <p>No inventory items found</p>
+                </div>
             <?php endif; ?>
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- RECENT OTC SALES -->
-    <!-- ================================================================ -->
-    <div class="card animate-fade-in-up" style="animation-delay:0.3s;">
-        <div class="card-header">
-            <h3 class="card-title"><i class="fas fa-shopping-cart"></i> Recent OTC Sales</h3>
-            <a href="otc_sales.php?branch=<?= $pharmacy['id'] ?>" class="card-action">View All →</a>
+    <div class="card-pharm animate-fade-in-up-pharm" style="animation-delay:0.25s;">
+        <div class="card-header-pharm">
+            <h3 class="card-title-pharm"><i class="fas fa-shopping-cart"></i> Recent OTC Sales</h3>
+            <a href="otc_sales.php?branch=<?= $pharmacy['id'] ?>" class="card-action-pharm">View All →</a>
         </div>
-        <div class="card-body">
+        <div class="card-body-pharm">
             <?php if (count($recent_otc_sales) > 0): ?>
-                <table class="data-table">
+                <table class="data-table-pharm">
                     <thead>
                         <tr>
                             <th>Sale #</th>
                             <th>Customer</th>
                             <th class="text-right">Net Amount</th>
-                            <th>Discount</th>
+                            <th class="text-right">Discount</th>
                             <th>Status</th>
                             <th>Date</th>
                             <th class="text-center">Action</th>
@@ -1514,10 +1163,10 @@ include_once '../../components/admin_sidebar.php';
                             <tr>
                                 <td class="font-mono text-xs"><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($sale['customer_name'] ?? 'Walk-in') ?></td>
-                                <td class="text-right font-semibold text-green-600 dark:text-green-400">
+                                <td class="text-right font-semibold text-green-600">
                                     TSh <?= number_format($sale['total_amount'] ?? 0, 0) ?>
                                 </td>
-                                <td class="text-right text-red-600 dark:text-red-400">
+                                <td class="text-right text-red-600">
                                     <?php if (($sale['discount_amount'] ?? 0) > 0): ?>
                                         - TSh <?= number_format($sale['discount_amount'] ?? 0, 0) ?>
                                     <?php else: ?>
@@ -1525,14 +1174,13 @@ include_once '../../components/admin_sidebar.php';
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <span class="status-badge <?= getStatusBadge($sale['payment_status'] ?? 'pending') ?>">
+                                    <span class="status-badge-pharm <?= getStatusBadge($sale['payment_status'] ?? 'pending') ?>">
                                         <?= ucfirst($sale['payment_status'] ?? 'Pending') ?>
                                     </span>
                                 </td>
                                 <td class="text-xs"><?= date('M d, Y', strtotime($sale['created_at'] ?? 'now')) ?></td>
                                 <td class="text-center">
-                                    <a href="view_otc_sale.php?id=<?= $sale['id'] ?>&branch=<?= $pharmacy['id'] ?>" 
-                                       class="btn-view btn-view-sm btn-view-success">
+                                    <a href="view_otc_sale.php?id=<?= $sale['id'] ?>&branch=<?= $pharmacy['id'] ?>" class="btn-view-pharm btn-view-sm btn-view-success">
                                         <i class="fas fa-eye"></i> View
                                     </a>
                                 </td>
@@ -1541,24 +1189,25 @@ include_once '../../components/admin_sidebar.php';
                     </tbody>
                 </table>
             <?php else: ?>
-                <div class="empty-state"><i class="fas fa-shopping-cart"></i><p>No OTC sales found</p></div>
+                <div class="empty-state-pharm">
+                    <i class="fas fa-shopping-cart"></i>
+                    <p>No OTC sales found</p>
+                </div>
             <?php endif; ?>
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- PHARMACISTS -->
-    <!-- ================================================================ -->
-    <div class="card animate-fade-in-up" style="animation-delay:0.35s;">
-        <div class="card-header">
-            <h3 class="card-title"><i class="fas fa-user-md"></i> Pharmacists (<?= count($pharmacists) ?>)</h3>
-            <a href="add_employee.php?branch=<?= $pharmacy['id'] ?>&role=pharmacy" class="btn btn-primary">
+    <div class="card-pharm animate-fade-in-up-pharm" style="animation-delay:0.3s;">
+        <div class="card-header-pharm">
+            <h3 class="card-title-pharm"><i class="fas fa-user-md"></i> Pharmacists (<?= count($pharmacists) ?>)</h3>
+            <a href="add_employee.php?branch=<?= $pharmacy['id'] ?>&role=pharmacy" class="btn-add-pharm">
                 <i class="fas fa-plus"></i> Add Pharmacist
             </a>
         </div>
-        <div class="card-body">
+        <div class="card-body-pharm">
             <?php if (count($pharmacists) > 0): ?>
-                <table class="data-table">
+                <table class="data-table-pharm">
                     <thead>
                         <tr>
                             <th>Name</th>
@@ -1575,13 +1224,12 @@ include_once '../../components/admin_sidebar.php';
                                 <td><?= htmlspecialchars($pharmacist['email'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($pharmacist['phone'] ?? 'N/A') ?></td>
                                 <td>
-                                    <span class="status-badge <?= $pharmacist['status'] === 'active' ? 'success' : 'danger' ?>">
+                                    <span class="status-badge-pharm <?= $pharmacist['status'] === 'active' ? 'success' : 'danger' ?>">
                                         <?= ucfirst($pharmacist['status'] ?? 'N/A') ?>
                                     </span>
                                 </td>
                                 <td class="text-center">
-                                    <a href="view_employee.php?id=<?= $pharmacist['id'] ?>&branch=<?= $pharmacy['id'] ?>" 
-                                       class="btn-view btn-view-sm">
+                                    <a href="view_employee.php?id=<?= $pharmacist['id'] ?>&branch=<?= $pharmacy['id'] ?>" class="btn-view-pharm btn-view-sm">
                                         <i class="fas fa-user"></i> View
                                     </a>
                                 </td>
@@ -1590,22 +1238,23 @@ include_once '../../components/admin_sidebar.php';
                     </tbody>
                 </table>
             <?php else: ?>
-                <div class="empty-state"><i class="fas fa-user-md"></i><p>No pharmacists assigned</p></div>
+                <div class="empty-state-pharm">
+                    <i class="fas fa-user-md"></i>
+                    <p>No pharmacists assigned</p>
+                </div>
             <?php endif; ?>
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
-    <footer class="footer">
+    <footer class="footer-pharm">
         <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="footer-brand-pharm">Braick Dispensary</span> Management System
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             Pharmacy Details - <?= htmlspecialchars($pharmacy['name']) ?>
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1613,177 +1262,27 @@ include_once '../../components/admin_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- PAGE-SPECIFIC JAVASCRIPT (NO dark mode, NO sidebar, NO date-time) -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE TOGGLE - FIXED
+    // FOOTER TIME
     // ================================================================
-    (function() {
-        var darkModeToggle = document.getElementById('darkModeToggle');
-        var darkIcon = document.getElementById('darkIcon');
-        var darkText = document.getElementById('darkText');
-        var htmlElement = document.documentElement;
-        
-        var savedDarkMode = localStorage.getItem('darkMode');
-        var cookieDarkMode = document.cookie.split('; ').find(function(row) {
-            return row.startsWith('dark_mode=');
-        });
-        
-        var isDark = false;
-        if (savedDarkMode === 'true') {
-            isDark = true;
-        } else if (cookieDarkMode) {
-            isDark = cookieDarkMode.split('=')[1] === 'true';
-        }
-        
-        if (isDark) {
-            htmlElement.setAttribute('data-theme', 'dark');
-            if (darkIcon) darkIcon.className = 'fas fa-sun';
-            if (darkText) darkText.textContent = 'Light';
-        } else {
-            htmlElement.removeAttribute('data-theme');
-            if (darkIcon) darkIcon.className = 'fas fa-moon';
-            if (darkText) darkText.textContent = 'Dark';
-        }
-        
-        if (darkModeToggle) {
-            darkModeToggle.addEventListener('click', function(e) {
-                e.preventDefault();
-                var isDarkNow = htmlElement.getAttribute('data-theme') === 'dark';
-                
-                if (isDarkNow) {
-                    htmlElement.removeAttribute('data-theme');
-                    if (darkIcon) darkIcon.className = 'fas fa-moon';
-                    if (darkText) darkText.textContent = 'Dark';
-                    localStorage.setItem('darkMode', 'false');
-                    document.cookie = "dark_mode=false; path=/";
-                } else {
-                    htmlElement.setAttribute('data-theme', 'dark');
-                    if (darkIcon) darkIcon.className = 'fas fa-sun';
-                    if (darkText) darkText.textContent = 'Light';
-                    localStorage.setItem('darkMode', 'true');
-                    document.cookie = "dark_mode=true; path=/";
-                }
-            });
-        }
-    })();
-
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        url.searchParams.delete('error');
-        window.location.href = url.toString();
-    }
-
-    // ================================================================
-    // CLOCK - UPDATE EVERY SECOND
-    // ================================================================
-    function updateClock() {
+    setInterval(function() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var el = document.getElementById('clockDisplay');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
-    }
-    setInterval(updateClock, 1000);
-    updateClock();
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    var overlay = document.getElementById('sidebarOverlay');
-    
-    function toggleSidebar() {
-        sidebar.classList.toggle('open');
-        overlay.classList.toggle('show');
-        document.body.style.overflow = sidebar.classList.contains('open') ? 'hidden' : '';
-    }
-    
-    sidebarToggle?.addEventListener('click', function(e) {
-        e.stopPropagation();
-        toggleSidebar();
-    });
-    
-    overlay?.addEventListener('click', function() {
-        sidebar.classList.remove('open');
-        overlay.classList.remove('show');
-        document.body.style.overflow = '';
-    });
-    
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && sidebar.classList.contains('open')) {
-            sidebar.classList.remove('open');
-            overlay.classList.remove('show');
-            document.body.style.overflow = '';
-        }
-    });
-    
-    window.addEventListener('resize', function() {
-        if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
-            sidebar.classList.remove('open');
-            overlay.classList.remove('show');
-            document.body.style.overflow = '';
-        }
-    });
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            var branch = '<?= $selected_branch_id ?>';
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
         var ftEl = document.getElementById('footerTime');
         if (ftEl) ftEl.textContent = timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    }, 1000);
 
-    console.log('%c💊 Braick Dispensary - View Pharmacy (SHARED HEADER FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💊 Braick - View Pharmacy', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#059669;');
+    console.log('%c✅ NO duplicate dark mode JavaScript', 'font-size:13px; color:#059669;');
+    console.log('%c🌙 Dark mode: Handled by header', 'font-size:13px; color:#7C3AED;');
     console.log('%c🏥 Pharmacy: <?= htmlspecialchars($pharmacy['name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Total Revenue: <?= format_currency($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ SHARED HEADER: ACTIVE', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ CLOCK: WORKING', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ DARK MODE: WORKING', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Prescription amount from bill_items.total_price', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

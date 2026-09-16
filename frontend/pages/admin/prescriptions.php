@@ -1,8 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/prescriptions.php
-// PRESCRIPTIONS LIST - GROUPED BY PATIENT
-// FIXED: Search Bar LEFT (BLUE) + Auto Search + MEDICINE HIGHLIGHT + Delete All
+// ADMIN - PRESCRIPTIONS GROUPED BY PATIENT + MEDICATION SUMMARY
+// ✅ Medication Summary search (inashow jumla ya quantities)
+// ✅ < > scroll buttons kwenye kila table
+// ✅ Highlight inatoweka unapofuta search
+// ✅ BLUE THEME
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -43,93 +46,56 @@ try {
     die("Database connection error: " . $e->getMessage());
 }
 
-// ================================================================
-// HANDLE DELETE ALL PRESCRIPTIONS FOR A PATIENT
-// ================================================================
-if (isset($_GET['delete_patient']) && is_numeric($_GET['delete_patient'])) {
-    $patient_id = (int)$_GET['delete_patient'];
+// DELETE - SINGLE
+if (isset($_GET['delete_prescription']) && is_numeric($_GET['delete_prescription'])) {
+    $prescription_id = (int)$_GET['delete_prescription'];
     $branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
-    $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
-    $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-    $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
-    
     try {
         $db->beginTransaction();
-        
-        $stmt = $db->prepare("
-            SELECT p.id, p.prescription_number, pat.full_name as patient_name
-            FROM prescriptions p
-            LEFT JOIN patients pat ON p.patient_id = pat.id
-            WHERE p.patient_id = ?
-        ");
-        $stmt->execute([$patient_id]);
-        $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        if (empty($prescriptions)) {
-            $db->rollBack();
-            header('Location: prescriptions.php?branch=' . urlencode($branch_id) . '&page=' . $page . '&error=no_prescriptions');
-            exit;
-        }
-        
-        $patient_name = $prescriptions[0]['patient_name'] ?? 'Unknown';
-        $prescription_ids = array_column($prescriptions, 'id');
-        
-        error_log("🗑️ Deleting ALL prescriptions for patient: $patient_name (" . count($prescription_ids) . " prescriptions)");
-        
-        $placeholders = implode(',', array_fill(0, count($prescription_ids), '?'));
-        
-        $stmt = $db->prepare("DELETE FROM prescription_items WHERE prescription_id IN ($placeholders)");
-        $stmt->execute($prescription_ids);
-        
-        $stmt = $db->prepare("DELETE FROM prescriptions WHERE patient_id = ?");
-        $stmt->execute([$patient_id]);
-        $prescriptions_deleted = $stmt->rowCount();
-        
-        $stmt = $db->prepare("DELETE FROM bill_items WHERE reference_id IN ($placeholders) AND reference_type = 'prescription'");
-        $stmt->execute($prescription_ids);
-        
+        $stmt = $db->prepare("DELETE FROM prescription_items WHERE prescription_id = ?");
+        $stmt->execute([$prescription_id]);
+        $stmt = $db->prepare("DELETE FROM prescriptions WHERE id = ?");
+        $stmt->execute([$prescription_id]);
+        $stmt = $db->prepare("DELETE FROM bill_items WHERE reference_id = ? AND reference_type = 'prescription'");
+        $stmt->execute([$prescription_id]);
         $db->commit();
-        
-        $redirect_url = 'prescriptions.php?';
-        $params = [];
-        if ($branch_id !== 'all') $params[] = 'branch=' . urlencode($branch_id);
-        if (!empty($search)) $params[] = 'search=' . urlencode($search);
-        if (!empty($status_filter)) $params[] = 'status=' . urlencode($status_filter);
-        if ($page > 1) $params[] = 'page=' . $page;
-        $params[] = 'deleted_patient=1';
-        $params[] = 'count=' . $prescriptions_deleted;
-        $params[] = 'patient=' . urlencode($patient_name);
-        $redirect_url .= implode('&', $params);
-        
-        header('Location: ' . $redirect_url);
+        header('Location: prescriptions.php?branch=' . urlencode($branch_id) . '&deleted=1');
         exit;
-        
     } catch (Exception $e) {
-        $db->rollBack();
-        error_log("❌ Delete all error: " . $e->getMessage());
-        
-        $redirect_url = 'prescriptions.php?';
-        $params = [];
-        if ($branch_id !== 'all') $params[] = 'branch=' . urlencode($branch_id);
-        if (!empty($search)) $params[] = 'search=' . urlencode($search);
-        if (!empty($status_filter)) $params[] = 'status=' . urlencode($status_filter);
-        if ($page > 1) $params[] = 'page=' . $page;
-        $params[] = 'error=delete_failed';
-        $redirect_url .= implode('&', $params);
-        
-        header('Location: ' . $redirect_url);
+        if ($db->inTransaction()) $db->rollBack();
+        header('Location: prescriptions.php?branch=' . urlencode($branch_id) . '&error=delete_failed');
         exit;
     }
 }
 
-// ================================================================
-// VARIABLES
-// ================================================================
-$message = '';
-$message_type = '';
-$per_page = 15;
-$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
-$offset = ($page - 1) * $per_page;
+// DELETE ALL - PATIENT
+if (isset($_GET['delete_patient']) && is_numeric($_GET['delete_patient'])) {
+    $patient_id = (int)$_GET['delete_patient'];
+    $branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
+    try {
+        $db->beginTransaction();
+        $stmt = $db->prepare("SELECT id FROM prescriptions WHERE patient_id = ?");
+        $stmt->execute([$patient_id]);
+        $prescription_ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        if (!empty($prescription_ids)) {
+            $placeholders = implode(',', array_fill(0, count($prescription_ids), '?'));
+            $stmt = $db->prepare("DELETE FROM prescription_items WHERE prescription_id IN ($placeholders)");
+            $stmt->execute($prescription_ids);
+            $stmt = $db->prepare("DELETE FROM bill_items WHERE reference_id IN ($placeholders) AND reference_type = 'prescription'");
+            $stmt->execute($prescription_ids);
+        }
+        $stmt = $db->prepare("DELETE FROM prescriptions WHERE patient_id = ?");
+        $stmt->execute([$patient_id]);
+        $db->commit();
+        header('Location: prescriptions.php?branch=' . urlencode($branch_id) . '&deleted_all=1');
+        exit;
+    } catch (Exception $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        header('Location: prescriptions.php?branch=' . urlencode($branch_id) . '&error=delete_failed');
+        exit;
+    }
+}
+
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
 $selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
@@ -141,22 +107,22 @@ $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 $selected_branch_name = 'All Branches';
 if ($selected_branch_id !== 'all') {
     foreach ($branches_list as $b) {
-        if ($b['id'] == $selected_branch_id) {
-            $selected_branch_name = $b['name'];
-            break;
-        }
+        if ($b['id'] == $selected_branch_id) { $selected_branch_name = $b['name']; break; }
     }
 }
 
-// ================================================================
-// BUILD QUERY - GROUPED BY PATIENT
-// ================================================================
+// WHERE CLAUSE
 $where_clause = " WHERE 1=1";
 $params = [];
 
 if (!empty($search)) {
-    // ✅ Search includes medication names
-    $where_clause .= " AND (p.prescription_number LIKE ? OR pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.diagnosis LIKE ? OR EXISTS (SELECT 1 FROM prescription_items pi WHERE pi.prescription_id = p.id AND pi.medication_name LIKE ?))";
+    $where_clause .= " AND (
+        p.prescription_number LIKE ? 
+        OR pat.full_name LIKE ? 
+        OR pat.patient_id LIKE ? 
+        OR p.diagnosis LIKE ?
+        OR EXISTS (SELECT 1 FROM prescription_items pi WHERE pi.prescription_id = p.id AND pi.medication_name LIKE ?)
+    )";
     $search_param = "%$search%";
     $params[] = $search_param;
     $params[] = $search_param;
@@ -175,175 +141,179 @@ if ($selected_branch_id !== 'all') {
     $params[] = (int)$selected_branch_id;
 }
 
-// ================================================================
-// GET PRESCRIPTIONS - GROUPED BY PATIENT
-// ================================================================
-$count_sql = "
-    SELECT COUNT(DISTINCT pat.id) as total 
-    FROM prescriptions p
-    LEFT JOIN patients pat ON p.patient_id = pat.id
-    $where_clause
-";
-$stmt = $db->prepare($count_sql);
-$stmt->execute($params);
-$total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-$total_pages = ceil($total_patients / $per_page);
-
+// FETCH
 $sql = "
     SELECT 
-        pat.id as patient_id,
+        p.id, p.prescription_number, p.patient_id, p.visit_id, p.doctor_id,
+        p.diagnosis, p.instructions, p.status, p.branch_id, p.created_at, p.dispensed_at,
         pat.full_name as patient_name,
         pat.patient_id as patient_number,
         pat.phone as patient_phone,
         pat.gender as patient_gender,
         pat.date_of_birth,
-        MAX(p.created_at) as last_prescription_date,
-        COUNT(p.id) as prescription_count,
-        GROUP_CONCAT(DISTINCT p.id ORDER BY p.id DESC) as prescription_ids,
-        GROUP_CONCAT(DISTINCT p.prescription_number ORDER BY p.id DESC SEPARATOR '|') as prescription_numbers,
-        GROUP_CONCAT(DISTINCT p.status ORDER BY p.id DESC SEPARATOR '|') as prescription_statuses,
-        GROUP_CONCAT(DISTINCT u.full_name ORDER BY p.id DESC SEPARATOR '|') as doctor_names,
-        GROUP_CONCAT(DISTINCT p.created_at ORDER BY p.id DESC SEPARATOR '|') as created_dates,
-        MAX(CASE WHEN p.status != 'cancelled' THEN p.status END) as overall_status,
-        SUM(CASE 
-            WHEN p.status != 'cancelled' 
-            THEN COALESCE((SELECT SUM(pi.total_price) FROM prescription_items pi WHERE pi.prescription_id = p.id), 0)
-            ELSE 0 
-        END) as total_amount,
-        GROUP_CONCAT(
-            CONCAT(
-                p.id, ':', 
-                p.prescription_number, ':', 
-                p.status, ':',
-                COALESCE((SELECT SUM(pi.total_price) FROM prescription_items pi WHERE pi.prescription_id = p.id), 0), ':',
-                COALESCE((SELECT GROUP_CONCAT(CONCAT(pi.medication_name, ' (', pi.quantity, ' pcs)') SEPARATOR ', ') 
-                          FROM prescription_items pi WHERE pi.prescription_id = p.id LIMIT 20), 'No medications')
-            ) 
-            ORDER BY p.id DESC SEPARATOR '||'
-        ) as prescription_data
+        doc.full_name as doctor_name,
+        b.name as branch_name,
+        (SELECT COUNT(*) FROM prescription_items WHERE prescription_id = p.id) as item_count,
+        (SELECT COALESCE(SUM(total_price), 0) FROM prescription_items WHERE prescription_id = p.id) as total_amount
     FROM prescriptions p
     LEFT JOIN patients pat ON p.patient_id = pat.id
-    LEFT JOIN users u ON p.doctor_id = u.id
+    LEFT JOIN users doc ON p.doctor_id = doc.id
+    LEFT JOIN branches b ON p.branch_id = b.id
     $where_clause
-    GROUP BY pat.id, pat.full_name, pat.patient_id, pat.phone, pat.gender, pat.date_of_birth
-    ORDER BY last_prescription_date DESC
-    LIMIT ? OFFSET ?
+    ORDER BY p.created_at DESC
 ";
 
-$params[] = $per_page;
-$params[] = $offset;
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
-$grouped_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$all_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Parse prescription data for each patient
-foreach ($grouped_prescriptions as &$group) {
-    $group['prescriptions'] = [];
-    if (!empty($group['prescription_data'])) {
-        $items = explode('||', $group['prescription_data']);
-        foreach ($items as $item) {
-            $parts = explode(':', $item);
-            if (count($parts) >= 5) {
-                $group['prescriptions'][] = [
-                    'id' => $parts[0],
-                    'number' => $parts[1],
-                    'status' => $parts[2],
-                    'amount' => $parts[3],
-                    'medications' => $parts[4]
-                ];
-            }
-        }
-    }
-    
-    // Build search data
-    $search_parts = [
-        $group['patient_name'] ?? '',
-        $group['patient_number'] ?? '',
-        $group['patient_phone'] ?? '',
-        $group['patient_gender'] ?? ''
-    ];
-    
-    $all_meds_text = '';
-    foreach ($group['prescriptions'] as $presc) {
-        if (!empty($presc['medications']) && $presc['medications'] !== 'No medications') {
-            $all_meds_text .= ' ' . $presc['medications'];
-        }
-    }
-    $search_parts[] = $all_meds_text;
-    
-    $group['search_data'] = strtolower(implode(' ', $search_parts));
-    
-    $status = $group['overall_status'] ?? 'pending';
-    $status_colors = [
-        'pending' => 'warning',
-        'confirmed' => 'info',
-        'dispensed' => 'success',
-        'cancelled' => 'danger'
-    ];
-    $group['status_color'] = $status_colors[$status] ?? 'secondary';
-    $group['status_label'] = ucfirst($status);
+foreach ($all_prescriptions as &$presc) {
+    $stmt = $db->prepare("
+        SELECT medication_name, dosage, frequency, quantity, unit_price, total_price, duration
+        FROM prescription_items 
+        WHERE prescription_id = ?
+        ORDER BY id ASC
+    ");
+    $stmt->execute([$presc['id']]);
+    $presc['medications'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
-unset($group);
+unset($presc);
+
+// GROUP BY PATIENT
+$patients = [];
+foreach ($all_prescriptions as $presc) {
+    $patient_id = $presc['patient_id'] ?? 0;
+    if (!isset($patients[$patient_id])) {
+        $patients[$patient_id] = [
+            'patient_id' => $patient_id,
+            'patient_name' => $presc['patient_name'] ?? 'Unknown Patient',
+            'patient_number' => $presc['patient_number'] ?? 'N/A',
+            'patient_phone' => $presc['patient_phone'] ?? '',
+            'patient_gender' => $presc['patient_gender'] ?? '',
+            'date_of_birth' => $presc['date_of_birth'] ?? '',
+            'prescriptions' => [],
+            'total_amount' => 0,
+            'latest_date' => null
+        ];
+    }
+    $patients[$patient_id]['prescriptions'][] = $presc;
+    $patients[$patient_id]['total_amount'] += $presc['total_amount'] ?? 0;
+    if (!$patients[$patient_id]['latest_date'] || $presc['created_at'] > $patients[$patient_id]['latest_date']) {
+        $patients[$patient_id]['latest_date'] = $presc['created_at'];
+    }
+}
+
+$patients_array = array_values($patients);
+foreach ($patients_array as &$p) {
+    $p['prescription_count'] = count($p['prescriptions']);
+}
+unset($p);
 
 // ================================================================
-// STATISTICS
+// MEDICATION SUMMARY (from PHP)
 // ================================================================
+$medication_summary = [];
+try {
+    $med_sql = "
+        SELECT 
+            pi.medication_name,
+            p.status,
+            COUNT(DISTINCT p.patient_id) as patient_count,
+            SUM(pi.quantity) as total_quantity
+        FROM prescription_items pi
+        INNER JOIN prescriptions p ON pi.prescription_id = p.id
+        WHERE 1=1
+    ";
+    $med_params = [];
+    if ($selected_branch_id !== 'all') {
+        $med_sql .= " AND p.branch_id = ?";
+        $med_params[] = (int)$selected_branch_id;
+    }
+    $med_sql .= " GROUP BY pi.medication_name, p.status";
+    
+    $stmt = $db->prepare($med_sql);
+    $stmt->execute($med_params);
+    $med_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    foreach ($med_rows as $row) {
+        $name = $row['medication_name'] ?? 'Unknown';
+        $nameLower = strtolower($name);
+        
+        if (!isset($medication_summary[$nameLower])) {
+            $medication_summary[$nameLower] = [
+                'name' => $name,
+                'total' => 0,
+                'patients' => 0,
+                'byStatus' => [
+                    'pending' => ['qty' => 0, 'patients' => 0],
+                    'confirmed' => ['qty' => 0, 'patients' => 0],
+                    'dispensed' => ['qty' => 0, 'patients' => 0],
+                    'cancelled' => ['qty' => 0, 'patients' => 0],
+                ]
+            ];
+        }
+        
+        $qty = (int)($row['total_quantity'] ?? 0);
+        $patientsCount = (int)($row['patient_count'] ?? 0);
+        $status = $row['status'] ?? 'pending';
+        
+        $medication_summary[$nameLower]['total'] += $qty;
+        $medication_summary[$nameLower]['patients'] += $patientsCount;
+        
+        if (isset($medication_summary[$nameLower]['byStatus'][$status])) {
+            $medication_summary[$nameLower]['byStatus'][$status]['qty'] += $qty;
+            $medication_summary[$nameLower]['byStatus'][$status]['patients'] += $patientsCount;
+        }
+    }
+} catch (Exception $e) {
+    $medication_summary = [];
+}
+
+// STATS
 $stats_where = " WHERE 1=1";
 $stats_params = [];
-
 if ($selected_branch_id !== 'all') {
     $stats_where .= " AND p.branch_id = ?";
     $stats_params[] = (int)$selected_branch_id;
 }
 
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $stats_where");
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $stats_where");
 $stmt->execute($stats_params);
 $total_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$pending_where = $stats_where . " AND p.status = 'pending'";
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $pending_where");
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $stats_where AND p.status = 'pending'");
 $stmt->execute($stats_params);
 $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$confirmed_where = $stats_where . " AND p.status = 'confirmed'";
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $confirmed_where");
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $stats_where AND p.status = 'confirmed'");
 $stmt->execute($stats_params);
 $confirmed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$dispensed_where = $stats_where . " AND p.status = 'dispensed'";
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $dispensed_where");
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $stats_where AND p.status = 'dispensed'");
 $stmt->execute($stats_params);
 $dispensed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$cancelled_where = $stats_where . " AND p.status = 'cancelled'";
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $cancelled_where");
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $stats_where AND p.status = 'cancelled'");
 $stmt->execute($stats_params);
 $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$amount_sql = "SELECT COALESCE(SUM(pi.total_price), 0) as total_amount FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'dispensed'";
-$stmt = $db->prepare($amount_sql);
+$stmt = $db->prepare("SELECT COALESCE(SUM(pi.total_price), 0) as total FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'dispensed'");
 $stmt->execute($stats_params);
-$total_amount_all = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
+$total_amount_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$pending_amount_sql = "SELECT COALESCE(SUM(pi.total_price), 0) as total_amount FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'pending'";
-$stmt = $db->prepare($pending_amount_sql);
+$stmt = $db->prepare("SELECT COALESCE(SUM(pi.total_price), 0) as total FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'pending'");
 $stmt->execute($stats_params);
-$pending_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
+$pending_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$confirmed_amount_sql = "SELECT COALESCE(SUM(pi.total_price), 0) as total_amount FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'confirmed'";
-$stmt = $db->prepare($confirmed_amount_sql);
+$stmt = $db->prepare("SELECT COALESCE(SUM(pi.total_price), 0) as total FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'confirmed'");
 $stmt->execute($stats_params);
-$confirmed_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
+$confirmed_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$dispensed_amount_sql = "SELECT COALESCE(SUM(pi.total_price), 0) as total_amount FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'dispensed'";
-$stmt = $db->prepare($dispensed_amount_sql);
+$stmt = $db->prepare("SELECT COALESCE(SUM(pi.total_price), 0) as total FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'cancelled'");
 $stmt->execute($stats_params);
-$dispensed_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
+$cancelled_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$cancelled_amount_sql = "SELECT COALESCE(SUM(pi.total_price), 0) as total_amount FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'cancelled'";
-$stmt = $db->prepare($cancelled_amount_sql);
-$stmt->execute($stats_params);
-$cancelled_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
+$total_patients_count = count($patients_array);
 
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
@@ -351,849 +321,1442 @@ $profile_pic_url = !empty($profile_pic)
 
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-include_once '../../components/admin_header.php';
-include_once '../../components/admin_sidebar.php';
+function calculateAge($dob) {
+    if (empty($dob)) return 'N/A';
+    $birthDate = new DateTime($dob);
+    $today = new DateTime('today');
+    return $birthDate->diff($today)->y;
+}
+
+include_once __DIR__ . '/../../components/admin_header.php';
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
 <style>
-    .stats-grid-5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 24px; }
-    .stat-card-custom {
-        border-radius: 14px; padding: 16px 18px; border: none;
-        display: flex; flex-direction: column;
-        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-        color: white; position: relative; overflow: hidden;
-        min-height: 110px; cursor: default;
-    }
-    .stat-card-custom::before {
-        content: ''; position: absolute; top: -50%; right: -20%;
-        width: 160px; height: 160px;
-        background: rgba(255,255,255,0.06); border-radius: 50%;
-        pointer-events: none; transition: all 0.5s ease;
-    }
-    .stat-card-custom:hover { transform: translateY(-4px) scale(1.01); box-shadow: 0 10px 32px rgba(0,0,0,0.2); }
-    .stat-card-custom:hover::before { transform: scale(1.3); right: -10%; }
-    
-    .stat-card-custom .stat-icon {
-        width: 44px; height: 44px; border-radius: 10px;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 1.1rem; flex-shrink: 0;
-        background: rgba(255,255,255,0.18); color: white;
-        border: 1px solid rgba(255,255,255,0.12);
-        backdrop-filter: blur(8px); margin-bottom: 4px;
-        position: relative; z-index: 1;
-    }
-    .stat-card-custom .stat-content { position: relative; z-index: 1; flex: 1; display: flex; flex-direction: column; }
-    .stat-card-custom .stat-label { font-size: 0.6rem; color: rgba(255,255,255,0.85); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 1px 0; }
-    .stat-card-custom .stat-number { font-size: 2.2rem; font-weight: 800; color: white; margin: 0; line-height: 1.1; }
-    .stat-card-custom .stat-amount { font-size: 0.9rem; font-weight: 600; color: rgba(255,255,255,0.9); margin-top: 2px; }
-    .stat-card-custom .stat-sub { font-size: 0.6rem; color: rgba(255,255,255,0.8); margin-top: 2px; }
-    .stat-card-custom .stat-arrow { position: absolute; right: 12px; bottom: 12px; color: rgba(255,255,255,0.12); font-size: 0.7rem; z-index: 1; }
-    .stat-card-custom:hover .stat-arrow { transform: translateX(6px); color: rgba(255,255,255,0.4); }
-    
-    .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-    .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
-    .card-green { background: linear-gradient(135deg, #059669, #047857); }
-    .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-    
-    .table-container { position: relative; overflow: hidden; border-radius: 12px; }
-    .table-scroll-wrapper { overflow-x: auto; overflow-y: visible; -webkit-overflow-scrolling: touch; scroll-behavior: smooth; position: relative; }
-    .table-scroll-wrapper::-webkit-scrollbar { height: 8px; }
-    .table-scroll-wrapper::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 10px; }
-    .table-scroll-wrapper::-webkit-scrollbar-thumb { background: #0B5ED7; border-radius: 10px; }
-    .table-scroll-wrapper::-webkit-scrollbar-thumb:hover { background: #0A4CA8; }
-    
-    /* ================================================================
-       TABLE HEADER BAR: SEARCH LEFT (BLUE) + SCROLL RIGHT
-       ================================================================ */
-    .table-header-bar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 12px;
-        padding: 12px 16px;
-        border-bottom: 2px solid var(--border-color);
-        background: var(--bg-card);
-    }
-    .table-header-left {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-        flex: 1;
-        min-width: 0;
-    }
-    .table-header-right {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        flex-wrap: wrap;
-        flex-shrink: 0;
-    }
-    
-    /* BLUE SEARCH BOX - LEFT SIDE */
-    .table-search-box {
-        position: relative;
-        min-width: 300px;
-        flex: 1;
-        max-width: 450px;
-    }
-    .table-search-box i {
-        position: absolute;
-        left: 14px;
-        top: 50%;
-        transform: translateY(-50%);
-        color: rgba(255,255,255,0.95);
-        font-size: 0.85rem;
-        pointer-events: none;
-        z-index: 1;
-    }
-    .table-search-box input {
-        width: 100%;
-        padding: 10px 14px 10px 42px;
-        border: 2px solid #0A4CA8;
-        border-radius: 10px;
-        font-size: 0.85rem;
-        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-        color: white;
-        outline: none;
-        transition: all 0.3s ease;
-        font-weight: 500;
-        height: 42px;
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
-    }
-    .table-search-box input::placeholder { color: rgba(255,255,255,0.85); font-weight: 400; }
-    .table-search-box input:focus {
-        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.25), 0 6px 20px rgba(11, 94, 215, 0.35);
-        transform: translateY(-1px);
-    }
-    
-    .table-title-inline {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 0.9rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        white-space: nowrap;
-    }
-    .table-title-inline i { color: #0B5ED7; }
-    
-    .search-results-info {
-        font-size: 0.7rem;
-        color: #0B5ED7;
-        padding: 6px 12px;
-        background: #E8F0FE;
-        border-radius: 8px;
-        white-space: nowrap;
-        display: none;
-        font-weight: 600;
-        border: 1px solid #0B5ED7;
-    }
-    .search-results-info.show { display: inline-flex; align-items: center; gap: 4px; }
-    .search-results-info strong { color: #0B5ED7; font-size: 0.8rem; }
-    
-    .scroll-btn-header {
-        width: 38px;
-        height: 38px;
-        border-radius: 8px;
-        border: 2px solid var(--border-color);
-        background: var(--bg-card);
-        color: var(--text-primary);
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        transition: all 0.3s ease;
-        font-size: 0.8rem;
-    }
-    .scroll-btn-header:hover {
-        background: #0B5ED7;
-        border-color: #0B5ED7;
-        color: white;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    .scroll-btn-header:disabled {
-        opacity: 0.35;
-        cursor: not-allowed;
-        transform: none;
-    }
-    .scroll-btn-header:disabled:hover {
-        background: var(--bg-card);
-        border-color: var(--border-color);
-        color: var(--text-primary);
-        box-shadow: none;
-    }
-    
-    /* HIGHLIGHT STYLES */
-    mark.highlight {
-        background: #FEF08A;
-        color: #854D0E;
-        padding: 1px 3px;
-        border-radius: 3px;
-        font-weight: 700;
-        box-shadow: 0 0 0 1px #FDE047;
-    }
-    [data-theme="dark"] mark.highlight {
-        background: #854D0E;
-        color: #FEF08A;
-        box-shadow: 0 0 0 1px #A16207;
-    }
-    mark.highlight-med {
-        background: #FED7AA;
-        color: #9A3412;
-        padding: 1px 4px;
-        border-radius: 4px;
-        font-weight: 700;
-        box-shadow: 0 0 0 1px #FDBA74;
-    }
-    [data-theme="dark"] mark.highlight-med {
-        background: #7C2D12;
-        color: #FED7AA;
-        box-shadow: 0 0 0 1px #9A3412;
-    }
-    
-    tr.presc-row.highlighted td:first-child {
-        box-shadow: inset 4px 0 0 0 #FBBF24;
-    }
-    tr.presc-row.highlighted {
-        background: rgba(254, 240, 138, 0.15) !important;
-    }
-    [data-theme="dark"] tr.presc-row.highlighted {
-        background: rgba(133, 77, 14, 0.15) !important;
-    }
-    
-    .medication-item.highlighted-med {
-        background: #FED7AA !important;
-        border-color: #FDBA74 !important;
-        box-shadow: 0 0 0 2px #FED7AA !important;
-    }
-    
-    .medication-list {
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-        line-height: 1.4;
-        max-height: 60px;
-        overflow-y: auto;
-        padding-right: 4px;
-    }
-    .medication-list::-webkit-scrollbar { width: 3px; }
-    .medication-list::-webkit-scrollbar-thumb { background: #0B5ED7; border-radius: 4px; }
-    
-    .medication-item {
-        display: inline-block;
-        background: var(--bg-body);
-        padding: 1px 6px;
-        border-radius: 4px;
-        margin: 1px 2px 1px 0;
-        font-size: 0.6rem;
-        border: 1px solid var(--border-color);
-    }
-    .medication-item .qty { font-weight: 600; color: #0B5ED7; }
-    
-    .table-blue thead th {
-        background: linear-gradient(135deg, #0B5ED7, #0A4CA8) !important;
-        color: #FFFFFF !important;
-        font-weight: 700 !important;
-        font-size: 0.65rem !important;
-        text-transform: uppercase !important;
-        letter-spacing: 0.05em !important;
-        padding: 10px 14px !important;
-        border-bottom: 3px solid #0A4CA8 !important;
-        white-space: nowrap !important;
-        position: sticky;
-        top: 0;
-        z-index: 5;
-    }
-    .table-blue thead th:first-child { border-radius: 8px 0 0 0 !important; }
-    .table-blue thead th:last-child { border-radius: 0 8px 0 0 !important; }
-    .table-blue tbody td {
-        padding: 8px 14px !important;
-        border-bottom: 1px solid #E2E8F0 !important;
-        color: #1E293B !important;
-        vertical-align: middle !important;
-        font-size: 0.82rem;
-    }
-    .table-blue tbody tr:hover td { background: #E8F0FE !important; }
-    [data-theme="dark"] .table-blue tbody td { color: #F1F5F9 !important; border-bottom-color: #334155 !important; }
-    [data-theme="dark"] .table-blue tbody tr:hover td { background: #1A2A4A !important; }
-    
-    .amount-cell { font-weight: 700; color: #0B5ED7; font-family: 'Courier New', monospace; font-size: 0.85rem; }
-    [data-theme="dark"] .amount-cell { color: #60A5FA; }
-    
-    .action-buttons-vertical {
-        display: flex; flex-direction: column; gap: 6px;
-        align-items: center; justify-content: center;
-    }
-    .btn-action {
-        display: inline-flex; align-items: center; justify-content: center;
-        gap: 5px; padding: 5px 14px; border-radius: 6px;
-        font-size: 0.65rem; font-weight: 600;
-        text-decoration: none; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        border: none; cursor: pointer; min-width: 80px; width: 100%;
-    }
-    .btn-action:hover { transform: translateY(-2px) scale(1.03); }
-    .btn-action:active { transform: scale(0.95); }
-    
-    .btn-view {
-        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-        color: white;
-        box-shadow: 0 2px 8px rgba(11, 94, 215, 0.25);
-    }
-    .btn-view:hover { box-shadow: 0 6px 20px rgba(11, 94, 215, 0.4); }
-    
-    .btn-delete-all {
-        background: linear-gradient(135deg, #DC2626, #B91C1C);
-        color: white;
-        box-shadow: 0 2px 8px rgba(220, 38, 38, 0.25);
-        border: 1px solid rgba(255,255,255,0.15);
-    }
-    .btn-delete-all:hover {
-        box-shadow: 0 6px 20px rgba(220, 38, 38, 0.4);
-        transform: translateY(-2px) scale(1.02);
-    }
-    .btn-delete-all .count-badge {
-        background: rgba(255,255,255,0.2);
-        padding: 0 8px; border-radius: 10px;
-        font-size: 0.55rem; margin-left: 4px;
-    }
-    
-    .status-badge {
-        padding: 3px 12px; border-radius: 20px;
-        font-size: 0.6rem; font-weight: 600;
-        display: inline-flex; align-items: center; gap: 4px;
-    }
-    .status-badge.warning { background: #FEF3C7; color: #D97706; }
-    .status-badge.success { background: #D1FAE5; color: #059669; }
-    .status-badge.danger { background: #FEE2E2; color: #EF4444; }
-    .status-badge.info { background: #E8F0FE; color: #0B5ED7; }
-    .status-badge.secondary { background: #E2E8F0; color: #64748B; }
-    [data-theme="dark"] .status-badge.warning { background: #3A2A1A; color: #FBBF24; }
-    [data-theme="dark"] .status-badge.success { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .status-badge.danger { background: #3A1A1A; color: #F87171; }
-    [data-theme="dark"] .status-badge.info { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .status-badge.secondary { background: #2D3748; color: #94A3B8; }
-    
-    .prescription-tag {
-        display: inline-block; font-size: 0.6rem;
-        padding: 1px 8px; border-radius: 10px;
-        background: var(--bg-body); color: var(--text-secondary);
-        border: 1px solid var(--border-color);
-        margin: 1px 2px; font-family: monospace;
-        white-space: nowrap;
-    }
-    .prescription-tag .status-dot {
-        display: inline-block; width: 6px; height: 6px;
-        border-radius: 50%; margin-right: 3px;
-    }
-    .prescription-tag .status-dot.pending { background: #D97706; }
-    .prescription-tag .status-dot.confirmed { background: #0B5ED7; }
-    .prescription-tag .status-dot.dispensed { background: #059669; }
-    .prescription-tag .status-dot.cancelled { background: #EF4444; }
-    
-    .filter-section {
-        background: var(--bg-card); border-radius: 14px;
-        padding: 14px 18px; border: 1px solid var(--border-color);
-        margin-bottom: 18px; display: flex; flex-wrap: wrap;
-        align-items: center; gap: 8px;
-    }
-    .filter-section .filter-label { font-size: 0.7rem; font-weight: 600; color: var(--text-secondary); margin-right: 4px; }
-    .filter-btn {
-        padding: 4px 14px; border-radius: 20px;
-        font-size: 0.7rem; font-weight: 500;
-        border: 2px solid var(--border-color); background: transparent;
-        color: var(--text-secondary); cursor: pointer;
-        transition: all 0.3s ease; text-decoration: none;
-        display: inline-block;
-    }
-    .filter-btn:hover { border-color: #0B5ED7; color: #0B5ED7; background: #E8F0FE; }
-    .filter-btn.active { background: #0B5ED7; color: white; border-color: #0B5ED7; }
-    .filter-btn.active:hover { background: #0A4CA8; border-color: #0A4CA8; }
-    [data-theme="dark"] .filter-btn:hover { background: #1A2A4A; border-color: #3B82F6; color: #3B82F6; }
-    .filter-btn i { margin-right: 4px; }
-    
-    .card {
-        background: var(--bg-card); border-radius: 16px;
-        padding: 18px 20px; border: 1px solid var(--border-color);
-        transition: all 0.3s;
-    }
-    .card:hover { border-color: #0B5ED7; box-shadow: 0 4px 12px rgba(11, 94, 215, 0.05); }
-    .card-header {
-        display: flex; justify-content: space-between;
-        align-items: center; margin-bottom: 12px;
-        flex-wrap: wrap; gap: 8px;
-    }
-    .card-title { font-size: 0.9rem; font-weight: 600; color: var(--text-primary); }
-    .title-blue { color: #0B5ED7; }
-    
-    .pagination { display: flex; gap: 4px; flex-wrap: wrap; }
-    .pagination .page-link {
-        padding: 6px 12px; border-radius: 6px;
-        border: 1px solid var(--border-color);
-        color: var(--text-primary); text-decoration: none;
-        font-size: 0.8rem; transition: all 0.3s;
-        background: var(--bg-card);
-    }
-    .pagination .page-link:hover { background: #0B5ED7; color: white; border-color: #0B5ED7; }
-    .pagination .page-link.active { background: #0B5ED7; color: white; border-color: #0B5ED7; }
-    .pagination .page-link.disabled { opacity: 0.5; cursor: not-allowed; }
-    
-    .page-header {
-        background: #0B5ED7 !important; border-radius: 16px !important;
-        padding: 20px 28px !important; margin-bottom: 20px !important;
-        display: flex !important; flex-wrap: wrap !important;
-        justify-content: space-between !important; align-items: center !important;
-        gap: 12px !important;
-        box-shadow: 0 4px 24px rgba(11, 94, 215, 0.25) !important;
-    }
-    .page-header .page-title { color: white !important; font-size: 1.4rem !important; font-weight: 700 !important; }
-    .page-header .page-title i { color: white !important; }
-    .page-header .page-subtitle { color: rgba(255,255,255,0.85) !important; font-size: 0.85rem !important; }
-    .page-header .branch-tag { background: rgba(255,255,255,0.2) !important; color: white !important; padding: 3px 14px !important; border-radius: 20px !important; font-size: 0.7rem !important; font-weight: 600 !important; }
-    
-    .toast-custom {
-        position: fixed; bottom: 24px; right: 24px;
-        padding: 12px 18px; border-radius: 12px; z-index: 999;
-        max-width: 360px; transform: translateY(100px); opacity: 0;
-        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-        display: flex; align-items: center; gap: 10px; color: white;
-    }
-    .toast-custom.show { transform: translateY(0); opacity: 1; }
-    .toast-custom.success { background: #059669; }
-    .toast-custom.error { background: #EF4444; }
-    .toast-custom.info { background: #0B5ED7; }
-    
-    .footer {
-        padding: 14px 0; border-top: 2px solid var(--border-color);
-        margin-top: 20px; text-align: center;
-        font-size: 0.7rem; color: var(--text-secondary);
-    }
-    .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
-    
-    .col-prescriptions { min-width: 180px; max-width: 250px; }
-    .col-actions { min-width: 90px; text-align: center; }
-    
-    .no-results-row td {
-        text-align: center;
-        padding: 30px 20px !important;
-        color: var(--text-secondary);
-    }
-    .no-results-row i {
-        font-size: 2rem;
-        color: var(--border-color);
-        display: block;
-        margin-bottom: 8px;
-    }
-    
-    @media (max-width: 1200px) { .stats-grid-5 { grid-template-columns: repeat(3, 1fr); } }
-    @media (max-width: 768px) {
-        .stats-grid-5 { grid-template-columns: 1fr 1fr; }
-        .stat-card-custom .stat-number { font-size: 1.6rem; }
-        .stat-card-custom { min-height: 90px; padding: 14px 16px; }
-        .stat-card-custom .stat-icon { width: 38px; height: 38px; font-size: 0.9rem; }
-        .filter-section { flex-direction: column; align-items: stretch; }
-        .btn-action { font-size: 0.55rem; padding: 3px 10px; min-width: 60px; }
-        .table-blue tbody td { font-size: 0.7rem; padding: 6px 10px !important; }
-        .scroll-btn-header { width: 32px; height: 32px; font-size: 0.7rem; }
-        .col-actions { min-width: 70px; }
-        .table-header-bar { flex-direction: column; align-items: stretch; }
-        .table-header-left { width: 100%; flex-direction: column; align-items: stretch; }
-        .table-search-box { min-width: 100%; max-width: 100%; }
-        .table-header-right { width: 100%; justify-content: flex-end; }
-    }
-    @media (max-width: 480px) {
-        .stats-grid-5 { grid-template-columns: 1fr 1fr; }
-        .stat-card-custom .stat-number { font-size: 1.4rem; }
-        .stat-card-custom { min-height: 80px; padding: 12px 14px; }
-        .stat-card-custom .stat-icon { width: 32px; height: 32px; font-size: 0.8rem; }
-        .page-header { padding: 14px 16px !important; }
-        .page-header .page-title { font-size: 1rem !important; }
-        .scroll-btn-header { width: 28px; height: 28px; font-size: 0.65rem; }
-        .col-actions { min-width: 60px; }
-    }
-    
-    @keyframes fadeInUp {
-        from { opacity: 0; transform: translateY(20px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-    .animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
+:root {
+    --primary: #0B5ED7;
+    --primary-dark: #0A4CA8;
+    --primary-darker: #083C8A;
+    --primary-light: #6EA8FE;
+    --primary-bg: #E8F0FE;
+    --primary-bg-dark: #1E3A5F;
+    --success: #059669;
+    --success-bg: #D1FAE5;
+    --danger: #DC2626;
+    --danger-bg: #FEE2E2;
+    --warning: #D97706;
+    --warning-bg: #FEF3C7;
+    --purple: #7C3AED;
+    --purple-bg: #EDE9FE;
+    --gray-50: #F8FAFC;
+    --gray-100: #F1F5F9;
+    --bg-body: #F1F5F9;
+    --bg-card: #FFFFFF;
+    --text-primary: #1E293B;
+    --text-secondary: #64748B;
+    --border-color: #E2E8F0;
+    --radius: 10px;
+    --radius-lg: 14px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.06);
+    --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+    --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
+}
+
+[data-theme="dark"] {
+    --bg-body: #0F172A;
+    --bg-card: #1E293B;
+    --text-primary: #F1F5F9;
+    --text-secondary: #94A3B8;
+    --border-color: #334155;
+}
+
+/* PAGE HEADER */
+.page-header-custom {
+    background: linear-gradient(135deg, #0B5ED7, #0A4CA8, #083C8A);
+    border-radius: 16px;
+    padding: 20px 28px;
+    margin-bottom: 20px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 4px 20px rgba(11, 94, 215, 0.3);
+    position: relative;
+    overflow: hidden;
+}
+
+.page-header-custom::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -20%;
+    width: 300px; height: 300px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.page-header-custom .page-title {
+    color: white;
+    font-size: 1.4rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    position: relative;
+    z-index: 1;
+    margin: 0;
+}
+
+.page-header-custom .page-title i { font-size: 1.6rem; opacity: 0.9; }
+
+.page-header-custom .page-subtitle {
+    color: rgba(255,255,255,0.85);
+    font-size: 0.82rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    position: relative;
+    z-index: 1;
+    margin-top: 4px;
+}
+
+.page-header-custom .role-badge-display {
+    background: rgba(255,255,255,0.2);
+    color: white;
+    padding: 3px 12px;
+    border-radius: 20px;
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.page-header-custom .branch-tag {
+    background: rgba(255,255,255,0.15);
+    color: white;
+    padding: 2px 10px;
+    border-radius: 20px;
+    font-size: 0.65rem;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.page-header-custom .btn-outline-light {
+    background: rgba(255,255,255,0.12);
+    color: white;
+    border: 1px solid rgba(255,255,255,0.2);
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-weight: 500;
+    font-size: 0.75rem;
+    transition: all 0.3s;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    position: relative;
+    z-index: 1;
+}
+
+.page-header-custom .btn-outline-light:hover {
+    background: rgba(255,255,255,0.25);
+    transform: translateY(-2px);
+}
+
+/* STATS - 5 CARDS */
+.stats-grid-5 {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.stat-card-custom {
+    border-radius: 12px;
+    padding: 14px 16px;
+    border: none;
+    display: flex;
+    flex-direction: column;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    color: white;
+    position: relative;
+    overflow: hidden;
+    min-height: 95px;
+    text-decoration: none;
+}
+
+.stat-card-custom::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -20%;
+    width: 140px; height: 140px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.stat-card-custom:hover { transform: translateY(-4px) scale(1.01); box-shadow: 0 10px 32px rgba(0,0,0,0.2); }
+
+.stat-card-custom .stat-icon {
+    width: 38px; height: 38px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    background: rgba(255,255,255,0.18);
+    color: white;
+    border: 1px solid rgba(255,255,255,0.12);
+    margin-bottom: 4px;
+    position: relative;
+    z-index: 1;
+}
+
+.stat-card-custom .stat-content { position: relative; z-index: 1; flex: 1; display: flex; flex-direction: column; }
+.stat-card-custom .stat-label { font-size: 0.55rem; color: rgba(255,255,255,0.85); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 1px 0; }
+.stat-card-custom .stat-number { font-size: 1.7rem; font-weight: 800; color: white; margin: 0; line-height: 1.1; }
+.stat-card-custom .stat-amount { font-size: 0.75rem; font-weight: 600; color: rgba(255,255,255,0.9); margin-top: 2px; }
+.stat-card-custom .stat-arrow { position: absolute; right: 10px; bottom: 10px; color: rgba(255,255,255,0.12); font-size: 0.65rem; z-index: 1; }
+
+.card-blue-1 { background: linear-gradient(135deg, #3B82F6, #0B5ED7, #0A4CA8); }
+.card-blue-2 { background: linear-gradient(135deg, #0EA5E9, #0284C7, #075985); }
+.card-blue-3 { background: linear-gradient(135deg, #0B5ED7, #083C8A, #062E6B); }
+.card-blue-4 { background: linear-gradient(135deg, #4F46E5, #4338CA, #3730A3); }
+.card-blue-5 { background: linear-gradient(135deg, #DC2626, #B91C1C, #991B1B); }
+
+/* FILTER SECTION */
+.filter-section {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 12px 16px;
+    border: 1px solid var(--border-color);
+    margin-bottom: 14px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.filter-section .filter-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-right: 4px;
+}
+
+.filter-btn {
+    padding: 3px 12px;
+    border-radius: 18px;
+    font-size: 0.68rem;
+    font-weight: 500;
+    border: 2px solid var(--border-color);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.filter-btn:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-bg); }
+.filter-btn.active { background: var(--primary); color: white; border-color: var(--primary); }
+.filter-btn i { margin-right: 4px; font-size: 0.6rem; }
+
+/* COMPACT SEARCH PANEL */
+.med-search-panel {
+    background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin-bottom: 14px;
+    box-shadow: 0 3px 12px rgba(11, 94, 215, 0.2);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.med-search-panel .search-label {
+    color: white;
+    font-size: 0.72rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.med-search-panel .search-label i {
+    background: rgba(255,255,255,0.2);
+    width: 26px; height: 26px;
+    border-radius: 7px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+}
+
+.med-search-panel .search-box {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: rgba(255,255,255,0.18);
+    border: 2px solid rgba(255,255,255,0.3);
+    border-radius: 8px;
+    padding: 0 12px;
+    transition: all 0.3s ease;
+    height: 38px;
+    flex: 1;
+    min-width: 200px;
+}
+
+.med-search-panel .search-box:focus-within {
+    background: rgba(255,255,255,0.28);
+    border-color: rgba(255,255,255,0.6);
+    box-shadow: 0 0 0 3px rgba(255,255,255,0.1);
+}
+
+.med-search-panel .search-box .search-icon {
+    color: rgba(255,255,255,0.9);
+    font-size: 0.85rem;
+    margin-right: 8px;
+}
+
+.med-search-panel .search-box input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: white;
+    font-size: 0.82rem;
+    padding: 0;
+    font-weight: 500;
+}
+
+.med-search-panel .search-box input::placeholder {
+    color: rgba(255,255,255,0.65);
+    font-size: 0.78rem;
+}
+
+.med-search-panel .search-box .search-clear-med {
+    background: rgba(255,255,255,0.25);
+    border: none;
+    color: white;
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.6rem;
+    margin-left: 6px;
+}
+
+.med-search-panel .search-box .search-clear-med.visible { display: flex; }
+.med-search-panel .search-box .search-clear-med:hover { background: rgba(255,255,255,0.4); }
+
+.med-search-panel .search-count {
+    color: rgba(255,255,255,0.9);
+    font-size: 0.68rem;
+    font-weight: 700;
+    background: rgba(255,255,255,0.2);
+    padding: 3px 10px;
+    border-radius: 12px;
+    white-space: nowrap;
+    display: none;
+}
+
+.med-search-panel .search-count.show { display: inline-block; }
+
+/* ✅ MEDICATION SUMMARY RESULT */
+.med-summary-result {
+    background: var(--bg-card);
+    border: 2px solid var(--primary);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 14px;
+    box-shadow: 0 4px 20px rgba(11, 94, 215, 0.15);
+    animation: fadeInUp 0.4s ease forwards;
+}
+
+.med-summary-result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 12px;
+    border-bottom: 2px dashed var(--border-color);
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.med-summary-result-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.95rem;
+    color: var(--text-primary);
+    flex-wrap: wrap;
+}
+
+.med-summary-result-title i {
+    background: var(--primary);
+    color: white;
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+
+.med-summary-result-title strong {
+    color: var(--primary);
+    font-weight: 800;
+    font-size: 1.05rem;
+}
+
+.med-summary-close {
+    background: transparent;
+    border: 1.5px solid var(--border-color);
+    color: var(--text-secondary);
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    transition: all 0.2s;
+}
+
+.med-summary-close:hover {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: white;
+}
+
+.med-summary-result-body {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+}
+
+.med-summary-stat {
+    background: var(--bg-body);
+    border-radius: 10px;
+    padding: 12px 10px;
+    text-align: center;
+    border: 2px solid transparent;
+    transition: all 0.3s;
+}
+
+.med-summary-stat:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+
+.med-summary-stat.total { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); color: white; }
+.med-summary-stat.dispensed { background: linear-gradient(135deg, #059669, #047857); color: white; }
+.med-summary-stat.pending { background: linear-gradient(135deg, #D97706, #B45309); color: white; }
+.med-summary-stat.confirmed { background: linear-gradient(135deg, #4F46E5, #4338CA); color: white; }
+
+.med-summary-stat-label {
+    font-size: 0.58rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.9;
+    display: block;
+    margin-bottom: 4px;
+}
+
+.med-summary-stat-value {
+    font-size: 1.6rem;
+    font-weight: 800;
+    line-height: 1.1;
+    display: block;
+}
+
+.med-summary-stat-sub {
+    font-size: 0.6rem;
+    opacity: 0.8;
+    display: block;
+    margin-top: 2px;
+}
+
+/* PATIENT CARD */
+.patient-card {
+    background: var(--bg-card);
+    border-radius: 14px;
+    border: 2px solid var(--border-color);
+    margin-bottom: 16px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    transition: all 0.3s ease;
+}
+
+.patient-card:hover {
+    border-color: var(--primary);
+    box-shadow: var(--shadow-md);
+}
+
+.patient-card.filtered-out { display: none; }
+
+.patient-header {
+    background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+    color: white;
+    padding: 12px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.patient-header:hover {
+    background: linear-gradient(135deg, #0A4CA8, #083C8A);
+}
+
+.patient-header .patient-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+    min-width: 250px;
+}
+
+.patient-header .patient-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 1.2rem;
+    color: white;
+    flex-shrink: 0;
+    border: 2px solid rgba(255,255,255,0.4);
+}
+
+.patient-header .patient-name {
+    font-weight: 700;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.patient-header .patient-name mark.highlight-name {
+    background: #FEF08A;
+    color: #854D0E;
+    padding: 1px 4px;
+    border-radius: 4px;
+    font-weight: 800;
+}
+
+.patient-header .patient-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 0.72rem;
+    opacity: 0.9;
+    flex-wrap: wrap;
+    margin-top: 2px;
+}
+
+.patient-header .patient-meta span {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.patient-header .patient-stats {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.patient-header .patient-stats .stat-pill {
+    background: rgba(255,255,255,0.2);
+    padding: 4px 12px;
+    border-radius: 18px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid rgba(255,255,255,0.15);
+}
+
+.patient-header .chevron {
+    font-size: 0.85rem;
+    transition: transform 0.3s ease;
+}
+
+.patient-header .chevron.rotated { transform: rotate(180deg); }
+
+.patient-body {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.4s ease, padding 0.3s ease;
+    background: var(--bg-card);
+}
+
+.patient-body.open {
+    max-height: 5000px;
+    padding: 14px 20px 18px;
+}
+
+.patient-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding-bottom: 12px;
+    border-bottom: 2px dashed var(--border-color);
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.patient-actions .patient-actions-info {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+/* TABLE HEADER BAR */
+.patient-table-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.patient-table-header .table-search-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.patient-table-header .table-scroll-controls {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.table-scroll-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    border: 1.5px solid var(--border-color);
+    background: var(--bg-card);
+    color: var(--primary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    transition: all 0.3s ease;
+}
+
+.table-scroll-btn:hover {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: white;
+    transform: translateY(-1px);
+    box-shadow: 0 3px 8px rgba(11, 94, 215, 0.3);
+}
+
+.table-scroll-btn:active { transform: scale(0.95); }
+
+.table-scroll-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    background: var(--bg-body);
+    color: var(--text-secondary);
+}
+
+.table-scroll-btn:disabled:hover {
+    background: var(--bg-body);
+    border-color: var(--border-color);
+    color: var(--text-secondary);
+    transform: none;
+    box-shadow: none;
+}
+
+/* PER-PATIENT SEARCH BAR */
+.patient-search-bar {
+    background: var(--bg-body);
+    border: 1.5px solid var(--border-color);
+    border-radius: 7px;
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    transition: all 0.2s;
+    max-width: 420px;
+    flex: 1;
+}
+
+.patient-search-bar:focus-within {
+    border-color: var(--primary);
+    background: var(--bg-card);
+    box-shadow: 0 0 0 2px rgba(11, 94, 215, 0.1);
+}
+
+.patient-search-bar i {
+    color: var(--primary);
+    font-size: 0.7rem;
+}
+
+.patient-search-bar input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    padding: 0;
+}
+
+.patient-search-bar input::placeholder {
+    color: var(--text-secondary);
+    opacity: 0.7;
+    font-size: 0.7rem;
+}
+
+.patient-search-bar .per-patient-count {
+    font-size: 0.6rem;
+    color: var(--primary);
+    font-weight: 700;
+    background: var(--primary-bg);
+    padding: 2px 8px;
+    border-radius: 10px;
+    white-space: nowrap;
+}
+
+.patient-search-bar .per-patient-clear {
+    background: var(--primary-bg);
+    border: none;
+    color: var(--primary);
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.55rem;
+    transition: all 0.2s;
+}
+
+.patient-search-bar .per-patient-clear.visible { display: flex; }
+.patient-search-bar .per-patient-clear:hover { background: var(--primary); color: white; }
+
+/* TABLE SCROLL */
+.table-scroll {
+    overflow-x: auto;
+    overflow-y: visible;
+    border-radius: 10px;
+    scroll-behavior: smooth;
+}
+
+.table-scroll::-webkit-scrollbar { height: 8px; }
+.table-scroll::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 10px; }
+.table-scroll::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+.table-scroll::-webkit-scrollbar-thumb:hover { background: var(--primary-dark); }
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+    min-width: 1100px;
+}
+
+.data-table thead th {
+    text-align: left;
+    padding: 9px 12px;
+    font-weight: 700;
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #ffffff;
+    background: var(--primary);
+    border-bottom: 3px solid var(--primary-dark);
+    white-space: nowrap;
+}
+
+.data-table thead th i { margin-right: 4px; opacity: 0.7; }
+
+.data-table tbody td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary);
+    vertical-align: middle;
+}
+
+.data-table tbody tr:hover td { background: var(--primary-bg); }
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table tbody tr:nth-child(even) td { background: var(--gray-50); }
+
+[data-theme="dark"] .data-table tbody tr:nth-child(even) td { background: #1A1A2E; }
+[data-theme="dark"] .data-table tbody tr:hover td { background: #1E3A5F; }
+
+/* MEDICATIONS */
+.medication-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.medication-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    background: var(--bg-body);
+    padding: 4px 8px;
+    border-radius: 5px;
+    font-size: 0.7rem;
+    border: 1px solid var(--border-color);
+    transition: all 0.3s ease;
+}
+
+.medication-item:hover {
+    border-color: var(--primary);
+    background: var(--primary-bg);
+}
+
+.medication-item .med-name {
+    font-weight: 500;
+    flex: 1;
+    color: var(--text-primary);
+}
+
+.medication-item .med-qty {
+    background: var(--primary);
+    color: white;
+    padding: 1px 8px;
+    border-radius: 9px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.medication-item .med-dosage {
+    font-size: 0.62rem;
+    color: var(--text-secondary);
+    margin-left: 4px;
+}
+
+.medication-item.highlighted-med {
+    background: #FED7AA !important;
+    border-color: #FDBA74 !important;
+    box-shadow: 0 0 0 2px #FDBA74;
+}
+
+mark.highlight {
+    background: #FEF08A;
+    color: #854D0E;
+    padding: 1px 3px;
+    border-radius: 3px;
+    font-weight: 700;
+}
+
+[data-theme="dark"] mark.highlight {
+    background: #854D0E;
+    color: #FEF08A;
+}
+
+/* BADGES */
+.prescription-tag {
+    display: inline-block;
+    font-family: monospace;
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 2px 9px;
+    border-radius: 5px;
+    background: var(--primary-bg);
+    color: var(--primary);
+    white-space: nowrap;
+}
+
+[data-theme="dark"] .prescription-tag {
+    background: #1E3A5F;
+    color: #60A5FA;
+}
+
+.status-badge {
+    padding: 3px 10px;
+    border-radius: 18px;
+    font-size: 0.62rem;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    white-space: nowrap;
+}
+
+.status-badge.warning { background: #FEF3C7; color: #D97706; }
+.status-badge.success { background: #D1FAE5; color: #059669; }
+.status-badge.danger { background: #FEE2E2; color: #EF4444; }
+.status-badge.info { background: #E8F0FE; color: #0B5ED7; }
+
+[data-theme="dark"] .status-badge.warning { background: #3A2A1A; color: #FBBF24; }
+[data-theme="dark"] .status-badge.success { background: #1A3A2A; color: #34D399; }
+[data-theme="dark"] .status-badge.danger { background: #3A1A1A; color: #F87171; }
+[data-theme="dark"] .status-badge.info { background: #1E3A5F; color: #6EA8FE; }
+
+.amount-cell {
+    font-weight: 700;
+    color: var(--primary);
+    font-family: 'Courier New', monospace;
+    font-size: 0.82rem;
+}
+
+.action-buttons-vertical {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: stretch;
+    justify-content: center;
+    min-width: 70px;
+}
+
+.btn-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 0.62rem;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    border: none;
+    text-decoration: none;
+    white-space: nowrap;
+    width: 100%;
+    height: 26px;
+}
+
+.btn-action:hover { transform: translateY(-2px); }
+
+.btn-action.btn-view-action {
+    background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+    color: white;
+    box-shadow: 0 2px 6px rgba(11, 94, 215, 0.3);
+}
+
+.btn-action.btn-delete-action {
+    background: linear-gradient(135deg, #DC2626, #B91C1C);
+    color: white;
+    box-shadow: 0 2px 6px rgba(220, 38, 38, 0.3);
+}
+
+.btn-delete-all-patient {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    border-radius: 7px;
+    font-weight: 700;
+    font-size: 0.68rem;
+    background: linear-gradient(135deg, #DC2626, #B91C1C);
+    color: white;
+    text-decoration: none;
+    border: none;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
+}
+
+.btn-delete-all-patient:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(220, 38, 38, 0.5);
+}
+
+/* EMPTY STATE */
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+    border-radius: 14px;
+    border: 2px dashed var(--border-color);
+}
+
+.empty-state i {
+    font-size: 3.5rem;
+    color: var(--primary);
+    display: block;
+    margin-bottom: 12px;
+}
+
+.empty-state p { font-size: 1rem; font-weight: 600; color: var(--text-primary); }
+.empty-state .sub { font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; font-weight: 400; }
+
+/* FOOTER */
+.footer {
+    padding: 14px 0;
+    border-top: 1px solid var(--border-color);
+    margin-top: 24px;
+    text-align: center;
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+}
+
+.footer .footer-brand { color: var(--primary); font-weight: 600; }
+
+/* TOAST */
+.toast-custom {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    padding: 14px 20px;
+    border-radius: 12px;
+    z-index: 9999;
+    max-width: 400px;
+    transform: translateY(100px);
+    opacity: 0;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: white;
+    box-shadow: var(--shadow-lg);
+    font-size: 0.85rem;
+}
+
+.toast-custom.show { transform: translateY(0); opacity: 1; }
+.toast-custom.success { background: linear-gradient(135deg, #059669, #047857); }
+.toast-custom.error { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+.toast-custom.info { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+
+/* RESPONSIVE */
+@media (max-width: 1200px) { .stats-grid-5 { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 1024px) { .stats-grid-5 { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 768px) {
+    .page-header-custom { padding: 14px 16px; }
+    .page-header-custom .page-title { font-size: 1.15rem; }
+    .stats-grid-5 { grid-template-columns: 1fr 1fr; gap: 8px; }
+    .stat-card-custom { min-height: 80px; padding: 10px 12px; }
+    .stat-card-custom .stat-number { font-size: 1.3rem; }
+    .med-search-panel { flex-direction: column; align-items: stretch; }
+    .med-search-panel .search-label { justify-content: center; }
+    .med-summary-result-body { grid-template-columns: repeat(2, 1fr); }
+    .patient-header { flex-direction: column; align-items: stretch; }
+    .patient-actions { flex-direction: column; align-items: stretch; }
+    .patient-table-header { flex-direction: column; align-items: stretch; }
+    .patient-table-header .table-scroll-controls { align-self: flex-end; }
+}
+@media (max-width: 480px) {
+    .stats-grid-5 { grid-template-columns: 1fr 1fr; gap: 6px; }
+    .stat-card-custom { padding: 8px 10px; min-height: 70px; }
+    .stat-card-custom .stat-number { font-size: 1rem; }
+    .med-summary-result-body { grid-template-columns: 1fr; }
+}
+
+@keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
 </style>
 
-<!-- TOP NAVIGATION -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper" style="display:none;">
-            <!-- Hidden top search - now using table search bar -->
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches_list as $branch): ?>
-                <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($branch['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
-
-<!-- MAIN CONTENT -->
 <main class="main-content">
 
-    <div class="page-header">
+    <div class="page-header-custom animate-fade-in-up">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-prescription mr-2"></i> Prescriptions
+                <i class="fas fa-prescription"></i>
+                Prescriptions
+                <span class="role-badge-display"><?= strtoupper($user_role) ?></span>
                 <?php if ($selected_branch_id !== 'all'): ?>
-                    <span class="branch-tag ml-2">
+                    <span class="branch-tag">
                         <i class="fas fa-store-alt"></i> <?= htmlspecialchars($selected_branch_name) ?>
                     </span>
                 <?php endif; ?>
             </h1>
             <p class="page-subtitle">
-                Manage all prescriptions - Grouped by patient
-                <span class="branch-tag ml-2">
-                    <i class="fas fa-users"></i> <?= $total_all ?> Patients
+                <span class="branch-tag">
+                    <i class="fas fa-users"></i> <?= $total_patients_count ?> Patients
                 </span>
-                <span class="ml-2 inline-flex bg-white/20 text-white px-3 py-1 rounded-full text-xs border border-white/10">
-                    <i class="fas fa-money-bill-wave mr-1"></i> TSh <?= number_format($total_amount_all) ?>
+                <span class="branch-tag">
+                    <i class="fas fa-prescription"></i> <?= $total_all ?> Prescriptions
+                </span>
+                <span class="branch-tag" style="background:rgba(52,211,153,0.25);color:#A7F3D0;">
+                    <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($total_amount_all, 0) ?>
                 </span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap">
-            <a href="dashboard.php" class="btn btn-outline-light" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.2);padding:6px 16px;border-radius:10px;font-size:0.8rem;text-decoration:none;display:inline-flex;align-items:center;gap:6px;">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
+            <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
+            <button onclick="window.location.reload()" class="btn-outline-light">
+                <i class="fas fa-sync-alt"></i> Refresh
+            </button>
         </div>
     </div>
 
-    <!-- 5 CARDS -->
     <div class="stats-grid-5 animate-fade-in-up">
-        <div class="stat-card-custom card-blue">
-            <div class="stat-icon"><i class="fas fa-users"></i></div>
+        <a href="prescriptions.php?branch=<?= $selected_branch_id ?>" class="stat-card-custom card-blue-1">
+            <div class="stat-icon"><i class="fas fa-prescription"></i></div>
             <div class="stat-content">
-                <p class="stat-label">Total Patients</p>
+                <p class="stat-label">Total</p>
                 <p class="stat-number"><?= $total_all ?></p>
                 <p class="stat-amount">TSh <?= number_format($total_amount_all, 0) ?></p>
-                <p class="stat-sub">All prescriptions</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-        
-        <div class="stat-card-custom card-orange">
+        </a>
+        <a href="prescriptions.php?branch=<?= $selected_branch_id ?>&status=pending" class="stat-card-custom card-blue-2">
             <div class="stat-icon"><i class="fas fa-clock"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Pending</p>
                 <p class="stat-number"><?= $pending_count ?></p>
                 <p class="stat-amount">TSh <?= number_format($pending_amount, 0) ?></p>
-                <p class="stat-sub">Awaiting approval</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-        
-        <div class="stat-card-custom card-blue">
+        </a>
+        <a href="prescriptions.php?branch=<?= $selected_branch_id ?>&status=confirmed" class="stat-card-custom card-blue-3">
             <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Confirmed</p>
                 <p class="stat-number"><?= $confirmed_count ?></p>
                 <p class="stat-amount">TSh <?= number_format($confirmed_amount, 0) ?></p>
-                <p class="stat-sub">Approved</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-        
-        <div class="stat-card-custom card-green">
+        </a>
+        <a href="prescriptions.php?branch=<?= $selected_branch_id ?>&status=dispensed" class="stat-card-custom card-blue-4">
             <div class="stat-icon"><i class="fas fa-pills"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Dispensed</p>
                 <p class="stat-number"><?= $dispensed_count ?></p>
-                <p class="stat-amount">TSh <?= number_format($dispensed_amount, 0) ?></p>
-                <p class="stat-sub">Completed</p>
+                <p class="stat-amount">TSh <?= number_format($total_amount_all, 0) ?></p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-        
-        <div class="stat-card-custom card-red">
+        </a>
+        <a href="prescriptions.php?branch=<?= $selected_branch_id ?>&status=cancelled" class="stat-card-custom card-blue-5">
             <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Cancelled</p>
                 <p class="stat-number"><?= $cancelled_count ?></p>
                 <p class="stat-amount">TSh <?= number_format($cancelled_amount, 0) ?></p>
-                <p class="stat-sub">Voided</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
+        </a>
     </div>
 
-    <!-- FILTERS -->
-    <div class="filter-section animate-fade-in-up" style="animation-delay:0.05s;">
+    <div class="filter-section animate-fade-in-up">
         <span class="filter-label"><i class="fas fa-filter"></i> Status:</span>
-        
-        <a href="?branch=<?= $selected_branch_id ?>&status=&page=1" class="filter-btn <?= empty($status_filter) ? 'active' : '' ?>">
+        <a href="?branch=<?= $selected_branch_id ?>&status=" class="filter-btn <?= empty($status_filter) ? 'active' : '' ?>">
             <i class="fas fa-globe"></i> All
         </a>
-        <a href="?branch=<?= $selected_branch_id ?>&status=pending&page=1" class="filter-btn <?= $status_filter === 'pending' ? 'active' : '' ?>">
+        <a href="?branch=<?= $selected_branch_id ?>&status=pending" class="filter-btn <?= $status_filter === 'pending' ? 'active' : '' ?>">
             <i class="fas fa-clock"></i> Pending
         </a>
-        <a href="?branch=<?= $selected_branch_id ?>&status=confirmed&page=1" class="filter-btn <?= $status_filter === 'confirmed' ? 'active' : '' ?>">
+        <a href="?branch=<?= $selected_branch_id ?>&status=confirmed" class="filter-btn <?= $status_filter === 'confirmed' ? 'active' : '' ?>">
             <i class="fas fa-check-circle"></i> Confirmed
         </a>
-        <a href="?branch=<?= $selected_branch_id ?>&status=dispensed&page=1" class="filter-btn <?= $status_filter === 'dispensed' ? 'active' : '' ?>">
+        <a href="?branch=<?= $selected_branch_id ?>&status=dispensed" class="filter-btn <?= $status_filter === 'dispensed' ? 'active' : '' ?>">
             <i class="fas fa-pills"></i> Dispensed
         </a>
-        <a href="?branch=<?= $selected_branch_id ?>&status=cancelled&page=1" class="filter-btn <?= $status_filter === 'cancelled' ? 'active' : '' ?>">
+        <a href="?branch=<?= $selected_branch_id ?>&status=cancelled" class="filter-btn <?= $status_filter === 'cancelled' ? 'active' : '' ?>">
             <i class="fas fa-times-circle"></i> Cancelled
         </a>
-        
         <?php if (!empty($status_filter)): ?>
-            <a href="prescriptions.php?branch=<?= $selected_branch_id ?>" class="filter-btn" style="border-color: #EF4444; color: #EF4444;">
+            <a href="prescriptions.php?branch=<?= $selected_branch_id ?>" class="filter-btn" style="border-color: var(--danger); color: var(--danger);">
                 <i class="fas fa-times"></i> Clear
             </a>
         <?php endif; ?>
     </div>
 
-    <!-- PRESCRIPTIONS LIST -->
-    <div class="card animate-fade-in-up" style="animation-delay:0.1s;">
+    <div class="med-search-panel animate-fade-in-up">
+        <div class="search-label">
+            <i class="fas fa-search"></i>
+            <span>Search</span>
+        </div>
+        <div class="search-box">
+            <i class="fas fa-search search-icon"></i>
+            <input type="text" 
+                   id="medSearchInput" 
+                   placeholder="Search patient name, ID, prescription #, medicine..."
+                   autocomplete="off">
+            <button type="button" class="search-clear-med" id="medSearchClear" title="Clear">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <span class="search-count" id="medSearchCount"></span>
+    </div>
+
+    <!-- ✅ MEDICATION SUMMARY RESULT -->
+    <div id="medSummaryResult" class="med-summary-result animate-fade-in-up" style="display:none;">
+        <div class="med-summary-result-header">
+            <div class="med-summary-result-title">
+                <i class="fas fa-pills"></i>
+                <span>Medication:</span>
+                <strong id="medSummaryName">-</strong>
+            </div>
+            <button type="button" class="med-summary-close" onclick="closeMedSummary()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
         
-        <!-- TABLE HEADER BAR: SEARCH LEFT (BLUE) + SCROLL RIGHT -->
-        <div class="table-header-bar">
-            <div class="table-header-left">
-                <!-- BLUE SEARCH BOX - LEFT SIDE -->
-                <div class="table-search-box">
+        <div class="med-summary-result-body">
+            <div class="med-summary-stat total">
+                <span class="med-summary-stat-label">Total Quantity</span>
+                <span class="med-summary-stat-value" id="medSummaryTotal">0</span>
+                <span class="med-summary-stat-sub"><span id="medSummaryPatients">0</span> patients</span>
+            </div>
+            <div class="med-summary-stat dispensed">
+                <span class="med-summary-stat-label">Dispensed</span>
+                <span class="med-summary-stat-value" id="medSummaryDispensed">0</span>
+                <span class="med-summary-stat-sub"><span id="medSummaryDispensedPatients">0</span> patients</span>
+            </div>
+            <div class="med-summary-stat pending">
+                <span class="med-summary-stat-label">Pending</span>
+                <span class="med-summary-stat-value" id="medSummaryPending">0</span>
+                <span class="med-summary-stat-sub"><span id="medSummaryPendingPatients">0</span> patients</span>
+            </div>
+            <div class="med-summary-stat confirmed">
+                <span class="med-summary-stat-label">Confirmed</span>
+                <span class="med-summary-stat-value" id="medSummaryConfirmed">0</span>
+                <span class="med-summary-stat-sub"><span id="medSummaryConfirmedPatients">0</span> patients</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="patientsContainer">
+        <?php if (count($patients_array) > 0): ?>
+            <?php foreach ($patients_array as $patient): 
+                $patient_id = $patient['patient_id'];
+                $presc_count = $patient['prescription_count'];
+                $age = calculateAge($patient['date_of_birth']);
+            ?>
+                <div class="patient-card animate-fade-in-up" 
+                     data-patient-id="<?= $patient_id ?>"
+                     data-patient-search="<?= htmlspecialchars(strtolower($patient['patient_name'] . ' ' . $patient['patient_number'] . ' ' . $patient['patient_phone'])) ?>">
+                    
+                    <div class="patient-header" onclick="togglePatient(<?= $patient_id ?>)">
+                        <div class="patient-info">
+                            <div class="patient-avatar" style="background: <?= '#' . substr(md5($patient['patient_name']), 0, 6) ?>;">
+                                <?= strtoupper(substr($patient['patient_name'], 0, 1)) ?>
+                            </div>
+                            <div>
+                                <div class="patient-name">
+                                    <span class="patient-name-text"><?= htmlspecialchars($patient['patient_name']) ?></span>
+                                    <?php if ($presc_count > 1): ?>
+                                        <span style="background:rgba(255,255,255,0.25);padding:1px 8px;border-radius:10px;font-size:0.58rem;font-weight:600;">
+                                            <i class="fas fa-prescription"></i> <?= $presc_count ?>
+                                        </span>
+                                    <?php endif; ?>
+                                </div>
+                                <div class="patient-meta">
+                                    <span><i class="fas fa-id-card"></i> <?= htmlspecialchars($patient['patient_number']) ?></span>
+                                    <?php if (!empty($patient['patient_phone'])): ?>
+                                        <span><i class="fas fa-phone"></i> <?= htmlspecialchars($patient['patient_phone']) ?></span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($patient['patient_gender'])): ?>
+                                        <span><i class="fas fa-<?= $patient['patient_gender'] === 'Female' ? 'venus' : 'mars' ?>"></i> <?= htmlspecialchars($patient['patient_gender']) ?> • <?= $age ?> yrs</span>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="patient-stats">
+                            <span class="stat-pill" style="background:rgba(255,255,255,0.3);">
+                                <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($patient['total_amount'] ?? 0, 0) ?>
+                            </span>
+                            <span class="stat-pill">
+                                <i class="fas fa-clock"></i> <?= date('M d, Y', strtotime($patient['latest_date'] ?? 'now')) ?>
+                            </span>
+                            <i class="fas fa-chevron-down chevron" id="chevron-<?= $patient_id ?>"></i>
+                        </div>
+                    </div>
+                    
+                    <div class="patient-body" id="body-<?= $patient_id ?>">
+                        
+                        <div class="patient-actions">
+                            <div class="patient-actions-info">
+                                <i class="fas fa-info-circle" style="color:var(--primary);"></i>
+                                <strong><?= $presc_count ?></strong> prescription(s) •
+                                Total: <strong>TSh <?= number_format($patient['total_amount'] ?? 0, 0) ?></strong>
+                            </div>
+                            <?php if ($presc_count > 1): ?>
+                                <a href="?delete_patient=<?= $patient_id ?>&branch=<?= $selected_branch_id ?>" 
+                                   class="btn-delete-all-patient"
+                                   onclick="return confirm('⚠️ DELETE ALL PRESCRIPTIONS?\n\nPatient: <?= htmlspecialchars(addslashes($patient['patient_name'])) ?>\nPrescriptions: <?= $presc_count ?>\nTotal: TSh <?= number_format($patient['total_amount'] ?? 0, 0) ?>\n\nThis action CANNOT be undone!');">
+                                    <i class="fas fa-trash-alt"></i>
+                                    Delete All (<?= $presc_count ?>)
+                                </a>
+                            <?php endif; ?>
+                        </div>
+                        
+                        <div class="patient-table-header">
+                            <div class="table-search-left">
+                                <div class="patient-search-bar">
+                                    <i class="fas fa-search"></i>
+                                    <input type="text" 
+                                           class="per-patient-search"
+                                           data-patient-id="<?= $patient_id ?>"
+                                           placeholder="Filter this patient's prescriptions..."
+                                           autocomplete="off">
+                                    <span class="per-patient-count">
+                                        <?= $presc_count ?> total
+                                    </span>
+                                    <button type="button" 
+                                            class="per-patient-clear" 
+                                            data-patient-id="<?= $patient_id ?>"
+                                            title="Clear">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div class="table-scroll-controls">
+                                <button type="button" 
+                                        class="table-scroll-btn" 
+                                        id="scroll-left-<?= $patient_id ?>"
+                                        onclick="scrollPatientTable(<?= $patient_id ?>, 'left')" 
+                                        title="Scroll Left">
+                                    <i class="fas fa-chevron-left"></i>
+                                </button>
+                                <button type="button" 
+                                        class="table-scroll-btn" 
+                                        id="scroll-right-<?= $patient_id ?>"
+                                        onclick="scrollPatientTable(<?= $patient_id ?>, 'right')" 
+                                        title="Scroll Right">
+                                    <i class="fas fa-chevron-right"></i>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="table-scroll" id="table-scroll-<?= $patient_id ?>">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:45px;">#</th>
+                                        <th><i class="fas fa-hashtag"></i> Prescription #</th>
+                                        <th><i class="fas fa-pills"></i> Medications</th>
+                                        <th><i class="fas fa-info-circle"></i> Status</th>
+                                        <th><i class="fas fa-money-bill-wave"></i> Amount</th>
+                                        <th><i class="fas fa-user-md"></i> Doctor</th>
+                                        <th><i class="fas fa-calendar"></i> Date</th>
+                                        <th style="text-align:center;width:110px;"><i class="fas fa-cog"></i> Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="patient-body-<?= $patient_id ?>">
+                                    <?php $i = 1; foreach ($patient['prescriptions'] as $presc): 
+                                        $status = $presc['status'] ?? 'pending';
+                                        $status_class = 'warning';
+                                        $status_icon = '⏳';
+                                        if ($status === 'confirmed') { $status_class = 'info'; $status_icon = '✅'; }
+                                        elseif ($status === 'dispensed') { $status_class = 'success'; $status_icon = '💊'; }
+                                        elseif ($status === 'cancelled') { $status_class = 'danger'; $status_icon = '❌'; }
+                                        
+                                        $search_data = strtolower(
+                                            ($presc['prescription_number'] ?? '') . ' ' . 
+                                            ($presc['patient_name'] ?? '') . ' ' . 
+                                            ($presc['patient_number'] ?? '') . ' ' . 
+                                            ($presc['doctor_name'] ?? '')
+                                        );
+                                        foreach ($presc['medications'] as $med) {
+                                            $search_data .= ' ' . ($med['medication_name'] ?? '');
+                                        }
+                                    ?>
+                                        <tr class="test-row" data-search="<?= htmlspecialchars($search_data) ?>">
+                                            <td class="row-number"><?= $i++ ?></td>
+                                            <td>
+                                                <span class="prescription-tag"><?= htmlspecialchars($presc['prescription_number'] ?? 'N/A') ?></span>
+                                            </td>
+                                            <td>
+                                                <?php if (!empty($presc['medications'])): ?>
+                                                    <div class="medication-list">
+                                                        <?php foreach ($presc['medications'] as $med): ?>
+                                                            <div class="medication-item" data-med-name="<?= htmlspecialchars(strtolower($med['medication_name'] ?? '')) ?>">
+                                                                <div class="med-name">
+                                                                    <span class="med-name-text"><?= htmlspecialchars($med['medication_name'] ?? 'N/A') ?></span>
+                                                                    <?php if (!empty($med['dosage'])): ?>
+                                                                        <span class="med-dosage"><?= htmlspecialchars($med['dosage']) ?></span>
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                                <span class="med-qty">x<?= (int)($med['quantity'] ?? 0) ?></span>
+                                                            </div>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                <?php else: ?>
+                                                    <span style="color:var(--text-muted);font-size:0.72rem;">No medications</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <span class="status-badge <?= $status_class ?>">
+                                                    <?= $status_icon ?> <?= ucfirst($status) ?>
+                                                </span>
+                                            </td>
+                                            <td class="amount-cell">
+                                                TSh <?= number_format($presc['total_amount'] ?? 0, 0) ?>
+                                            </td>
+                                            <td style="font-size:0.72rem;">
+                                                Dr. <?= htmlspecialchars($presc['doctor_name'] ?? 'N/A') ?>
+                                            </td>
+                                            <td style="font-size:0.7rem;">
+                                                <?= date('M d, Y', strtotime($presc['created_at'] ?? 'now')) ?>
+                                            </td>
+                                            <td>
+                                                <div class="action-buttons-vertical">
+                                                    <a href="prescription_details.php?id=<?= $presc['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                                       class="btn-action btn-view-action" title="View">
+                                                        <i class="fas fa-eye"></i> View
+                                                    </a>
+                                                    <a href="?delete_prescription=<?= $presc['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                                       class="btn-action btn-delete-action" 
+                                                       title="Delete"
+                                                       onclick="return confirm('⚠️ Delete this prescription?\n\nPrescription #: <?= htmlspecialchars(addslashes($presc['prescription_number'] ?? 'N/A')) ?>\nPatient: <?= htmlspecialchars(addslashes($presc['patient_name'] ?? 'N/A')) ?>\n\nThis action cannot be undone!');">
+                                                        <i class="fas fa-trash"></i> Delete
+                                                    </a>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+            
+            <div id="noSearchResults" style="display:none;">
+                <div class="empty-state">
                     <i class="fas fa-search"></i>
-                    <input type="text" id="prescSearchInput" placeholder="🔍 Search patient, ID, prescription, or medicine..." autocomplete="off">
+                    <p>No results found</p>
+                    <p class="sub">Try a different keyword</p>
                 </div>
-                
-                <div class="table-title-inline">
-                    <i class="fas fa-users"></i>
-                    <span>Patients List</span>
-                    <span id="prescCountDisplay" style="font-size:0.8rem;color:var(--text-secondary);">
-                        (<strong style="color:#0B5ED7;"><?= count($grouped_prescriptions) ?></strong> patients)
-                    </span>
-                </div>
-                
-                <span class="search-results-info" id="prescSearchInfo">
-                    <i class="fas fa-filter"></i> <strong id="prescSearchCount">0</strong> match
-                </span>
             </div>
             
-            <div class="table-header-right">
-                <button type="button" class="scroll-btn-header" id="prescScrollBtnLeft" onclick="scrollTable('left')" title="Scroll Left">
-                    <i class="fas fa-chevron-left"></i>
-                </button>
-                <button type="button" class="scroll-btn-header" id="prescScrollBtnRight" onclick="scrollTable('right')" title="Scroll Right">
-                    <i class="fas fa-chevron-right"></i>
-                </button>
-            </div>
-        </div>
-        
-        <div class="table-container">
-            <div class="table-scroll-wrapper" id="tableScrollWrapper">
-                <table class="data-table table-blue w-full">
-                    <thead>
-                        <tr>
-                            <th style="width: 45px; min-width: 45px;">#</th>
-                            <th style="min-width: 150px;">Patient</th>
-                            <th style="min-width: 100px;">Patient ID</th>
-                            <th class="col-prescriptions">Prescriptions</th>
-                            <th style="min-width: 200px;">Medications</th>
-                            <th style="min-width: 120px;" class="text-right">Total Amount</th>
-                            <th style="min-width: 100px;">Status</th>
-                            <th style="min-width: 70px; text-align: center;">Count</th>
-                            <th style="min-width: 110px;">Last Date</th>
-                            <th class="col-actions">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="prescTableBody">
-                        <?php if (count($grouped_prescriptions) > 0): ?>
-                            <?php $i = $offset + 1; foreach ($grouped_prescriptions as $group): ?>
-                                <tr class="presc-row" data-search="<?= htmlspecialchars($group['search_data']) ?>">
-                                    <td class="font-bold presc-sno" style="color:#0B5ED7;"><?= $i++ ?></td>
-                                    <td class="cell-patient">
-                                        <div class="font-semibold patient-name"><?= htmlspecialchars($group['patient_name'] ?? 'Unknown') ?></div>
-                                        <div class="text-xs text-gray-400"><?= htmlspecialchars($group['patient_gender'] ?? 'N/A') ?></div>
-                                        <div class="text-xs text-gray-400">📞 <span class="patient-phone"><?= htmlspecialchars($group['patient_phone'] ?? 'N/A') ?></span></div>
-                                    </td>
-                                    <td class="cell-patient-id">
-                                        <div class="font-mono text-xs font-bold patient-id"><?= htmlspecialchars($group['patient_number'] ?? 'N/A') ?></div>
-                                    </td>
-                                    <td class="cell-prescriptions">
-                                        <?php 
-                                        $status_colors = ['pending' => 'pending', 'confirmed' => 'confirmed', 'dispensed' => 'dispensed', 'cancelled' => 'cancelled'];
-                                        foreach (array_slice($group['prescriptions'], 0, 3) as $prescription): 
-                                            $color = $status_colors[$prescription['status']] ?? 'secondary';
-                                        ?>
-                                            <span class="prescription-tag">
-                                                <span class="status-dot <?= $color ?>"></span>
-                                                <span class="prescription-number"><?= htmlspecialchars($prescription['number']) ?></span>
-                                            </span>
-                                        <?php endforeach; ?>
-                                        <?php if (count($group['prescriptions']) > 3): ?>
-                                            <span class="prescription-tag" style="background:#E8F0FE;color:#0B5ED7;">
-                                                +<?= count($group['prescriptions']) - 3 ?> more
-                                            </span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td class="cell-medications">
-                                        <div class="medication-list">
-                                            <?php 
-                                            $all_meds = [];
-                                            foreach ($group['prescriptions'] as $prescription) {
-                                                if (!empty($prescription['medications']) && $prescription['medications'] !== 'No medications') {
-                                                    $meds = explode(', ', $prescription['medications']);
-                                                    foreach ($meds as $med) {
-                                                        if (!empty($med) && $med !== 'No medications') {
-                                                            $all_meds[] = $med;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            $unique_meds = array_unique($all_meds);
-                                            $display_meds = array_slice($unique_meds, 0, 5);
-                                            foreach ($display_meds as $med): 
-                                                $qty_display = '';
-                                                $med_name = $med;
-                                                if (preg_match('/\((\d+)\s*([^)]*)\)/', $med, $matches)) {
-                                                    $qty_display = ' <span class="qty">' . $matches[1] . '</span>';
-                                                    $med_name = trim(str_replace('(' . $matches[1] . $matches[2] . ')', '', $med));
-                                                }
-                                            ?>
-                                                <span class="medication-item" data-med-name="<?= htmlspecialchars($med_name) ?>">
-                                                    <span class="med-name-text"><?= htmlspecialchars(substr($med_name, 0, 25)) . (strlen($med_name) > 25 ? '...' : '') ?></span>
-                                                    <?= $qty_display ?>
-                                                </span>
-                                            <?php endforeach; ?>
-                                            <?php if (count($unique_meds) > 5): ?>
-                                                <span class="medication-item" style="background:#E8F0FE;color:#0B5ED7;">
-                                                    +<?= count($unique_meds) - 5 ?> more
-                                                </span>
-                                            <?php endif; ?>
-                                        </div>
-                                    </td>
-                                    <td class="text-right amount-cell">
-                                        TSh <?= number_format($group['total_amount'] ?? 0, 0) ?>
-                                    </td>
-                                    <td class="cell-status">
-                                        <?php 
-                                        $status = $group['overall_status'] ?? 'pending';
-                                        $color = $group['status_color'] ?? 'secondary';
-                                        $label = $group['status_label'] ?? 'Unknown';
-                                        ?>
-                                        <span class="status-badge <?= $color ?>">
-                                            <?php if ($status === 'pending'): ?>⏳<?php elseif ($status === 'confirmed'): ?>✅<?php elseif ($status === 'dispensed'): ?>💊<?php else: ?>❌<?php endif; ?>
-                                            <?= $label ?>
-                                        </span>
-                                    </td>
-                                    <td class="text-center">
-                                        <span class="font-bold" style="color:#0B5ED7;">
-                                            <?= count($group['prescriptions']) ?>
-                                        </span>
-                                    </td>
-                                    <td class="text-xs">
-                                        <?= date('M d, Y', strtotime($group['last_prescription_date'] ?? 'now')) ?>
-                                    </td>
-                                    <td>
-                                        <div class="action-buttons-vertical">
-                                            <?php 
-                                            $first_prescription = !empty($group['prescriptions']) ? $group['prescriptions'][0] : null;
-                                            $prescription_id = $first_prescription ? $first_prescription['id'] : 0;
-                                            ?>
-                                            <a href="prescription_details.php?id=<?= $prescription_id ?>&branch=<?= $selected_branch_id ?>" 
-                                               class="btn-action btn-view" title="View Prescriptions">
-                                                <i class="fas fa-eye"></i> View
-                                            </a>
-                                            
-                                            <a href="?delete_patient=<?= $group['patient_id'] ?>&branch=<?= $selected_branch_id ?>&page=<?= $page ?><?= $search ? '&search='.urlencode($search) : '' ?><?= $status_filter ? '&status='.urlencode($status_filter) : '' ?>" 
-                                               class="btn-action btn-delete-all" 
-                                               title="Delete all <?= count($group['prescriptions']) ?> prescriptions for <?= htmlspecialchars($group['patient_name'] ?? 'Unknown') ?>"
-                                               onclick="return confirmDeleteAll('<?= htmlspecialchars($group['patient_name'] ?? 'Unknown') ?>', '<?= count($group['prescriptions']) ?>', '<?= number_format($group['total_amount'] ?? 0, 0) ?>')">
-                                                <i class="fas fa-trash-alt"></i> 
-                                                Delete All
-                                                <span class="count-badge"><?= count($group['prescriptions']) ?></span>
-                                            </a>
-                                        </div>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                            
-                            <tr class="no-results-row" id="prescNoResults" style="display:none;">
-                                <td colspan="10">
-                                    <i class="fas fa-search-minus"></i>
-                                    <p style="color:var(--text-primary);font-weight:500;">No patients match your search</p>
-                                    <p style="font-size:0.75rem;margin-top:4px;color:var(--text-muted);">Try searching for patient name, ID, prescription number, or medicine name (e.g. "Albendazole")</p>
-                                </td>
-                            </tr>
-                        <?php else: ?>
-                            <tr>
-                                <td colspan="10" class="text-center py-8 text-gray-400">
-                                    <i class="fas fa-prescription text-4xl block mb-3" style="color: #0B5ED7;"></i>
-                                    <p class="text-lg font-medium" style="color: var(--text-primary);">
-                                        <?= !empty($search) || !empty($status_filter) ? 'No prescriptions found matching your filters' : 'No prescriptions found' ?>
-                                    </p>
-                                </td>
-                            </tr>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        
-        <!-- PAGINATION -->
-        <?php if ($total_pages > 1): ?>
-            <div class="flex flex-wrap justify-between items-center gap-3 mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
-                <div class="text-sm text-gray-500 dark:text-gray-400">
-                    Showing <?= $offset + 1 ?> - <?= min($offset + $per_page, $total_patients) ?> of <?= $total_patients ?> patients
-                </div>
-                
-                <div class="pagination">
-                    <?php if ($page > 1): ?>
-                        <a href="?page=<?= $page - 1 ?>&branch=<?= $selected_branch_id ?><?= $status_filter ? '&status='.urlencode($status_filter) : '' ?>" class="page-link">
-                            <i class="fas fa-chevron-left"></i>
-                        </a>
-                    <?php else: ?>
-                        <span class="page-link disabled"><i class="fas fa-chevron-left"></i></span>
-                    <?php endif; ?>
-                    
-                    <?php for ($p = 1; $p <= $total_pages; $p++): ?>
-                        <a href="?page=<?= $p ?>&branch=<?= $selected_branch_id ?><?= $status_filter ? '&status='.urlencode($status_filter) : '' ?>" 
-                           class="page-link <?= $p === $page ? 'active' : '' ?>">
-                            <?= $p ?>
-                        </a>
-                    <?php endfor; ?>
-                    
-                    <?php if ($page < $total_pages): ?>
-                        <a href="?page=<?= $page + 1 ?>&branch=<?= $selected_branch_id ?><?= $status_filter ? '&status='.urlencode($status_filter) : '' ?>" class="page-link">
-                            <i class="fas fa-chevron-right"></i>
-                        </a>
-                    <?php else: ?>
-                        <span class="page-link disabled"><i class="fas fa-chevron-right"></i></span>
-                    <?php endif; ?>
-                </div>
+        <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-prescription"></i>
+                <p>No prescriptions found</p>
+                <p class="sub">
+                    <?= !empty($search) || !empty($status_filter) ? 'Try adjusting your filters' : 'No prescriptions have been created yet' ?>
+                </p>
             </div>
         <?php endif; ?>
     </div>
@@ -1201,65 +1764,168 @@ include_once '../../components/admin_sidebar.php';
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
-            Prescriptions Management (Grouped by Patient)
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="margin:0 8px;">|</span>
+            Prescriptions (Grouped by Patient)
+            <span style="margin:0 8px;">|</span>
+            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
+            <span style="margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
 
 </main>
 
-<!-- TOAST -->
 <div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
+    <i class="fas fa-info-circle"></i>
     <div>
-        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+        <p style="font-weight:600;font-size:0.8rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.7rem;opacity:0.9;margin:0;" id="toastMessage"></p>
     </div>
 </div>
 
 <script>
 // ================================================================
-// TABLE SCROLL
+// MEDICATION SUMMARY DATA (from PHP)
 // ================================================================
-function scrollTable(direction) {
-    var container = document.getElementById('tableScrollWrapper');
-    if (!container) return;
+var MEDICATION_DATA = <?= json_encode($medication_summary) ?>;
+
+// ================================================================
+// TOGGLE PATIENT
+// ================================================================
+function togglePatient(patientId) {
+    var body = document.getElementById('body-' + patientId);
+    var chevron = document.getElementById('chevron-' + patientId);
+    if (body) body.classList.toggle('open');
+    if (chevron) chevron.classList.toggle('rotated');
+    
+    setTimeout(function() {
+        updateScrollButtons(patientId);
+    }, 350);
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    var firstBody = document.querySelector('.patient-body');
+    var firstChevron = document.querySelector('.chevron');
+    if (firstBody) {
+        setTimeout(function() {
+            firstBody.classList.add('open');
+            if (firstChevron) firstChevron.classList.add('rotated');
+        }, 300);
+    }
+});
+
+// ================================================================
+// SCROLL TABLE FUNCTIONS
+// ================================================================
+function scrollPatientTable(patientId, direction) {
+    var wrapper = document.getElementById('table-scroll-' + patientId);
+    if (!wrapper) return;
+    
     var scrollAmount = 400;
     if (direction === 'left') {
-        container.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
+        wrapper.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
     } else {
-        container.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+        wrapper.scrollBy({ left: scrollAmount, behavior: 'smooth' });
     }
 }
 
-function updateScrollButtons() {
-    var wrap = document.getElementById('tableScrollWrapper');
-    var btnLeft = document.getElementById('prescScrollBtnLeft');
-    var btnRight = document.getElementById('prescScrollBtnRight');
-    if (!wrap || !btnLeft || !btnRight) return;
+function updateScrollButtons(patientId) {
+    var wrapper = document.getElementById('table-scroll-' + patientId);
+    var btnLeft = document.getElementById('scroll-left-' + patientId);
+    var btnRight = document.getElementById('scroll-right-' + patientId);
     
-    var scrollLeft = wrap.scrollLeft;
-    var maxScroll = wrap.scrollWidth - wrap.clientWidth;
+    if (!wrapper || !btnLeft || !btnRight) return;
     
-    btnLeft.disabled = (scrollLeft <= 5);
-    btnRight.disabled = (scrollLeft >= maxScroll - 5 || maxScroll <= 0);
+    var maxScroll = wrapper.scrollWidth - wrapper.clientWidth;
+    btnLeft.disabled = (wrapper.scrollLeft <= 5);
+    btnRight.disabled = (wrapper.scrollLeft >= maxScroll - 5 || maxScroll <= 0);
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    var wrappers = document.querySelectorAll('.table-scroll[id^="table-scroll-"]');
+    wrappers.forEach(function(wrapper) {
+        var patientId = wrapper.id.replace('table-scroll-', '');
+        
+        wrapper.addEventListener('scroll', function() {
+            updateScrollButtons(patientId);
+        });
+        
+        setTimeout(function() {
+            updateScrollButtons(patientId);
+        }, 200);
+    });
+    
+    window.addEventListener('resize', function() {
+        wrappers.forEach(function(wrapper) {
+            var patientId = wrapper.id.replace('table-scroll-', '');
+            setTimeout(function() {
+                updateScrollButtons(patientId);
+            }, 200);
+        });
+    });
+});
+
+// ================================================================
+// ✅ MEDICATION SUMMARY SEARCH
+// ================================================================
+function searchMedicationSummary(query) {
+    query = query.toLowerCase().trim();
+    var resultCard = document.getElementById('medSummaryResult');
+    
+    if (!query) {
+        resultCard.style.display = 'none';
+        return;
+    }
+    
+    // Find matching medication
+    var matchedMed = null;
+    
+    // Exact match first
+    if (MEDICATION_DATA[query]) {
+        matchedMed = MEDICATION_DATA[query];
+    } else {
+        // Partial match
+        for (var key in MEDICATION_DATA) {
+            if (key.includes(query)) {
+                matchedMed = MEDICATION_DATA[key];
+                break;
+            }
+        }
+    }
+    
+    if (!matchedMed) {
+        resultCard.style.display = 'none';
+        return;
+    }
+    
+    // Show summary
+    document.getElementById('medSummaryName').textContent = matchedMed.name;
+    document.getElementById('medSummaryTotal').textContent = matchedMed.total;
+    document.getElementById('medSummaryPatients').textContent = matchedMed.patients;
+    
+    document.getElementById('medSummaryDispensed').textContent = matchedMed.byStatus.dispensed.qty;
+    document.getElementById('medSummaryDispensedPatients').textContent = matchedMed.byStatus.dispensed.patients;
+    
+    document.getElementById('medSummaryPending').textContent = matchedMed.byStatus.pending.qty;
+    document.getElementById('medSummaryPendingPatients').textContent = matchedMed.byStatus.pending.patients;
+    
+    document.getElementById('medSummaryConfirmed').textContent = matchedMed.byStatus.confirmed.qty;
+    document.getElementById('medSummaryConfirmedPatients').textContent = matchedMed.byStatus.confirmed.patients;
+    
+    resultCard.style.display = 'block';
+}
+
+function closeMedSummary() {
+    document.getElementById('medSummaryResult').style.display = 'none';
 }
 
 // ================================================================
-// AUTO SEARCH WITH HIGHLIGHT
+// MAIN SEARCH - HIGHLIGHT + FILTER + MEDICATION SUMMARY
 // ================================================================
 (function() {
-    var searchInput = document.getElementById('prescSearchInput');
-    var tableBody = document.getElementById('prescTableBody');
-    var noResultsRow = document.getElementById('prescNoResults');
-    var countDisplay = document.getElementById('prescCountDisplay');
-    var searchInfo = document.getElementById('prescSearchInfo');
-    var searchCount = document.getElementById('prescSearchCount');
-    
-    if (!searchInput || !tableBody) return;
-    var totalRows = document.querySelectorAll('.presc-row').length;
+    var medSearchInput = document.getElementById('medSearchInput');
+    var medSearchClear = document.getElementById('medSearchClear');
+    var medSearchCount = document.getElementById('medSearchCount');
     
     function escapeRegExp(string) {
         return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1269,312 +1935,285 @@ function updateScrollButtons() {
         if (!query || !text) return text;
         var escaped = escapeRegExp(query);
         var regex = new RegExp('(' + escaped + ')', 'gi');
-        return text.replace(regex, '<mark class="highlight">$1</mark>');
+        return text.replace(regex, '<mark class="highlight-name">$1</mark>');
     }
     
-    function applyHighlights(row, query) {
-        if (!query) return;
-        
-        // Highlight patient name, ID, phone
-        row.querySelectorAll('.patient-name, .patient-id, .patient-phone').forEach(function(el) {
-            var original = el.getAttribute('data-original') || el.textContent;
-            el.setAttribute('data-original', original);
-            el.innerHTML = highlightText(original, query);
-        });
-        
-        // Highlight prescription numbers
-        row.querySelectorAll('.prescription-number').forEach(function(el) {
-            var original = el.getAttribute('data-original') || el.textContent;
-            el.setAttribute('data-original', original);
-            el.innerHTML = highlightText(original, query);
-        });
-        
-        // HIGHLIGHT MEDICINE NAMES
-        row.querySelectorAll('.med-name-text').forEach(function(el) {
-            var original = el.getAttribute('data-original') || el.textContent;
-            el.setAttribute('data-original', original);
-            if (original.toLowerCase().includes(query.toLowerCase())) {
-                el.innerHTML = original.replace(
-                    new RegExp('(' + escapeRegExp(query) + ')', 'gi'),
-                    '<mark class="highlight-med">$1</mark>'
-                );
-            } else {
-                el.innerHTML = original;
+    function removeAllHighlights() {
+        document.querySelectorAll('.patient-card').forEach(function(card) {
+            var nameEl = card.querySelector('.patient-name-text');
+            if (nameEl && nameEl.getAttribute('data-original')) {
+                nameEl.innerHTML = nameEl.getAttribute('data-original');
             }
-        });
-        
-        // Highlight medication items
-        row.querySelectorAll('.medication-item').forEach(function(item) {
-            var medName = item.getAttribute('data-med-name') || '';
-            if (medName.toLowerCase().includes(query.toLowerCase())) {
-                item.classList.add('highlighted-med');
-            } else {
+            card.querySelectorAll('.medication-item').forEach(function(item) {
                 item.classList.remove('highlighted-med');
+            });
+        });
+    }
+    
+    function applyPatientHighlight(card, query) {
+        if (!query) return;
+        var nameEl = card.querySelector('.patient-name-text');
+        if (nameEl) {
+            var orig = nameEl.getAttribute('data-original') || nameEl.textContent;
+            nameEl.setAttribute('data-original', orig);
+            nameEl.innerHTML = highlightText(orig, query);
+        }
+    }
+    
+    function filterAll(query) {
+        var patientCards = document.querySelectorAll('.patient-card');
+        var noSearchResults = document.getElementById('noSearchResults');
+        var visiblePatients = 0;
+        var queryLower = query.toLowerCase().trim();
+        
+        // ✅ Show medication summary
+        searchMedicationSummary(queryLower);
+        
+        if (queryLower === '') {
+            removeAllHighlights();
+        }
+        
+        patientCards.forEach(function(card) {
+            if (queryLower === '') {
+                var nameEl = card.querySelector('.patient-name-text');
+                if (nameEl && nameEl.getAttribute('data-original')) {
+                    nameEl.innerHTML = nameEl.getAttribute('data-original');
+                }
+            }
+            
+            var patientSearchData = card.getAttribute('data-patient-search') || '';
+            var testRows = card.querySelectorAll('.test-row');
+            var hasMatch = false;
+            
+            if (queryLower === '') {
+                hasMatch = true;
+            } else {
+                if (patientSearchData.includes(queryLower)) {
+                    hasMatch = true;
+                    applyPatientHighlight(card, query);
+                }
+            }
+            
+            testRows.forEach(function(row) {
+                var searchData = row.getAttribute('data-search') || '';
+                var medItems = row.querySelectorAll('.medication-item');
+                var medMatch = false;
+                
+                medItems.forEach(function(item) {
+                    var medName = item.getAttribute('data-med-name') || '';
+                    if (queryLower !== '' && medName.includes(queryLower)) {
+                        medMatch = true;
+                        item.classList.add('highlighted-med');
+                    } else {
+                        item.classList.remove('highlighted-med');
+                    }
+                });
+                
+                if (queryLower === '' || searchData.includes(queryLower) || medMatch) {
+                    hasMatch = true;
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+            
+            if (hasMatch) {
+                card.classList.remove('filtered-out');
+                visiblePatients++;
+                
+                if (queryLower !== '') {
+                    var body = card.querySelector('.patient-body');
+                    var chevron = card.querySelector('.chevron');
+                    if (body && !body.classList.contains('open')) {
+                        body.classList.add('open');
+                        if (chevron) chevron.classList.add('rotated');
+                    }
+                }
+            } else {
+                card.classList.add('filtered-out');
+            }
+        });
+        
+        if (noSearchResults) {
+            noSearchResults.style.display = (visiblePatients === 0 && queryLower !== '') ? '' : 'none';
+        }
+        
+        if (queryLower !== '') {
+            medSearchCount.textContent = visiblePatients + ' patient' + (visiblePatients !== 1 ? 's' : '');
+            medSearchCount.classList.add('show');
+            medSearchClear.classList.add('visible');
+        } else {
+            medSearchCount.classList.remove('show');
+            medSearchClear.classList.remove('visible');
+        }
+        
+        setTimeout(function() {
+            patientCards.forEach(function(card) {
+                var pid = card.getAttribute('data-patient-id');
+                updateScrollButtons(pid);
+            });
+        }, 200);
+    }
+    
+    if (medSearchInput) {
+        medSearchInput.addEventListener('input', function() {
+            filterAll(this.value);
+        });
+        medSearchInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                this.value = '';
+                closeMedSummary();
+                filterAll('');
+                this.blur();
             }
         });
     }
     
-    function removeAllHighlights(row) {
-        row.querySelectorAll('.patient-name, .patient-id, .patient-phone, .prescription-number, .med-name-text').forEach(function(el) {
-            var original = el.getAttribute('data-original');
-            if (original !== null) {
-                el.innerHTML = original;
-            }
+    if (medSearchClear) {
+        medSearchClear.addEventListener('click', function() {
+            medSearchInput.value = '';
+            closeMedSummary();
+            filterAll('');
+            medSearchInput.focus();
         });
-        
-        row.querySelectorAll('.medication-item').forEach(function(item) {
-            item.classList.remove('highlighted-med');
-        });
-        
-        row.classList.remove('highlighted');
     }
-    
-    function filterTable() {
-        var query = searchInput.value.trim();
-        var queryLower = query.toLowerCase();
-        var rows = document.querySelectorAll('.presc-row');
+})();
+
+// ================================================================
+// PER-PATIENT SEARCH
+// ================================================================
+document.querySelectorAll('.per-patient-search').forEach(function(input) {
+    input.addEventListener('input', function() {
+        var patientId = this.getAttribute('data-patient-id');
+        var query = this.value.toLowerCase().trim();
+        var tbody = document.getElementById('patient-body-' + patientId);
+        if (!tbody) return;
+        
+        var rows = tbody.querySelectorAll('.test-row');
         var visibleCount = 0;
+        var searchBar = this.closest('.patient-search-bar');
+        var clearBtn = searchBar ? searchBar.querySelector('.per-patient-clear') : null;
+        
+        if (clearBtn) {
+            if (query !== '') {
+                clearBtn.classList.add('visible');
+            } else {
+                clearBtn.classList.remove('visible');
+            }
+        }
         
         rows.forEach(function(row) {
             var searchData = row.getAttribute('data-search') || '';
+            var medItems = row.querySelectorAll('.medication-item');
+            var medMatch = false;
             
-            removeAllHighlights(row);
+            medItems.forEach(function(item) {
+                var medName = item.getAttribute('data-med-name') || '';
+                if (query === '') {
+                    item.classList.remove('highlighted-med');
+                } else if (medName.includes(query)) {
+                    medMatch = true;
+                    item.classList.add('highlighted-med');
+                } else {
+                    item.classList.remove('highlighted-med');
+                }
+            });
             
-            if (query === '' || searchData.includes(queryLower)) {
+            if (query === '' || searchData.includes(query) || medMatch) {
                 row.style.display = '';
                 visibleCount++;
-                
-                var snoCell = row.querySelector('.presc-sno');
-                if (snoCell) snoCell.textContent = visibleCount;
-                
-                if (query !== '') {
-                    applyHighlights(row, query);
-                    
-                    var medMatch = false;
-                    row.querySelectorAll('.medication-item').forEach(function(item) {
-                        if (item.classList.contains('highlighted-med')) {
-                            medMatch = true;
-                        }
-                    });
-                    if (medMatch) {
-                        row.classList.add('highlighted');
-                    }
-                }
+                var rowNum = row.querySelector('.row-number');
+                if (rowNum) rowNum.textContent = visibleCount;
             } else {
                 row.style.display = 'none';
             }
         });
         
-        if (countDisplay) {
-            countDisplay.innerHTML = query === '' 
-                ? '(<strong style="color:#0B5ED7;">' + totalRows + '</strong> patients)' 
-                : '(<strong style="color:#0B5ED7;">' + visibleCount + '</strong> of ' + totalRows + ')';
-        }
-        
-        if (searchInfo && searchCount) {
+        var countBadge = searchBar ? searchBar.querySelector('.per-patient-count') : null;
+        if (countBadge) {
             if (query === '') {
-                searchInfo.classList.remove('show');
+                countBadge.textContent = rows.length + ' total';
             } else {
-                searchInfo.classList.add('show');
-                searchCount.textContent = visibleCount;
+                countBadge.textContent = visibleCount + ' of ' + rows.length;
             }
         }
         
-        if (noResultsRow) {
-            noResultsRow.style.display = (visibleCount === 0 && query !== '') ? '' : 'none';
-        }
+        setTimeout(function() {
+            updateScrollButtons(patientId);
+        }, 100);
+    });
+});
+
+document.querySelectorAll('.per-patient-clear').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        var patientId = this.getAttribute('data-patient-id');
+        var searchBar = this.closest('.patient-search-bar');
+        var input = searchBar ? searchBar.querySelector('.per-patient-search') : null;
         
-        setTimeout(updateScrollButtons, 100);
-    }
-    
-    searchInput.addEventListener('input', filterTable);
-    searchInput.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            this.value = '';
-            filterTable();
-            this.blur();
+        if (input) {
+            input.value = '';
+            input.dispatchEvent(new Event('input'));
+            input.focus();
         }
     });
-})();
-
-// ================================================================
-// CONFIRM DELETE ALL
-// ================================================================
-function confirmDeleteAll(patientName, count, totalAmount) {
-    var msg = '⚠️ ARE YOU SURE YOU WANT TO DELETE ALL PRESCRIPTIONS?\n\n';
-    msg += '👤 Patient: ' + patientName + '\n';
-    msg += '📋 Number of Prescriptions: ' + count + '\n';
-    msg += '💰 Total Amount: TSh ' + totalAmount + '\n\n';
-    msg += 'This will delete:\n';
-    msg += '• All ' + count + ' prescription(s)\n';
-    msg += '• All medication items\n';
-    msg += '• All associated bill items\n\n';
-    msg += '⚠️ This action CANNOT be undone!\n';
-    msg += '⚠️ All data will be permanently lost!';
-    
-    return confirm(msg);
-}
-
-// ================================================================
-// DARK MODE
-// ================================================================
-var darkModeToggle = document.getElementById('darkModeToggle');
-var darkIcon = document.getElementById('darkIcon');
-var darkText = document.getElementById('darkText');
-var htmlElement = document.documentElement;
-
-var savedDarkMode = localStorage.getItem('darkMode');
-if (savedDarkMode === 'true') {
-    htmlElement.setAttribute('data-theme', 'dark');
-    darkIcon.className = 'fas fa-sun';
-    darkText.textContent = 'Light';
-}
-
-darkModeToggle?.addEventListener('click', function() {
-    var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-    if (isDark) {
-        htmlElement.removeAttribute('data-theme');
-        darkIcon.className = 'fas fa-moon';
-        darkText.textContent = 'Dark';
-        localStorage.setItem('darkMode', 'false');
-        document.cookie = "dark_mode=false; path=/";
-    } else {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-        localStorage.setItem('darkMode', 'true');
-        document.cookie = "dark_mode=true; path=/";
-    }
 });
 
-// ================================================================
-// SIDEBAR
-// ================================================================
-var sidebar = document.getElementById('sidebar');
-var sidebarToggle = document.getElementById('sidebarToggle');
+// FOOTER TIME
+setInterval(function() {
+    var now = new Date();
+    var timeStr = now.toLocaleTimeString('en-US', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+    });
+    var ftEl = document.getElementById('footerTimestamp');
+    if (ftEl) ftEl.textContent = 'Last updated: ' + timeStr;
+}, 1000);
 
-sidebarToggle?.addEventListener('click', function() {
-    sidebar.classList.toggle('open');
-});
-
-document.addEventListener('click', function(e) {
-    if (window.innerWidth <= 1024) {
-        if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
-            sidebar.classList.remove('open');
-        }
-    }
-});
-
-// ================================================================
-// SWITCH BRANCH
-// ================================================================
-function switchBranch(branchId) {
-    var url = new URL(window.location.href);
-    url.searchParams.set('branch', branchId);
-    url.searchParams.delete('page');
-    url.searchParams.delete('deleted_patient');
-    url.searchParams.delete('error');
-    window.location.href = url.toString();
-}
-
-// ================================================================
 // TOAST
-// ================================================================
 function showToast(title, message, type) {
     var toast = document.getElementById('toast');
     var toastTitle = document.getElementById('toastTitle');
     var toastMessage = document.getElementById('toastMessage');
-    
+    if (!toast) return;
     toast.className = 'toast-custom ' + type;
     toastTitle.textContent = title;
     toastMessage.textContent = message;
     toast.style.display = 'flex';
-    
     toast.classList.add('show');
     clearTimeout(toast.timeout);
     toast.timeout = setTimeout(function() {
         toast.classList.remove('show');
         setTimeout(function() { toast.style.display = 'none'; }, 400);
-    }, 4000);
+    }, 3500);
 }
 
-// HANDLE DELETE SUCCESS
-<?php if (isset($_GET['deleted_patient']) && $_GET['deleted_patient'] == 1): 
-    $count = isset($_GET['count']) ? (int)$_GET['count'] : 0;
-    $patient = isset($_GET['patient']) ? urldecode($_GET['patient']) : 'Unknown';
-?>
-    showToast('✅ Success', 'Deleted <?= $count ?> prescription(s) for <?= htmlspecialchars($patient) ?>!', 'success');
-    if (window.history && window.history.replaceState) {
-        var url = new URL(window.location.href);
-        url.searchParams.delete('deleted_patient');
-        url.searchParams.delete('count');
-        url.searchParams.delete('patient');
-        window.history.replaceState({}, document.title, url.toString());
-    }
+<?php if (isset($_GET['deleted']) && $_GET['deleted'] == 1): ?>
+    document.addEventListener('DOMContentLoaded', function() {
+        showToast('✅ Success', 'Prescription deleted successfully!', 'success');
+        if (window.history && window.history.replaceState) {
+            var url = new URL(window.location.href);
+            url.searchParams.delete('deleted');
+            window.history.replaceState({}, document.title, url.toString());
+        }
+    });
 <?php endif; ?>
 
-<?php if (isset($_GET['error']) && $_GET['error'] == 'delete_failed'): ?>
-    showToast('⚠️ Error', 'Failed to delete prescriptions. Please try again.', 'error');
-    if (window.history && window.history.replaceState) {
-        var url = new URL(window.location.href);
-        url.searchParams.delete('error');
-        window.history.replaceState({}, document.title, url.toString());
-    }
+<?php if (isset($_GET['deleted_all']) && $_GET['deleted_all'] == 1): ?>
+    document.addEventListener('DOMContentLoaded', function() {
+        showToast('✅ Success', 'All prescriptions for this patient deleted!', 'success');
+        if (window.history && window.history.replaceState) {
+            var url = new URL(window.location.href);
+            url.searchParams.delete('deleted_all');
+            window.history.replaceState({}, document.title, url.toString());
+        }
+    });
 <?php endif; ?>
 
-<?php if (isset($_GET['error']) && $_GET['error'] == 'no_prescriptions'): ?>
-    showToast('⚠️ Error', 'No prescriptions found for this patient.', 'error');
-    if (window.history && window.history.replaceState) {
-        var url = new URL(window.location.href);
-        url.searchParams.delete('error');
-        window.history.replaceState({}, document.title, url.toString());
-    }
-<?php endif; ?>
-
-// ================================================================
-// INITIALIZE
-// ================================================================
-document.addEventListener('DOMContentLoaded', function() {
-    var wrap = document.getElementById('tableScrollWrapper');
-    if (wrap) {
-        wrap.addEventListener('scroll', updateScrollButtons);
-        setTimeout(updateScrollButtons, 200);
-    }
-    
-    window.addEventListener('resize', function() {
-        setTimeout(updateScrollButtons, 200);
-    });
-});
-
-// ================================================================
-// DATE TIME
-// ================================================================
-function updateDateTime() {
-    var now = new Date();
-    var dateStr = now.toLocaleDateString('en-US', {
-        weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-    });
-    var timeStr = now.toLocaleTimeString('en-US', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-    });
-    var el = document.getElementById('currentDateTime');
-    if (el) {
-        el.textContent = dateStr + ' • ' + timeStr;
-    }
-}
-updateDateTime();
-setInterval(updateDateTime, 1000);
-
-// ================================================================
-// CONSOLE
-// ================================================================
-console.log('%c🏥 Braick Dispensary - Prescriptions Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-console.log('%c✅ Search bar iko LEFT SIDE na BLUE background', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
-console.log('%c✨ HIGHLIGHT: Ukisearch "Albendazole" ita-highlight kila mahali', 'font-size:13px; color:#D97706; font-weight:bold;');
-console.log('%c✅ Inatafuta hadi DAWA (medication_name)', 'font-size:13px; color:#059669;');
-console.log('%c✅ DELETE ALL button inafuta prescriptions zote za patient', 'font-size:13px; color:#DC2626;');
-console.log('%c◄ ► Scroll Buttons kwenye RIGHT SIDE', 'font-size:13px; color:#7C3AED;');
+console.log('%c💊 Braick - Prescriptions (Grouped by Patient)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ Medication Summary - search dawa inaonyesha total quantities', 'font-size:12px;color:#34D399;');
+console.log('%c✅ < > scroll buttons kwenye kila table', 'font-size:12px;color:#34D399;');
+console.log('%c✅ Highlight inatoweka unapofuta search', 'font-size:12px;color:#34D399;');
+console.log('%c✅ Per-patient search + clear button', 'font-size:12px;color:#34D399;');
+console.log('%c📊 Total medications in system: <?= count($medication_summary) ?>', 'font-size:12px;color:#0B5ED7;');
 </script>
 
 </body>

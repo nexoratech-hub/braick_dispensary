@@ -4,6 +4,9 @@
 // PHARMACY - COMPLETE INVENTORY
 // ✅ Add Medicine/Equipment zinafungua select_purchase.php
 // ✅ Branch ID aware
+// ✅ FIXED: All filters working (All, Active, Inactive, Low Stock, Out of Stock, Expiring Soon, Has Expired)
+// ✅ FIXED: Quantity 0 = ACTIVE (inaonekana kwenye search, haiwezi kuuzwa)
+// ✅ FIXED: Expired pekee = INACTIVE
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -151,7 +154,9 @@ $stock_filter = isset($_GET['stock']) ? trim($_GET['stock']) : '';
 $expiry_filter = isset($_GET['expiry']) ? trim($_GET['expiry']) : '';
 
 // ================================================================
-// MEDICINES QUERY
+// ✅ MEDICINES QUERY - WHERE → GROUP BY → HAVING → ORDER BY
+// ✅ FIXED: Quantity 0 = ACTIVE (batch yoyote active & haijaexpire)
+// ✅ FIXED: Expired pekee = INACTIVE
 // ================================================================
 $med_query = "
     SELECT 
@@ -164,28 +169,57 @@ $med_query = "
         GROUP_CONCAT(m.quantity SEPARATOR '|') as batch_quantities, GROUP_CONCAT(m.expiry_date SEPARATOR '|') as batch_expiries,
         GROUP_CONCAT(m.status SEPARATOR '|') as batch_statuses,
         MIN(DATEDIFF(CASE WHEN m.expiry_date = '0000-00-00' THEN NULL ELSE m.expiry_date END, CURDATE())) as days_remaining,
-        CASE WHEN SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') THEN m.quantity ELSE 0 END) > 0 THEN 'active' ELSE 'inactive' END as computed_status
+        CASE 
+            WHEN SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') THEN 1 ELSE 0 END) > 0 
+            THEN 'active' 
+            ELSE 'inactive' 
+        END as computed_status
     FROM medications_inventory m
     LEFT JOIN users u ON m.added_by = u.id
     WHERE m.branch_id = ?
 ";
 $med_params = [$user_branch_id];
 
-if (!empty($category_filter)) { $med_query .= " AND m.category = ?"; $med_params[] = $category_filter; }
-if ($status_filter === 'active') { $med_query .= " HAVING computed_status = 'active'"; }
-elseif ($status_filter === 'inactive') { $med_query .= " HAVING computed_status = 'inactive'"; }
-if ($stock_filter === 'low') { $med_query .= " HAVING total_quantity > 0 AND total_quantity <= reorder_level AND computed_status = 'active'"; }
-elseif ($stock_filter === 'out') { $med_query .= " HAVING total_quantity = 0"; }
-if ($expiry_filter === 'expiring') { $med_query .= " AND m.expiry_date IS NOT NULL AND m.expiry_date != '0000-00-00' AND m.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"; }
-if ($expiry_filter === 'expired') { $med_query .= " AND m.expiry_date IS NOT NULL AND m.expiry_date != '0000-00-00' AND m.expiry_date < CURDATE()"; }
-$med_query .= " GROUP BY m.medication_name, m.category, m.unit, m.branch_id ORDER BY m.medication_name ASC";
+// Category filter (WHERE)
+if (!empty($category_filter)) { 
+    $med_query .= " AND m.category = ?"; 
+    $med_params[] = $category_filter; 
+}
+
+// Expiry filter (WHERE - kabla ya GROUP BY)
+if ($expiry_filter === 'expiring') { 
+    $med_query .= " AND m.expiry_date IS NOT NULL AND m.expiry_date != '0000-00-00' AND m.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"; 
+}
+if ($expiry_filter === 'expired') { 
+    $med_query .= " AND m.expiry_date IS NOT NULL AND m.expiry_date != '0000-00-00' AND m.expiry_date < CURDATE()"; 
+}
+
+$med_query .= " GROUP BY m.medication_name, m.category, m.unit, m.branch_id";
+
+// Status filter (HAVING - baada ya GROUP BY)
+if ($status_filter === 'active') { 
+    $med_query .= " HAVING computed_status = 'active'"; 
+} elseif ($status_filter === 'inactive') { 
+    $med_query .= " HAVING computed_status = 'inactive'"; 
+}
+
+// Stock filter (HAVING - baada ya GROUP BY)
+if ($stock_filter === 'low') { 
+    $med_query .= " HAVING total_quantity > 0 AND total_quantity <= reorder_level AND computed_status = 'active'"; 
+} elseif ($stock_filter === 'out') { 
+    $med_query .= " HAVING total_quantity = 0 AND computed_status = 'active'"; 
+}
+
+$med_query .= " ORDER BY m.medication_name ASC";
 
 $stmt = $db->prepare($med_query);
 $stmt->execute($med_params);
 $medicines = $stmt->fetchAll();
 
 // ================================================================
-// EQUIPMENT QUERY
+// ✅ EQUIPMENT QUERY - WHERE → GROUP BY → HAVING → ORDER BY
+// ✅ FIXED: Quantity 0 = ACTIVE (batch yoyote active & haijaexpire)
+// ✅ FIXED: Expired pekee = INACTIVE
 // ================================================================
 $equip_query = "
     SELECT 
@@ -198,21 +232,48 @@ $equip_query = "
         GROUP_CONCAT(e.quantity SEPARATOR '|') as batch_quantities, GROUP_CONCAT(e.expiry_date SEPARATOR '|') as batch_expiries,
         GROUP_CONCAT(e.status SEPARATOR '|') as batch_statuses,
         MIN(DATEDIFF(CASE WHEN e.expiry_date = '0000-00-00' THEN NULL ELSE e.expiry_date END, CURDATE())) as days_remaining,
-        CASE WHEN SUM(CASE WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') THEN e.quantity ELSE 0 END) > 0 THEN 'active' ELSE 'inactive' END as computed_status
+        CASE 
+            WHEN SUM(CASE WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') THEN 1 ELSE 0 END) > 0 
+            THEN 'active' 
+            ELSE 'inactive' 
+        END as computed_status
     FROM medical_equipment e
     LEFT JOIN users u ON e.added_by = u.id
     WHERE e.branch_id = ?
 ";
 $equip_params = [$user_branch_id];
 
-if (!empty($category_filter)) { $equip_query .= " AND e.category = ?"; $equip_params[] = $category_filter; }
-if ($status_filter === 'active') { $equip_query .= " HAVING computed_status = 'active'"; }
-elseif ($status_filter === 'inactive') { $equip_query .= " HAVING computed_status = 'inactive'"; }
-if ($stock_filter === 'low') { $equip_query .= " HAVING total_quantity > 0 AND total_quantity <= reorder_level AND computed_status = 'active'"; }
-elseif ($stock_filter === 'out') { $equip_query .= " HAVING total_quantity = 0"; }
-if ($expiry_filter === 'expiring') { $equip_query .= " AND e.expiry_date IS NOT NULL AND e.expiry_date != '0000-00-00' AND e.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"; }
-if ($expiry_filter === 'expired') { $equip_query .= " AND e.expiry_date IS NOT NULL AND e.expiry_date != '0000-00-00' AND e.expiry_date < CURDATE()"; }
-$equip_query .= " GROUP BY e.equipment_name, e.category, e.unit, e.branch_id ORDER BY e.equipment_name ASC";
+// Category filter (WHERE)
+if (!empty($category_filter)) { 
+    $equip_query .= " AND e.category = ?"; 
+    $equip_params[] = $category_filter; 
+}
+
+// Expiry filter (WHERE - kabla ya GROUP BY)
+if ($expiry_filter === 'expiring') { 
+    $equip_query .= " AND e.expiry_date IS NOT NULL AND e.expiry_date != '0000-00-00' AND e.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"; 
+}
+if ($expiry_filter === 'expired') { 
+    $equip_query .= " AND e.expiry_date IS NOT NULL AND e.expiry_date != '0000-00-00' AND e.expiry_date < CURDATE()"; 
+}
+
+$equip_query .= " GROUP BY e.equipment_name, e.category, e.unit, e.branch_id";
+
+// Status filter (HAVING - baada ya GROUP BY)
+if ($status_filter === 'active') { 
+    $equip_query .= " HAVING computed_status = 'active'"; 
+} elseif ($status_filter === 'inactive') { 
+    $equip_query .= " HAVING computed_status = 'inactive'"; 
+}
+
+// Stock filter (HAVING - baada ya GROUP BY)
+if ($stock_filter === 'low') { 
+    $equip_query .= " HAVING total_quantity > 0 AND total_quantity <= reorder_level AND computed_status = 'active'"; 
+} elseif ($stock_filter === 'out') { 
+    $equip_query .= " HAVING total_quantity = 0 AND computed_status = 'active'"; 
+}
+
+$equip_query .= " ORDER BY e.equipment_name ASC";
 
 $stmt = $db->prepare($equip_query);
 $stmt->execute($equip_params);
@@ -220,6 +281,8 @@ $equipment = $stmt->fetchAll();
 
 // ================================================================
 // STATISTICS - MEDICINES
+// ✅ FIXED: Quantity 0 bado ni ACTIVE (haiwezi kuuzwa)
+// ✅ FIXED: Expired/Inactive manual pekee = INACTIVE
 // ================================================================
 $stmt = $db->prepare("SELECT COUNT(DISTINCT medication_name) as count FROM medications_inventory WHERE branch_id = ? AND status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00')");
 $stmt->execute([$user_branch_id]);
@@ -245,7 +308,8 @@ $stmt = $db->prepare("SELECT COUNT(DISTINCT medication_name) as count FROM medic
 $stmt->execute([$user_branch_id]);
 $med_expired = $stmt->fetch()['count'] ?? 0;
 
-$stmt = $db->prepare("SELECT COUNT(DISTINCT medication_name) as count FROM medications_inventory WHERE branch_id = ? AND status = 'inactive'");
+// ✅ FIXED: Inactive = status='inactive' AU imeexpire (SI quantity 0)
+$stmt = $db->prepare("SELECT COUNT(DISTINCT medication_name) as count FROM medications_inventory WHERE branch_id = ? AND (status = 'inactive' OR (expiry_date IS NOT NULL AND expiry_date != '0000-00-00' AND expiry_date < CURDATE()))");
 $stmt->execute([$user_branch_id]);
 $med_inactive = $stmt->fetch()['count'] ?? 0;
 
@@ -255,6 +319,8 @@ $med_value = $stmt->fetch(PDO::FETCH_ASSOC)['total_value'] ?? 0;
 
 // ================================================================
 // STATISTICS - EQUIPMENT
+// ✅ FIXED: Quantity 0 bado ni ACTIVE (haiwezi kuuzwa)
+// ✅ FIXED: Expired/Inactive manual pekee = INACTIVE
 // ================================================================
 $stmt = $db->prepare("SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE branch_id = ? AND status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00')");
 $stmt->execute([$user_branch_id]);
@@ -280,7 +346,8 @@ $stmt = $db->prepare("SELECT COUNT(DISTINCT equipment_name) as count FROM medica
 $stmt->execute([$user_branch_id]);
 $equip_expired = $stmt->fetch()['count'] ?? 0;
 
-$stmt = $db->prepare("SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE branch_id = ? AND status = 'inactive'");
+// ✅ FIXED: Inactive = status='inactive' AU imeexpire (SI quantity 0)
+$stmt = $db->prepare("SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE branch_id = ? AND (status = 'inactive' OR (expiry_date IS NOT NULL AND expiry_date != '0000-00-00' AND expiry_date < CURDATE()))");
 $stmt->execute([$user_branch_id]);
 $equip_inactive = $stmt->fetch()['count'] ?? 0;
 
@@ -873,7 +940,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .col-sno { width: 35px; text-align: center; }
         .col-name { min-width: 160px; }
         .col-category { min-width: 100px; }
-        .col-qty { min-width: 60px; text-align: center; }
+        .col-qty { min-width: 80px; text-align: center; }
         .col-reorder { min-width: 70px; text-align: center; }
         .col-stock { min-width: 100px; }
         .col-price { min-width: 130px; font-family: 'Courier New', monospace; }
@@ -1029,6 +1096,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             to { opacity: 1; transform: translateY(0); }
         }
         
+        /* ✅ Zero qty warning badge */
+        .zero-qty-warning {
+            font-size: 0.55rem;
+            display: block;
+            color: var(--warning);
+            font-weight: 600;
+            margin-top: 2px;
+        }
+        
         @media (max-width: 1200px) { .stats-grid { grid-template-columns: repeat(4, 1fr); } }
         @media (max-width: 1024px) { .main-content { margin-left: 0; padding: 16px; } }
         @media (max-width: 992px) { .stats-grid { grid-template-columns: repeat(3, 1fr); } }
@@ -1085,12 +1161,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </p>
         </div>
         <div class="header-actions">
-            <!-- ✅ ADD MEDICINE - INAFUNGUA SELECT_PURCHASE.PHP -->
             <a href="select_purchase.php?type=medicine" class="btn-add-medicine">
                 <i class="fas fa-plus-circle"></i> Add Medicine
             </a>
             
-            <!-- ✅ ADD EQUIPMENT - INAFUNGUA SELECT_PURCHASE.PHP -->
             <a href="select_purchase.php?type=equipment" class="btn-add-equipment">
                 <i class="fas fa-plus-circle"></i> Add Equipment
             </a>
@@ -1168,7 +1242,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <span class="stat-icon"><i class="fas fa-times-circle"></i></span>
                 <div class="stat-number"><?= $med_out_of_stock ?></div>
                 <div class="stat-label">Out of Stock</div>
-                <div class="stat-sub">Quantity = 0</div>
+                <div class="stat-sub">Active but 0 Qty</div>
             </a>
             <a href="inventory.php?tab=medicines&expiry=expiring" class="stat-card teal">
                 <span class="stat-icon"><i class="fas fa-clock"></i></span>
@@ -1192,13 +1266,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <span class="stat-icon"><i class="fas fa-archive"></i></span>
                 <div class="stat-number"><?= $med_inactive ?></div>
                 <div class="stat-label">Inactive</div>
-                <div class="stat-sub">No active batches</div>
+                <div class="stat-sub">Expired/Manual off</div>
             </a>
         </div>
 
         <div class="card animate-fade-in-up">
             <div class="filter-group">
-                <a href="inventory.php?tab=medicines" class="filter-btn <?= empty($status_filter) && empty($stock_filter) && empty($expiry_filter) ? 'active' : '' ?>">All</a>
+                <a href="inventory.php?tab=medicines" class="filter-btn <?= (empty($status_filter) || $status_filter === 'all') && empty($stock_filter) && empty($expiry_filter) ? 'active' : '' ?>">All</a>
                 <a href="inventory.php?tab=medicines&status=active" class="filter-btn <?= $status_filter === 'active' ? 'active' : '' ?>">Active</a>
                 <a href="inventory.php?tab=medicines&status=inactive" class="filter-btn <?= $status_filter === 'inactive' ? 'active' : '' ?>">Inactive</a>
                 <a href="inventory.php?tab=medicines&stock=low" class="filter-btn <?= $stock_filter === 'low' ? 'active' : '' ?>">Low Stock</a>
@@ -1320,7 +1394,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                             <div style="font-size:0.6rem;color:var(--text-muted);"><?= htmlspecialchars($item['unit'] ?? 'pcs') ?></div>
                                         </td>
                                         <td class="col-category"><?= htmlspecialchars($item['category'] ?? 'N/A') ?></td>
-                                        <td class="col-qty"><strong><?= $total_qty ?></strong></td>
+                                        <td class="col-qty">
+                                            <strong><?= $total_qty ?></strong>
+                                            <?php if ($total_qty == 0 && $display_status === 'active'): ?>
+                                                <span class="zero-qty-warning">
+                                                    <i class="fas fa-exclamation-triangle"></i> 0 Qty
+                                                </span>
+                                            <?php endif; ?>
+                                        </td>
                                         <td class="col-reorder"><?= $item['reorder_level'] ?></td>
                                         <td class="col-stock">
                                             <span class="stock-badge <?= $stock_status ?>">
@@ -1409,7 +1490,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <span class="stat-icon"><i class="fas fa-times-circle"></i></span>
                 <div class="stat-number"><?= $equip_out_of_stock ?></div>
                 <div class="stat-label">Out of Stock</div>
-                <div class="stat-sub">Quantity = 0</div>
+                <div class="stat-sub">Active but 0 Qty</div>
             </a>
             <a href="inventory.php?tab=equipment&expiry=expiring" class="stat-card teal">
                 <span class="stat-icon"><i class="fas fa-clock"></i></span>
@@ -1433,13 +1514,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <span class="stat-icon"><i class="fas fa-archive"></i></span>
                 <div class="stat-number"><?= $equip_inactive ?></div>
                 <div class="stat-label">Inactive</div>
-                <div class="stat-sub">No active batches</div>
+                <div class="stat-sub">Expired/Manual off</div>
             </a>
         </div>
 
         <div class="card animate-fade-in-up">
             <div class="filter-group">
-                <a href="inventory.php?tab=equipment" class="filter-btn <?= empty($status_filter) && empty($stock_filter) && empty($expiry_filter) ? 'active' : '' ?>">All</a>
+                <a href="inventory.php?tab=equipment" class="filter-btn <?= (empty($status_filter) || $status_filter === 'all') && empty($stock_filter) && empty($expiry_filter) ? 'active' : '' ?>">All</a>
                 <a href="inventory.php?tab=equipment&status=active" class="filter-btn <?= $status_filter === 'active' ? 'active' : '' ?>">Active</a>
                 <a href="inventory.php?tab=equipment&status=inactive" class="filter-btn <?= $status_filter === 'inactive' ? 'active' : '' ?>">Inactive</a>
                 <a href="inventory.php?tab=equipment&stock=low" class="filter-btn <?= $stock_filter === 'low' ? 'active' : '' ?>">Low Stock</a>
@@ -1561,7 +1642,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                             <div style="font-size:0.6rem;color:var(--text-muted);"><?= htmlspecialchars($item['unit'] ?? 'pcs') ?></div>
                                         </td>
                                         <td class="col-category"><?= htmlspecialchars($item['category'] ?? 'N/A') ?></td>
-                                        <td class="col-qty"><strong><?= $total_qty ?></strong></td>
+                                        <td class="col-qty">
+                                            <strong><?= $total_qty ?></strong>
+                                            <?php if ($total_qty == 0 && $display_status === 'active'): ?>
+                                                <span class="zero-qty-warning">
+                                                    <i class="fas fa-exclamation-triangle"></i> 0 Qty
+                                                </span>
+                                            <?php endif; ?>
+                                        </td>
                                         <td class="col-reorder"><?= $item['reorder_level'] ?></td>
                                         <td class="col-stock">
                                             <span class="stock-badge <?= $stock_status ?>">
@@ -1667,6 +1755,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                             }
                         ?>
                         <strong><?= $total_qty ?></strong>
+                        <?php if ($total_qty == 0): ?>
+                            <span style="font-size:0.6rem;color:var(--warning);font-weight:600;margin-left:6px;">
+                                <i class="fas fa-exclamation-triangle"></i> Cannot be sold
+                            </span>
+                        <?php endif; ?>
                     </div>
                 </div>
                 <div class="view-item" style="padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
@@ -1736,13 +1829,27 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     $days_left = '∞';
                                 }
                                 
-                                if ($batch_status === 'inactive') { $status_label = 'Inactive'; $status_class = 'inactive'; }
+                                // ✅ Batch yenye quantity 0 bado ni ACTIVE (haiwezi kuuzwa)
+                                if ($batch_status === 'inactive') { 
+                                    $status_label = 'Inactive'; 
+                                    $status_class = 'inactive'; 
+                                } elseif ($batch_qty == 0) {
+                                    $status_label = 'Active (0 Qty)';
+                                    $status_class = 'active';
+                                }
                                 
                                 $batch_added_by = !empty($batch['added_by_full_name']) ? $batch['added_by_full_name'] : ($batch['added_by_name'] ?? 'System');
                             ?>
                                 <tr style="border-bottom:1px solid var(--border-color);">
                                     <td style="padding:5px 10px;"><span class="batch-number"><?= htmlspecialchars($batch['batch_number'] ?? 'N/A') ?></span></td>
-                                    <td style="padding:5px 10px;text-align:center;font-weight:600;"><?= $batch_qty ?></td>
+                                    <td style="padding:5px 10px;text-align:center;font-weight:600;">
+                                        <?= $batch_qty ?>
+                                        <?php if ($batch_qty == 0): ?>
+                                            <span style="font-size:0.55rem;display:block;color:var(--warning);font-weight:600;">
+                                                <i class="fas fa-exclamation-triangle"></i> 0 Qty
+                                            </span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td style="padding:5px 10px;">
                                         <?php if (!empty($batch_expiry) && $batch_expiry !== '0000-00-00'): ?>
                                             <span class="expiry-badge <?= $exp_status ?>"><?= date('d/m/Y', strtotime($batch_expiry)) ?></span>
@@ -1994,9 +2101,10 @@ document.addEventListener('keydown', function(e) {
 });
 
 console.log('%c💊 Braick - Pharmacy Inventory', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Add Medicine/Equipment zinafungua select_purchase.php', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Inaonyesha IN_PROGRESS purchases zote za branch', 'font-size:13px; color:#34D399;');
-console.log('%c✅ User anaweza JOIN au CREATE NEW purchase', 'font-size:13px; color:#FBBF24;');
+console.log('%c✅ FIXED: Quantity 0 = ACTIVE (inaonekana kwenye search, haiwezi kuuzwa)', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ FIXED: Expired/Inactive manual pekee = INACTIVE', 'font-size:13px; color:#34D399;');
+console.log('%c✅ SQL order: WHERE → GROUP BY → HAVING → ORDER BY', 'font-size:13px; color:#34D399;');
+console.log('%c✅ Add Medicine/Equipment zinafungua select_purchase.php', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

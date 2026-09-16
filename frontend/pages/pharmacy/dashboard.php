@@ -4,6 +4,7 @@
 // PHARMACY DASHBOARD - 8 CARDS WITH AUTO-UPDATE (AJAX)
 // USING NEW DATABASE: dispensary_db
 // QUICK ACTIONS: 3 BUTTONS (New Prescription, OTC Sale, Inventory)
+// ✅ FIXED: Equipment with no expiry date (NULL or '0000-00-00') are ACTIVE FOREVER
 // ================================================================
 
 // ================================================================
@@ -70,6 +71,7 @@ try {
     
     // ================================================================
     // CARD 1: TOTAL STOCK ITEMS (Medicine + Equipment)
+    // ✅ FIXED: Equipment without expiry date counted as active
     // ================================================================
     
     // Medicines (active, not expired)
@@ -78,7 +80,7 @@ try {
         FROM medications_inventory 
         WHERE branch_id = ? 
         AND status = 'active'
-        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+        AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
     ");
     $stmt->execute([$user_branch_id]);
     $med_data = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -91,7 +93,7 @@ try {
         FROM medical_equipment 
         WHERE branch_id = ? 
         AND status = 'active'
-        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+        AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
     ");
     $stmt->execute([$user_branch_id]);
     $equip_data = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -103,14 +105,16 @@ try {
     
     // ================================================================
     // CARD 2: EXPIRED (Medicine + Equipment)
+    // ✅ FIXED: Equipment with NULL or '0000-00-00' expiry date NOT counted as expired
     // ================================================================
     
-    // Expired Medicines (all - active + inactive)
+    // Expired Medicines
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, SUM(quantity) as total_quantity
         FROM medications_inventory 
         WHERE branch_id = ? 
         AND expiry_date IS NOT NULL 
+        AND expiry_date != '0000-00-00'
         AND expiry_date < CURDATE()
     ");
     $stmt->execute([$user_branch_id]);
@@ -118,12 +122,13 @@ try {
     $expired_med_count = $expired_med['count'] ?? 0;
     $expired_med_quantity = $expired_med['total_quantity'] ?? 0;
     
-    // Expired Equipment (all - active + inactive)
+    // Expired Equipment
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, SUM(quantity) as total_quantity
         FROM medical_equipment 
         WHERE branch_id = ? 
         AND expiry_date IS NOT NULL 
+        AND expiry_date != '0000-00-00'
         AND expiry_date < CURDATE()
     ");
     $stmt->execute([$user_branch_id]);
@@ -136,6 +141,7 @@ try {
     
     // ================================================================
     // CARD 3: EXPIRE SOON (Medicine + Equipment)
+    // ✅ FIXED: Equipment with NULL or '0000-00-00' expiry date NOT counted
     // ================================================================
     
     // Medicines expiring soon
@@ -145,6 +151,7 @@ try {
         WHERE branch_id = ? 
         AND status = 'active'
         AND expiry_date IS NOT NULL 
+        AND expiry_date != '0000-00-00'
         AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
     ");
     $stmt->execute([$user_branch_id]);
@@ -157,6 +164,7 @@ try {
         WHERE branch_id = ? 
         AND status = 'active'
         AND expiry_date IS NOT NULL 
+        AND expiry_date != '0000-00-00'
         AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
     ");
     $stmt->execute([$user_branch_id]);
@@ -219,6 +227,7 @@ try {
     
     // ================================================================
     // CARD 7: LOW STOCK (Medicine + Equipment)
+    // ✅ FIXED: Equipment without expiry date counted as active
     // ================================================================
     
     // Low Stock Medicines
@@ -229,7 +238,7 @@ try {
         AND status = 'active'
         AND quantity > 0 
         AND quantity <= reorder_level
-        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+        AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
     ");
     $stmt->execute([$user_branch_id]);
     $low_stock_med = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -242,7 +251,7 @@ try {
         AND status = 'active'
         AND quantity > 0 
         AND quantity <= reorder_level
-        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+        AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
     ");
     $stmt->execute([$user_branch_id]);
     $low_stock_equip = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -251,6 +260,7 @@ try {
     
     // ================================================================
     // CARD 8: OUT OF STOCK (Medicine + Equipment)
+    // ✅ FIXED: Equipment without expiry date counted as active
     // ================================================================
     
     // Out of Stock Medicines
@@ -260,7 +270,7 @@ try {
         WHERE branch_id = ? 
         AND status = 'active'
         AND quantity = 0
-        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+        AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
     ");
     $stmt->execute([$user_branch_id]);
     $out_of_stock_med = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -272,7 +282,7 @@ try {
         WHERE branch_id = ? 
         AND status = 'active'
         AND quantity = 0
-        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+        AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
     ");
     $stmt->execute([$user_branch_id]);
     $out_of_stock_equip = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -280,7 +290,8 @@ try {
     $out_of_stock_count = $out_of_stock_med + $out_of_stock_equip;
     
     // ================================================================
-    // LISTS FOR DISPLAY (Expired, Expire Soon, Low Stock, Out of Stock)
+    // LISTS FOR DISPLAY
+    // ✅ FIXED: Equipment without expiry date NOT counted as expired
     // ================================================================
     
     // Expired Medicines List
@@ -289,6 +300,7 @@ try {
         FROM medications_inventory 
         WHERE branch_id = ? 
         AND expiry_date IS NOT NULL 
+        AND expiry_date != '0000-00-00'
         AND expiry_date < CURDATE()
         ORDER BY expiry_date ASC
         LIMIT 10
@@ -302,6 +314,7 @@ try {
         FROM medical_equipment 
         WHERE branch_id = ? 
         AND expiry_date IS NOT NULL 
+        AND expiry_date != '0000-00-00'
         AND expiry_date < CURDATE()
         ORDER BY expiry_date ASC
         LIMIT 10
@@ -323,6 +336,7 @@ try {
         WHERE branch_id = ? 
         AND status = 'active'
         AND expiry_date IS NOT NULL 
+        AND expiry_date != '0000-00-00'
         AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
         ORDER BY expiry_date ASC
         LIMIT 10
@@ -337,6 +351,7 @@ try {
         WHERE branch_id = ? 
         AND status = 'active'
         AND expiry_date IS NOT NULL 
+        AND expiry_date != '0000-00-00'
         AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
         ORDER BY expiry_date ASC
         LIMIT 10
@@ -359,7 +374,7 @@ try {
         AND status = 'active'
         AND quantity > 0 
         AND quantity <= reorder_level
-        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+        AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
         ORDER BY quantity ASC
         LIMIT 10
     ");
@@ -374,7 +389,7 @@ try {
         AND status = 'active'
         AND quantity > 0 
         AND quantity <= reorder_level
-        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+        AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
         ORDER BY quantity ASC
         LIMIT 10
     ");
@@ -395,7 +410,7 @@ try {
         WHERE branch_id = ? 
         AND status = 'active'
         AND quantity = 0
-        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+        AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
         ORDER BY medication_name ASC
         LIMIT 10
     ");
@@ -409,7 +424,7 @@ try {
         WHERE branch_id = ? 
         AND status = 'active'
         AND quantity = 0
-        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+        AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
         ORDER BY equipment_name ASC
         LIMIT 10
     ");
@@ -1943,10 +1958,11 @@ include_once '../../components/pharmacy_sidebar.php';
     });
     
     console.log('%c💊 Braick - Pharmacy Dashboard (Auto-Update Every 3s)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ FIXED: Equipment without expiry date NOT counted as expired', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ Equipment with NULL or "0000-00-00" expiry = ACTIVE FOREVER', 'font-size:13px; color:#34D399;');
     console.log('%c🔄 Auto-update interval: ' + updateInterval + 'ms', 'font-size:13px; color:#34D399;');
     console.log('%c📊 8 CARDS + 5 LISTS', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ QUICK ACTIONS: 3 buttons (No Reports)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Card fonts: BIGGER size', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ QUICK ACTIONS: 3 buttons', 'font-size:13px; color:#34D399;');
     console.log('%c📦 1. Total Stock: 💊<?= $total_medicines ?> + 🔧<?= $total_equipment ?> = <?= $total_stock_items ?>', 'font-size:12px; color:#0B5ED7;');
     console.log('%c🚫 2. Expired: 💊<?= $expired_med_count ?> + 🔧<?= $expired_equip_count ?> = <?= $expired_count ?>', 'font-size:12px; color:#DC2626;');
     console.log('%c⏰ 3. Expire Soon: 💊<?= $expire_soon_med ?> + 🔧<?= $expire_soon_equip ?> = <?= $expire_soon_count ?>', 'font-size:12px; color:#D97706;');
@@ -1956,7 +1972,6 @@ include_once '../../components/pharmacy_sidebar.php';
     console.log('%c⚠️ 7. Low Stock: 💊<?= $low_stock_med ?> + 🔧<?= $low_stock_equip ?> = <?= $low_stock_count ?>', 'font-size:12px; color:#D97706;');
     console.log('%c🚫 8. Out of Stock: 💊<?= $out_of_stock_med ?> + 🔧<?= $out_of_stock_equip ?> = <?= $out_of_stock_count ?>', 'font-size:12px; color:#6B7280;');
     console.log('%c✅ Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Press Ctrl+R or F5 for manual refresh', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

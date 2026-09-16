@@ -3,6 +3,9 @@
 // FILE: frontend/pages/admin/edit_patient.php
 // EDIT PATIENT - UPDATE PATIENT INFORMATION
 // BRAICK DISPENSARY - USING EXISTING DB TABLES
+// ✅ Uses SHARED header & sidebar
+// ✅ Page-specific CSS only
+// ✅ Dark mode inatumia header toggle
 // ================================================================
 
 // ================================================================
@@ -31,6 +34,7 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
@@ -320,36 +324,87 @@ include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC CSS -->
+<!-- ================================================================ -->
 <style>
     /* ================================================================
-       FORM STYLES
+       PAGE VARIABLES
        ================================================================ */
-    
-    .form-card {
-        background: var(--bg-card);
+    :root {
+        --pat-primary: #0B5ED7;
+        --pat-primary-dark: #0A4CA8;
+        --pat-primary-light: #6EA8FE;
+        --pat-primary-bg: #E8F0FE;
+        --pat-primary-gradient: linear-gradient(135deg, #0B5ED7, #1A73E8);
+        --pat-success: #059669;
+        --pat-success-bg: #D1FAE5;
+        --pat-danger: #DC2626;
+        --pat-danger-bg: #FEE2E2;
+        --pat-warning: #D97706;
+        --pat-warning-bg: #FEF3C7;
+        --pat-purple: #7C3AED;
+        --pat-purple-bg: #EDE9FE;
+        --pat-bg-body: #F0F4F8;
+        --pat-bg-card: #FFFFFF;
+        --pat-text-primary: #1E293B;
+        --pat-text-secondary: #64748B;
+        --pat-border-color: #E2E8F0;
+        --pat-radius: 10px;
+        --pat-radius-lg: 14px;
+        --pat-shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+        --pat-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+    }
+
+    [data-theme="dark"] {
+        --pat-bg-body: #0F172A;
+        --pat-bg-card: #1E293B;
+        --pat-text-primary: #F1F5F9;
+        --pat-text-secondary: #94A3B8;
+        --pat-border-color: #334155;
+        --pat-primary-bg: #1E3A5F;
+    }
+
+    /* ================================================================
+       DARK MODE - PAGE YOTE
+       ================================================================ */
+    html[data-theme="dark"] body {
+        background: #0F172A !important;
+    }
+
+    html[data-theme="dark"] .main-content {
+        background: #0F172A !important;
+        color: #F1F5F9;
+    }
+
+    /* ================================================================
+       FORM CARD
+       ================================================================ */
+    .form-card-custom {
+        background: var(--pat-bg-card);
         border-radius: 16px;
         padding: 24px 28px;
-        border: 1px solid var(--border-color);
+        border: 1px solid var(--pat-border-color);
         transition: all 0.3s;
         max-width: 900px;
         margin: 0 auto;
     }
-    
-    .form-card:hover {
-        border-color: #0B5ED7;
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.05);
+
+    .form-card-custom:hover {
+        border-color: var(--pat-primary);
+        box-shadow: var(--pat-shadow-md);
     }
-    
-    .form-header {
+
+    .form-header-custom {
         display: flex;
         align-items: center;
         gap: 16px;
         padding-bottom: 16px;
         margin-bottom: 20px;
-        border-bottom: 2px solid var(--border-color);
+        border-bottom: 2px solid var(--pat-border-color);
     }
-    
-    .form-header-icon {
+
+    .form-header-custom .form-header-icon {
         width: 50px;
         height: 50px;
         border-radius: 14px;
@@ -358,127 +413,138 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         justify-content: center;
         font-size: 1.5rem;
         flex-shrink: 0;
-        background: linear-gradient(135deg, #0B5ED7, #1A73E8);
+        background: var(--pat-primary-gradient);
         color: white;
         box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
     }
-    
-    .form-header h3 {
+
+    .form-header-custom h3 {
         font-size: 1.1rem;
         font-weight: 700;
-        color: var(--text-primary);
+        color: var(--pat-text-primary);
         margin: 0;
     }
-    
-    .form-header p {
+
+    .form-header-custom p {
         font-size: 0.85rem;
-        color: var(--text-secondary);
+        color: var(--pat-text-secondary);
         margin: 0;
     }
-    
-    .form-label {
+
+    /* ================================================================
+       FORM CONTROLS
+       ================================================================ */
+    .form-label-custom {
         font-size: 0.82rem;
         font-weight: 600;
-        color: var(--text-primary);
+        color: var(--pat-text-primary);
         margin-bottom: 4px;
         display: block;
     }
-    
-    .form-label .required {
+
+    .form-label-custom .required {
         color: #EF4444;
         margin-left: 2px;
     }
-    
-    .form-control {
+
+    .form-control-custom {
         width: 100%;
         padding: 8px 14px;
-        border: 2px solid var(--border-color);
+        border: 2px solid var(--pat-border-color);
         border-radius: 10px;
         font-size: 0.85rem;
         transition: all 0.3s ease;
         outline: none;
-        background: var(--bg-card);
-        color: var(--text-primary);
+        background: var(--pat-bg-card);
+        color: var(--pat-text-primary);
         font-family: 'Inter', 'Segoe UI', sans-serif;
     }
-    
-    .form-control:focus {
-        border-color: #0B5ED7;
+
+    .form-control-custom:focus {
+        border-color: var(--pat-primary);
         box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
     }
-    
-    .form-control::placeholder {
-        color: var(--text-secondary);
+
+    .form-control-custom::placeholder {
+        color: var(--pat-text-secondary);
         opacity: 0.5;
     }
-    
-    .form-control:disabled {
-        background: var(--bg-body);
+
+    .form-control-custom:disabled {
+        background: var(--pat-bg-body);
         cursor: not-allowed;
         opacity: 0.7;
     }
-    
-    select.form-control {
+
+    [data-theme="dark"] .form-control-custom option {
+        background: #1E293B;
+        color: #F1F5F9;
+    }
+
+    select.form-control-custom {
         appearance: auto;
         -webkit-appearance: auto;
     }
-    
-    textarea.form-control {
+
+    textarea.form-control-custom {
         resize: vertical;
         min-height: 60px;
     }
-    
-    .form-row-icon {
+
+    .form-row-icon-custom {
         position: relative;
     }
-    
-    .form-row-icon .form-control {
+
+    .form-row-icon-custom .form-control-custom {
         padding-left: 40px;
     }
-    
-    .form-row-icon .input-icon {
+
+    .form-row-icon-custom .input-icon {
         position: absolute;
         left: 12px;
         top: 50%;
         transform: translateY(-50%);
-        color: var(--text-secondary);
+        color: var(--pat-text-secondary);
         font-size: 0.9rem;
         pointer-events: none;
         transition: color 0.3s ease;
     }
-    
-    .form-row-icon .form-control:focus ~ .input-icon,
-    .form-row-icon .form-control:focus + .input-icon {
-        color: #0B5ED7;
+
+    .form-row-icon-custom .form-control-custom:focus ~ .input-icon,
+    .form-row-icon-custom .form-control-custom:focus + .input-icon {
+        color: var(--pat-primary);
     }
-    
-    .help-text {
+
+    .help-text-custom {
         font-size: 0.7rem;
-        color: var(--text-secondary);
+        color: var(--pat-text-secondary);
         margin-top: 3px;
     }
-    
-    .section-divider {
+
+    .section-divider-custom {
         border: none;
-        border-top: 2px dashed var(--border-color);
+        border-top: 2px dashed var(--pat-border-color);
         margin: 16px 0;
     }
-    
-    .section-title {
+
+    .section-title-custom {
         font-size: 0.95rem;
         font-weight: 700;
-        color: #0B5ED7;
+        color: var(--pat-primary);
         display: flex;
         align-items: center;
         gap: 10px;
         margin-bottom: 10px;
     }
-    
-    [data-theme="dark"] .section-title {
+
+    [data-theme="dark"] .section-title-custom {
         color: #6EA8FE;
     }
-    
-    .btn {
+
+    /* ================================================================
+       BUTTONS
+       ================================================================ */
+    .btn-custom {
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -492,62 +558,72 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         border: none;
         text-decoration: none;
         min-height: 40px;
+        font-family: inherit;
     }
-    
-    .btn-primary {
-        background: linear-gradient(135deg, #0B5ED7, #1A73E8);
+
+    .btn-primary-custom {
+        background: var(--pat-primary-gradient);
         color: white;
         box-shadow: 0 4px 14px rgba(11, 94, 215, 0.3);
     }
-    
-    .btn-primary:hover {
+
+    .btn-primary-custom:hover {
         background: linear-gradient(135deg, #0A4CA8, #1557B0);
         transform: translateY(-2px);
         box-shadow: 0 8px 25px rgba(11, 94, 215, 0.4);
+        color: white;
     }
-    
-    .btn-outline {
+
+    .btn-outline-custom {
         background: transparent;
-        color: var(--text-primary);
-        border: 2px solid var(--border-color);
+        color: var(--pat-text-primary);
+        border: 2px solid var(--pat-border-color);
     }
-    
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: #0B5ED7;
-        color: #0B5ED7;
+
+    .btn-outline-custom:hover {
+        background: var(--pat-bg-body);
+        border-color: var(--pat-primary);
+        color: var(--pat-primary);
         transform: translateY(-2px);
     }
-    
-    .btn-sm {
+
+    [data-theme="dark"] .btn-outline-custom:hover {
+        background: #0F172A;
+        border-color: #6EA8FE;
+        color: #6EA8FE;
+    }
+
+    .btn-sm-custom {
         padding: 4px 14px;
         font-size: 0.75rem;
         min-height: 32px;
     }
-    
-    .form-actions {
+
+    .form-actions-custom {
         display: flex;
         flex-wrap: wrap;
         gap: 12px;
         padding-top: 20px;
         margin-top: 20px;
-        border-top: 2px solid var(--border-color);
+        border-top: 2px solid var(--pat-border-color);
     }
-    
-    /* Allergies Tags */
-    .allergy-tags {
+
+    /* ================================================================
+       ALLERGY TAGS
+       ================================================================ */
+    .allergy-tags-custom {
         display: flex;
         flex-wrap: wrap;
         gap: 6px;
         padding: 8px 12px;
-        border: 2px solid var(--border-color);
+        border: 2px solid var(--pat-border-color);
         border-radius: 10px;
         min-height: 50px;
-        background: var(--bg-card);
+        background: var(--pat-bg-card);
         margin-top: 4px;
     }
-    
-    .allergy-tag {
+
+    .allergy-tag-custom {
         display: inline-flex;
         align-items: center;
         gap: 6px;
@@ -555,46 +631,46 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         border-radius: 20px;
         font-size: 0.75rem;
         font-weight: 500;
-        background: #E8F0FE;
-        color: #0B5ED7;
+        background: var(--pat-primary-bg);
+        color: var(--pat-primary);
         border: 1px solid rgba(11, 94, 215, 0.2);
     }
-    
-    [data-theme="dark"] .allergy-tag {
+
+    [data-theme="dark"] .allergy-tag-custom {
         background: #1E3A5F;
         color: #6EA8FE;
         border-color: rgba(110, 168, 254, 0.2);
     }
-    
-    .allergy-tag .remove-allergy {
+
+    .allergy-tag-custom .remove-allergy {
         cursor: pointer;
         color: #EF4444;
         font-size: 0.8rem;
         margin-left: 2px;
         transition: all 0.3s;
     }
-    
-    .allergy-tag .remove-allergy:hover {
+
+    .allergy-tag-custom .remove-allergy:hover {
         transform: scale(1.2);
     }
-    
-    .allergy-select-container {
+
+    .allergy-select-container-custom {
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
         align-items: center;
         margin-top: 8px;
     }
-    
-    .allergy-select-container select {
+
+    .allergy-select-container-custom select {
         flex: 1;
         min-width: 200px;
     }
-    
-    .allergy-select-container .btn-add-allergy {
+
+    .allergy-select-container-custom .btn-add-allergy {
         padding: 6px 16px;
         border-radius: 8px;
-        background: #0B5ED7;
+        background: var(--pat-primary);
         color: white;
         border: none;
         cursor: pointer;
@@ -603,27 +679,27 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         transition: all 0.3s;
         white-space: nowrap;
     }
-    
-    .allergy-select-container .btn-add-allergy:hover {
-        background: #0A4CA8;
+
+    .allergy-select-container-custom .btn-add-allergy:hover {
+        background: var(--pat-primary-dark);
         transform: translateY(-1px);
     }
-    
-    .allergy-custom-input {
+
+    .allergy-custom-input-custom {
         margin-top: 8px;
         display: flex;
         gap: 8px;
         align-items: center;
     }
-    
-    .allergy-custom-input input {
+
+    .allergy-custom-input-custom input {
         flex: 1;
     }
-    
-    .allergy-custom-input .btn-add-custom {
+
+    .allergy-custom-input-custom .btn-add-custom {
         padding: 6px 16px;
         border-radius: 8px;
-        background: #059669;
+        background: var(--pat-success);
         color: white;
         border: none;
         cursor: pointer;
@@ -632,108 +708,167 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         transition: all 0.3s;
         white-space: nowrap;
     }
-    
-    .allergy-custom-input .btn-add-custom:hover {
+
+    .allergy-custom-input-custom .btn-add-custom:hover {
         background: #047857;
         transform: translateY(-1px);
     }
-    
-    /* Responsive */
+
+    /* ================================================================
+       PAGE HEADER
+       ================================================================ */
+    .page-header-custom {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        border-radius: 16px;
+        padding: 24px 32px;
+        margin-bottom: 28px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+        color: white;
+    }
+
+    .page-header-custom .page-title {
+        color: white;
+        font-size: 1.6rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin: 0;
+    }
+
+    .page-header-custom .page-subtitle {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 6px;
+    }
+
+    .page-header-custom .header-badge-custom {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255,255,255,0.15);
+    }
+
+    .page-header-custom .btn-outline-light {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.2);
+        padding: 8px 18px;
+        border-radius: 10px;
+        font-weight: 500;
+        font-size: 0.82rem;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition: all 0.3s;
+    }
+
+    .page-header-custom .btn-outline-light:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateX(-3px);
+        color: white;
+    }
+
+    /* ================================================================
+       ALERTS
+       ================================================================ */
+    .alert-custom {
+        padding: 14px 20px;
+        border-radius: 12px;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        font-weight: 500;
+        max-width: 900px;
+        margin-left: auto;
+        margin-right: auto;
+        animation: slideDown 0.3s ease;
+    }
+
+    @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .alert-custom.alert-success {
+        background: #D1FAE5;
+        color: #065F46;
+        border: 2px solid #6EE7B7;
+    }
+
+    .alert-custom.alert-error {
+        background: #FEE2E2;
+        color: #991B1B;
+        border: 2px solid #FCA5A5;
+    }
+
+    [data-theme="dark"] .alert-custom.alert-success {
+        background: #1A3A2A;
+        color: #34D399;
+        border-color: #34D399;
+    }
+
+    [data-theme="dark"] .alert-custom.alert-error {
+        background: #3A1A1A;
+        color: #F87171;
+        border-color: #F87171;
+    }
+
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer-custom {
+        padding: 14px 0;
+        border-top: 1px solid var(--pat-border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--pat-text-secondary);
+    }
+
+    .footer-custom .footer-brand {
+        color: var(--pat-primary);
+        font-weight: 600;
+    }
+
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
     @media (max-width: 640px) {
-        .form-card {
-            padding: 16px 14px;
-        }
-        .form-header {
-            flex-direction: column;
-            text-align: center;
-        }
-        .form-header-icon {
-            width: 44px;
-            height: 44px;
-            font-size: 1.2rem;
-        }
-        .btn {
-            padding: 6px 14px;
-            font-size: 0.8rem;
-            min-height: 36px;
-        }
-        .form-actions {
-            flex-direction: column;
-        }
-        .form-actions .btn {
-            width: 100%;
-            justify-content: center;
-        }
-        .form-row-icon .form-control {
-            padding-left: 34px;
-        }
-        .allergy-select-container {
-            flex-direction: column;
-        }
-        .allergy-select-container select {
-            width: 100%;
-            min-width: unset;
-        }
-        .allergy-custom-input {
-            flex-direction: column;
-        }
-        .allergy-custom-input input {
-            width: 100%;
-        }
+        .form-card-custom { padding: 16px 14px; }
+        .form-header-custom { flex-direction: column; text-align: center; }
+        .form-header-custom .form-header-icon { width: 44px; height: 44px; font-size: 1.2rem; }
+        .btn-custom { padding: 6px 14px; font-size: 0.8rem; min-height: 36px; }
+        .form-actions-custom { flex-direction: column; }
+        .form-actions-custom .btn-custom { width: 100%; justify-content: center; }
+        .form-row-icon-custom .form-control-custom { padding-left: 34px; }
+        .allergy-select-container-custom { flex-direction: column; }
+        .allergy-select-container-custom select { width: 100%; min-width: unset; }
+        .allergy-custom-input-custom { flex-direction: column; }
+        .allergy-custom-input-custom input { width: 100%; }
+        .page-header-custom { padding: 18px 20px; }
+        .page-header-custom .page-title { font-size: 1.3rem; }
     }
 </style>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <form method="GET" action="patients.php" class="flex-1 flex">
-                <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
-                <input type="text" name="search" placeholder="Search patients..." 
-                       class="flex-1 px-3 py-2 bg-transparent border-none outline-none text-sm" 
-                       style="color: var(--text-primary);">
-                <button type="submit" class="search-btn">
-                    <i class="fas fa-search mr-1"></i> Search
-                </button>
-            </form>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches_list as $branch): ?>
-                <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($branch['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -741,23 +876,23 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <div class="page-header-custom">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-user-edit mr-2" style="color: #0B5ED7;"></i> Edit Patient
+                <i class="fas fa-user-edit"></i> Edit Patient
             </h1>
             <p class="page-subtitle">
                 Update patient information
-                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
-                    <i class="fas fa-user mr-1"></i> <?= htmlspecialchars($patient['full_name']) ?>
+                <span class="header-badge-custom">
+                    <i class="fas fa-user"></i> <?= htmlspecialchars($patient['full_name']) ?>
                 </span>
-                <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
-                    <i class="fas fa-id-card mr-1"></i> <?= htmlspecialchars($patient['patient_id']) ?>
+                <span class="header-badge-custom">
+                    <i class="fas fa-id-card"></i> <?= htmlspecialchars($patient['patient_id']) ?>
                 </span>
             </p>
         </div>
         <div>
-            <a href="patient_details.php?id=<?= $patient_id ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
+            <a href="patient_details.php?id=<?= $patient_id ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back to Patient
             </a>
         </div>
@@ -765,17 +900,17 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
-            <?= $message ?>
+        <div class="alert-custom alert-<?= $message_type === 'success' ? 'success' : 'error' ?>">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>" style="font-size:1.2rem;flex-shrink:0;"></i>
+            <div><?= $message ?></div>
         </div>
     <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- EDIT PATIENT FORM -->
     <!-- ================================================================ -->
-    <div class="form-card">
-        <div class="form-header">
+    <div class="form-card-custom">
+        <div class="form-header-custom">
             <div class="form-header-icon">
                 <i class="fas fa-user-edit"></i>
             </div>
@@ -786,26 +921,26 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
         
         <form method="POST" action="" id="editPatientForm">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="form-grid-responsive">
                 
                 <!-- ================================================================ -->
                 <!-- Personal Information -->
                 <!-- ================================================================ -->
-                <div class="md:col-span-2">
-                    <h3 class="section-title">
+                <div style="grid-column: 1 / -1;">
+                    <h3 class="section-title-custom">
                         <i class="fas fa-user-circle"></i> Personal Information
                     </h3>
-                    <hr class="section-divider">
+                    <hr class="section-divider-custom">
                 </div>
                 
                 <!-- Full Name -->
                 <div>
-                    <label class="form-label">
-                        <i class="fas fa-user text-blue-600"></i> Full Name
+                    <label class="form-label-custom">
+                        <i class="fas fa-user" style="color:#0B5ED7;"></i> Full Name
                         <span class="required">*</span>
                     </label>
-                    <div class="form-row-icon">
-                        <input type="text" name="full_name" class="form-control" 
+                    <div class="form-row-icon-custom">
+                        <input type="text" name="full_name" class="form-control-custom" 
                                placeholder="Enter full name" 
                                value="<?= htmlspecialchars($patient['full_name']) ?>" required>
                         <span class="input-icon"><i class="fas fa-user"></i></span>
@@ -814,24 +949,24 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 
                 <!-- Patient ID (Read-only) -->
                 <div>
-                    <label class="form-label">
-                        <i class="fas fa-id-card text-blue-600"></i> Patient ID
+                    <label class="form-label-custom">
+                        <i class="fas fa-id-card" style="color:#0B5ED7;"></i> Patient ID
                     </label>
-                    <div class="form-row-icon">
-                        <input type="text" class="form-control" 
+                    <div class="form-row-icon-custom">
+                        <input type="text" class="form-control-custom" 
                                value="<?= htmlspecialchars($patient['patient_id']) ?>" disabled>
                         <span class="input-icon"><i class="fas fa-id-card"></i></span>
                     </div>
-                    <p class="help-text">Patient ID cannot be changed</p>
+                    <p class="help-text-custom">Patient ID cannot be changed</p>
                 </div>
                 
                 <!-- Date of Birth -->
                 <div>
-                    <label class="form-label">
-                        <i class="fas fa-calendar-alt text-blue-600"></i> Date of Birth
+                    <label class="form-label-custom">
+                        <i class="fas fa-calendar-alt" style="color:#0B5ED7;"></i> Date of Birth
                     </label>
-                    <div class="form-row-icon">
-                        <input type="date" name="date_of_birth" class="form-control" 
+                    <div class="form-row-icon-custom">
+                        <input type="date" name="date_of_birth" class="form-control-custom" 
                                value="<?= $patient['date_of_birth'] ?>">
                         <span class="input-icon"><i class="fas fa-calendar-alt"></i></span>
                     </div>
@@ -839,11 +974,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 
                 <!-- Gender -->
                 <div>
-                    <label class="form-label">
-                        <i class="fas fa-venus-mars text-blue-600"></i> Gender
+                    <label class="form-label-custom">
+                        <i class="fas fa-venus-mars" style="color:#0B5ED7;"></i> Gender
                     </label>
-                    <div class="form-row-icon">
-                        <select name="gender" class="form-control">
+                    <div class="form-row-icon-custom">
+                        <select name="gender" class="form-control-custom">
                             <option value="">Select Gender</option>
                             <option value="Male" <?= $patient['gender'] === 'Male' ? 'selected' : '' ?>>Male</option>
                             <option value="Female" <?= $patient['gender'] === 'Female' ? 'selected' : '' ?>>Female</option>
@@ -855,11 +990,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 
                 <!-- Marital Status -->
                 <div>
-                    <label class="form-label">
-                        <i class="fas fa-ring text-blue-600"></i> Marital Status
+                    <label class="form-label-custom">
+                        <i class="fas fa-ring" style="color:#0B5ED7;"></i> Marital Status
                     </label>
-                    <div class="form-row-icon">
-                        <select name="marital_status" class="form-control">
+                    <div class="form-row-icon-custom">
+                        <select name="marital_status" class="form-control-custom">
                             <option value="">Select Marital Status</option>
                             <option value="Single" <?= $patient['marital_status'] === 'Single' ? 'selected' : '' ?>>Single</option>
                             <option value="Married" <?= $patient['marital_status'] === 'Married' ? 'selected' : '' ?>>Married</option>
@@ -872,11 +1007,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 
                 <!-- Blood Group -->
                 <div>
-                    <label class="form-label">
-                        <i class="fas fa-tint text-blue-600"></i> Blood Group
+                    <label class="form-label-custom">
+                        <i class="fas fa-tint" style="color:#0B5ED7;"></i> Blood Group
                     </label>
-                    <div class="form-row-icon">
-                        <select name="blood_group" class="form-control">
+                    <div class="form-row-icon-custom">
+                        <select name="blood_group" class="form-control-custom">
                             <option value="">Select Blood Group</option>
                             <option value="A+" <?= $patient['blood_group'] === 'A+' ? 'selected' : '' ?>>A+</option>
                             <option value="A-" <?= $patient['blood_group'] === 'A-' ? 'selected' : '' ?>>A-</option>
@@ -894,20 +1029,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <!-- ================================================================ -->
                 <!-- Contact Information -->
                 <!-- ================================================================ -->
-                <div class="md:col-span-2">
-                    <h3 class="section-title">
+                <div style="grid-column: 1 / -1;">
+                    <h3 class="section-title-custom">
                         <i class="fas fa-address-card"></i> Contact Information
                     </h3>
-                    <hr class="section-divider">
+                    <hr class="section-divider-custom">
                 </div>
                 
                 <!-- Phone -->
                 <div>
-                    <label class="form-label">
-                        <i class="fas fa-phone text-blue-600"></i> Phone Number
+                    <label class="form-label-custom">
+                        <i class="fas fa-phone" style="color:#0B5ED7;"></i> Phone Number
                     </label>
-                    <div class="form-row-icon">
-                        <input type="tel" name="phone" class="form-control" 
+                    <div class="form-row-icon-custom">
+                        <input type="tel" name="phone" class="form-control-custom" 
                                placeholder="Enter phone number" 
                                value="<?= htmlspecialchars($patient['phone'] ?? '') ?>">
                         <span class="input-icon"><i class="fas fa-phone"></i></span>
@@ -916,11 +1051,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 
                 <!-- Email -->
                 <div>
-                    <label class="form-label">
-                        <i class="fas fa-envelope text-blue-600"></i> Email Address
+                    <label class="form-label-custom">
+                        <i class="fas fa-envelope" style="color:#0B5ED7;"></i> Email Address
                     </label>
-                    <div class="form-row-icon">
-                        <input type="email" name="email" class="form-control" 
+                    <div class="form-row-icon-custom">
+                        <input type="email" name="email" class="form-control-custom" 
                                placeholder="Enter email address" 
                                value="<?= htmlspecialchars($patient['email'] ?? '') ?>">
                         <span class="input-icon"><i class="fas fa-envelope"></i></span>
@@ -929,11 +1064,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 
                 <!-- Address -->
                 <div>
-                    <label class="form-label">
-                        <i class="fas fa-map-marker-alt text-blue-600"></i> Address
+                    <label class="form-label-custom">
+                        <i class="fas fa-map-marker-alt" style="color:#0B5ED7;"></i> Address
                     </label>
-                    <div class="form-row-icon">
-                        <input type="text" name="address" class="form-control" 
+                    <div class="form-row-icon-custom">
+                        <input type="text" name="address" class="form-control-custom" 
                                placeholder="Enter address" 
                                value="<?= htmlspecialchars($patient['address'] ?? '') ?>">
                         <span class="input-icon"><i class="fas fa-map-marker-alt"></i></span>
@@ -942,11 +1077,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 
                 <!-- Emergency Contact -->
                 <div>
-                    <label class="form-label">
-                        <i class="fas fa-phone-alt text-blue-600"></i> Emergency Contact
+                    <label class="form-label-custom">
+                        <i class="fas fa-phone-alt" style="color:#0B5ED7;"></i> Emergency Contact
                     </label>
-                    <div class="form-row-icon">
-                        <input type="text" name="emergency_contact" class="form-control" 
+                    <div class="form-row-icon-custom">
+                        <input type="text" name="emergency_contact" class="form-control-custom" 
                                placeholder="Enter emergency contact number" 
                                value="<?= htmlspecialchars($patient['emergency_contact'] ?? '') ?>">
                         <span class="input-icon"><i class="fas fa-phone-alt"></i></span>
@@ -954,30 +1089,30 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 </div>
                 
                 <!-- ================================================================ -->
-                <!-- Medical Information - Allergies with Pick and Custom -->
+                <!-- Allergies -->
                 <!-- ================================================================ -->
-                <div class="md:col-span-2">
-                    <h3 class="section-title">
+                <div style="grid-column: 1 / -1;">
+                    <h3 class="section-title-custom">
                         <i class="fas fa-allergies"></i> Allergies
                     </h3>
-                    <hr class="section-divider">
+                    <hr class="section-divider-custom">
                 </div>
                 
-                <div class="md:col-span-2">
-                    <label class="form-label">
-                        <i class="fas fa-allergies text-blue-600"></i> Allergies
+                <div style="grid-column: 1 / -1;">
+                    <label class="form-label-custom">
+                        <i class="fas fa-allergies" style="color:#0B5ED7;"></i> Allergies
                     </label>
                     
                     <!-- Allergy Tags Display -->
-                    <div class="allergy-tags" id="allergyTagsContainer">
+                    <div class="allergy-tags-custom" id="allergyTagsContainer">
                         <?php foreach ($current_allergies as $allergy): ?>
-                            <span class="allergy-tag" data-allergy="<?= htmlspecialchars($allergy) ?>">
+                            <span class="allergy-tag-custom" data-allergy="<?= htmlspecialchars($allergy) ?>">
                                 <?= htmlspecialchars($allergy) ?>
                                 <span class="remove-allergy" onclick="removeAllergy(this)" title="Remove allergy">✕</span>
                             </span>
                         <?php endforeach; ?>
                         <?php if (empty($current_allergies)): ?>
-                            <span class="text-gray-400 text-sm" id="noAllergyMessage">No allergies added</span>
+                            <span style="color:var(--pat-text-secondary);font-size:0.85rem;" id="noAllergyMessage">No allergies added</span>
                         <?php endif; ?>
                     </div>
                     
@@ -985,8 +1120,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <input type="hidden" name="allergies_hidden" id="allergiesHidden" value="<?= htmlspecialchars($patient['allergies'] ?? '') ?>">
                     
                     <!-- Select Predefined Allergies -->
-                    <div class="allergy-select-container">
-                        <select id="allergySelect" class="form-control">
+                    <div class="allergy-select-container-custom">
+                        <select id="allergySelect" class="form-control-custom">
                             <option value="">Select a common allergy...</option>
                             <?php foreach ($predefined_allergies as $allergy): ?>
                                 <option value="<?= htmlspecialchars($allergy) ?>"><?= htmlspecialchars($allergy) ?></option>
@@ -998,8 +1133,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </div>
                     
                     <!-- Custom Allergy Input -->
-                    <div class="allergy-custom-input">
-                        <input type="text" id="customAllergyInput" class="form-control" 
+                    <div class="allergy-custom-input-custom">
+                        <input type="text" id="customAllergyInput" class="form-control-custom" 
                                placeholder="Enter custom allergy..." 
                                onkeypress="if(event.key==='Enter'){event.preventDefault();addCustomAllergy();}">
                         <button type="button" class="btn-add-custom" onclick="addCustomAllergy()">
@@ -1007,27 +1142,27 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         </button>
                     </div>
                     
-                    <p class="help-text">Select from common allergies or type your own. Click ✕ to remove an allergy.</p>
+                    <p class="help-text-custom">Select from common allergies or type your own. Click ✕ to remove an allergy.</p>
                 </div>
                 
                 <!-- ================================================================ -->
                 <!-- Assignment Information -->
                 <!-- ================================================================ -->
-                <div class="md:col-span-2">
-                    <h3 class="section-title">
+                <div style="grid-column: 1 / -1;">
+                    <h3 class="section-title-custom">
                         <i class="fas fa-user-md"></i> Assignment Information
                     </h3>
-                    <hr class="section-divider">
+                    <hr class="section-divider-custom">
                 </div>
                 
                 <!-- Branch -->
                 <div>
-                    <label class="form-label">
-                        <i class="fas fa-store-alt text-blue-600"></i> Branch
+                    <label class="form-label-custom">
+                        <i class="fas fa-store-alt" style="color:#0B5ED7;"></i> Branch
                         <span class="required">*</span>
                     </label>
-                    <div class="form-row-icon">
-                        <select name="branch_id" id="branchSelect" class="form-control" required onchange="loadDoctors(this.value)">
+                    <div class="form-row-icon-custom">
+                        <select name="branch_id" id="branchSelect" class="form-control-custom" required onchange="loadDoctors(this.value)">
                             <option value="">Select Branch</option>
                             <?php foreach ($branches_list as $branch): ?>
                                 <option value="<?= $branch['id'] ?>" <?= $branch['id'] == $patient['branch_id'] ? 'selected' : '' ?>>
@@ -1039,13 +1174,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </div>
                 </div>
                 
-                <!-- Assigned Doctor (Only doctors from selected branch) -->
+                <!-- Assigned Doctor -->
                 <div>
-                    <label class="form-label">
-                        <i class="fas fa-user-md text-blue-600"></i> Assigned Doctor
+                    <label class="form-label-custom">
+                        <i class="fas fa-user-md" style="color:#0B5ED7;"></i> Assigned Doctor
                     </label>
-                    <div class="form-row-icon">
-                        <select name="assigned_doctor_id" id="doctorSelect" class="form-control">
+                    <div class="form-row-icon-custom">
+                        <select name="assigned_doctor_id" id="doctorSelect" class="form-control-custom">
                             <option value="">None</option>
                             <?php foreach ($doctors_list as $doctor): ?>
                                 <option value="<?= $doctor['id'] ?>" <?= $doctor['id'] == $patient['assigned_doctor_id'] ? 'selected' : '' ?>>
@@ -1055,20 +1190,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         </select>
                         <span class="input-icon"><i class="fas fa-user-md"></i></span>
                     </div>
-                    <p class="help-text">Only doctors from the selected branch are shown</p>
+                    <p class="help-text-custom">Only doctors from the selected branch are shown</p>
                 </div>
                 
             </div>
             
             <!-- Form Actions -->
-            <div class="form-actions">
-                <button type="submit" class="btn btn-primary">
+            <div class="form-actions-custom">
+                <button type="submit" class="btn-custom btn-primary-custom">
                     <i class="fas fa-save"></i> Update Patient
                 </button>
-                <a href="patient_details.php?id=<?= $patient_id ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline">
+                <a href="patient_details.php?id=<?= $patient_id ?>&branch=<?= $selected_branch_id ?>" class="btn-custom btn-outline-custom">
                     <i class="fas fa-times"></i> Cancel
                 </a>
-                <button type="reset" class="btn btn-outline">
+                <button type="reset" class="btn-custom btn-outline-custom">
                     <i class="fas fa-undo"></i> Reset
                 </button>
             </div>
@@ -1078,12 +1213,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer">
+    <footer class="footer-custom">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             Edit Patient
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
+            <span id="footerTime"><?= date('H:i:s') ?></span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1091,121 +1228,72 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
-    </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
-    // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
-        }
-    });
-
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        window.location.href = url.toString();
-    }
-
-    // ================================================================
-    // TOAST
+    // TOAST (page-specific)
     // ================================================================
     function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
+        var toast = document.createElement('div');
+        toast.style.cssText = `
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 9999;
+            max-width: 400px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+            animation: slideInToast 0.4s ease;
+            font-size: 0.85rem;
+            font-weight: 500;
+        `;
         
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
+        var bgColor = type === 'success' ? '#059669' : 
+                      type === 'error' ? '#DC2626' : 
+                      type === 'warning' ? '#D97706' : '#0B5ED7';
+        toast.style.background = bgColor;
         
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() { toast.style.display = 'none'; }, 400);
-        }, 3500);
+        var icon = type === 'success' ? 'fa-check-circle' : 
+                   type === 'error' ? 'fa-exclamation-circle' : 
+                   type === 'warning' ? 'fa-exclamation-triangle' : 'fa-info-circle';
+        
+        toast.innerHTML = `
+            <i class="fas ${icon}" style="font-size:1.1rem;"></i>
+            <div>
+                <p style="font-weight:600;font-size:0.85rem;margin:0;">${title}</p>
+                <p style="font-size:0.75rem;opacity:0.9;margin:2px 0 0 0;">${message}</p>
+            </div>
+        `;
+        
+        document.body.appendChild(toast);
+        
+        setTimeout(function() {
+            toast.style.animation = 'slideOutToast 0.4s ease';
+            setTimeout(function() { toast.remove(); }, 400);
+        }, 3000);
     }
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
+    if (!document.getElementById('toastAnimations')) {
+        var style = document.createElement('style');
+        style.id = 'toastAnimations';
+        style.textContent = `
+            @keyframes slideInToast {
+                from { transform: translateX(120%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }
+            @keyframes slideOutToast {
+                from { transform: translateX(0); opacity: 1; }
+                to { transform: translateX(120%); opacity: 0; }
+            }
+        `;
+        document.head.appendChild(style);
     }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
 
     // ================================================================
     // LOAD DOCTORS BY BRANCH (AJAX)
@@ -1214,14 +1302,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         var doctorSelect = document.getElementById('doctorSelect');
         var currentPatientDoctor = '<?= $patient['assigned_doctor_id'] ?>';
         
-        // Clear current options
         doctorSelect.innerHTML = '<option value="">None</option>';
         
         if (branchId) {
-            // Show loading state
             doctorSelect.innerHTML = '<option value="">Loading doctors...</option>';
             
-            // Fetch doctors for this branch
             var xhr = new XMLHttpRequest();
             xhr.open('GET', '../../../backend/ajax/get_doctors_by_branch.php?branch_id=' + encodeURIComponent(branchId), true);
             xhr.onload = function() {
@@ -1263,25 +1348,22 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         var container = document.getElementById('allergyTagsContainer');
         var hidden = document.getElementById('allergiesHidden');
         
-        // Clear container
         container.innerHTML = '';
         
         if (allergies.length === 0) {
-            container.innerHTML = '<span class="text-gray-400 text-sm" id="noAllergyMessage">No allergies added</span>';
+            container.innerHTML = '<span style="color:var(--pat-text-secondary);font-size:0.85rem;" id="noAllergyMessage">No allergies added</span>';
             hidden.value = '';
             return;
         }
         
-        // Add each allergy as a tag
         allergies.forEach(function(allergy) {
             var tag = document.createElement('span');
-            tag.className = 'allergy-tag';
+            tag.className = 'allergy-tag-custom';
             tag.dataset.allergy = allergy;
             tag.innerHTML = allergy + ' <span class="remove-allergy" onclick="removeAllergy(this)" title="Remove allergy">✕</span>';
             container.appendChild(tag);
         });
         
-        // Update hidden input
         hidden.value = allergies.join(', ');
     }
     
@@ -1327,7 +1409,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
     
     function removeAllergy(element) {
-        var tag = element.closest('.allergy-tag');
+        var tag = element.closest('.allergy-tag-custom');
         var allergy = tag.dataset.allergy;
         var index = allergies.indexOf(allergy);
         
@@ -1337,7 +1419,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             showToast('Info', 'Allergy removed: ' + allergy, 'info');
         }
     }
-    
+
     // ================================================================
     // FORM VALIDATION
     // ================================================================
@@ -1359,11 +1441,41 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             return false;
         }
         
-        // Update allergies hidden input before submit
         document.getElementById('allergiesHidden').value = allergies.join(', ');
         
         return true;
     });
+
+    // ================================================================
+    // FOOTER TIME
+    // ================================================================
+    setInterval(function() {
+        var now = new Date();
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var ftEl = document.getElementById('footerTime');
+        if (ftEl) ftEl.textContent = timeStr;
+    }, 1000);
+
+    // ================================================================
+    // RESPONSIVE FORM GRID
+    // ================================================================
+    (function() {
+        function adjustFormGrid() {
+            var grid = document.querySelector('.form-grid-responsive');
+            if (!grid) return;
+            
+            if (window.innerWidth <= 768) {
+                grid.style.gridTemplateColumns = '1fr';
+            } else {
+                grid.style.gridTemplateColumns = '1fr 1fr';
+            }
+        }
+        
+        adjustFormGrid();
+        window.addEventListener('resize', adjustFormGrid);
+    })();
 
     console.log('%c🏥 Braick Dispensary - Edit Patient', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
@@ -1371,9 +1483,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c📋 ID: <?= htmlspecialchars($patient['patient_id']) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💊 Allergies: <?= count($current_allergies) ?> items (pick + custom)', 'font-size:13px; color:#7B2FBE;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👨‍⚕️ Doctors filtered by branch', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
-    console.log('%c📊 Tables: patients, branches, users', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#34D399;');
+    console.log('%c🌙 Dark mode: Handled by header (shared)', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

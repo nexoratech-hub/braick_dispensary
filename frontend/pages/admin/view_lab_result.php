@@ -2,21 +2,16 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_lab_result.php
 // ADMIN - VIEW LAB RESULT DETAILS
-// BRAICK DISPENSARY - BLUE THEME
-// USING YOUR DATABASE
-// FIXED: Removed action buttons, added Add Results button
+// ✅ Uses SHARED header & sidebar
+// ✅ Full dark mode support
+// ✅ Blue page header card
+// ✅ Only "Add Results" button
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
@@ -26,17 +21,11 @@ try {
     die("Database connection error: " . $e->getMessage());
 }
 
-// ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// CHECK IF USER IS ADMIN
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -50,9 +39,6 @@ if ($_SESSION['role'] !== 'admin') {
     exit;
 }
 
-// ================================================================
-// GET ADMIN DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
@@ -61,9 +47,7 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// VERIFY USER EXISTS IN DATABASE
-// ================================================================
+// VERIFY USER
 $stmt = $db->prepare("SELECT id, full_name, role, status FROM users WHERE id = ?");
 $stmt->execute([$user_id]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -74,9 +58,7 @@ if (!$user || $user['status'] !== 'active') {
     exit;
 }
 
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
+// UNREAD NOTIFICATIONS
 $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
@@ -86,9 +68,7 @@ try {
     $unread_notifications = 0;
 }
 
-// ================================================================
-// GET PARAMETERS
-// ================================================================
+// PARAMETERS
 $lab_test_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
 
@@ -97,9 +77,7 @@ if ($lab_test_id <= 0) {
     exit;
 }
 
-// ================================================================
-// FETCH LAB TEST DETAILS - USING YOUR DATABASE
-// ================================================================
+// FETCH LAB TEST
 try {
     $stmt = $db->prepare("
         SELECT 
@@ -149,9 +127,7 @@ try {
     exit;
 }
 
-// ================================================================
 // CALCULATE AGE
-// ================================================================
 $age = null;
 if (!empty($lab_test['date_of_birth'])) {
     $birthDate = new DateTime($lab_test['date_of_birth']);
@@ -159,9 +135,7 @@ if (!empty($lab_test['date_of_birth'])) {
     $age = $birthDate->diff($today)->y;
 }
 
-// ================================================================
-// GET BRANCHES FOR FILTER
-// ================================================================
+// GET BRANCHES
 $branches = [];
 try {
     $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
@@ -170,9 +144,7 @@ try {
     $branches = [];
 }
 
-// ================================================================
-// STATUS BADGE CLASS
-// ================================================================
+// HELPERS
 function getStatusBadge($status) {
     $classes = [
         'pending' => 'warning',
@@ -193,763 +165,491 @@ function getStatusIcon($status) {
     return $icons[$status] ?? 'fa-circle';
 }
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lab Result - <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?> - Braick Dispensary</title>
-    
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
-    <style>
-        /* ================================================================
-           ROOT VARIABLES - BOLDER BLUE THEME
-           ================================================================ */
-        :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #3B82F6;
-            --primary-bg: #EFF6FF;
-            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #073B8A);
-            
-            --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
-            --success-bg: #D1FAE5;
-            
-            --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
-            --danger-bg: #FEE2E2;
-            
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            
-            --teal: #0D9488;
-            --teal-bg: #ECFDF5;
-            
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            
-            --bg-body: #F0F4F8;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
-            --radius: 12px;
-            --radius-lg: 18px;
-            --table-hover: #F8FAFC;
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-light: #60A5FA;
-            --primary-bg: #1E3A5F;
-            --primary-gradient: linear-gradient(135deg, #2563EB, #1D4ED8);
-            --primary-gradient-strong: linear-gradient(135deg, #1D4ED8, #1E40AF);
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-hover: #1E293B;
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-        }
-        
-        /* ================================================================
-           PAGE HEADER - BOLDER BLUE THEME
-           ================================================================ */
-        .page-header {
-            background: var(--primary-gradient-strong);
-            border-radius: var(--radius-lg);
-            padding: 28px 36px;
-            margin-bottom: 28px;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            box-shadow: 0 8px 32px rgba(10, 76, 168, 0.35);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 400px;
-            height: 400px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header .page-title {
-            color: white;
-            font-size: 1.8rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC CSS - FULL DARK MODE -->
+<!-- ================================================================ -->
+<style>
+    /* LIGHT MODE */
+    :root {
+        --page-bg-body: #F0F4F8;
+        --page-bg-card: #FFFFFF;
+        --page-text-primary: #1E293B;
+        --page-text-secondary: #64748B;
+        --page-text-muted: #94A3B8;
+        --page-border: #E2E8F0;
+        --page-hover: #F8FAFC;
+    }
+
+    /* DARK MODE */
+    [data-theme="dark"] {
+        --page-bg-body: #0F172A;
+        --page-bg-card: #1E293B;
+        --page-text-primary: #F1F5F9;
+        --page-text-secondary: #94A3B8;
+        --page-text-muted: #64748B;
+        --page-border: #334155;
+        --page-hover: #1E3A5F;
+    }
+
+    /* BODY & MAIN CONTENT */
+    body { background: var(--page-bg-body, #F0F4F8); }
+    html[data-theme="dark"] body { background: #0F172A !important; }
+    .main-content { background: var(--page-bg-body, #F0F4F8); }
+    html[data-theme="dark"] .main-content { background: #0F172A !important; color: #F1F5F9; }
+
+    /* PAGE HEADER */
+    .page-header-custom {
+        background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #083D8A 100%);
+        border-radius: 18px;
+        padding: 28px 36px;
+        margin-bottom: 24px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 8px 32px rgba(11, 94, 215, 0.35), 0 4px 12px rgba(11, 94, 215, 0.2);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .page-header-custom::before {
+        content: '';
+        position: absolute;
+        top: -60%; right: -10%;
+        width: 400px; height: 400px;
+        background: radial-gradient(circle, rgba(255,255,255,0.12) 0%, transparent 70%);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .page-header-custom .page-title {
+        color: white;
+        font-size: 1.8rem;
+        font-weight: 800;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+    }
+
+    .page-header-custom .page-title i {
+        width: 48px; height: 48px;
+        background: rgba(255,255,255,0.2);
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.4rem;
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255,255,255,0.2);
+    }
+
+    .page-header-custom .page-subtitle {
+        color: rgba(255,255,255,0.9);
+        font-size: 0.95rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 8px;
+    }
+
+    .page-header-custom .role-badge-display {
+        background: rgba(255,255,255,0.25);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .page-header-custom .header-badge {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 6px 14px;
+        border-radius: 20px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255,255,255,0.2);
+    }
+
+    .page-header-custom .btn-outline-light {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        border: 1.5px solid rgba(255,255,255,0.3);
+        padding: 8px 18px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.82rem;
+        transition: all 0.3s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        position: relative;
+        z-index: 1;
+    }
+
+    .page-header-custom .btn-outline-light:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        color: white;
+    }
+
+    /* INFO BOX */
+    .info-box-custom {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        padding: 20px 24px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        border-left: 4px solid #0B5ED7;
+        margin-bottom: 20px;
+        max-width: 900px;
+        margin-left: auto;
+        margin-right: auto;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+
+    html[data-theme="dark"] .info-box-custom {
+        background: #1E293B;
+        border-color: #334155;
+        border-left-color: #6EA8FE;
+    }
+
+    .info-box-custom .info-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 6px 0;
+        font-size: 0.85rem;
+        flex-wrap: wrap;
+        gap: 4px;
+        border-bottom: 1px solid var(--page-border, #E2E8F0);
+    }
+
+    html[data-theme="dark"] .info-box-custom .info-item {
+        border-bottom-color: #334155;
+    }
+
+    .info-box-custom .info-item:last-child { border-bottom: none; }
+
+    .info-box-custom .info-item .label {
+        color: var(--page-text-secondary, #64748B);
+        font-weight: 600;
+    }
+
+    .info-box-custom .info-item .value {
+        font-weight: 600;
+        color: var(--page-text-primary, #1E293B);
+    }
+
+    html[data-theme="dark"] .info-box-custom .info-item .value { color: #F1F5F9; }
+
+    .info-box-custom .info-item .value a {
+        color: #0B5ED7;
+        text-decoration: none;
+        font-weight: 700;
+    }
+
+    .info-box-custom .info-item .value a:hover {
+        text-decoration: underline;
+    }
+
+    html[data-theme="dark"] .info-box-custom .info-item .value a { color: #6EA8FE; }
+
+    /* RESULT CARD */
+    .result-card-custom {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        padding: 24px 28px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        margin-bottom: 20px;
+        max-width: 900px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    html[data-theme="dark"] .result-card-custom {
+        background: #1E293B;
+        border-color: #334155;
+    }
+
+    .result-card-custom:hover {
+        border-color: #0B5ED7;
+        box-shadow: 0 4px 16px rgba(11, 94, 215, 0.08);
+    }
+
+    .result-card-custom .result-label {
+        font-size: 0.75rem;
+        color: var(--page-text-secondary, #64748B);
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .result-card-custom .result-label i {
+        color: #0B5ED7;
+        font-size: 0.9rem;
+    }
+
+    html[data-theme="dark"] .result-card-custom .result-label i { color: #6EA8FE; }
+
+    .result-card-custom .result-value {
+        font-size: 0.95rem;
+        font-weight: 500;
+        color: var(--page-text-primary, #1E293B);
+        white-space: pre-wrap;
+        line-height: 1.7;
+    }
+
+    html[data-theme="dark"] .result-card-custom .result-value { color: #F1F5F9; }
+
+    /* SPECIAL RESULT CARD (Interpretation) */
+    .result-card-custom.interpretation {
+        background: #EFF6FF;
+        border-color: #93C5FD;
+        border-left: 4px solid #0B5ED7;
+    }
+
+    html[data-theme="dark"] .result-card-custom.interpretation {
+        background: #1E3A5F;
+        border-color: #3B82F6;
+    }
+
+    .result-card-custom.interpretation .result-label {
+        color: #0A4CA8;
+    }
+
+    .result-card-custom.interpretation .result-value {
+        color: #0A4CA8;
+        font-weight: 600;
+    }
+
+    html[data-theme="dark"] .result-card-custom.interpretation .result-label,
+    html[data-theme="dark"] .result-card-custom.interpretation .result-value {
+        color: #93C5FD;
+    }
+
+    /* CLINICAL INFO GRID */
+    .clinical-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+    }
+
+    @media (max-width: 640px) {
+        .clinical-grid { grid-template-columns: 1fr; }
+    }
+
+    /* BADGES */
+    .badge-custom {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: white;
+    }
+
+    .badge-success { background: #059669; }
+    .badge-danger { background: #DC2626; }
+    .badge-warning { background: #D97706; }
+    .badge-info { background: #0B5ED7; }
+    .badge-secondary { background: #64748B; }
+    .badge-purple { background: #7C3AED; }
+
+    /* BUTTONS */
+    .btn-custom {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 10px 20px;
+        border-radius: 10px;
+        font-weight: 700;
+        font-size: 0.85rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+        white-space: nowrap;
+    }
+
+    .btn-primary-custom {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+    }
+    .btn-primary-custom:hover {
+        color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(11, 94, 215, 0.35);
+    }
+
+    .btn-outline-custom {
+        background: transparent;
+        color: var(--page-text-secondary, #64748B);
+        border: 2px solid var(--page-border, #E2E8F0);
+    }
+    .btn-outline-custom:hover {
+        background: var(--page-hover, #F1F5F9);
+        border-color: #0B5ED7;
+        color: #0B5ED7;
+        transform: translateY(-2px);
+    }
+
+    /* ADD RESULTS BUTTON */
+    .btn-add-results-custom {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+        padding: 16px 32px;
+        font-size: 1.1rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.35);
+        border: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        font-weight: 700;
+    }
+
+    .btn-add-results-custom:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 8px 32px rgba(11, 94, 215, 0.5);
+        color: white;
+        background: linear-gradient(135deg, #0A4CA8, #083D8A);
+    }
+
+    .btn-add-results-custom i {
+        font-size: 1.3rem;
+    }
+
+    .btn-add-results-custom .sub-text {
+        font-size: 0.7rem;
+        font-weight: 500;
+        opacity: 0.85;
+        display: block;
+        margin-top: 2px;
+    }
+
+    /* ACTIONS CARD */
+    .actions-card {
+        background: linear-gradient(135deg, #EFF6FF, #DBEAFE);
+        border-radius: 16px;
+        padding: 20px 24px;
+        border: 2px solid #93C5FD;
+        margin-bottom: 24px;
+        max-width: 900px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    html[data-theme="dark"] .actions-card {
+        background: #1E3A5F;
+        border-color: #3B82F6;
+    }
+
+    .actions-card .actions-title {
+        font-size: 0.85rem;
+        font-weight: 800;
+        color: #0A4CA8;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 12px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    html[data-theme="dark"] .actions-card .actions-title { color: #93C5FD; }
+
+    .actions-card .actions-title i { color: #0B5ED7; }
+    html[data-theme="dark"] .actions-card .actions-title i { color: #6EA8FE; }
+
+    /* RESPONSIVE */
+    @media (max-width: 768px) {
+        .page-header-custom { padding: 18px; }
+        .page-header-custom .page-title { font-size: 1.15rem; }
+        .info-box-custom, .result-card-custom, .actions-card { padding: 16px; }
+        .btn-add-results-custom {
+            padding: 12px 20px;
             font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
-        .page-header .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
-        .page-header .header-badge {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
-            transition: all 0.3s ease;
-        }
-        
-        .page-header .header-badge:hover {
-            background: rgba(255,255,255,0.2);
-            transform: translateY(-1px);
-        }
-        
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: var(--radius);
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        
-        /* ================================================================
-           BUTTONS - FULL CSS STYLED
-           ================================================================ */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            padding: 10px 20px;
-            border-radius: var(--radius);
-            font-weight: 600;
-            font-size: 0.85rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .btn:hover {
-            transform: translateY(-3px);
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .btn:active {
-            transform: translateY(0px);
-        }
-        
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none !important;
-            box-shadow: none !important;
-        }
-        
-        .btn-primary {
-            background: var(--primary-gradient);
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background: var(--primary-gradient-strong);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
-        }
-        
-        .btn-success {
-            background: linear-gradient(135deg, #059669, #047857);
-            color: white;
-        }
-        
-        .btn-success:hover {
-            background: linear-gradient(135deg, #047857, #065F46);
-            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.35);
-        }
-        
-        .btn-danger {
-            background: linear-gradient(135deg, #DC2626, #B91C1C);
-            color: white;
-        }
-        
-        .btn-danger:hover {
-            background: linear-gradient(135deg, #B91C1C, #991B1B);
-            box-shadow: 0 4px 16px rgba(220, 38, 38, 0.35);
-        }
-        
-        .btn-warning {
-            background: linear-gradient(135deg, #D97706, #B45309);
-            color: white;
-        }
-        
-        .btn-warning:hover {
-            background: linear-gradient(135deg, #B45309, #92400E);
-            box-shadow: 0 4px 16px rgba(217, 119, 6, 0.35);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-primary);
-            border: 2px solid var(--border-color);
-        }
-        
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.15);
-        }
-        
-        .btn-sm {
-            padding: 5px 12px;
-            font-size: 0.7rem;
-            border-radius: 6px;
-        }
-        
-        .btn-lg {
-            padding: 14px 32px;
-            font-size: 1rem;
-        }
-        
-        .btn-block {
             width: 100%;
             justify-content: center;
         }
-        
-        .btn i {
-            font-size: 0.9rem;
-        }
-        
-        .btn-sm i {
-            font-size: 0.7rem;
-        }
-        
-        .btn-lg i {
-            font-size: 1.1rem;
-        }
-        
-        /* ================================================================
-           ADD RESULTS BUTTON - LARGE AND VISIBLE
-           ================================================================ */
-        .btn-add-results {
-            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            color: white;
-            padding: 16px 32px;
-            font-size: 1.1rem;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.35);
-            border: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 12px;
-            transition: all 0.3s ease;
-            text-decoration: none;
-            font-weight: 700;
-        }
-        
-        .btn-add-results:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.5);
-            background: linear-gradient(135deg, #0A4CA8, #073B8A);
-        }
-        
-        .btn-add-results i {
-            font-size: 1.3rem;
-        }
-        
-        .btn-add-results .sub-text {
-            font-size: 0.65rem;
-            font-weight: 400;
-            opacity: 0.8;
-            display: block;
-        }
-        
-        /* ================================================================
-           INFO BOX
-           ================================================================ */
-        .info-box {
-            background: var(--primary-bg);
-            border-radius: var(--radius);
-            padding: 16px 20px;
-            border-left: 4px solid var(--primary);
-            margin-bottom: 20px;
-            max-width: 900px;
-            margin-left: auto;
-            margin-right: auto;
-        }
-        
-        .info-box .info-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 4px 0;
-            font-size: 0.85rem;
-            flex-wrap: wrap;
-            gap: 4px;
-        }
-        
-        .info-box .info-item .label {
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .info-box .info-item .value {
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-        
-        .info-box .info-item .value .text-blue-600 {
-            color: var(--primary) !important;
-        }
-        
-        .info-box .info-item .value .text-gray-400 {
-            color: var(--text-secondary) !important;
-        }
-        
-        /* ================================================================
-           RESULT CARD
-           ================================================================ */
-        .result-card {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            padding: 24px 28px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-            margin-bottom: 24px;
-            max-width: 900px;
-            margin-left: auto;
-            margin-right: auto;
-        }
-        
-        .result-card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .result-card .result-label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-        }
-        
-        .result-card .result-value {
-            font-size: 0.95rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            white-space: pre-wrap;
-            line-height: 1.6;
-        }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 2px 10px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 600;
-            color: white;
-            letter-spacing: 0.02em;
-        }
-        
-        .badge-success { background: #059669; }
-        .badge-danger { background: #DC2626; }
-        .badge-warning { background: #D97706; color: #1E293B; }
-        .badge-info { background: #0B5ED7; }
-        .badge-secondary { background: #64748B; }
-        .badge-purple { background: #7C3AED; }
-        
-        [data-theme="dark"] .badge-warning { color: #1E293B; }
-        
-        /* ================================================================
-           TOAST
-           ================================================================ */
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 14px 20px;
-            border-radius: 12px;
-            z-index: 999;
-            max-width: 400px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: white;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
-        }
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        .toast-custom.success { background: var(--success); }
-        .toast-custom.error { background: var(--danger); }
-        .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand {
-            color: var(--primary);
-            font-weight: 700;
-        }
-        
-        /* ================================================================
-           MODAL
-           ================================================================ */
-        .modal {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            z-index: 1000;
-            display: none;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .modal.show {
-            display: flex;
-        }
-        
-        .modal-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            backdrop-filter: blur(4px);
-            cursor: pointer;
-        }
-        
-        .modal-content {
-            background: var(--bg-card);
-            border-radius: 16px;
-            max-width: 480px;
-            width: 90%;
-            position: relative;
-            z-index: 1001;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            border: 1px solid var(--border-color);
-            animation: modalSlideIn 0.3s ease;
-        }
-        
-        @keyframes modalSlideIn {
-            from { transform: scale(0.9) translateY(20px); opacity: 0; }
-            to { transform: scale(1) translateY(0); opacity: 1; }
-        }
-        
-        .modal-header {
-            padding: 16px 20px;
-            border-bottom: 1px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .modal-header h3 {
-            font-size: 1rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin: 0;
-        }
-        
-        .modal-close {
-            background: none;
-            border: none;
-            font-size: 1.5rem;
-            cursor: pointer;
-            color: var(--text-secondary);
-            padding: 0 4px;
-            transition: color 0.3s;
-        }
-        
-        .modal-close:hover {
-            color: var(--text-primary);
-        }
-        
-        .modal-body {
-            padding: 20px;
-            color: var(--text-primary);
-        }
-        
-        .modal-footer {
-            padding: 16px 20px;
-            border-top: 1px solid var(--border-color);
-            display: flex;
-            justify-content: flex-end;
-            gap: 8px;
-        }
-        
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .main-content { margin-left: 0; padding: 16px; }
-            .info-box .info-item { flex-direction: column; }
-            .result-card { padding: 16px; }
-        }
-        
-        @media (max-width: 768px) {
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .result-card { padding: 14px; }
-            .btn-add-results {
-                padding: 12px 20px;
-                font-size: 0.95rem;
-                width: 100%;
-                justify-content: center;
-            }
-        }
-        
-        @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .page-header { flex-direction: column; align-items: flex-start !important; }
-            .modal-content { width: 95%; }
-        }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        /* ================================================================
-           PRINT STYLES
-           ================================================================ */
-        @media print {
-            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
-            .search-wrapper, .page-header .btn-outline-light,
-            .footer, #sidebarToggle { display: none !important; }
-            .main-content { margin: 0; padding: 20px; }
-            .result-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .info-box { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .page-header {
-                background: #0B5ED7 !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-            }
-            .page-title, .page-subtitle, .header-badge, .role-badge-display {
-                color: white !important;
-            }
-            .badge { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-        }
-    </style>
-</head>
-<body>
+    }
+
+    @media print {
+        .page-header-custom { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; }
+        .btn-add-results-custom, .btn-custom, .actions-card { display: none !important; }
+    }
+</style>
 
 <!-- ================================================================ -->
-<!-- MAIN CONTENT - Sidebar is loaded from admin_sidebar.php -->
+<!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
-    <div class="page-header">
-        <div>
+    <div class="page-header-custom">
+        <div style="position:relative;z-index:1;">
             <h1 class="page-title">
                 <i class="fas fa-flask"></i>
                 Lab Result Details
                 <span class="role-badge-display">ADMIN</span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-vial"></i>
-                <strong><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></strong>
+                <span><i class="fas fa-vial"></i> <strong><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></strong></span>
                 <span class="header-badge">
                     <i class="fas <?= getStatusIcon($lab_test['status'] ?? 'pending') ?>"></i>
                     <?= ucfirst($lab_test['status'] ?? 'Pending') ?>
                 </span>
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-user"></i>
-                    <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>
+                <span class="header-badge" style="background:rgba(52,211,153,0.25);border-color:rgba(52,211,153,0.4);color:#A7F3D0;">
+                    <i class="fas fa-user"></i> <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>
                 </span>
-                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
-                    <i class="fas fa-money-bill-wave"></i>
-                    TSh <?= number_format($lab_test['test_price'] ?? 0, 0) ?>
-                </span>
-                <span class="header-badge" style="background:rgba(255,255,255,0.15);">
-                    <i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?>
+                <span class="header-badge" style="background:rgba(251,191,36,0.25);border-color:rgba(251,191,36,0.4);color:#FDE68A;">
+                    <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($lab_test['test_price'] ?? 0, 0) ?>
                 </span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- TEST INFORMATION -->
-    <!-- ================================================================ -->
-    <div class="info-box animate-fade-in-up" style="animation-delay:0.05s;">
+    <div class="info-box-custom">
         <div class="info-item">
             <span class="label">Test ID</span>
             <span class="value">#<?= $lab_test_id ?></span>
@@ -958,9 +658,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span class="label">Test Name</span>
             <span class="value">
                 <strong><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></strong>
-                <?php if (!empty($lab_test['test_code'])): ?>
-                    <span class="text-gray-400 text-sm">(<?= htmlspecialchars($lab_test['test_code']) ?>)</span>
-                <?php endif; ?>
+                <?php if (!empty($lab_test['test_code'])) { ?>
+                    <span style="color:var(--page-text-muted);font-size:0.8rem;">(<?= htmlspecialchars($lab_test['test_code']) ?>)</span>
+                <?php } ?>
             </span>
         </div>
         <div class="info-item">
@@ -970,54 +670,54 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <div class="info-item">
             <span class="label">Patient</span>
             <span class="value">
-                <?php if (!empty($lab_test['patient_id']) && !empty($lab_test['patient_name'])): ?>
-                    <a href="view_patient.php?id=<?= $lab_test['patient_id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="text-blue-600 hover:underline">
+                <?php if (!empty($lab_test['patient_id']) && !empty($lab_test['patient_name'])) { ?>
+                    <a href="view_patient.php?id=<?= $lab_test['patient_id'] ?>&branch=<?= urlencode($selected_branch_id) ?>">
                         <?= htmlspecialchars($lab_test['patient_name']) ?>
                     </a>
-                    <?php if (!empty($lab_test['patient_code'])): ?>
+                    <?php if (!empty($lab_test['patient_code'])) { ?>
                         (<?= htmlspecialchars($lab_test['patient_code']) ?>)
-                    <?php endif; ?>
-                    <?php if ($age !== null): ?>
-                        <span class="text-gray-400 text-sm">| <?= $age ?> yrs</span>
-                    <?php endif; ?>
-                <?php else: ?>
+                    <?php } ?>
+                    <?php if ($age !== null) { ?>
+                        <span style="color:var(--page-text-muted);font-size:0.8rem;">| <?= $age ?> yrs</span>
+                    <?php } ?>
+                <?php } else { ?>
                     <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>
-                <?php endif; ?>
+                <?php } ?>
             </span>
         </div>
         <div class="info-item">
             <span class="label">Visit</span>
             <span class="value">
-                <?php if (!empty($lab_test['visit_number']) && !empty($lab_test['visit_id'])): ?>
-                    <a href="view_visit.php?id=<?= $lab_test['visit_id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="text-blue-600 hover:underline">
+                <?php if (!empty($lab_test['visit_number']) && !empty($lab_test['visit_id'])) { ?>
+                    <a href="view_visit.php?id=<?= $lab_test['visit_id'] ?>&branch=<?= urlencode($selected_branch_id) ?>">
                         <?= htmlspecialchars($lab_test['visit_number']) ?>
                     </a>
-                <?php else: ?>
+                <?php } else { ?>
                     <?= htmlspecialchars($lab_test['visit_number'] ?? 'N/A') ?>
-                <?php endif; ?>
+                <?php } ?>
             </span>
         </div>
         <div class="info-item">
             <span class="label">Doctor</span>
             <span class="value">
-                <?php if (!empty($lab_test['doctor_name'])): ?>
+                <?php if (!empty($lab_test['doctor_name'])) { ?>
                     Dr. <?= htmlspecialchars($lab_test['doctor_name']) ?>
-                    <?php if (!empty($lab_test['doctor_specialty'])): ?>
-                        <span class="text-gray-400 text-sm">(<?= htmlspecialchars($lab_test['doctor_specialty']) ?>)</span>
-                    <?php endif; ?>
-                <?php else: ?>
-                    <span class="text-gray-400">Not assigned</span>
-                <?php endif; ?>
+                    <?php if (!empty($lab_test['doctor_specialty'])) { ?>
+                        <span style="color:var(--page-text-muted);font-size:0.8rem;">(<?= htmlspecialchars($lab_test['doctor_specialty']) ?>)</span>
+                    <?php } ?>
+                <?php } else { ?>
+                    <span style="color:var(--page-text-muted);">Not assigned</span>
+                <?php } ?>
             </span>
         </div>
         <div class="info-item">
             <span class="label">Technician</span>
             <span class="value">
-                <?php if (!empty($lab_test['technician_name'])): ?>
+                <?php if (!empty($lab_test['technician_name'])) { ?>
                     <?= htmlspecialchars($lab_test['technician_name']) ?>
-                <?php else: ?>
-                    <span class="text-gray-400">Not assigned</span>
-                <?php endif; ?>
+                <?php } else { ?>
+                    <span style="color:var(--page-text-muted);">Not assigned</span>
+                <?php } ?>
             </span>
         </div>
         <div class="info-item">
@@ -1027,7 +727,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <div class="info-item">
             <span class="label">Status</span>
             <span class="value">
-                <span class="badge badge-<?= getStatusBadge($lab_test['status'] ?? 'pending') ?>">
+                <span class="badge-custom badge-<?= getStatusBadge($lab_test['status'] ?? 'pending') ?>">
                     <i class="fas <?= getStatusIcon($lab_test['status'] ?? 'pending') ?>"></i>
                     <?= ucfirst($lab_test['status'] ?? 'Pending') ?>
                 </span>
@@ -1041,108 +741,105 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span class="label">Created</span>
             <span class="value"><?= date('M d, Y h:i A', strtotime($lab_test['created_at'] ?? 'now')) ?></span>
         </div>
-        <?php if (!empty($lab_test['completed_at'])): ?>
+        <?php if (!empty($lab_test['completed_at'])) { ?>
         <div class="info-item">
             <span class="label">Completed</span>
-            <span class="value" style="color:var(--success);"><?= date('M d, Y h:i A', strtotime($lab_test['completed_at'])) ?></span>
+            <span class="value" style="color:#059669;"><?= date('M d, Y h:i A', strtotime($lab_test['completed_at'])) ?></span>
         </div>
-        <?php endif; ?>
+        <?php } ?>
     </div>
 
-    <!-- ================================================================ -->
     <!-- REFERENCE RANGE -->
-    <!-- ================================================================ -->
-    <?php if (!empty($lab_test['reference_range'])): ?>
-    <div class="result-card animate-fade-in-up" style="animation-delay:0.1s;">
-        <div class="result-label"><i class="fas fa-chart-bar"></i> Reference Range</div>
+    <?php if (!empty($lab_test['reference_range'])) { ?>
+    <div class="result-card-custom">
+        <div class="result-label">
+            <i class="fas fa-chart-bar"></i> Reference Range
+        </div>
         <div class="result-value"><?= htmlspecialchars($lab_test['reference_range']) ?></div>
     </div>
-    <?php endif; ?>
+    <?php } ?>
 
-    <!-- ================================================================ -->
     <!-- RESULTS -->
-    <!-- ================================================================ -->
-    <div class="result-card animate-fade-in-up" style="animation-delay:0.15s;">
-        <div class="result-label"><i class="fas fa-file-medical-alt"></i> Results</div>
+    <div class="result-card-custom">
+        <div class="result-label">
+            <i class="fas fa-file-medical-alt"></i> Results
+        </div>
         <div class="result-value">
-            <?php if (!empty($lab_test['formatted_result'])): ?>
+            <?php if (!empty($lab_test['formatted_result'])) { ?>
                 <?= $lab_test['formatted_result'] ?>
-            <?php elseif (!empty($lab_test['results'])): ?>
+            <?php } elseif (!empty($lab_test['results'])) { ?>
                 <?= nl2br(htmlspecialchars($lab_test['results'])) ?>
-            <?php else: ?>
-                <span class="text-gray-400">No results available yet</span>
-            <?php endif; ?>
+            <?php } else { ?>
+                <span style="color:var(--page-text-muted);font-style:italic;">No results available yet</span>
+            <?php } ?>
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- INTERPRETATION -->
-    <!-- ================================================================ -->
-    <?php if (!empty($lab_test['interpretation'])): ?>
-    <div class="result-card animate-fade-in-up" style="animation-delay:0.2s;border-color:var(--primary);background:var(--primary-bg);">
-        <div class="result-label" style="color:var(--primary);"><i class="fas fa-stethoscope"></i> Interpretation</div>
-        <div class="result-value" style="color:var(--primary);"><?= nl2br(htmlspecialchars($lab_test['interpretation'])) ?></div>
+    <?php if (!empty($lab_test['interpretation'])) { ?>
+    <div class="result-card-custom interpretation">
+        <div class="result-label">
+            <i class="fas fa-stethoscope"></i> Interpretation
+        </div>
+        <div class="result-value"><?= nl2br(htmlspecialchars($lab_test['interpretation'])) ?></div>
     </div>
-    <?php endif; ?>
+    <?php } ?>
 
-    <!-- ================================================================ -->
     <!-- NOTES -->
-    <!-- ================================================================ -->
-    <?php if (!empty($lab_test['notes'])): ?>
-    <div class="result-card animate-fade-in-up" style="animation-delay:0.25s;">
-        <div class="result-label"><i class="fas fa-sticky-note"></i> Notes</div>
-        <div class="result-value" style="font-style:italic;color:var(--text-secondary);"><?= nl2br(htmlspecialchars($lab_test['notes'])) ?></div>
-    </div>
-    <?php endif; ?>
-
-    <!-- ================================================================ -->
-    <!-- CLINICAL INFORMATION -->
-    <!-- ================================================================ -->
-    <?php if (!empty($lab_test['symptoms']) || !empty($lab_test['complaint']) || !empty($lab_test['diagnosis']) || !empty($lab_test['treatment'])): ?>
-    <div class="result-card animate-fade-in-up" style="animation-delay:0.3s;">
-        <h3 class="text-sm font-bold text-primary mb-4">
-            <i class="fas fa-notes-medical"></i> Clinical Information
-        </h3>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <?php if (!empty($lab_test['symptoms'])): ?>
-            <div>
-                <div class="result-label"><i class="fas fa-exclamation-triangle"></i> Symptoms</div>
-                <div class="result-value"><?= htmlspecialchars($lab_test['symptoms']) ?></div>
-            </div>
-            <?php endif; ?>
-            <?php if (!empty($lab_test['complaint'])): ?>
-            <div>
-                <div class="result-label"><i class="fas fa-comment-medical"></i> Complaint</div>
-                <div class="result-value"><?= htmlspecialchars($lab_test['complaint']) ?></div>
-            </div>
-            <?php endif; ?>
-            <?php if (!empty($lab_test['diagnosis'])): ?>
-            <div>
-                <div class="result-label"><i class="fas fa-stethoscope"></i> Diagnosis</div>
-                <div class="result-value"><?= htmlspecialchars($lab_test['diagnosis']) ?></div>
-            </div>
-            <?php endif; ?>
-            <?php if (!empty($lab_test['treatment'])): ?>
-            <div>
-                <div class="result-label"><i class="fas fa-prescription"></i> Treatment</div>
-                <div class="result-value"><?= htmlspecialchars($lab_test['treatment']) ?></div>
-            </div>
-            <?php endif; ?>
+    <?php if (!empty($lab_test['notes'])) { ?>
+    <div class="result-card-custom">
+        <div class="result-label">
+            <i class="fas fa-sticky-note"></i> Notes
+        </div>
+        <div class="result-value" style="font-style:italic;color:var(--page-text-secondary);">
+            <?= nl2br(htmlspecialchars($lab_test['notes'])) ?>
         </div>
     </div>
-    <?php endif; ?>
+    <?php } ?>
 
-    <!-- ================================================================ -->
-    <!-- ACTION BUTTONS - ONLY ADD RESULTS -->
-    <!-- ================================================================ -->
-    <div class="result-card animate-fade-in-up" style="animation-delay:0.35s; border: 3px solid var(--primary); background: var(--primary-bg);">
-        <h3 class="text-sm font-bold text-primary mb-4">
+    <!-- CLINICAL INFORMATION -->
+    <?php if (!empty($lab_test['symptoms']) || !empty($lab_test['complaint']) || !empty($lab_test['diagnosis']) || !empty($lab_test['treatment'])) { ?>
+    <div class="result-card-custom">
+        <div class="result-label">
+            <i class="fas fa-notes-medical"></i> Clinical Information
+        </div>
+        <div class="clinical-grid" style="margin-top:12px;">
+            <?php if (!empty($lab_test['symptoms'])) { ?>
+            <div>
+                <div class="result-label" style="font-size:0.7rem;"><i class="fas fa-exclamation-triangle"></i> Symptoms</div>
+                <div class="result-value" style="font-size:0.85rem;"><?= htmlspecialchars($lab_test['symptoms']) ?></div>
+            </div>
+            <?php } ?>
+            <?php if (!empty($lab_test['complaint'])) { ?>
+            <div>
+                <div class="result-label" style="font-size:0.7rem;"><i class="fas fa-comment-medical"></i> Complaint</div>
+                <div class="result-value" style="font-size:0.85rem;"><?= htmlspecialchars($lab_test['complaint']) ?></div>
+            </div>
+            <?php } ?>
+            <?php if (!empty($lab_test['diagnosis'])) { ?>
+            <div>
+                <div class="result-label" style="font-size:0.7rem;"><i class="fas fa-stethoscope"></i> Diagnosis</div>
+                <div class="result-value" style="font-size:0.85rem;"><?= htmlspecialchars($lab_test['diagnosis']) ?></div>
+            </div>
+            <?php } ?>
+            <?php if (!empty($lab_test['treatment'])) { ?>
+            <div>
+                <div class="result-label" style="font-size:0.7rem;"><i class="fas fa-prescription"></i> Treatment</div>
+                <div class="result-value" style="font-size:0.85rem;"><?= htmlspecialchars($lab_test['treatment']) ?></div>
+            </div>
+            <?php } ?>
+        </div>
+    </div>
+    <?php } ?>
+
+    <!-- ACTIONS -->
+    <div class="actions-card">
+        <div class="actions-title">
             <i class="fas fa-bolt"></i> Actions
-        </h3>
-        <div class="flex flex-wrap gap-3">
-            <!-- Add Results Button - Large and Visible -->
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;">
             <a href="add_lab_results.php?id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" 
-               class="btn-add-results">
+               class="btn-add-results-custom">
                 <i class="fas fa-plus-circle"></i>
                 <div>
                     Add Results
@@ -1150,176 +847,54 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 </div>
             </a>
             
-            <!-- Back Button -->
-            <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline" style="margin-left:8px;">
+            <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn-custom btn-outline-custom">
                 <i class="fas fa-arrow-left"></i> Back to List
             </a>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
-    <footer class="footer">
-        <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
-            Lab Result - <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?>
-            <span class="text-gray-300 mx-2">|</span>
-            <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
-        </p>
-    </footer>
-
 </main>
 
 <!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
-    </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
+    // DARK MODE BACKGROUND ENFORCEMENT
+    function enforceDarkModeBackground() {
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var body = document.body;
+        var mainContent = document.querySelector('.main-content');
+        
         if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
+            if (body) body.style.background = '#0F172A';
+            if (mainContent) mainContent.style.background = '#0F172A';
         } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
+            if (body) body.style.background = '#F0F4F8';
+            if (mainContent) mainContent.style.background = '#F0F4F8';
         }
+    }
+
+    enforceDarkModeBackground();
+
+    document.addEventListener('darkModeChanged', function(e) {
+        setTimeout(enforceDarkModeBackground, 50);
     });
 
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.attributeName === 'data-theme') {
+                enforceDarkModeBackground();
             }
-        }
-    });
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
         });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
-        var ftEl = document.getElementById('footerTime');
-        if (ftEl) ftEl.textContent = timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
-    // ================================================================
-    // TOAST
-    // ================================================================
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
-    }
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            var branch = '<?= $selected_branch_id ?>';
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
     });
+    observer.observe(document.documentElement, { attributes: true });
 
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        url.searchParams.delete('branch_id');
-        window.location.href = url.toString();
-    }
-
-    console.log('%c🧪 Braick Dispensary - View Lab Result', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🔬 Test: <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?> (ID: <?= $lab_test_id ?>)', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🧪 Braick - View Lab Result', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#059669;');
+    console.log('%c🌙 FULL DARK MODE inafanya kazi', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🔬 Test: <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?> (ID: <?= $lab_test_id ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📋 Status: <?= ucfirst($lab_test['status'] ?? 'Pending') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Action buttons removed - Only Add Results button', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Using database tables: lab_tests, visits, patients, users, branches, lab_tests_catalog', 'font-size:13px; color:#34D399;');
-    console.log('%c🔵 Blue Theme Applied with beautiful CSS', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔒 Login session: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Only "Add Results" button — action buttons removed', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

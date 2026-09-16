@@ -3,6 +3,8 @@
 // FILE: frontend/pages/cashier/view_otc_sale.php
 // CASHIER - VIEW OTC SALE DETAILS
 // SHOWS ALL ITEMS FOR A SPECIFIC OTC SALE
+// ✅ GREEN THEME
+// ✅ BEAUTIFUL INFO CARD CSS
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -187,6 +189,7 @@ include_once '../../components/cashier_sidebar.php';
             --success-dark: #047857;
             --success-light: #34D399;
             --success-bg: #D1FAE5;
+            --success-soft: #ECFDF5;
             --danger: #DC2626;
             --danger-dark: #B91C1C;
             --danger-light: #F87171;
@@ -195,8 +198,6 @@ include_once '../../components/cashier_sidebar.php';
             --warning-bg: #FEF3C7;
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
-            --otc-color: #8B5CF6;
-            --otc-bg: #EDE9FE;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
@@ -236,10 +237,10 @@ include_once '../../components/cashier_sidebar.php';
             --gray-700: #E2E8F0;
             --primary-bg: #1E3A5F;
             --success-bg: #1A3A2A;
+            --success-soft: #0F2A1E;
             --danger-bg: #3A1A1A;
             --warning-bg: #3A2A1A;
             --purple-bg: #2A1A3A;
-            --otc-bg: #2A1A3A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -253,7 +254,7 @@ include_once '../../components/cashier_sidebar.php';
         
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--otc-color); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         
         .main-content {
             margin-left: 270px;
@@ -262,8 +263,9 @@ include_once '../../components/cashier_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
+        /* ✅ GREEN PAGE HEADER */
         .page-header {
-            background: linear-gradient(135deg, #8B5CF6, #6D28D9);
+            background: linear-gradient(135deg, #059669, #047857, #065F46);
             border-radius: var(--radius-lg);
             padding: 24px 32px;
             margin-bottom: 28px;
@@ -272,7 +274,7 @@ include_once '../../components/cashier_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 4px 20px rgba(139, 92, 246, 0.25);
+            box-shadow: 0 4px 20px rgba(5, 150, 105, 0.3);
             position: relative;
             overflow: hidden;
         }
@@ -359,6 +361,7 @@ include_once '../../components/cashier_sidebar.php';
             backdrop-filter: blur(4px);
             position: relative;
             z-index: 1;
+            cursor: pointer;
         }
         
         .page-header .btn-outline-light:hover {
@@ -377,14 +380,15 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .sale-card:hover {
-            border-color: var(--otc-color);
+            border-color: var(--success);
             box-shadow: var(--shadow-md);
         }
         
+        /* ✅ GREEN SALE HEADER */
         .sale-header {
-            background: var(--otc-bg);
+            background: linear-gradient(135deg, #ECFDF5, #D1FAE5);
             padding: 18px 24px;
-            border-bottom: 2px solid var(--border-color);
+            border-bottom: 2px solid var(--success);
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -392,10 +396,14 @@ include_once '../../components/cashier_sidebar.php';
             gap: 10px;
         }
         
+        [data-theme="dark"] .sale-header {
+            background: linear-gradient(135deg, #0F2A1E, #1A3A2A);
+        }
+        
         .sale-header .sale-number {
             font-weight: 700;
             font-size: 1.2rem;
-            color: var(--otc-color);
+            color: var(--success);
             font-family: monospace;
         }
         
@@ -417,6 +425,7 @@ include_once '../../components/cashier_sidebar.php';
         .sale-header .sale-status.paid {
             background: var(--success-bg);
             color: var(--success);
+            border: 1px solid var(--success);
         }
         
         .sale-header .sale-status.cancelled {
@@ -428,37 +437,200 @@ include_once '../../components/cashier_sidebar.php';
             padding: 24px 28px;
         }
         
+        /* ================================================================ */
+        /* ✅ BEAUTIFUL INFO CARD CSS */
+        /* ================================================================ */
         .info-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 12px 24px;
-            padding-bottom: 18px;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+            padding-bottom: 20px;
             border-bottom: 2px dashed var(--border-color);
-            margin-bottom: 18px;
+            margin-bottom: 20px;
         }
         
         .info-grid .info-item {
             display: flex;
             flex-direction: column;
+            padding: 14px 18px;
+            background: linear-gradient(135deg, var(--gray-50), var(--bg-card));
+            border: 1.5px solid var(--border-color);
+            border-radius: 12px;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .info-grid .info-item::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: linear-gradient(180deg, var(--success), var(--success-dark));
+            opacity: 0.8;
+        }
+        
+        .info-grid .info-item:hover {
+            transform: translateY(-3px);
+            border-color: var(--success);
+            box-shadow: 0 6px 20px rgba(5, 150, 105, 0.15);
         }
         
         .info-grid .info-item .label {
             font-size: 0.6rem;
             color: var(--text-secondary);
-            font-weight: 600;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.04em;
+            letter-spacing: 0.06em;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 6px;
+        }
+        
+        .info-grid .info-item .label i {
+            color: var(--success);
+            font-size: 0.7rem;
+            width: 14px;
+            text-align: center;
         }
         
         .info-grid .info-item .value {
-            font-size: 0.9rem;
-            font-weight: 500;
+            font-size: 0.92rem;
+            font-weight: 600;
             color: var(--text-primary);
-            margin-top: 2px;
+            line-height: 1.4;
+            word-break: break-word;
         }
         
         .info-grid .info-item .value.otc-color {
-            color: var(--otc-color);
+            color: var(--success);
+            font-weight: 700;
+        }
+        
+        /* ✅ STATUS BADGE IN INFO CARD */
+        .info-grid .info-item .value .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            background: var(--success-bg);
+            color: var(--success);
+            border: 1px solid var(--success);
+        }
+        
+        .info-grid .info-item .value .status-pill.pending {
+            background: var(--warning-bg);
+            color: var(--warning);
+            border-color: var(--warning);
+        }
+        
+        .info-grid .info-item .value .status-pill.cancelled {
+            background: var(--danger-bg);
+            color: var(--danger);
+            border-color: var(--danger);
+        }
+        
+        /* ✅ NOTES FULL-WIDTH CARD */
+        .info-grid .info-item.notes-item {
+            grid-column: span 2;
+            background: linear-gradient(135deg, #FFFBEB, #FEF3C7);
+            border-color: #FCD34D;
+        }
+        
+        .info-grid .info-item.notes-item::before {
+            background: linear-gradient(180deg, #F59E0B, #D97706);
+        }
+        
+        [data-theme="dark"] .info-grid .info-item.notes-item {
+            background: linear-gradient(135deg, #2A1F0A, #3A2A1A);
+            border-color: #D97706;
+        }
+        
+        .info-grid .info-item.notes-item .label i {
+            color: #F59E0B;
+        }
+        
+        .info-grid .info-item.notes-item .value {
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: #78350F;
+            line-height: 1.5;
+            font-style: italic;
+            padding: 8px 12px;
+            background: rgba(255,255,255,0.6);
+            border-radius: 8px;
+            border-left: 3px solid #F59E0B;
+            margin-top: 2px;
+        }
+        
+        [data-theme="dark"] .info-grid .info-item.notes-item .value {
+            color: #FCD34D;
+            background: rgba(0,0,0,0.2);
+        }
+        
+        /* ✅ PREMIUM BADGE */
+        .premium-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+            color: #92400E;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.6rem;
+            font-weight: 700;
+            border: 1px solid #FCD34D;
+            margin-top: 4px;
+        }
+        
+        [data-theme="dark"] .premium-tag {
+            background: linear-gradient(135deg, #3D2E0A, #5A3E0F);
+            color: #FCD34D;
+            border-color: #D97706;
+        }
+        
+        /* ✅ PAID STATUS CARD */
+        .info-grid .info-item.status-item.paid {
+            background: linear-gradient(135deg, #ECFDF5, #D1FAE5);
+            border-color: var(--success);
+        }
+        
+        .info-grid .info-item.status-item.paid::before {
+            background: linear-gradient(180deg, #059669, #047857);
+        }
+        
+        .info-grid .info-item.status-item.pending {
+            background: linear-gradient(135deg, #FFFBEB, #FEF3C7);
+            border-color: var(--warning);
+        }
+        
+        .info-grid .info-item.status-item.pending::before {
+            background: linear-gradient(180deg, #F59E0B, #D97706);
+        }
+        
+        /* ✅ CUSTOMER CARD SPECIAL STYLE */
+        .info-grid .info-item.customer-item {
+            background: linear-gradient(135deg, #EFF6FF, #DBEAFE);
+            border-color: #93C5FD;
+        }
+        
+        .info-grid .info-item.customer-item::before {
+            background: linear-gradient(180deg, #3B82F6, #2563EB);
+        }
+        
+        .info-grid .info-item.customer-item .label i {
+            color: #3B82F6;
+        }
+        
+        [data-theme="dark"] .info-grid .info-item.customer-item {
+            background: linear-gradient(135deg, #1A2A4A, #1E3A5F);
+            border-color: #3B82F6;
         }
         
         .items-table-wrap {
@@ -468,6 +640,7 @@ include_once '../../components/cashier_sidebar.php';
             margin-bottom: 18px;
         }
         
+        /* ✅ GREEN TABLE HEADER */
         .items-table {
             width: 100%;
             border-collapse: collapse;
@@ -482,8 +655,8 @@ include_once '../../components/cashier_sidebar.php';
             text-transform: uppercase;
             letter-spacing: 0.05em;
             color: white;
-            background: var(--otc-color);
-            border-bottom: 3px solid #6D28D9;
+            background: linear-gradient(135deg, #059669, #047857);
+            border-bottom: 3px solid #065F46;
             white-space: nowrap;
         }
         
@@ -498,7 +671,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .items-table tbody tr:hover td {
-            background: var(--primary-bg);
+            background: var(--success-bg);
         }
         
         .items-table tbody tr:last-child td {
@@ -517,7 +690,7 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--bg-body);
             padding: 2px 10px;
             border-radius: 4px;
-            border-left: 3px solid var(--otc-color);
+            border-left: 3px solid var(--success);
         }
         
         .items-table .item-type-badge {
@@ -581,8 +754,9 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--text-primary);
         }
         
+        /* ✅ GREEN GRAND TOTAL */
         .totals-box .total-row.grand-total .value {
-            color: var(--otc-color);
+            color: var(--success);
             font-weight: 700;
             font-size: 1.15rem;
         }
@@ -614,14 +788,15 @@ include_once '../../components/cashier_sidebar.php';
             text-decoration: none;
         }
         
+        /* ✅ GREEN BUTTON */
         .btn-otc {
-            background: var(--otc-color);
+            background: linear-gradient(135deg, #059669, #047857);
             color: white;
         }
         .btn-otc:hover {
-            background: #6D28D9;
+            background: linear-gradient(135deg, #047857, #065F46);
             transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(139, 92, 246, 0.3);
+            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
         }
         
         .btn-outline {
@@ -631,16 +806,16 @@ include_once '../../components/cashier_sidebar.php';
         }
         .btn-outline:hover {
             background: var(--bg-body);
-            border-color: var(--otc-color);
-            color: var(--otc-color);
+            border-color: var(--success);
+            color: var(--success);
         }
         
         .btn-success {
-            background: var(--success);
+            background: linear-gradient(135deg, #059669, #047857);
             color: white;
         }
         .btn-success:hover {
-            background: var(--success-dark);
+            background: linear-gradient(135deg, #047857, #065F46);
             transform: translateY(-2px);
             box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
         }
@@ -685,7 +860,7 @@ include_once '../../components/cashier_sidebar.php';
             font-size: 0.65rem;
             color: var(--text-secondary);
         }
-        .footer .footer-brand { color: var(--otc-color); font-weight: 600; }
+        .footer .footer-brand { color: var(--success); font-weight: 600; }
         
         .empty-state {
             text-align: center;
@@ -696,7 +871,7 @@ include_once '../../components/cashier_sidebar.php';
             max-width: 800px;
             margin: 0 auto;
         }
-        .empty-state i { font-size: 3rem; color: var(--border-color); display: block; margin-bottom: 12px; }
+        .empty-state i { font-size: 3rem; color: var(--success); display: block; margin-bottom: 12px; }
         .empty-state h3 { font-size: 1.2rem; color: var(--text-primary); margin-bottom: 8px; }
         .empty-state p { color: var(--text-secondary); font-size: 0.9rem; }
         
@@ -717,6 +892,7 @@ include_once '../../components/cashier_sidebar.php';
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.2rem; }
             .info-grid { grid-template-columns: 1fr 1fr; }
+            .info-grid .info-item.notes-item { grid-column: span 2; }
             .sale-body { padding: 14px 16px; }
             .items-table { font-size: 0.75rem; }
             .items-table thead th, .items-table tbody td { padding: 6px 10px; }
@@ -727,6 +903,7 @@ include_once '../../components/cashier_sidebar.php';
         
         @media (max-width: 480px) {
             .info-grid { grid-template-columns: 1fr; }
+            .info-grid .info-item.notes-item { grid-column: span 1; }
             .sale-header { flex-direction: column; text-align: center; }
         }
     </style>
@@ -743,12 +920,12 @@ include_once '../../components/cashier_sidebar.php';
                 OTC Sale Details
                 <span class="role-badge-display"><?= strtoupper($user_role) ?></span>
                 <?php if ($is_admin): ?>
-                    <span class="header-badge" style="background:rgba(124,58,237,0.3);border-color:rgba(124,58,237,0.3);color:#C4B5FD;">
+                    <span class="header-badge" style="background:rgba(255,255,255,0.2);border-color:rgba(255,255,255,0.2);">
                         <i class="fas fa-user-shield"></i> ADMIN
                     </span>
                 <?php endif; ?>
                 <?php if ($is_reception): ?>
-                    <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FCD34D;">
+                    <span class="header-badge" style="background:rgba(255,255,255,0.2);border-color:rgba(255,255,255,0.2);">
                         <i class="fas fa-eye"></i> RECEPTION
                     </span>
                 <?php endif; ?>
@@ -759,11 +936,11 @@ include_once '../../components/cashier_sidebar.php';
                 <span class="header-badge">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
-                <span class="header-badge" style="background:rgba(139,92,246,0.2);border-color:rgba(139,92,246,0.2);">
+                <span class="header-badge" style="background:rgba(255,255,255,0.15);border-color:rgba(255,255,255,0.15);">
                     <i class="fas fa-shopping-cart"></i> OTC Sale
                 </span>
                 <?php if ($sale && $sale['payment_status'] === 'paid'): ?>
-                    <span class="header-badge" style="background:rgba(5,150,105,0.2);border-color:rgba(5,150,105,0.2);color:#34D399;">
+                    <span class="header-badge" style="background:rgba(255,255,255,0.2);border-color:rgba(255,255,255,0.2);">
                         <i class="fas fa-check-circle"></i> Paid
                     </span>
                 <?php endif; ?>
@@ -774,7 +951,7 @@ include_once '../../components/cashier_sidebar.php';
                 <i class="fas fa-arrow-left"></i> Back
             </a>
             <?php if ($sale && $sale['payment_status'] === 'pending'): ?>
-                <a href="process_otc_payment.php?sale_id=<?= $sale_id ?>" class="btn-outline-light" style="background:rgba(5,150,105,0.2);border-color:rgba(5,150,105,0.2);">
+                <a href="process_otc_payment.php?sale_id=<?= $sale_id ?>" class="btn-outline-light" style="background:rgba(255,255,255,0.2);border-color:rgba(255,255,255,0.2);">
                     <i class="fas fa-money-bill-wave"></i> Pay Now
                 </a>
             <?php endif; ?>
@@ -828,55 +1005,71 @@ include_once '../../components/cashier_sidebar.php';
         
         <!-- Body -->
         <div class="sale-body">
-            <!-- Info Grid -->
+            <!-- ✅ BEAUTIFUL INFO CARDS -->
             <div class="info-grid">
-                <div class="info-item">
+                <!-- Customer Card -->
+                <div class="info-item customer-item">
                     <span class="label"><i class="fas fa-user"></i> Customer</span>
                     <span class="value"><?= htmlspecialchars($sale['customer_name'] ?? 'Walk-in Customer') ?></span>
                 </div>
+                
+                <!-- Phone Card -->
                 <div class="info-item">
                     <span class="label"><i class="fas fa-phone"></i> Phone</span>
                     <span class="value"><?= htmlspecialchars($sale['customer_phone'] ?? 'N/A') ?></span>
                 </div>
+                
                 <?php if (!empty($sale['patient_id'])): ?>
                     <div class="info-item">
                         <span class="label"><i class="fas fa-id-card"></i> Patient ID</span>
                         <span class="value"><?= htmlspecialchars($sale['patient_id']) ?></span>
                     </div>
                 <?php endif; ?>
+                
                 <?php if ($patient): ?>
                     <div class="info-item">
                         <span class="label"><i class="fas fa-user-md"></i> Patient Name</span>
                         <span class="value"><?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></span>
                     </div>
                 <?php endif; ?>
+                
+                <!-- Payment Method Card -->
                 <div class="info-item">
                     <span class="label"><i class="fas fa-credit-card"></i> Payment Method</span>
                     <span class="value"><?= ucfirst($sale['payment_method'] ?? 'Not set') ?></span>
                 </div>
-                <div class="info-item">
+                
+                <!-- ✅ Status Card with Colored Style -->
+                <div class="info-item status-item <?= $sale['payment_status'] === 'paid' ? 'paid' : ($sale['payment_status'] === 'cancelled' ? 'cancelled' : 'pending') ?>">
                     <span class="label"><i class="fas fa-info-circle"></i> Status</span>
                     <span class="value otc-color">
                         <?php if ($sale['payment_status'] === 'paid'): ?>
-                            ✅ Paid
+                            <span class="status-pill paid"><i class="fas fa-check-circle"></i> PAID</span>
                         <?php elseif ($sale['payment_status'] === 'cancelled'): ?>
-                            ❌ Cancelled
+                            <span class="status-pill cancelled"><i class="fas fa-times-circle"></i> CANCELLED</span>
                         <?php else: ?>
-                            ⏳ Pending
+                            <span class="status-pill pending"><i class="fas fa-clock"></i> PENDING</span>
                         <?php endif; ?>
                     </span>
                 </div>
+                
+                <!-- ✅ Notes Card (Full Width) - Beautiful Style -->
                 <?php if (!empty($sale['notes'])): ?>
-                    <div class="info-item" style="grid-column: span 2;">
+                    <div class="info-item notes-item">
                         <span class="label"><i class="fas fa-sticky-note"></i> Notes</span>
                         <span class="value"><?= nl2br(htmlspecialchars($sale['notes'])) ?></span>
+                        <?php if (strpos($sale['notes'], 'Premium') !== false): ?>
+                            <span class="premium-tag">
+                                <i class="fas fa-crown"></i> Premium Applied
+                            </span>
+                        <?php endif; ?>
                     </div>
                 <?php endif; ?>
             </div>
             
             <!-- Items Table -->
             <h4 style="font-size:0.9rem;font-weight:600;color:var(--text-primary);margin-bottom:10px;display:flex;align-items:center;gap:8px;">
-                <i class="fas fa-list-ul" style="color:var(--otc-color);"></i>
+                <i class="fas fa-list-ul" style="color:var(--success);"></i>
                 Sale Items
                 <span style="font-size:0.7rem;font-weight:400;color:var(--text-secondary);">
                     (<?= count($items) ?> items)
@@ -917,7 +1110,7 @@ include_once '../../components/cashier_sidebar.php';
                                 </td>
                                 <td class="text-right"><?= $item['quantity'] ?? 1 ?></td>
                                 <td class="text-right font-mono"><?= $currency ?> <?= number_format($item['unit_price'] ?? 0, 0) ?></td>
-                                <td class="text-right font-mono" style="font-weight:600;color:var(--otc-color);">
+                                <td class="text-right font-mono" style="font-weight:600;color:var(--success);">
                                     <?= $currency ?> <?= number_format($item['total_price'] ?? 0, 0) ?>
                                 </td>
                             </tr>
@@ -1003,7 +1196,7 @@ include_once '../../components/cashier_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             OTC Sale Details
             <span class="text-gray-300 mx-2">|</span>
-            <span style="color:<?= $is_reception ? '#FCD34D' : '#FFD700' ?>;font-weight:600;">
+            <span style="color:var(--success);font-weight:600;">
                 👤 <?= htmlspecialchars($user_full_name) ?>
             </span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1113,10 +1306,10 @@ include_once '../../components/cashier_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c🛒 Braick - View OTC Sale (All Items)', 'font-size:18px; font-weight:bold; color:#8B5CF6;');
-    console.log('%c✅ Shows all items for the OTC sale', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Shows customer information', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Shows totals and payment status', 'font-size:13px; color:#34D399;');
+    console.log('%c🛒 Braick - View OTC Sale (GREEN THEME + BEAUTIFUL INFO CARDS)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ GREEN theme applied throughout', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Beautiful info cards with colored borders', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Notes card with premium badge', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🛒 Sale: <?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📦 Items: <?= count($items) ?>', 'font-size:13px; color:#64748B;');

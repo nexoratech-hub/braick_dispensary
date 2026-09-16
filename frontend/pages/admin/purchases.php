@@ -2,8 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/admin/purchases.php
 // ADMIN - PURCHASE MANAGEMENT
-// ✅ EMBEDDED HEADER (same as shared admin_header.php)
-// ✅ Uses SHARED admin_sidebar.php
+// ✅ Uses SHARED header & sidebar (NO DUPLICATES)
+// ✅ Blue theme + full dark mode support via --page-* variables
+// ✅ FIXED: Mouse scroll hairuhusiwi kupunguza quantities
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -23,6 +24,7 @@ if ($_SESSION['role'] !== 'admin') {
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
         case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
@@ -40,6 +42,7 @@ $user_is_online = $_SESSION['is_online'] ?? 1;
 $selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
 
 require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 try {
     $db = Database::getInstance()->getConnection();
@@ -47,14 +50,7 @@ try {
     die("Database connection failed: " . $e->getMessage());
 }
 
-// GET BRANCHES
-$branches = [];
-try {
-    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) { $branches = []; }
-
-// AUTO-MIGRATION
+// AUTO-MIGRATION (same as before)
 try {
     $stmt = $db->query("SHOW COLUMNS FROM medications_inventory LIKE 'added_by'");
     if ($stmt->rowCount() == 0) {
@@ -246,8 +242,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // ADD MEDICINE
+    // ADD MEDICINE / EQUIPMENT / COMPLETE / CANCEL / DELETE
+    // (SAME CODE AS ORIGINAL - KEPT INTACT)
     if ($action_post === 'add_medicine') {
+        // ... (same as original code - kept intact)
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         $medication_name = trim($_POST['medication_name'] ?? '');
         $quantity = (int)($_POST['quantity'] ?? 0);
@@ -257,26 +255,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $batch_number = trim($_POST['batch_number'] ?? '');
         $category = trim($_POST['category'] ?? '');
         
-        if ($category === '__other__' && !empty($_POST['category_manual'])) {
-            $category = trim($_POST['category_manual']);
-        }
+        if ($category === '__other__' && !empty($_POST['category_manual'])) $category = trim($_POST['category_manual']);
         if (empty($category)) $category = 'Other';
         
         $unit = trim($_POST['unit'] ?? 'pcs');
-        if (empty($unit) && !empty($_POST['unit_manual'])) {
-            $unit = trim($_POST['unit_manual']);
-        }
-        if (empty($unit) || $unit === '__other__') {
-            $unit = 'pcs';
-        }
+        if (empty($unit) && !empty($_POST['unit_manual'])) $unit = trim($_POST['unit_manual']);
+        if (empty($unit) || $unit === '__other__') $unit = 'pcs';
         
         $reorder_level = (int)($_POST['reorder_level'] ?? 10);
         $supplier = trim($_POST['supplier'] ?? '');
         $status = $_POST['status'] ?? 'active';
         
-        if (empty($batch_number)) {
-            $batch_number = 'BATCH-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
-        }
+        if (empty($batch_number)) $batch_number = 'BATCH-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
         
         $stmt = $db->prepare("SELECT status, created_by, purchase_type, branch_id FROM purchases WHERE id = ?");
         $stmt->execute([$purchase_id_post]);
@@ -359,14 +349,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
         
-        if (!empty($errors)) {
-            $message = implode('<br>', $errors);
-            $message_type = 'error';
-        }
+        if (!empty($errors)) { $message = implode('<br>', $errors); $message_type = 'error'; }
     }
     
-    // ADD EQUIPMENT
+    // ADD EQUIPMENT (same as original)
     if ($action_post === 'add_equipment') {
+        // ... (same as original code - kept intact)
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         $equipment_name = trim($_POST['equipment_name'] ?? '');
         $quantity = (int)($_POST['quantity'] ?? 0);
@@ -376,26 +364,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $batch_number = trim($_POST['batch_number'] ?? '');
         $category = trim($_POST['category'] ?? '');
         
-        if ($category === '__other__' && !empty($_POST['category_manual'])) {
-            $category = trim($_POST['category_manual']);
-        }
+        if ($category === '__other__' && !empty($_POST['category_manual'])) $category = trim($_POST['category_manual']);
         if (empty($category)) $category = 'Other';
         
         $unit = trim($_POST['unit'] ?? 'pcs');
-        if (empty($unit) && !empty($_POST['unit_manual'])) {
-            $unit = trim($_POST['unit_manual']);
-        }
-        if (empty($unit) || $unit === '__other__') {
-            $unit = 'pcs';
-        }
+        if (empty($unit) && !empty($_POST['unit_manual'])) $unit = trim($_POST['unit_manual']);
+        if (empty($unit) || $unit === '__other__') $unit = 'pcs';
         
         $reorder_level = (int)($_POST['reorder_level'] ?? 5);
         $supplier = trim($_POST['supplier'] ?? '');
         $status = $_POST['status'] ?? 'active';
         
-        if (empty($batch_number)) {
-            $batch_number = 'EQP-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
-        }
+        if (empty($batch_number)) $batch_number = 'EQP-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
         
         $stmt = $db->prepare("SELECT status, created_by, purchase_type, branch_id FROM purchases WHERE id = ?");
         $stmt->execute([$purchase_id_post]);
@@ -478,20 +458,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
         
-        if (!empty($errors)) {
-            $message = implode('<br>', $errors);
-            $message_type = 'error';
-        }
+        if (!empty($errors)) { $message = implode('<br>', $errors); $message_type = 'error'; }
     }
     
-    // COMPLETE PURCHASE
+    // COMPLETE PURCHASE (same as original)
     if ($action_post === 'complete_purchase') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
-        
-        $stmt = $db->prepare("
-            SELECT id, status, created_by, invoice_number, purchase_type, branch_id, total_items
-            FROM purchases WHERE id = ?
-        ");
+        $stmt = $db->prepare("SELECT id, status, created_by, invoice_number, purchase_type, branch_id, total_items FROM purchases WHERE id = ?");
         $stmt->execute([$purchase_id_post]);
         $purchase = $stmt->fetch(PDO::FETCH_ASSOC);
         
@@ -503,26 +476,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (empty($errors)) {
             try {
                 $db->beginTransaction();
-                
                 $stmt = $db->prepare("SELECT pi.* FROM purchase_items pi WHERE pi.purchase_id = ?");
                 $stmt->execute([$purchase_id_post]);
                 $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
                 $updated_count = 0;
-                
                 foreach ($items as $item) {
                     if ($item['item_type'] === 'medicine') {
                         $stmt = $db->prepare("SELECT id, quantity FROM medications_inventory WHERE id = ? LIMIT 1");
                         $stmt->execute([$item['item_id']]);
                         $inventory = $stmt->fetch(PDO::FETCH_ASSOC);
-                        
                         if ($inventory) {
                             $new_qty = $inventory['quantity'] + $item['quantity'];
-                            $stmt = $db->prepare("
-                                UPDATE medications_inventory 
-                                SET quantity = ?, unit_cost = ?, selling_price = ?, status = 'active', updated_at = NOW()
-                                WHERE id = ?
-                            ");
+                            $stmt = $db->prepare("UPDATE medications_inventory SET quantity = ?, unit_cost = ?, selling_price = ?, status = 'active', updated_at = NOW() WHERE id = ?");
                             $stmt->execute([$new_qty, $item['buying_price'], $item['selling_price'], $item['item_id']]);
                             $updated_count++;
                         }
@@ -530,26 +496,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $stmt = $db->prepare("SELECT id, quantity FROM medical_equipment WHERE id = ? LIMIT 1");
                         $stmt->execute([$item['item_id']]);
                         $inventory = $stmt->fetch(PDO::FETCH_ASSOC);
-                        
                         if ($inventory) {
                             $new_qty = $inventory['quantity'] + $item['quantity'];
-                            $stmt = $db->prepare("
-                                UPDATE medical_equipment 
-                                SET quantity = ?, unit_cost = ?, selling_price = ?, status = 'active', updated_at = NOW()
-                                WHERE id = ?
-                            ");
+                            $stmt = $db->prepare("UPDATE medical_equipment SET quantity = ?, unit_cost = ?, selling_price = ?, status = 'active', updated_at = NOW() WHERE id = ?");
                             $stmt->execute([$new_qty, $item['buying_price'], $item['selling_price'], $item['item_id']]);
                             $updated_count++;
                         }
                     }
                 }
                 
-                $stmt = $db->prepare("
-                    UPDATE purchases SET status = 'COMPLETED', completed_at = NOW(), updated_at = NOW()
-                    WHERE id = ?
-                ");
+                $stmt = $db->prepare("UPDATE purchases SET status = 'COMPLETED', completed_at = NOW(), updated_at = NOW() WHERE id = ?");
                 $stmt->execute([$purchase_id_post]);
-                
                 $db->commit();
                 
                 $_SESSION['purchase_message'] = "✅ Purchase <strong>{$purchase['invoice_number']}</strong> completed! ($updated_count items updated)";
@@ -562,14 +519,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message_type = 'error';
             }
         }
-        
-        if (!empty($errors)) {
-            $message = implode('<br>', $errors);
-            $message_type = 'error';
-        }
+        if (!empty($errors)) { $message = implode('<br>', $errors); $message_type = 'error'; }
     }
     
-    // CANCEL PURCHASE
+    // CANCEL PURCHASE (same as original)
     if ($action_post === 'cancel_purchase') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         $cancel_reason = trim($_POST['cancel_reason'] ?? 'Cancelled by Admin');
@@ -586,22 +539,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (empty($errors)) {
             try {
                 $db->beginTransaction();
-                
                 $stmt = $db->prepare("DELETE FROM purchase_items WHERE purchase_id = ?");
                 $stmt->execute([$purchase_id_post]);
                 
                 $stmt = $db->prepare("
-                    UPDATE purchases 
-                    SET status = 'CANCELLED', 
-                        cancelled_reason = ?, 
-                        cancelled_by = ?, 
-                        cancelled_by_name = ?,
-                        cancelled_at = NOW(), 
-                        updated_at = NOW()
+                    UPDATE purchases SET status = 'CANCELLED', cancelled_reason = ?, cancelled_by = ?, 
+                        cancelled_by_name = ?, cancelled_at = NOW(), updated_at = NOW()
                     WHERE id = ?
                 ");
                 $stmt->execute([$cancel_reason, $user_id, $user_full_name, $purchase_id_post]);
-                
                 $db->commit();
                 
                 $_SESSION['purchase_message'] = "✅ Purchase <strong>{$purchase['invoice_number']}</strong> cancelled!";
@@ -614,14 +560,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message_type = 'error';
             }
         }
-        
-        if (!empty($errors)) {
-            $message = implode('<br>', $errors);
-            $message_type = 'error';
-        }
+        if (!empty($errors)) { $message = implode('<br>', $errors); $message_type = 'error'; }
     }
     
-    // DELETE ITEM
+    // DELETE ITEM (same as original)
     if ($action_post === 'delete_item') {
         $item_id = (int)($_POST['item_id'] ?? 0);
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
@@ -686,7 +628,6 @@ $all_equipment = [];
 if ($purchase_id > 0) {
     $branch_where = "";
     $branch_params = [$purchase_id];
-    
     if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         $branch_where = " AND p.branch_id = ?";
         $branch_params[] = (int)$selected_branch_id;
@@ -705,7 +646,6 @@ if ($purchase_id > 0) {
     if ($current_purchase) {
         $is_creator = ($current_purchase['created_by'] == $user_id);
         $can_edit = ($current_purchase['status'] === 'IN_PROGRESS');
-        
         $purchase_branch = $current_purchase['branch_id'] ?? $user_branch_id;
         
         $stmt = $db->prepare("
@@ -749,19 +689,17 @@ if ($purchase_id > 0) {
     }
 }
 
-// GET IN_PROGRESS PURCHASES
+// GET IN_PROGRESS, COMPLETED, CANCELLED
 $all_med_in_progress = [];
 $all_equip_in_progress = [];
 
 if ($active_view === 'medicine') {
     $med_where = "p.status = 'IN_PROGRESS' AND p.purchase_type = 'medicine'";
     $med_params = [];
-    
     if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         $med_where .= " AND p.branch_id = ?";
         $med_params[] = (int)$selected_branch_id;
     }
-    
     $stmt = $db->prepare("
         SELECT p.*, u.full_name as creator_name, b.name as branch_name
         FROM purchases p
@@ -777,12 +715,10 @@ if ($active_view === 'medicine') {
 if ($active_view === 'equipment') {
     $equip_where = "p.status = 'IN_PROGRESS' AND p.purchase_type = 'equipment'";
     $equip_params = [];
-    
     if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         $equip_where .= " AND p.branch_id = ?";
         $equip_params[] = (int)$selected_branch_id;
     }
-    
     $stmt = $db->prepare("
         SELECT p.*, u.full_name as creator_name, b.name as branch_name
         FROM purchases p
@@ -795,70 +731,6 @@ if ($active_view === 'equipment') {
     $all_equip_in_progress = $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
-// COMPLETED
-$completed_purchases = [];
-$comp_where = "p.status = 'COMPLETED'";
-$comp_params = [];
-
-if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    $comp_where .= " AND p.branch_id = ?";
-    $comp_params[] = (int)$selected_branch_id;
-}
-
-if ($active_view === 'medicine') {
-    $comp_where .= " AND p.purchase_type = 'medicine'";
-} elseif ($active_view === 'equipment') {
-    $comp_where .= " AND p.purchase_type = 'equipment'";
-}
-
-$stmt = $db->prepare("
-    SELECT p.*, u.full_name as creator_name, b.name as branch_name
-    FROM purchases p
-    LEFT JOIN users u ON p.created_by = u.id
-    LEFT JOIN branches b ON p.branch_id = b.id
-    WHERE " . $comp_where . "
-    ORDER BY p.completed_at DESC
-    LIMIT 50
-");
-$stmt->execute($comp_params);
-$completed_purchases = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// CANCELLED
-$cancelled_purchases = [];
-$canc_where = "p.status = 'CANCELLED'";
-$canc_params = [];
-
-if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    $canc_where .= " AND p.branch_id = ?";
-    $canc_params[] = (int)$selected_branch_id;
-}
-
-if ($active_view === 'medicine') {
-    $canc_where .= " AND p.purchase_type = 'medicine'";
-} elseif ($active_view === 'equipment') {
-    $canc_where .= " AND p.purchase_type = 'equipment'";
-}
-
-$stmt = $db->prepare("
-    SELECT p.*, u.full_name as creator_name, a.full_name as cancelled_by_name, b.name as branch_name
-    FROM purchases p
-    LEFT JOIN users u ON p.created_by = u.id
-    LEFT JOIN users a ON p.cancelled_by = a.id
-    LEFT JOIN branches b ON p.branch_id = b.id
-    WHERE " . $canc_where . "
-    ORDER BY p.updated_at DESC
-    LIMIT 20
-");
-$stmt->execute($canc_params);
-$cancelled_purchases = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-$unread_notifications = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-} catch (Exception $e) {}
-
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
@@ -866,790 +738,894 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.PN
 
 $display_branch_name = 'All Branches';
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    foreach ($branches as $b) {
-        if ($b['id'] == $selected_branch_id) {
-            $display_branch_name = $b['name'];
-            break;
-        }
-    }
+    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
+    $stmt->execute([(int)$selected_branch_id]);
+    $bd = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($bd) $display_branch_name = $bd['name'];
 }
 
 $page_title = 'Admin Purchases';
-if ($active_view === 'medicine') {
-    $page_title = 'Medicine Purchases';
-} elseif ($active_view === 'equipment') {
-    $page_title = 'Equipment Purchases';
-} elseif ($purchase_id > 0 && $current_purchase) {
-    $page_title = 'Purchase: ' . $current_purchase['invoice_number'];
-}
+if ($active_view === 'medicine') $page_title = 'Medicine Purchases';
+elseif ($active_view === 'equipment') $page_title = 'Equipment Purchases';
+elseif ($purchase_id > 0 && $current_purchase) $page_title = 'Purchase: ' . $current_purchase['invoice_number'];
 
 // ================================================================
-// ✅ INCLUDE SHARED SIDEBAR ONLY (NO HEADER - WE HAVE EMBEDDED HEADER)
+// ✅ SHARED HEADER & SIDEBAR
 // ================================================================
+include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= $page_title ?> - Braick Dispensary</title>
-    
-    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
-    <style>
-        :root {
-            --primary: #0B5ED7; --primary-dark: #0A4CA8; --primary-light: #E8F0FE;
-            --success: #059669; --success-dark: #047857; --success-light: #D1FAE5;
-            --warning: #D97706; --warning-light: #FEF3C7;
-            --danger: #DC2626; --danger-light: #FEE2E2;
-            --purple: #7C3AED; --purple-light: #EDE9FE;
-            --teal: #0D9488; --teal-light: #CCFBF1;
-            --bg-body: #F1F5F9; --bg-card: #FFFFFF; --bg-nav: #FFFFFF;
-            --border-color: #E2E8F0;
-            --text-primary: #1E293B; --text-secondary: #64748B; --text-muted: #94A3B8;
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A; --bg-card: #1E293B; --bg-nav: #1E293B;
-            --border-color: #334155;
-            --text-primary: #F1F5F9; --text-secondary: #94A3B8; --text-muted: #64748B;
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', 'Segoe UI', sans-serif; background: var(--bg-body); color: var(--text-primary); }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           ✅ EMBEDDED HEADER - SAME AS SHARED admin_header.php
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 12px;
-            border: 2px solid var(--border-color);
-            flex: 1;
-            max-width: 500px;
-            height: 42px;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-            height: 100%;
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            color: white;
-            border: none;
-            padding: 0 20px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            height: 100%;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--text-muted); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 8px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            transition: all 0.3s;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .branch-selector {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 8px;
-            padding: 6px 12px;
-            font-size: 0.78rem;
-            color: var(--text-primary);
-            outline: none;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .branch-selector:focus {
-            border-color: var(--primary);
-        }
-        
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
-        .main-content { margin-left: 270px; margin-top: 68px; padding: 28px 32px; min-height: calc(100vh - 68px); }
-        
-        /* PAGE HEADER */
-        .page-header-box {
-            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            border-radius: 16px; padding: 18px 24px; margin-bottom: 20px;
-            display: flex; justify-content: space-between; align-items: center;
-            flex-wrap: wrap; gap: 10px;
-        }
-        
-        .page-header-box.equipment-mode {
-            background: linear-gradient(135deg, #7C3AED, #5B21B6);
-        }
-        
-        .page-header-box .page-title {
-            color: white; font-size: 1.4rem; font-weight: 700;
-            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-        }
-        .page-header-box .role-badge-display {
-            background: rgba(255,255,255,0.2); color: white;
-            padding: 2px 10px; border-radius: 20px; font-size: 0.55rem;
-            font-weight: 600; text-transform: uppercase;
-        }
-        .page-header-box .branch-name-display {
-            background: rgba(255,255,255,0.15); padding: 2px 12px;
-            border-radius: 20px; font-size: 0.7rem; font-weight: 500; color: white;
-        }
-        .page-header-box .page-subtitle {
-            color: rgba(255,255,255,0.85); font-size: 0.8rem;
-            display: flex; align-items: center; gap: 6px;
-            flex-wrap: wrap; margin-top: 2px;
-        }
-        
-        .header-badge {
-            background: rgba(255,255,255,0.15); color: white;
-            padding: 2px 10px; border-radius: 20px; font-size: 0.6rem;
-            font-weight: 500; display: inline-flex; align-items: center; gap: 4px;
-        }
-        
-        .header-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-        
-        .btn-back-header {
-            background: rgba(255,255,255,0.2); color: white;
-            padding: 10px 22px; border-radius: 10px;
-            font-weight: 600; font-size: 0.85rem;
-            border: 2px solid rgba(255,255,255,0.3);
-            cursor: pointer; text-decoration: none;
-            display: inline-flex; align-items: center; gap: 8px;
-            transition: all 0.3s ease; white-space: nowrap;
-            height: 48px; backdrop-filter: blur(4px);
-        }
-        .btn-back-header:hover {
-            background: rgba(255,255,255,0.3);
-            border-color: rgba(255,255,255,0.5);
-            transform: translateX(-3px);
-        }
-        
-        .btn-add-purchase {
-            background: #059669; color: white;
-            padding: 10px 24px; border-radius: 8px;
-            font-weight: 700; font-size: 0.9rem; border: none;
-            cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
-        }
-        .btn-add-purchase:hover { background: #047857; transform: translateY(-2px); }
-        .btn-add-purchase.purple { background: #7C3AED; box-shadow: 0 4px 12px rgba(124, 58, 237, 0.35); }
-        .btn-add-purchase.purple:hover { background: #6D28D9; }
-        
-        .btn-join {
-            background: #0B5ED7; color: white;
-            padding: 6px 18px; border-radius: 6px;
-            font-size: 0.75rem; font-weight: 600; border: none;
-            cursor: pointer; text-decoration: none;
-            display: inline-flex; align-items: center; gap: 6px;
-        }
-        .btn-join:hover { background: #0A4CA8; transform: translateY(-2px); }
-        .btn-join.purple { background: #7C3AED; }
-        .btn-join.purple:hover { background: #6D28D9; }
-        
-        .btn-complete {
-            background: #059669; color: white;
-            padding: 10px 24px; border-radius: 8px;
-            font-weight: 700; font-size: 0.85rem; border: none;
-            cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        .btn-complete:hover { background: #047857; transform: translateY(-2px); }
-        .btn-complete:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-        
-        .btn-cancel-purchase {
-            background: #DC2626; color: white;
-            padding: 10px 24px; border-radius: 8px;
-            font-weight: 700; font-size: 0.85rem; border: none;
-            cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-        }
-        .btn-cancel-purchase:hover { background: #991B1B; transform: translateY(-2px); }
-        
-        .btn-delete-item {
-            background: #DC2626; color: white; border: none;
-            padding: 3px 10px; border-radius: 4px;
-            font-size: 0.65rem; cursor: pointer;
-        }
-        .btn-delete-item:hover { background: #991B1B; }
-        
-        .btn-print {
-            background: #DC2626; color: white;
-            padding: 8px 20px; border-radius: 8px;
-            font-weight: 600; font-size: 0.85rem; border: none;
-            cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
-        }
-        .btn-print:hover { background: #991B1B; }
-        
-        .btn-save {
-            background: #059669; color: white;
-            padding: 10px 28px; border-radius: 10px;
-            font-weight: 600; font-size: 0.9rem; border: none;
-            cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
-        }
-        .btn-save:hover { background: #047857; }
-        .btn-save.purple { background: #7C3AED; }
-        .btn-save.purple:hover { background: #6D28D9; }
-        
-        .btn-cancel {
-            background: transparent; color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-            padding: 10px 24px; border-radius: 10px;
-            font-weight: 600; font-size: 0.9rem; cursor: pointer;
-            text-decoration: none;
-        }
-        .btn-cancel:hover { border-color: #DC2626; color: #DC2626; }
-        
-        .btn-generate {
-            background: #0B5ED7; color: white; border: none;
-            border-radius: 10px; padding: 8px 14px;
-            font-size: 0.75rem; font-weight: 600;
-            cursor: pointer; white-space: nowrap; height: 42px;
-            display: inline-flex; align-items: center; gap: 4px;
-        }
-        .btn-generate:hover { background: #0A4CA8; }
-        
-        .btn-toggle {
-            background: #0B5ED7; color: white; border: none;
-            border-radius: 10px; padding: 8px 12px;
-            font-size: 0.7rem; font-weight: 600;
-            cursor: pointer; white-space: nowrap; height: 42px;
-            display: inline-flex; align-items: center; gap: 4px;
-        }
-        .btn-toggle:hover { background: #0A4CA8; }
-        
-        /* MESSAGE */
-        .message-box {
-            padding: 12px 18px; border-radius: 10px; margin-bottom: 16px;
-            display: flex; align-items: center; gap: 10px;
-            font-weight: 500; font-size: 0.9rem;
-            border-left: 5px solid transparent;
-        }
-        .message-box.success { background: #D1FAE5; color: #065F46; border-left-color: #059669; }
-        .message-box.error { background: #FEE2E2; color: #991B1B; border-left-color: #DC2626; }
-        .message-box.info { background: #E8F0FE; color: #0A4CA8; border-left-color: #0B5ED7; }
-        .message-box .message-close { margin-left: auto; background: none; border: none; cursor: pointer; font-size: 1.1rem; color: inherit; }
-        
-        /* CARD */
-        .card {
-            background: var(--bg-card); border-radius: 12px;
-            padding: 14px 18px; border: 2px solid var(--border-color);
-            margin-bottom: 20px;
-        }
-        
-        .card-header {
-            display: flex; justify-content: space-between;
-            align-items: center; margin-bottom: 10px;
-            flex-wrap: wrap; gap: 6px;
-        }
-        
-        .card-title { font-size: 0.9rem; font-weight: 600; }
-        .card-title i.blue { color: #0B5ED7; }
-        .card-title i.purple { color: #7C3AED; }
-        .card-title i.green { color: #059669; }
-        
-        .result-count { font-size: 0.75rem; color: var(--text-secondary); }
-        .result-count strong { color: #0B5ED7; }
-        
-        /* GRID */
-        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-        
-        .purchase-card {
-            background: var(--bg-card); border: 2px solid var(--border-color);
-            border-radius: 10px; padding: 14px 16px;
-            transition: all 0.3s ease;
-        }
-        .purchase-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); transform: translateY(-2px); }
-        
-        .purchase-card .invoice-number { font-size: 1rem; font-weight: 700; }
-        
-        .purchase-card .status-badge {
-            padding: 2px 10px; border-radius: 12px;
-            font-size: 0.6rem; font-weight: 600;
-        }
-        .status-badge.in-progress { background: #FEF3C7; color: #D97706; }
-        .status-badge.completed { background: #D1FAE5; color: #059669; }
-        .status-badge.cancelled { background: #FEE2E2; color: #DC2626; }
-        
-        .purchase-card .meta-text { font-size: 0.7rem; color: var(--text-secondary); }
-        
-        .branch-tag-small {
-            display: inline-flex; align-items: center; gap: 3px;
-            padding: 1px 8px; border-radius: 10px;
-            font-size: 0.6rem; font-weight: 600;
-            background: #E8F0FE; color: #0B5ED7;
-        }
-        
-        /* PURCHASE DETAILS */
-        .purchase-details-header {
-            display: flex; justify-content: space-between;
-            align-items: center; flex-wrap: wrap; gap: 10px;
-            margin-bottom: 16px;
-        }
-        .purchase-details-header .invoice-number {
-            font-size: 1.4rem; font-weight: 700; color: #0B5ED7;
-        }
-        
-        .purchase-status {
-            padding: 4px 16px; border-radius: 20px;
-            font-size: 0.7rem; font-weight: 600;
-        }
-        .purchase-status.in_progress { background: #FEF3C7; color: #D97706; }
-        .purchase-status.completed { background: #D1FAE5; color: #059669; }
-        .purchase-status.cancelled { background: #FEE2E2; color: #DC2626; }
-        
-        .purchase-info-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 10px; margin-bottom: 16px;
-        }
-        .purchase-info-item {
-            padding: 8px 12px; background: var(--bg-body);
-            border-radius: 6px;
-        }
-        .purchase-info-item .label {
-            font-size: 0.55rem; text-transform: uppercase;
-            color: var(--text-secondary); font-weight: 600;
-        }
-        .purchase-info-item .value {
-            font-size: 0.85rem; font-weight: 600; margin-top: 2px;
-        }
-        
-        /* FORMS */
-        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-        .form-grid .full-width { grid-column: 1 / -1; }
-        
-        .form-label { font-size: 0.75rem; font-weight: 600; margin-bottom: 3px; display: block; }
-        .form-label .required { color: #DC2626; }
-        
-        .form-control {
-            width: 100%; padding: 7px 12px;
-            border: 2px solid var(--border-color);
-            border-radius: 8px; font-size: 0.8rem;
-            outline: none; background: var(--bg-card); color: var(--text-primary);
-            height: 42px;
-        }
-        .form-control:focus { border-color: #0B5ED7; box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1); }
-        
-        .form-actions {
-            display: flex; gap: 10px; margin-top: 18px;
-            padding-top: 14px; border-top: 2px solid var(--border-color);
-            flex-wrap: wrap;
-        }
-        
-        .category-input-group,
-        .unit-input-group,
-        .batch-input-group {
-            display: flex; gap: 6px; align-items: center;
-        }
-        .category-input-group .form-control,
-        .unit-input-group .form-control,
-        .batch-input-group .form-control { flex: 1; }
-        
-        .autocomplete-container { position: relative; width: 100%; }
-        
-        .autocomplete-list {
-            position: absolute; top: 100%; left: 0; right: 0;
-            background: var(--bg-card);
-            border: 2px solid var(--border-color); border-top: none;
-            border-radius: 0 0 8px 8px; z-index: 100;
-            max-height: 200px; overflow-y: auto;
-            display: none; box-shadow: 0 8px 30px rgba(0,0,0,0.12);
-        }
-        .autocomplete-list.show { display: block; }
-        
-        .autocomplete-item {
-            padding: 8px 14px; cursor: pointer;
-            border-bottom: 1px solid var(--border-color);
-            font-size: 0.82rem;
-        }
-        .autocomplete-item:hover { background: #E8F0FE; color: #0B5ED7; }
-        .autocomplete-item .item-detail { font-size: 0.65rem; color: var(--text-muted); display: block; }
-        
-        /* TABLE */
-        .table-wrapper { overflow-x: auto; }
-        
-        .data-table {
-            width: 100%; border-collapse: separate;
-            border-spacing: 0; font-size: 0.78rem;
-        }
-        .data-table thead th {
-            background: #0B5ED7; color: white;
-            padding: 8px 10px; font-size: 0.6rem;
-            text-transform: uppercase; font-weight: 700;
-            white-space: nowrap; text-align: left;
-        }
-        .data-table tbody tr:nth-child(even) { background: #E8F0FE; }
-        .data-table tbody tr:hover td { background: #D1FAE5; }
-        .data-table td {
-            padding: 8px 10px; border-bottom: 1px solid var(--border-color);
-            vertical-align: middle;
-        }
-        
-        .added-by-tag {
-            display: inline-flex; align-items: center; gap: 3px;
-            padding: 1px 8px; border-radius: 10px;
-            font-size: 0.6rem; font-weight: 600;
-            background: #EDE9FE; color: #7C3AED;
-        }
-        
-        .unit-badge {
-            display: inline-flex; align-items: center; gap: 3px;
-            padding: 1px 6px; border-radius: 6px;
-            font-size: 0.6rem; font-weight: 600;
-            background: #CCFBF1; color: #0D9488;
-        }
-        
-        .empty-state {
-            text-align: center; padding: 40px 20px;
-            color: var(--text-secondary);
-        }
-        .empty-state i {
-            font-size: 3rem; color: var(--border-color);
-            display: block; margin-bottom: 12px;
-        }
-        .empty-state p { font-size: 0.95rem; margin-bottom: 6px; }
-        .empty-state .sub { font-size: 0.8rem; }
-        
-        /* MODAL */
-        .modal-overlay {
-            display: none; position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.7); z-index: 2000;
-            justify-content: center; align-items: center;
-            padding: 20px;
-        }
-        .modal-overlay.show { display: flex; }
-        
-        .modal-content {
-            background: var(--bg-card); border-radius: 12px;
-            max-width: 550px; width: 100%;
-            max-height: 90vh; overflow-y: auto;
-            padding: 24px 28px;
-            border: 2px solid var(--border-color);
-        }
-        .modal-content.modal-pdf { max-width: 900px; background: white; padding: 20px; }
-        
-        .modal-header {
-            display: flex; justify-content: space-between; align-items: center;
-            padding-bottom: 12px; border-bottom: 2px solid var(--border-color);
-            margin-bottom: 16px;
-        }
-        .modal-title { font-size: 1.1rem; font-weight: 700; color: #DC2626; }
-        .modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--text-secondary); }
-        .modal-close:hover { color: #DC2626; }
-        
-        .modal-actions {
-            display: flex; gap: 10px; padding-top: 14px;
-            border-top: 2px solid var(--border-color);
-            margin-top: 16px; flex-wrap: wrap;
-        }
-        
-        .btn-confirm-cancel {
-            background: #DC2626; color: white;
-            padding: 10px 28px; border-radius: 8px;
-            font-weight: 600; font-size: 0.9rem; border: none;
-            cursor: pointer; flex: 1;
-        }
-        .btn-confirm-cancel:hover { background: #991B1B; }
-        
-        .btn-close-modal {
-            background: transparent; color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-            padding: 10px 24px; border-radius: 8px;
-            font-weight: 600; font-size: 0.9rem; cursor: pointer;
-        }
-        .btn-close-modal:hover { border-color: #DC2626; color: #DC2626; }
-        
-        .cancel-reason-textarea {
-            width: 100%; padding: 10px 14px;
-            border: 2px solid var(--border-color);
-            border-radius: 8px; font-size: 0.9rem;
-            resize: vertical; min-height: 80px;
-            background: var(--bg-body); color: var(--text-primary);
-            font-family: inherit;
-        }
-        .cancel-reason-textarea:focus {
-            border-color: #DC2626;
-            box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1);
-            outline: none;
-        }
-        
-        .cancel-warning-icon {
-            text-align: center; font-size: 3rem;
-            color: #DC2626; margin-bottom: 10px;
-        }
-        
-        .btn-print-invoice {
-            background: #0B5ED7; color: white;
-            padding: 8px 20px; border-radius: 8px;
-            font-weight: 600; font-size: 0.85rem; border: none;
-            cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
-        }
-        .btn-print-invoice:hover { background: #0A4CA8; }
-        
-        .btn-close-modal-pdf {
-            background: transparent; color: #64748B;
-            border: 2px solid #E2E8F0; padding: 8px 20px;
-            border-radius: 8px; font-weight: 600;
-            font-size: 0.85rem; cursor: pointer;
-        }
-        .btn-close-modal-pdf:hover { border-color: #DC2626; color: #DC2626; }
-        
-        .admin-badge {
-            background: linear-gradient(135deg, #DC2626, #991B1B);
-            color: white; padding: 2px 10px; border-radius: 20px;
-            font-size: 0.6rem; font-weight: 700;
-            display: inline-flex; align-items: center; gap: 4px;
-        }
-        
-        /* ACTION BAR */
-        .action-bar {
-            background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-            border: 2px solid #D97706;
-            border-radius: 12px;
-            padding: 14px 20px;
-            margin-top: 16px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
-        .action-bar .action-info {
-            font-size: 0.85rem;
-            color: #92400E;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        .action-bar .action-buttons {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        
-        /* FOOTER */
-        .footer {
-            padding: 10px 0; border-top: 1px solid var(--border-color);
-            margin-top: 16px; text-align: center;
-            font-size: 0.6rem; color: var(--text-secondary);
-        }
-        .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
-        
-        /* RESPONSIVE */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .grid-3 { grid-template-columns: 1fr 1fr; }
-        }
-        @media (max-width: 768px) {
-            .grid-3 { grid-template-columns: 1fr; }
-            .form-grid { grid-template-columns: 1fr; }
-            .form-grid .full-width { grid-column: 1; }
-            .page-header-box .page-title { font-size: 1.1rem; }
-            .header-actions { width: 100%; }
-            .data-table { min-width: 800px; }
-            .btn-back-header { width: 100%; justify-content: center; }
-            .action-bar { flex-direction: column; align-items: stretch; }
-            .action-bar .action-buttons { width: 100%; }
-            .action-bar .action-buttons button,
-            .action-bar .action-buttons form { flex: 1; }
-            .action-bar .action-buttons button { width: 100%; justify-content: center; }
-            .datetime { display: none; }
-        }
-    </style>
-</head>
-<body>
+<!-- ================================================================
+     PAGE-SPECIFIC CSS - TUMIA VARIABLES ZA HEADER (--page-*)
+     ================================================================ -->
+<style>
+    /* PAGE HEADER BOX */
+    .page-header-box-purch {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        border-radius: 16px;
+        padding: 18px 24px;
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+        position: relative;
+        overflow: hidden;
+    }
 
-<!-- ================================================================ -->
-<!-- ✅ EMBEDDED HEADER - SAME AS SHARED admin_header.php -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div style="display:flex;align-items:center;gap:16px;flex:1;">
-        <button id="sidebarToggle" class="lg:hidden icon-btn" style="display:none;">
-            <i class="fas fa-bars" style="font-size:1.1rem;"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search" style="color:#94A3B8;margin-left:12px;"></i>
-            <input type="text" id="globalSearchInput" placeholder="Search purchases...">
-            <button id="globalSearchBtn" class="search-btn">
-                <i class="fas fa-search"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div style="display:flex;align-items:center;gap:12px;">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime">
-            <i class="fas fa-clock"></i>
-            <span id="currentDateTime"><?= date('d M Y • h:i:s A') ?></span>
-        </span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn" onclick="window.location.href='notifications.php'">
-            <i class="fas fa-bell" style="font-size:1.1rem;"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+    .page-header-box-purch::before {
+        content: '';
+        position: absolute;
+        top: -60%; right: -10%;
+        width: 400px; height: 400px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .page-header-box-purch.equipment-mode {
+        background: linear-gradient(135deg, #7C3AED, #5B21B6);
+    }
+
+    .page-header-box-purch .page-title-purch {
+        color: white;
+        font-size: 1.4rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+    }
+
+    .page-header-box-purch .page-subtitle-purch {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.8rem;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 4px;
+    }
+
+    .page-header-box-purch .role-badge-display {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 2px 10px;
+        border-radius: 20px;
+        font-size: 0.55rem;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+
+    .page-header-box-purch .branch-name-display {
+        background: rgba(255,255,255,0.15);
+        padding: 2px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        color: white;
+    }
+
+    .header-badge-purch {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 2px 10px;
+        border-radius: 20px;
+        font-size: 0.6rem;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .header-actions-purch {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+        position: relative;
+        z-index: 1;
+    }
+
+    /* BUTTONS */
+    .btn-purch {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 18px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.82rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        text-decoration: none;
+        border: none;
+        font-family: inherit;
+    }
+
+    .btn-purch:hover {
+        transform: translateY(-2px);
+    }
+
+    .btn-back-header-purch {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        border: 2px solid rgba(255,255,255,0.3);
+        backdrop-filter: blur(4px);
+    }
+
+    .btn-back-header-purch:hover {
+        background: rgba(255,255,255,0.3);
+        border-color: rgba(255,255,255,0.5);
+        color: white;
+    }
+
+    .btn-add-purchase-purch {
+        background: #059669;
+        color: white;
+        padding: 10px 24px;
+        font-weight: 700;
+        font-size: 0.9rem;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+    }
+
+    .btn-add-purchase-purch:hover {
+        background: #047857;
+        color: white;
+    }
+
+    .btn-add-purchase-purch.purple {
+        background: #7C3AED;
+        box-shadow: 0 4px 12px rgba(124, 58, 237, 0.35);
+    }
+
+    .btn-add-purchase-purch.purple:hover {
+        background: #6D28D9;
+    }
+
+    .btn-join-purch {
+        background: #0B5ED7;
+        color: white;
+        padding: 6px 18px;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+
+    .btn-join-purch:hover {
+        background: #0A4CA8;
+        color: white;
+    }
+
+    .btn-join-purch.purple { background: #7C3AED; }
+    .btn-join-purch.purple:hover { background: #6D28D9; }
+
+    .btn-complete-purch {
+        background: #059669;
+        color: white;
+        padding: 10px 24px;
+        border-radius: 8px;
+        font-weight: 700;
+        font-size: 0.85rem;
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+    }
+
+    .btn-complete-purch:hover { background: #047857; color: white; }
+    .btn-complete-purch:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    .btn-cancel-purchase-purch {
+        background: #DC2626;
+        color: white;
+        padding: 10px 24px;
+        border-radius: 8px;
+        font-weight: 700;
+        font-size: 0.85rem;
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+    }
+
+    .btn-cancel-purchase-purch:hover { background: #991B1B; color: white; }
+
+    .btn-delete-item-purch {
+        background: #DC2626;
+        color: white;
+        border: none;
+        padding: 3px 10px;
+        border-radius: 4px;
+        font-size: 0.65rem;
+        cursor: pointer;
+    }
+
+    .btn-delete-item-purch:hover { background: #991B1B; }
+
+    .btn-print-purch {
+        background: #DC2626;
+        color: white;
+        padding: 8px 20px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+
+    .btn-print-purch:hover { background: #991B1B; color: white; }
+
+    .btn-save-purch {
+        background: #059669;
+        color: white;
+        padding: 10px 28px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.9rem;
+    }
+
+    .btn-save-purch:hover { background: #047857; color: white; }
+
+    .btn-save-purch.purple { background: #7C3AED; }
+    .btn-save-purch.purple:hover { background: #6D28D9; }
+
+    .btn-cancel-purch {
+        background: transparent;
+        color: var(--page-text-secondary, #64748B);
+        border: 2px solid var(--page-border, #E2E8F0);
+        padding: 10px 24px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.9rem;
+    }
+
+    .btn-cancel-purch:hover {
+        border-color: #DC2626;
+        color: #DC2626;
+    }
+
+    .btn-generate-purch, .btn-toggle-purch {
+        background: #0B5ED7;
+        color: white;
+        border: none;
+        border-radius: 10px;
+        padding: 8px 14px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+        height: 42px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .btn-generate-purch:hover, .btn-toggle-purch:hover { background: #0A4CA8; }
+
+    /* MESSAGE BOX */
+    .message-box-purch {
+        padding: 12px 18px;
+        border-radius: 10px;
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 500;
+        font-size: 0.9rem;
+        border-left: 5px solid transparent;
+        animation: slideDownPurch 0.4s ease;
+    }
+
+    @keyframes slideDownPurch {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .message-box-purch.success { background: #D1FAE5; color: #065F46; border-left-color: #059669; }
+    .message-box-purch.error { background: #FEE2E2; color: #991B1B; border-left-color: #DC2626; }
+    .message-box-purch.info { background: #E8F0FE; color: #0A4CA8; border-left-color: #0B5ED7; }
+
+    [data-theme="dark"] .message-box-purch.success { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .message-box-purch.error { background: #3A1A1A; color: #F87171; }
+    [data-theme="dark"] .message-box-purch.info { background: #1E3A5F; color: #6EA8FE; }
+
+    .message-box-purch .message-close {
+        margin-left: auto;
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 1.1rem;
+        color: inherit;
+    }
+
+    /* CARD */
+    .card-purch {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 12px;
+        padding: 14px 18px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        margin-bottom: 20px;
+    }
+
+    .card-header-purch {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .card-title-purch {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--page-text-primary, #1E293B);
+        margin: 0;
+    }
+
+    .card-title-purch i.blue { color: #0B5ED7; }
+    .card-title-purch i.purple { color: #7C3AED; }
+    .card-title-purch i.green { color: #059669; }
+
+    .result-count-purch {
+        font-size: 0.75rem;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .result-count-purch strong { color: #0B5ED7; }
+
+    /* GRID 3 */
+    .grid-3-purch {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+    }
+
+    /* PURCHASE CARD */
+    .purchase-card-purch {
+        background: var(--page-bg-card, #FFFFFF);
+        border: 2px solid var(--page-border, #E2E8F0);
+        border-radius: 10px;
+        padding: 14px 16px;
+        transition: all 0.3s ease;
+    }
+
+    .purchase-card-purch:hover {
+        box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+        transform: translateY(-2px);
+    }
+
+    .purchase-card-purch .invoice-number-purch {
+        font-size: 1rem;
+        font-weight: 700;
+    }
+
+    .purchase-card-purch .status-badge-purch {
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 0.6rem;
+        font-weight: 600;
+    }
+
+    .status-badge-purch.in-progress { background: #FEF3C7; color: #D97706; }
+    .status-badge-purch.completed { background: #D1FAE5; color: #059669; }
+    .status-badge-purch.cancelled { background: #FEE2E2; color: #DC2626; }
+
+    .purchase-card-purch .meta-text-purch {
+        font-size: 0.7rem;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .branch-tag-small-purch {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 1px 8px;
+        border-radius: 10px;
+        font-size: 0.6rem;
+        font-weight: 600;
+        background: #E8F0FE;
+        color: #0B5ED7;
+    }
+
+    [data-theme="dark"] .branch-tag-small-purch {
+        background: #1E3A5F;
+        color: #6EA8FE;
+    }
+
+    /* PURCHASE DETAILS */
+    .purchase-details-header-purch {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 16px;
+    }
+
+    .purchase-details-header-purch .invoice-number-purch {
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: #0B5ED7;
+    }
+
+    .purchase-status-purch {
+        padding: 4px 16px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+    }
+
+    .purchase-status-purch.in_progress { background: #FEF3C7; color: #D97706; }
+    .purchase-status-purch.completed { background: #D1FAE5; color: #059669; }
+    .purchase-status-purch.cancelled { background: #FEE2E2; color: #DC2626; }
+
+    [data-theme="dark"] .purchase-status-purch.in_progress { background: #3A2A1A; color: #FBBF24; }
+    [data-theme="dark"] .purchase-status-purch.completed { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .purchase-status-purch.cancelled { background: #3A1A1A; color: #F87171; }
+
+    .purchase-info-grid-purch {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 10px;
+        margin-bottom: 16px;
+    }
+
+    .purchase-info-item-purch {
+        padding: 8px 12px;
+        background: var(--page-hover, #F8FAFC);
+        border-radius: 6px;
+    }
+
+    [data-theme="dark"] .purchase-info-item-purch { background: #0F172A; }
+
+    .purchase-info-item-purch .label-purch {
+        font-size: 0.55rem;
+        text-transform: uppercase;
+        color: var(--page-text-secondary, #64748B);
+        font-weight: 600;
+    }
+
+    .purchase-info-item-purch .value-purch {
+        font-size: 0.85rem;
+        font-weight: 600;
+        margin-top: 2px;
+    }
+
+    /* FORMS */
+    .form-grid-purch {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+    }
+
+    .form-grid-purch .full-width { grid-column: 1 / -1; }
+
+    .form-label-purch {
+        font-size: 0.75rem;
+        font-weight: 600;
+        margin-bottom: 3px;
+        display: block;
+        color: var(--page-text-primary, #1E293B);
+    }
+
+    .form-label-purch .required { color: #DC2626; }
+
+    .form-control-purch {
+        width: 100%;
+        padding: 7px 12px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        border-radius: 8px;
+        font-size: 0.8rem;
+        outline: none;
+        background: var(--page-input-bg, #FFFFFF);
+        color: var(--page-text-primary, #1E293B);
+        height: 42px;
+        font-family: inherit;
+    }
+
+    .form-control-purch:focus {
+        border-color: #0B5ED7;
+        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
+    }
+
+    .form-actions-purch {
+        display: flex;
+        gap: 10px;
+        margin-top: 18px;
+        padding-top: 14px;
+        border-top: 2px solid var(--page-border, #E2E8F0);
+        flex-wrap: wrap;
+    }
+
+    /* INPUT GROUPS */
+    .category-input-group-purch,
+    .unit-input-group-purch,
+    .batch-input-group-purch {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+    }
+
+    .category-input-group-purch .form-control-purch,
+    .unit-input-group-purch .form-control-purch,
+    .batch-input-group-purch .form-control-purch { flex: 1; }
+
+    /* AUTOCOMPLETE */
+    .autocomplete-container-purch {
+        position: relative;
+        width: 100%;
+    }
+
+    .autocomplete-list-purch {
+        position: absolute;
+        top: 100%; left: 0; right: 0;
+        background: var(--page-bg-card, #FFFFFF);
+        border: 2px solid var(--page-border, #E2E8F0);
+        border-top: none;
+        border-radius: 0 0 8px 8px;
+        z-index: 100;
+        max-height: 200px;
+        overflow-y: auto;
+        display: none;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+    }
+
+    .autocomplete-list-purch.show { display: block; }
+
+    .autocomplete-item-purch {
+        padding: 8px 14px;
+        cursor: pointer;
+        border-bottom: 1px solid var(--page-border, #E2E8F0);
+        font-size: 0.82rem;
+        color: var(--page-text-primary, #1E293B);
+    }
+
+    .autocomplete-item-purch:hover {
+        background: #E8F0FE;
+        color: #0B5ED7;
+    }
+
+    [data-theme="dark"] .autocomplete-item-purch:hover {
+        background: #1E3A5F;
+        color: #6EA8FE;
+    }
+
+    .autocomplete-item-purch .item-detail-purch {
+        font-size: 0.65rem;
+        color: var(--page-text-muted, #94A3B8);
+        display: block;
+    }
+
+    /* TABLE */
+    .table-wrapper-purch { overflow-x: auto; }
+
+    .data-table-purch {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 0.78rem;
+    }
+
+    .data-table-purch thead th {
+        background: #0B5ED7;
+        color: white;
+        padding: 8px 10px;
+        font-size: 0.6rem;
+        text-transform: uppercase;
+        font-weight: 700;
+        white-space: nowrap;
+        text-align: left;
+    }
+
+    .data-table-purch tbody tr:nth-child(even) { background: #E8F0FE; }
+    [data-theme="dark"] .data-table-purch tbody tr:nth-child(even) { background: #1E3A5F; }
+
+    .data-table-purch tbody tr:hover td { background: #D1FAE5; }
+    [data-theme="dark"] .data-table-purch tbody tr:hover td { background: #1A3A2A; }
+
+    .data-table-purch td {
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--page-border, #E2E8F0);
+        vertical-align: middle;
+        color: var(--page-text-primary, #1E293B);
+    }
+
+    .added-by-tag-purch {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 1px 8px;
+        border-radius: 10px;
+        font-size: 0.6rem;
+        font-weight: 600;
+        background: #EDE9FE;
+        color: #7C3AED;
+    }
+
+    .unit-badge-purch {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 1px 6px;
+        border-radius: 6px;
+        font-size: 0.6rem;
+        font-weight: 600;
+        background: #CCFBF1;
+        color: #0D9488;
+    }
+
+    /* EMPTY STATE */
+    .empty-state-purch {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .empty-state-purch i {
+        font-size: 3rem;
+        color: var(--page-text-muted, #94A3B8);
+        display: block;
+        margin-bottom: 12px;
+    }
+
+    .empty-state-purch p {
+        font-size: 0.95rem;
+        margin-bottom: 6px;
+    }
+
+    .empty-state-purch .sub { font-size: 0.8rem; }
+
+    /* MODAL */
+    .modal-overlay-purch {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.7);
+        z-index: 9999;
+        justify-content: center;
+        align-items: center;
+        padding: 20px;
+        backdrop-filter: blur(4px);
+    }
+
+    .modal-overlay-purch.show { display: flex; }
+
+    .modal-content-purch {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 12px;
+        max-width: 550px;
+        width: 100%;
+        max-height: 90vh;
+        overflow-y: auto;
+        padding: 24px 28px;
+        border: 2px solid var(--page-border, #E2E8F0);
+    }
+
+    .modal-content-purch.modal-pdf { max-width: 900px; background: white; padding: 20px; }
+
+    .modal-header-purch {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding-bottom: 12px;
+        border-bottom: 2px solid var(--page-border, #E2E8F0);
+        margin-bottom: 16px;
+    }
+
+    .modal-title-purch {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #DC2626;
+    }
+
+    .modal-close-purch {
+        background: none;
+        border: none;
+        font-size: 1.5rem;
+        cursor: pointer;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .modal-close-purch:hover { color: #DC2626; }
+
+    .modal-actions-purch {
+        display: flex;
+        gap: 10px;
+        padding-top: 14px;
+        border-top: 2px solid var(--page-border, #E2E8F0);
+        margin-top: 16px;
+        flex-wrap: wrap;
+    }
+
+    .btn-confirm-cancel-purch {
+        background: #DC2626;
+        color: white;
+        padding: 10px 28px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        border: none;
+        cursor: pointer;
+        flex: 1;
+    }
+
+    .btn-confirm-cancel-purch:hover { background: #991B1B; }
+
+    .btn-close-modal-purch {
+        background: transparent;
+        color: var(--page-text-secondary, #64748B);
+        border: 2px solid var(--page-border, #E2E8F0);
+        padding: 10px 24px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        cursor: pointer;
+    }
+
+    .btn-close-modal-purch:hover {
+        border-color: #DC2626;
+        color: #DC2626;
+    }
+
+    .cancel-reason-textarea-purch {
+        width: 100%;
+        padding: 10px 14px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        border-radius: 8px;
+        font-size: 0.9rem;
+        resize: vertical;
+        min-height: 80px;
+        background: var(--page-hover, #F8FAFC);
+        color: var(--page-text-primary, #1E293B);
+        font-family: inherit;
+    }
+
+    .cancel-reason-textarea-purch:focus {
+        border-color: #DC2626;
+        box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1);
+        outline: none;
+    }
+
+    .cancel-warning-icon-purch {
+        text-align: center;
+        font-size: 3rem;
+        color: #DC2626;
+        margin-bottom: 10px;
+    }
+
+    .btn-print-invoice-purch {
+        background: #0B5ED7;
+        color: white;
+        padding: 8px 20px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.85rem;
+        border: none;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .btn-print-invoice-purch:hover { background: #0A4CA8; }
+
+    .btn-close-modal-pdf-purch {
+        background: transparent;
+        color: #64748B;
+        border: 2px solid #E2E8F0;
+        padding: 8px 20px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.85rem;
+        cursor: pointer;
+    }
+
+    .btn-close-modal-pdf-purch:hover { border-color: #DC2626; color: #DC2626; }
+
+    .admin-badge-purch {
+        background: linear-gradient(135deg, #DC2626, #991B1B);
+        color: white;
+        padding: 2px 10px;
+        border-radius: 20px;
+        font-size: 0.6rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    /* ACTION BAR */
+    .action-bar-purch {
+        background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+        border: 2px solid #D97706;
+        border-radius: 12px;
+        padding: 14px 20px;
+        margin-top: 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+
+    .action-bar-purch .action-info-purch {
+        font-size: 0.85rem;
+        color: #92400E;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .action-bar-purch .action-buttons-purch {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    /* FOOTER */
+    .footer-purch {
+        padding: 10px 0;
+        border-top: 1px solid var(--page-border, #E2E8F0);
+        margin-top: 16px;
+        text-align: center;
+        font-size: 0.6rem;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .footer-purch .footer-brand-purch {
+        color: #0B5ED7;
+        font-weight: 600;
+    }
+
+    /* ✅ ZUIA SCROLL WHEEL KUBADILISHA NUMBER INPUTS */
+    input.numeric-only {
+        text-align: left;
+        letter-spacing: 0.5px;
+    }
+
+    /* RESPONSIVE */
+    @media (max-width: 1024px) {
+        .grid-3-purch { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 768px) {
+        .grid-3-purch { grid-template-columns: 1fr; }
+        .form-grid-purch { grid-template-columns: 1fr; }
+        .form-grid-purch .full-width { grid-column: 1; }
+        .page-header-box-purch .page-title-purch { font-size: 1.1rem; }
+        .header-actions-purch { width: 100%; }
+        .data-table-purch { min-width: 800px; }
+        .btn-back-header-purch { width: 100%; justify-content: center; }
+        .action-bar-purch { flex-direction: column; align-items: stretch; }
+        .action-bar-purch .action-buttons-purch { width: 100%; }
+        .action-bar-purch .action-buttons-purch button { width: 100%; justify-content: center; }
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -1657,9 +1633,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <main class="main-content">
 
     <!-- PAGE HEADER -->
-    <div class="page-header-box <?= $active_view === 'equipment' ? 'equipment-mode' : '' ?>">
+    <div class="page-header-box-purch <?= $active_view === 'equipment' ? 'equipment-mode' : '' ?>">
         <div>
-            <h1 class="page-title">
+            <h1 class="page-title-purch">
                 <?php if ($active_view === 'medicine'): ?>
                     <i class="fas fa-pills"></i> Medicine Purchases
                 <?php elseif ($active_view === 'equipment'): ?>
@@ -1674,29 +1650,27 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($display_branch_name) ?>
                 </span>
             </h1>
-            <p class="page-subtitle">
+            <p class="page-subtitle-purch">
                 <?php if ($purchase_id > 0 && $current_purchase): ?>
                     <strong><?= $current_purchase['total_items'] ?></strong> items · 
                     <strong><?= number_format($current_purchase['total_quantity']) ?></strong> units
                     <?php if (!$is_creator): ?>
-                        <span class="admin-badge">
-                            <i class="fas fa-shield-alt"></i> ADMIN MODE
-                        </span>
+                        <span class="admin-badge-purch"><i class="fas fa-shield-alt"></i> ADMIN MODE</span>
                     <?php endif; ?>
                 <?php elseif ($active_view === 'medicine'): ?>
-                    <span class="header-badge"><i class="fas fa-pills"></i> <?= count($all_med_in_progress) ?> MEDICINE in progress</span>
+                    <span class="header-badge-purch"><i class="fas fa-pills"></i> <?= count($all_med_in_progress) ?> MEDICINE in progress</span>
                 <?php elseif ($active_view === 'equipment'): ?>
-                    <span class="header-badge"><i class="fas fa-tools"></i> <?= count($all_equip_in_progress) ?> EQUIPMENT in progress</span>
+                    <span class="header-badge-purch"><i class="fas fa-tools"></i> <?= count($all_equip_in_progress) ?> EQUIPMENT in progress</span>
                 <?php endif; ?>
             </p>
         </div>
-        <div class="header-actions">
+        <div class="header-actions-purch">
             <?php if ($purchase_id > 0 && $current_purchase): ?>
-                <a href="purchases.php?action=list_<?= $current_purchase['purchase_type'] ?>&branch=<?= $selected_branch_id ?>" class="btn-back-header">
+                <a href="purchases.php?action=list_<?= $current_purchase['purchase_type'] ?>&branch=<?= $selected_branch_id ?>" class="btn-purch btn-back-header-purch">
                     <i class="fas fa-arrow-left"></i> Back to List
                 </a>
             <?php elseif ($active_view !== 'none'): ?>
-                <a href="inventory.php?tab=<?= $active_view === 'medicine' ? 'medicines' : 'equipment' ?>&branch=<?= $selected_branch_id ?>" class="btn-back-header">
+                <a href="inventory.php?tab=<?= $active_view === 'medicine' ? 'medicines' : 'equipment' ?>&branch=<?= $selected_branch_id ?>" class="btn-purch btn-back-header-purch">
                     <i class="fas fa-arrow-left"></i> Back to Inventory
                 </a>
             <?php endif; ?>
@@ -1706,7 +1680,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <input type="hidden" name="action" value="create_purchase">
                     <input type="hidden" name="purchase_type" value="medicine">
                     <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
-                    <button type="submit" class="btn-add-purchase">
+                    <button type="submit" class="btn-purch btn-add-purchase-purch">
                         <i class="fas fa-plus-circle"></i> New Medicine Purchase
                     </button>
                 </form>
@@ -1715,7 +1689,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <input type="hidden" name="action" value="create_purchase">
                     <input type="hidden" name="purchase_type" value="equipment">
                     <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
-                    <button type="submit" class="btn-add-purchase purple">
+                    <button type="submit" class="btn-purch btn-add-purchase-purch purple">
                         <i class="fas fa-plus-circle"></i> New Equipment Purchase
                     </button>
                 </form>
@@ -1725,7 +1699,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     <!-- MESSAGE -->
     <?php if ($message): ?>
-        <div class="message-box <?= $message_type ?>" id="messageBox">
+        <div class="message-box-purch <?= $message_type ?>" id="messageBox">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'info' ? 'fa-info-circle' : 'fa-exclamation-circle') ?>"></i>
             <span><?= $message ?></span>
             <button class="message-close" onclick="closeMessage()">&times;</button>
@@ -1734,51 +1708,51 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     <!-- MEDICINE IN PROGRESS -->
     <?php if ($active_view === 'medicine' && !$purchase_id): ?>
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
+        <div class="card-purch">
+            <div class="card-header-purch">
+                <h3 class="card-title-purch">
                     <i class="fas fa-pills blue"></i> 
                     Medicine Purchases In Progress
-                    <span class="result-count">(<strong><?= count($all_med_in_progress) ?></strong> available)</span>
+                    <span class="result-count-purch">(<strong><?= count($all_med_in_progress) ?></strong> available)</span>
                 </h3>
             </div>
             
             <?php if (count($all_med_in_progress) > 0): ?>
-                <div class="grid-3">
+                <div class="grid-3-purch">
                     <?php foreach ($all_med_in_progress as $purchase): ?>
-                        <div class="purchase-card" style="border-color:#D97706;">
+                        <div class="purchase-card-purch" style="border-color:#D97706;">
                             <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:4px;">
                                 <div>
-                                    <div class="invoice-number" style="color:#D97706;">
+                                    <div class="invoice-number-purch" style="color:#D97706;">
                                         <i class="fas fa-file-invoice"></i> <?= htmlspecialchars($purchase['invoice_number']) ?>
                                     </div>
-                                    <div class="meta-text" style="margin-top:4px;">
+                                    <div class="meta-text-purch" style="margin-top:4px;">
                                         <i class="fas fa-user"></i> <?= htmlspecialchars($purchase['creator_name'] ?? 'Unknown') ?>
                                         <?php if ($purchase['created_by'] == $user_id): ?>
                                             <span style="color:#059669;font-weight:600;"> (You)</span>
                                         <?php else: ?>
-                                            <span class="admin-badge" style="font-size:0.5rem;padding:0 6px;">
+                                            <span class="admin-badge-purch" style="font-size:0.5rem;padding:0 6px;">
                                                 <i class="fas fa-shield-alt"></i> OTHER
                                             </span>
                                         <?php endif; ?>
                                     </div>
-                                    <div class="meta-text">
+                                    <div class="meta-text-purch">
                                         <i class="fas fa-store-alt"></i> 
-                                        <span class="branch-tag-small"><?= htmlspecialchars($purchase['branch_name'] ?? 'N/A') ?></span>
+                                        <span class="branch-tag-small-purch"><?= htmlspecialchars($purchase['branch_name'] ?? 'N/A') ?></span>
                                     </div>
-                                    <div class="meta-text">
+                                    <div class="meta-text-purch">
                                         <i class="fas fa-clock"></i> <?= date('d/m/Y H:i', strtotime($purchase['created_at'])) ?>
                                     </div>
                                 </div>
-                                <span class="status-badge in-progress">
+                                <span class="status-badge-purch in-progress">
                                     <i class="fas fa-spinner fa-spin"></i> IN PROGRESS
                                 </span>
                             </div>
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:4px;">
-                                <div class="meta-text">
+                                <div class="meta-text-purch">
                                     <i class="fas fa-boxes"></i> <?= number_format($purchase['total_items']) ?> items
                                 </div>
-                                <a href="purchases.php?id=<?= $purchase['id'] ?>&type=medicine&branch=<?= $selected_branch_id ?>" class="btn-join">
+                                <a href="purchases.php?id=<?= $purchase['id'] ?>&type=medicine&branch=<?= $selected_branch_id ?>" class="btn-purch btn-join-purch">
                                     <i class="fas fa-sign-in-alt"></i> Open
                                 </a>
                             </div>
@@ -1786,7 +1760,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <?php endforeach; ?>
                 </div>
             <?php else: ?>
-                <div class="empty-state">
+                <div class="empty-state-purch">
                     <i class="fas fa-pills"></i>
                     <p>No medicine purchases in progress</p>
                     <p class="sub">Click "New Medicine Purchase" above to start one.</p>
@@ -1797,51 +1771,51 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     <!-- EQUIPMENT IN PROGRESS -->
     <?php if ($active_view === 'equipment' && !$purchase_id): ?>
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
+        <div class="card-purch">
+            <div class="card-header-purch">
+                <h3 class="card-title-purch">
                     <i class="fas fa-tools purple"></i> 
                     Equipment Purchases In Progress
-                    <span class="result-count">(<strong><?= count($all_equip_in_progress) ?></strong> available)</span>
+                    <span class="result-count-purch">(<strong><?= count($all_equip_in_progress) ?></strong> available)</span>
                 </h3>
             </div>
             
             <?php if (count($all_equip_in_progress) > 0): ?>
-                <div class="grid-3">
+                <div class="grid-3-purch">
                     <?php foreach ($all_equip_in_progress as $purchase): ?>
-                        <div class="purchase-card" style="border-color:#7C3AED;">
+                        <div class="purchase-card-purch" style="border-color:#7C3AED;">
                             <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:4px;">
                                 <div>
-                                    <div class="invoice-number" style="color:#7C3AED;">
+                                    <div class="invoice-number-purch" style="color:#7C3AED;">
                                         <i class="fas fa-file-invoice"></i> <?= htmlspecialchars($purchase['invoice_number']) ?>
                                     </div>
-                                    <div class="meta-text" style="margin-top:4px;">
+                                    <div class="meta-text-purch" style="margin-top:4px;">
                                         <i class="fas fa-user"></i> <?= htmlspecialchars($purchase['creator_name'] ?? 'Unknown') ?>
                                         <?php if ($purchase['created_by'] == $user_id): ?>
                                             <span style="color:#059669;font-weight:600;"> (You)</span>
                                         <?php else: ?>
-                                            <span class="admin-badge" style="font-size:0.5rem;padding:0 6px;">
+                                            <span class="admin-badge-purch" style="font-size:0.5rem;padding:0 6px;">
                                                 <i class="fas fa-shield-alt"></i> OTHER
                                             </span>
                                         <?php endif; ?>
                                     </div>
-                                    <div class="meta-text">
+                                    <div class="meta-text-purch">
                                         <i class="fas fa-store-alt"></i> 
-                                        <span class="branch-tag-small"><?= htmlspecialchars($purchase['branch_name'] ?? 'N/A') ?></span>
+                                        <span class="branch-tag-small-purch"><?= htmlspecialchars($purchase['branch_name'] ?? 'N/A') ?></span>
                                     </div>
-                                    <div class="meta-text">
+                                    <div class="meta-text-purch">
                                         <i class="fas fa-clock"></i> <?= date('d/m/Y H:i', strtotime($purchase['created_at'])) ?>
                                     </div>
                                 </div>
-                                <span class="status-badge in-progress">
+                                <span class="status-badge-purch in-progress">
                                     <i class="fas fa-spinner fa-spin"></i> IN PROGRESS
                                 </span>
                             </div>
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:4px;">
-                                <div class="meta-text">
+                                <div class="meta-text-purch">
                                     <i class="fas fa-boxes"></i> <?= number_format($purchase['total_items']) ?> items
                                 </div>
-                                <a href="purchases.php?id=<?= $purchase['id'] ?>&type=equipment&branch=<?= $selected_branch_id ?>" class="btn-join purple">
+                                <a href="purchases.php?id=<?= $purchase['id'] ?>&type=equipment&branch=<?= $selected_branch_id ?>" class="btn-purch btn-join-purch purple">
                                     <i class="fas fa-sign-in-alt"></i> Open
                                 </a>
                             </div>
@@ -1849,7 +1823,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <?php endforeach; ?>
                 </div>
             <?php else: ?>
-                <div class="empty-state">
+                <div class="empty-state-purch">
                     <i class="fas fa-tools"></i>
                     <p>No equipment purchases in progress</p>
                     <p class="sub">Click "New Equipment Purchase" above to start one.</p>
@@ -1860,39 +1834,24 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     <!-- VIEW SPECIFIC PURCHASE -->
     <?php if ($purchase_id && $current_purchase): ?>
-        <div class="card">
-            <div class="purchase-details-header">
+        <div class="card-purch">
+            <div class="purchase-details-header-purch">
                 <div>
-                    <div class="invoice-number">
+                    <div class="invoice-number-purch">
                         <i class="fas fa-file-invoice"></i> <?= htmlspecialchars($current_purchase['invoice_number']) ?>
-                        <span style="font-size:0.65rem;font-weight:400;color:var(--text-secondary);margin-left:8px;">
+                        <span style="font-size:0.65rem;font-weight:400;color:var(--page-text-secondary);margin-left:8px;">
                             <?= ucfirst($current_purchase['purchase_type']) ?>
                         </span>
                     </div>
-                    <div style="font-size:0.7rem;color:var(--text-secondary);margin-top:2px;">
+                    <div style="font-size:0.7rem;color:var(--page-text-secondary);margin-top:2px;">
                         Created: <?= date('d/m/Y H:i', strtotime($current_purchase['created_at'])) ?>
                         <?php if ($current_purchase['completed_at']): ?>
                             | Completed: <?= date('d/m/Y H:i', strtotime($current_purchase['completed_at'])) ?>
                         <?php endif; ?>
                     </div>
-                    <div style="margin-top:6px;">
-                        <span class="branch-tag-small" style="padding:3px 12px;font-size:0.7rem;">
-                            <i class="fas fa-store-alt"></i> 
-                            <?php 
-                                $purchase_branch_name = 'N/A';
-                                foreach ($branches as $b) {
-                                    if ($b['id'] == ($current_purchase['branch_id'] ?? 0)) {
-                                        $purchase_branch_name = $b['name'];
-                                        break;
-                                    }
-                                }
-                                echo htmlspecialchars($purchase_branch_name);
-                            ?>
-                        </span>
-                    </div>
                 </div>
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                    <span class="purchase-status <?= strtolower($current_purchase['status']) ?>">
+                    <span class="purchase-status-purch <?= strtolower($current_purchase['status']) ?>">
                         <i class="fas <?= $current_purchase['status'] === 'IN_PROGRESS' ? 'fa-spinner fa-spin' : ($current_purchase['status'] === 'COMPLETED' ? 'fa-check-circle' : 'fa-times-circle') ?>"></i>
                         <?= $current_purchase['status'] ?>
                     </span>
@@ -1901,12 +1860,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             <i class="fas fa-crown"></i> Creator
                         </span>
                     <?php else: ?>
-                        <span class="admin-badge">
+                        <span class="admin-badge-purch">
                             <i class="fas fa-shield-alt"></i> ADMIN MODE
                         </span>
                     <?php endif; ?>
                     <?php if ($current_purchase['status'] === 'COMPLETED'): ?>
-                        <button onclick="openPDFView(<?= $purchase_id ?>)" class="btn-print">
+                        <button onclick="openPDFView(<?= $purchase_id ?>)" class="btn-purch btn-print-purch">
                             <i class="fas fa-file-pdf"></i> PDF Invoice
                         </button>
                     <?php endif; ?>
@@ -1914,46 +1873,44 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </div>
             
             <!-- INFO GRID -->
-            <?php 
-                $profit = ($current_purchase['total_selling_value'] ?? 0) - ($current_purchase['total_buying_cost'] ?? 0);
-            ?>
-            <div class="purchase-info-grid">
-                <div class="purchase-info-item">
-                    <div class="label">Created By</div>
-                    <div class="value">
+            <?php $profit = ($current_purchase['total_selling_value'] ?? 0) - ($current_purchase['total_buying_cost'] ?? 0); ?>
+            <div class="purchase-info-grid-purch">
+                <div class="purchase-info-item-purch">
+                    <div class="label-purch">Created By</div>
+                    <div class="value-purch">
                         <i class="fas fa-user" style="color:#0B5ED7;"></i>
                         <?= htmlspecialchars($current_purchase['creator_name'] ?? 'Unknown') ?>
                     </div>
                 </div>
-                <div class="purchase-info-item">
-                    <div class="label">Total Items</div>
-                    <div class="value">
+                <div class="purchase-info-item-purch">
+                    <div class="label-purch">Total Items</div>
+                    <div class="value-purch">
                         <i class="fas fa-boxes" style="color:#D97706;"></i>
                         <?= number_format($current_purchase['total_items']) ?> items
                     </div>
                 </div>
-                <div class="purchase-info-item">
-                    <div class="label">Total Quantity</div>
-                    <div class="value">
+                <div class="purchase-info-item-purch">
+                    <div class="label-purch">Total Quantity</div>
+                    <div class="value-purch">
                         <i class="fas fa-cubes" style="color:#0D9488;"></i>
                         <?= number_format($current_purchase['total_quantity']) ?> units
                     </div>
                 </div>
-                <div class="purchase-info-item" style="background:#FEE2E2;border:2px solid #DC2626;">
-                    <div class="label" style="color:#DC2626;">💰 Buying Cost</div>
-                    <div class="value" style="color:#DC2626;">
+                <div class="purchase-info-item-purch" style="background:#FEE2E2;border:2px solid #DC2626;">
+                    <div class="label-purch" style="color:#DC2626;">💰 Buying Cost</div>
+                    <div class="value-purch" style="color:#DC2626;">
                         TSh <?= number_format($current_purchase['total_buying_cost'] ?? 0) ?>
                     </div>
                 </div>
-                <div class="purchase-info-item" style="background:#D1FAE5;border:2px solid #059669;">
-                    <div class="label" style="color:#059669;">💰 Selling Value</div>
-                    <div class="value" style="color:#059669;">
+                <div class="purchase-info-item-purch" style="background:#D1FAE5;border:2px solid #059669;">
+                    <div class="label-purch" style="color:#059669;">💰 Selling Value</div>
+                    <div class="value-purch" style="color:#059669;">
                         TSh <?= number_format($current_purchase['total_selling_value'] ?? 0) ?>
                     </div>
                 </div>
-                <div class="purchase-info-item" style="background:<?= $profit >= 0 ? '#D1FAE5' : '#FEE2E2' ?>;border:2px solid <?= $profit >= 0 ? '#059669' : '#DC2626' ?>;">
-                    <div class="label" style="color:<?= $profit >= 0 ? '#059669' : '#DC2626' ?>;">📈 Expected Profit</div>
-                    <div class="value" style="color:<?= $profit >= 0 ? '#059669' : '#DC2626' ?>;">
+                <div class="purchase-info-item-purch" style="background:<?= $profit >= 0 ? '#D1FAE5' : '#FEE2E2' ?>;border:2px solid <?= $profit >= 0 ? '#059669' : '#DC2626' ?>;">
+                    <div class="label-purch" style="color:<?= $profit >= 0 ? '#059669' : '#DC2626' ?>;">📈 Expected Profit</div>
+                    <div class="value-purch" style="color:<?= $profit >= 0 ? '#059669' : '#DC2626' ?>;">
                         TSh <?= number_format($profit) ?>
                     </div>
                 </div>
@@ -1961,30 +1918,29 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             
             <!-- ACTION BAR -->
             <?php if ($current_purchase['status'] === 'IN_PROGRESS'): ?>
-                <div class="action-bar">
-                    <div class="action-info">
+                <div class="action-bar-purch">
+                    <div class="action-info-purch">
                         <i class="fas fa-info-circle"></i>
                         <?php if ($is_creator): ?>
                             This purchase has <strong><?= count($purchase_items) ?></strong> item(s). Click to complete or cancel.
                         <?php else: ?>
-                            <span class="admin-badge" style="font-size:0.6rem;">
+                            <span class="admin-badge-purch" style="font-size:0.6rem;">
                                 <i class="fas fa-shield-alt"></i> ADMIN MODE
                             </span>
-                            You are viewing a purchase created by <strong><?= htmlspecialchars($current_purchase['creator_name'] ?? 'another user') ?></strong>. You can complete or cancel it.
+                            Viewing purchase by <strong><?= htmlspecialchars($current_purchase['creator_name'] ?? 'another user') ?></strong>.
                         <?php endif; ?>
                     </div>
-                    <div class="action-buttons">
-                        <form method="POST" style="display:inline;" 
-                              onsubmit="return confirm('Complete this purchase? Inventory will be updated.');">
+                    <div class="action-buttons-purch">
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Complete this purchase?');">
                             <input type="hidden" name="action" value="complete_purchase">
                             <input type="hidden" name="purchase_id" value="<?= $purchase_id ?>">
                             <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
-                            <button type="submit" class="btn-complete" <?= count($purchase_items) == 0 ? 'disabled' : '' ?>>
+                            <button type="submit" class="btn-purch btn-complete-purch" <?= count($purchase_items) == 0 ? 'disabled' : '' ?>>
                                 <i class="fas fa-check-circle"></i> Complete Purchase
                             </button>
                         </form>
                         
-                        <button type="button" class="btn-cancel-purchase" onclick="openCancelModal(<?= $purchase_id ?>, '<?= htmlspecialchars($current_purchase['invoice_number']) ?>')">
+                        <button type="button" class="btn-purch btn-cancel-purchase-purch" onclick="openCancelModal(<?= $purchase_id ?>, '<?= htmlspecialchars($current_purchase['invoice_number']) ?>')">
                             <i class="fas fa-times-circle"></i> Cancel Purchase
                         </button>
                     </div>
@@ -1993,9 +1949,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             
             <!-- ADD MEDICINE FORM -->
             <?php if ($current_purchase['purchase_type'] === 'medicine' && $current_purchase['status'] === 'IN_PROGRESS'): ?>
-                <div class="card" style="margin-top:12px;border-color:#059669;">
-                    <div class="card-header">
-                        <h4 class="card-title" style="font-size:0.85rem;">
+                <div class="card-purch" style="margin-top:12px;border-color:#059669;">
+                    <div class="card-header-purch">
+                        <h4 class="card-title-purch" style="font-size:0.85rem;">
                             <i class="fas fa-plus-circle green"></i> Add Medicine Batch
                         </h4>
                     </div>
@@ -2005,106 +1961,108 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <input type="hidden" name="purchase_id" value="<?= $purchase_id ?>">
                         <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
                         
-                        <div class="form-grid">
+                        <div class="form-grid-purch">
                             <div class="full-width">
-                                <label class="form-label">Medicine Name <span class="required">*</span></label>
-                                <div class="autocomplete-container">
-                                    <input type="text" name="medication_name" id="purchaseMedicineName" class="form-control" 
+                                <label class="form-label-purch">Medicine Name <span class="required">*</span></label>
+                                <div class="autocomplete-container-purch">
+                                    <input type="text" name="medication_name" id="purchaseMedicineName" class="form-control-purch" 
                                            placeholder="Type medicine name..." required autocomplete="off">
                                     <input type="hidden" name="medicine_id" id="purchaseMedicineId" value="">
-                                    <div class="autocomplete-list" id="purchaseMedicineAutocomplete"></div>
+                                    <div class="autocomplete-list-purch" id="purchaseMedicineAutocomplete"></div>
                                 </div>
                             </div>
                             
                             <div>
-                                <label class="form-label">Category <span class="required">*</span></label>
-                                <div class="category-input-group">
-                                    <select name="category" id="purchaseCategorySelect" class="form-control" required>
+                                <label class="form-label-purch">Category <span class="required">*</span></label>
+                                <div class="category-input-group-purch">
+                                    <select name="category" id="purchaseCategorySelect" class="form-control-purch" required>
                                         <option value="">Select</option>
                                         <?php foreach ($predefined_med_categories as $cat): ?>
                                             <option value="<?= htmlspecialchars($cat) ?>"><?= htmlspecialchars($cat) ?></option>
                                         <?php endforeach; ?>
                                         <option value="__other__">+ Other</option>
                                     </select>
-                                    <input type="text" name="category_manual" id="purchaseCategoryManual" class="form-control" placeholder="Custom..." style="display:none;">
-                                    <button type="button" class="btn-toggle" onclick="toggleCategory('med')">
+                                    <input type="text" name="category_manual" id="purchaseCategoryManual" class="form-control-purch" placeholder="Custom..." style="display:none;">
+                                    <button type="button" class="btn-purch btn-toggle-purch" onclick="toggleCategory('med')">
                                         <i class="fas fa-edit"></i>
                                     </button>
                                 </div>
                             </div>
                             
                             <div>
-                                <label class="form-label">Unit <span class="required">*</span></label>
-                                <div class="unit-input-group">
-                                    <select name="unit" id="purchaseUnit" class="form-control" required>
+                                <label class="form-label-purch">Unit <span class="required">*</span></label>
+                                <div class="unit-input-group-purch">
+                                    <select name="unit" id="purchaseUnit" class="form-control-purch" required>
                                         <option value="">Select Unit</option>
                                         <?php foreach ($predefined_units as $unit_key => $unit_label): ?>
                                             <option value="<?= htmlspecialchars($unit_key) ?>"><?= htmlspecialchars($unit_label) ?></option>
                                         <?php endforeach; ?>
                                         <option value="__other__">+ Other (Manual)</option>
                                     </select>
-                                    <input type="text" name="unit_manual" id="purchaseUnitManual" class="form-control" placeholder="Custom unit..." style="display:none;">
-                                    <button type="button" class="btn-toggle" onclick="toggleUnit('med')">
+                                    <input type="text" name="unit_manual" id="purchaseUnitManual" class="form-control-purch" placeholder="Custom unit..." style="display:none;">
+                                    <button type="button" class="btn-purch btn-toggle-purch" onclick="toggleUnit('med')">
                                         <i class="fas fa-edit"></i>
                                     </button>
                                 </div>
                             </div>
                             
                             <div>
-                                <label class="form-label">Quantity <span class="required">*</span></label>
-                                <input type="number" name="quantity" id="purchaseQuantity" class="form-control" placeholder="0" min="1" required>
+                                <label class="form-label-purch">Quantity <span class="required">*</span></label>
+                                <input type="text" name="quantity" id="purchaseQuantity" class="form-control-purch numeric-only" 
+                                       placeholder="0" inputmode="numeric" pattern="[0-9]*" required autocomplete="off">
                             </div>
                             
                             <div>
-                                <label class="form-label">Reorder Level</label>
-                                <input type="number" name="reorder_level" id="purchaseReorderLevel" class="form-control" value="10" min="0">
+                                <label class="form-label-purch">Reorder Level</label>
+                                <input type="text" name="reorder_level" id="purchaseReorderLevel" class="form-control-purch numeric-only" 
+                                       value="10" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
                             </div>
                             
                             <div>
-                                <label class="form-label">Buying Price (TSh) <span class="required">*</span></label>
-                                <input type="text" name="buying_price" id="purchaseBuyingPrice" class="form-control money-input" value="0" required>
+                                <label class="form-label-purch">Buying Price (TSh) <span class="required">*</span></label>
+                                <input type="text" name="buying_price" id="purchaseBuyingPrice" class="form-control-purch money-input" value="0" required autocomplete="off">
                             </div>
                             
                             <div>
-                                <label class="form-label">Selling Price (TSh) <span class="required">*</span></label>
-                                <input type="text" name="selling_price" id="purchaseUnitPrice" class="form-control money-input" value="0" required>
+                                <label class="form-label-purch">Selling Price (TSh) <span class="required">*</span></label>
+                                <input type="text" name="selling_price" id="purchaseUnitPrice" class="form-control-purch money-input" value="0" required autocomplete="off">
                             </div>
                             
                             <div>
-                                <label class="form-label">Supplier</label>
-                                <input type="text" name="supplier" id="purchaseSupplier" class="form-control" placeholder="Supplier">
+                                <label class="form-label-purch">Supplier</label>
+                                <input type="text" name="supplier" id="purchaseSupplier" class="form-control-purch" placeholder="Supplier">
                             </div>
                             
                             <div>
-                                <label class="form-label">Expiry Date <span class="required">*</span></label>
-                                <input type="date" name="expiry_date" id="purchaseExpiryDate" class="form-control" required>
+                                <label class="form-label-purch">Expiry Date <span class="required">*</span></label>
+                                <input type="date" name="expiry_date" id="purchaseExpiryDate" class="form-control-purch" required>
                             </div>
                             
                             <div class="full-width">
-                                <label class="form-label">Batch Number</label>
-                                <div class="batch-input-group">
-                                    <input type="text" name="batch_number" id="purchaseBatchInput" class="form-control" 
+                                <label class="form-label-purch">Batch Number</label>
+                                <div class="batch-input-group-purch">
+                                    <input type="text" name="batch_number" id="purchaseBatchInput" class="form-control-purch" 
                                            value="<?= 'BATCH-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6)) ?>">
-                                    <button type="button" class="btn-generate" onclick="generateBatch('med')">
+                                    <button type="button" class="btn-purch btn-generate-purch" onclick="generateBatch('med')">
                                         <i class="fas fa-sync-alt"></i> Generate
                                     </button>
                                 </div>
                             </div>
                             
                             <div>
-                                <label class="form-label">Status</label>
-                                <select name="status" id="purchaseStatus" class="form-control">
+                                <label class="form-label-purch">Status</label>
+                                <select name="status" id="purchaseStatus" class="form-control-purch">
                                     <option value="active">Active</option>
                                     <option value="inactive">Inactive</option>
                                 </select>
                             </div>
                         </div>
                         
-                        <div class="form-actions">
-                            <button type="submit" class="btn-save">
+                        <div class="form-actions-purch">
+                            <button type="submit" class="btn-purch btn-save-purch">
                                 <i class="fas fa-plus-circle"></i> Add Medicine
                             </button>
-                            <button type="reset" class="btn-cancel">
+                            <button type="reset" class="btn-purch btn-cancel-purch">
                                 <i class="fas fa-times"></i> Clear
                             </button>
                         </div>
@@ -2114,9 +2072,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             
             <!-- ADD EQUIPMENT FORM -->
             <?php if ($current_purchase['purchase_type'] === 'equipment' && $current_purchase['status'] === 'IN_PROGRESS'): ?>
-                <div class="card" style="margin-top:12px;border-color:#7C3AED;">
-                    <div class="card-header">
-                        <h4 class="card-title" style="font-size:0.85rem;">
+                <div class="card-purch" style="margin-top:12px;border-color:#7C3AED;">
+                    <div class="card-header-purch">
+                        <h4 class="card-title-purch" style="font-size:0.85rem;">
                             <i class="fas fa-plus-circle purple"></i> Add Equipment Batch
                         </h4>
                     </div>
@@ -2126,38 +2084,38 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <input type="hidden" name="purchase_id" value="<?= $purchase_id ?>">
                         <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
                         
-                        <div class="form-grid">
+                        <div class="form-grid-purch">
                             <div class="full-width">
-                                <label class="form-label">Equipment Name <span class="required">*</span></label>
-                                <div class="autocomplete-container">
-                                    <input type="text" name="equipment_name" id="purchaseEquipmentName" class="form-control" 
+                                <label class="form-label-purch">Equipment Name <span class="required">*</span></label>
+                                <div class="autocomplete-container-purch">
+                                    <input type="text" name="equipment_name" id="purchaseEquipmentName" class="form-control-purch" 
                                            placeholder="Type equipment name..." required autocomplete="off">
                                     <input type="hidden" name="equipment_id" id="purchaseEquipmentId" value="">
-                                    <div class="autocomplete-list" id="purchaseEquipmentAutocomplete"></div>
+                                    <div class="autocomplete-list-purch" id="purchaseEquipmentAutocomplete"></div>
                                 </div>
                             </div>
                             
                             <div>
-                                <label class="form-label">Category <span class="required">*</span></label>
-                                <div class="category-input-group">
-                                    <select name="category" id="purchaseEquipCategorySelect" class="form-control" required>
+                                <label class="form-label-purch">Category <span class="required">*</span></label>
+                                <div class="category-input-group-purch">
+                                    <select name="category" id="purchaseEquipCategorySelect" class="form-control-purch" required>
                                         <option value="">Select</option>
                                         <?php foreach ($predefined_equip_categories as $cat): ?>
                                             <option value="<?= htmlspecialchars($cat) ?>"><?= htmlspecialchars($cat) ?></option>
                                         <?php endforeach; ?>
                                         <option value="__other__">+ Other</option>
                                     </select>
-                                    <input type="text" name="category_manual" id="purchaseEquipCategoryManual" class="form-control" placeholder="Custom..." style="display:none;">
-                                    <button type="button" class="btn-toggle" onclick="toggleCategory('equip')">
+                                    <input type="text" name="category_manual" id="purchaseEquipCategoryManual" class="form-control-purch" placeholder="Custom..." style="display:none;">
+                                    <button type="button" class="btn-purch btn-toggle-purch" onclick="toggleCategory('equip')">
                                         <i class="fas fa-edit"></i>
                                     </button>
                                 </div>
                             </div>
                             
                             <div>
-                                <label class="form-label">Unit <span class="required">*</span></label>
-                                <div class="unit-input-group">
-                                    <select name="unit" id="purchaseEquipUnit" class="form-control" required>
+                                <label class="form-label-purch">Unit <span class="required">*</span></label>
+                                <div class="unit-input-group-purch">
+                                    <select name="unit" id="purchaseEquipUnit" class="form-control-purch" required>
                                         <option value="">Select Unit</option>
                                         <option value="pcs">Pieces (pcs)</option>
                                         <option value="set">Set</option>
@@ -2172,68 +2130,70 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                         <option value="carton">Carton</option>
                                         <option value="__other__">+ Other (Manual)</option>
                                     </select>
-                                    <input type="text" name="unit_manual" id="purchaseEquipUnitManual" class="form-control" placeholder="Custom unit..." style="display:none;">
-                                    <button type="button" class="btn-toggle" onclick="toggleUnit('equip')">
+                                    <input type="text" name="unit_manual" id="purchaseEquipUnitManual" class="form-control-purch" placeholder="Custom unit..." style="display:none;">
+                                    <button type="button" class="btn-purch btn-toggle-purch" onclick="toggleUnit('equip')">
                                         <i class="fas fa-edit"></i>
                                     </button>
                                 </div>
                             </div>
                             
                             <div>
-                                <label class="form-label">Quantity <span class="required">*</span></label>
-                                <input type="number" name="quantity" id="purchaseEquipQuantity" class="form-control" placeholder="0" min="1" required>
+                                <label class="form-label-purch">Quantity <span class="required">*</span></label>
+                                <input type="text" name="quantity" id="purchaseEquipQuantity" class="form-control-purch numeric-only" 
+                                       placeholder="0" inputmode="numeric" pattern="[0-9]*" required autocomplete="off">
                             </div>
                             
                             <div>
-                                <label class="form-label">Reorder Level</label>
-                                <input type="number" name="reorder_level" id="purchaseEquipReorderLevel" class="form-control" value="5" min="0">
+                                <label class="form-label-purch">Reorder Level</label>
+                                <input type="text" name="reorder_level" id="purchaseEquipReorderLevel" class="form-control-purch numeric-only" 
+                                       value="5" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
                             </div>
                             
                             <div>
-                                <label class="form-label">Buying Price (TSh) <span class="required">*</span></label>
-                                <input type="text" name="buying_price" id="purchaseEquipBuyingPrice" class="form-control money-input" value="0" required>
+                                <label class="form-label-purch">Buying Price (TSh) <span class="required">*</span></label>
+                                <input type="text" name="buying_price" id="purchaseEquipBuyingPrice" class="form-control-purch money-input" value="0" required autocomplete="off">
                             </div>
                             
                             <div>
-                                <label class="form-label">Selling Price (TSh) <span class="required">*</span></label>
-                                <input type="text" name="selling_price" id="purchaseEquipSellingPrice" class="form-control money-input" value="0" required>
+                                <label class="form-label-purch">Selling Price (TSh) <span class="required">*</span></label>
+                                <input type="text" name="selling_price" id="purchaseEquipSellingPrice" class="form-control-purch money-input" value="0" required autocomplete="off">
                             </div>
                             
                             <div>
-                                <label class="form-label">Supplier</label>
-                                <input type="text" name="supplier" id="purchaseEquipSupplier" class="form-control" placeholder="Supplier">
+                                <label class="form-label-purch">Supplier</label>
+                                <input type="text" name="supplier" id="purchaseEquipSupplier" class="form-control-purch" placeholder="Supplier">
                             </div>
                             
                             <div>
-                                <label class="form-label">Expiry Date (Optional)</label>
-                                <input type="date" name="expiry_date" id="purchaseEquipExpiryDate" class="form-control">
+                                <label class="form-label-purch">Expiry Date (Optional)</label>
+                                <input type="date" name="expiry_date" id="purchaseEquipExpiryDate" class="form-control-purch">
                             </div>
                             
                             <div class="full-width">
-                                <label class="form-label">Batch Number</label>
-                                <div class="batch-input-group">
-                                    <input type="text" name="batch_number" id="purchaseEquipBatchInput" class="form-control" 
+                                <label class="form-label-purch">Batch Number</label>
+                                <div class="batch-input-group-purch">
+                                    <input type="text" name="batch_number" id="purchaseEquipBatchInput" class="form-control-purch" 
                                            value="<?= 'EQP-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6)) ?>">
-                                    <button type="button" class="btn-generate" onclick="generateBatch('equip')">
+                                    <button type="button" class="btn-purch btn-generate-purch" onclick="generateBatch('equip')">
                                         <i class="fas fa-sync-alt"></i> Generate
                                     </button>
                                 </div>
                             </div>
                             
                             <div>
-                                <label class="form-label">Status</label>
-                                <select name="status" id="purchaseEquipStatus" class="form-control">
+                                <label class="form-label-purch">Status</label>
+                                <select name="status" id="purchaseEquipStatus" class="form-control-purch">
                                     <option value="active">Active</option>
                                     <option value="inactive">Inactive</option>
                                 </select>
                             </div>
                         </div>
                         
-                        <div class="form-actions">
-                            <button type="submit" class="btn-save purple">
+                        <div class="form-actions-purch">
+                            <button type="submit" class="btn-purch btn-save-purch purple">
                                 <i class="fas fa-plus-circle"></i> Add Equipment
                             </button>
-                            <button type="reset" class="btn-cancel">
+                            <button type="reset" class="btn-purch btn-cancel-purch">
                                 <i class="fas fa-times"></i> Clear
                             </button>
                         </div>
@@ -2243,16 +2203,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             
             <!-- ITEMS TABLE -->
             <div style="margin-top:16px;">
-                <div class="card-header">
-                    <h4 class="card-title">
+                <div class="card-header-purch">
+                    <h4 class="card-title-purch">
                         <i class="fas fa-list blue"></i> Items 
-                        <span class="result-count">(<strong><?= count($purchase_items) ?></strong> items)</span>
+                        <span class="result-count-purch">(<strong><?= count($purchase_items) ?></strong> items)</span>
                     </h4>
                 </div>
                 
                 <?php if (count($purchase_items) > 0): ?>
-                    <div class="table-wrapper">
-                        <table class="data-table">
+                    <div class="table-wrapper-purch">
+                        <table class="data-table-purch">
                             <thead>
                                 <tr>
                                     <th style="width:30px;text-align:center;">#</th>
@@ -2277,14 +2237,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                         <td style="text-align:center;"><?= $counter++ ?></td>
                                         <td>
                                             <strong><?= htmlspecialchars($item['item_name'] ?? 'Unknown') ?></strong>
-                                            <div style="font-size:0.6rem;color:var(--text-secondary);">
+                                            <div style="font-size:0.6rem;color:var(--page-text-secondary);">
                                                 Batch: <?= htmlspecialchars($item['batch_number'] ?? 'N/A') ?>
                                             </div>
                                         </td>
                                         <td><?= htmlspecialchars($item['category'] ?? 'N/A') ?></td>
                                         <td style="text-align:center;"><?= number_format($item['quantity']) ?></td>
                                         <td style="text-align:center;">
-                                            <span class="unit-badge">
+                                            <span class="unit-badge-purch">
                                                 <i class="fas fa-balance-scale"></i>
                                                 <?= htmlspecialchars($item['unit'] ?? 'pcs') ?>
                                             </span>
@@ -2294,20 +2254,19 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                         <td style="color:#059669;font-weight:600;">TSh <?= number_format($item['selling_price'] ?? 0) ?></td>
                                         <td style="color:#059669;font-weight:600;">TSh <?= number_format($item['total_selling_value'] ?? 0) ?></td>
                                         <td>
-                                            <span class="added-by-tag">
+                                            <span class="added-by-tag-purch">
                                                 <i class="fas fa-user-circle"></i>
                                                 <?= htmlspecialchars($item['added_by_full_name'] ?? 'Unknown') ?>
                                             </span>
                                         </td>
                                         <?php if ($current_purchase['status'] === 'IN_PROGRESS'): ?>
                                             <td style="text-align:center;">
-                                                <form method="POST" style="display:inline;" 
-                                                      onsubmit="return confirm('Remove this item?');">
+                                                <form method="POST" style="display:inline;" onsubmit="return confirm('Remove this item?');">
                                                     <input type="hidden" name="action" value="delete_item">
                                                     <input type="hidden" name="item_id" value="<?= $item['id'] ?>">
                                                     <input type="hidden" name="purchase_id" value="<?= $purchase_id ?>">
                                                     <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
-                                                    <button type="submit" class="btn-delete-item" title="Remove">
+                                                    <button type="submit" class="btn-delete-item-purch" title="Remove">
                                                         <i class="fas fa-trash"></i>
                                                     </button>
                                                 </form>
@@ -2319,7 +2278,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         </table>
                     </div>
                 <?php else: ?>
-                    <div class="empty-state">
+                    <div class="empty-state-purch">
                         <i class="fas fa-box-open"></i>
                         <p>No items added yet</p>
                         <p class="sub">Use the form above to add items.</p>
@@ -2330,39 +2289,40 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <?php endif; ?>
 
     <!-- FOOTER -->
-    <footer class="footer">
+    <footer class="footer-purch">
         <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span>|</span>
+            <span class="footer-brand-purch">Braick Dispensary</span> Management System
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             Admin Purchases
-            <span>|</span>
-            <span class="branch-tag-small" style="padding:2px 10px;">
-                <i class="fas fa-store-alt"></i> <?= htmlspecialchars($display_branch_name) ?>
-            </span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
+            <span id="footerTime"><?= date('H:i:s') ?></span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             &copy; <?= date('Y') ?>
         </p>
     </footer>
 
 </main>
 
+<!-- ================================================================ -->
 <!-- CANCEL MODAL -->
-<div class="modal-overlay" id="cancelModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <div class="modal-title">
+<!-- ================================================================ -->
+<div class="modal-overlay-purch" id="cancelModal">
+    <div class="modal-content-purch">
+        <div class="modal-header-purch">
+            <div class="modal-title-purch">
                 <i class="fas fa-exclamation-triangle"></i> Cancel Purchase
             </div>
-            <button class="modal-close" onclick="closeCancelModal()">&times;</button>
+            <button class="modal-close-purch" onclick="closeCancelModal()">&times;</button>
         </div>
         
-        <div class="cancel-warning-icon">
+        <div class="cancel-warning-icon-purch">
             <i class="fas fa-exclamation-circle"></i>
         </div>
         
-        <p style="text-align:center;color:var(--text-primary);font-weight:500;margin-bottom:8px;">
+        <p style="text-align:center;color:var(--page-text-primary);font-weight:500;margin-bottom:8px;">
             Are you sure you want to cancel this purchase?
         </p>
-        <p style="text-align:center;color:var(--text-secondary);font-size:0.85rem;margin-bottom:16px;">
+        <p style="text-align:center;color:var(--page-text-secondary);font-size:0.85rem;margin-bottom:16px;">
             <strong id="cancelInvoiceNumber"></strong>
         </p>
         
@@ -2377,16 +2337,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
             
             <div style="margin-bottom:8px;">
-                <label class="form-label">Reason for Cancellation <span class="required">*</span></label>
-                <textarea name="cancel_reason" id="cancelReason" class="cancel-reason-textarea" 
+                <label class="form-label-purch">Reason for Cancellation <span class="required">*</span></label>
+                <textarea name="cancel_reason" id="cancelReason" class="cancel-reason-textarea-purch" 
                           placeholder="Explain why..." required></textarea>
             </div>
             
-            <div class="modal-actions">
-                <button type="submit" class="btn-confirm-cancel">
+            <div class="modal-actions-purch">
+                <button type="submit" class="btn-confirm-cancel-purch">
                     <i class="fas fa-times-circle"></i> Yes, Cancel Purchase
                 </button>
-                <button type="button" class="btn-close-modal" onclick="closeCancelModal()">
+                <button type="button" class="btn-close-modal-purch" onclick="closeCancelModal()">
                     <i class="fas fa-times"></i> No, Go Back
                 </button>
             </div>
@@ -2394,14 +2354,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 </div>
 
+<!-- ================================================================ -->
 <!-- PDF MODAL -->
-<div class="modal-overlay" id="pdfModal">
-    <div class="modal-content modal-pdf">
-        <div class="modal-header">
-            <div class="modal-title" style="color:#0B5ED7;">
+<!-- ================================================================ -->
+<div class="modal-overlay-purch" id="pdfModal">
+    <div class="modal-content-purch modal-pdf">
+        <div class="modal-header-purch">
+            <div class="modal-title-purch" style="color:#0B5ED7;">
                 <i class="fas fa-file-pdf" style="color:#DC2626;"></i> Purchase Invoice
             </div>
-            <button class="modal-close" onclick="closePDF()">&times;</button>
+            <button class="modal-close-purch" onclick="closePDF()">&times;</button>
         </div>
         
         <div id="pdfInvoiceContent" style="background:white;padding:10px;max-height:70vh;overflow-y:auto;">
@@ -2411,482 +2373,492 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </div>
         </div>
         
-        <div class="modal-actions">
-            <button class="btn-print-invoice" onclick="printPDFInvoice()">
+        <div class="modal-actions-purch">
+            <button class="btn-purch btn-print-invoice-purch" onclick="printPDFInvoice()">
                 <i class="fas fa-print"></i> Print Invoice
             </button>
-            <button class="btn-close-modal-pdf" onclick="closePDF()">
+            <button class="btn-purch btn-close-modal-pdf-purch" onclick="closePDF()">
                 <i class="fas fa-times"></i> Close
             </button>
         </div>
     </div>
 </div>
 
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
+<!-- ================================================================ -->
 <script>
-// ================================================================
-// HEADER JAVASCRIPT
-// ================================================================
-(function() {
-    var toggle = document.getElementById('darkModeToggle');
-    var icon = document.getElementById('darkIcon');
-    var text = document.getElementById('darkText');
-    var html = document.documentElement;
-    
-    if (localStorage.getItem('darkMode') === 'true') {
-        html.setAttribute('data-theme', 'dark');
-        if (icon) icon.className = 'fas fa-sun';
-        if (text) text.textContent = 'Light';
-    }
-    
-    toggle?.addEventListener('click', function() {
-        if (html.getAttribute('data-theme') === 'dark') {
-            html.removeAttribute('data-theme');
-            if (icon) icon.className = 'fas fa-moon';
-            if (text) text.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            html.setAttribute('data-theme', 'dark');
-            if (icon) icon.className = 'fas fa-sun';
-            if (text) text.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
+    // ================================================================
+    // FOOTER TIME
+    // ================================================================
+    setInterval(function() {
+        var now = new Date();
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var ftEl = document.getElementById('footerTime');
+        if (ftEl) ftEl.textContent = timeStr;
+    }, 1000);
+
+    // ================================================================
+    // ✅ ZUIA SCROLL WHEEL KUBADILISHA NUMBER INPUTS
+    // ================================================================
+    document.addEventListener('wheel', function(e) {
+        if (document.activeElement && 
+            (document.activeElement.type === 'number' || 
+             document.activeElement.classList.contains('numeric-only'))) {
+            document.activeElement.blur();
         }
-    });
-})();
+    }, { passive: true });
 
-function updateClock() {
-    var n = new Date();
-    var d = n.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' });
-    var tm = n.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:true });
-    var el = document.getElementById('currentDateTime');
-    if (el) el.textContent = d + ' • ' + tm;
-}
-updateClock();
-setInterval(updateClock, 1000);
-
-function switchBranch(id) {
-    var url = new URL(window.location.href);
-    url.searchParams.set('branch', id);
-    window.location.href = url.toString();
-}
-
-// ================================================================
-// PURCHASE-SPECIFIC JAVASCRIPT
-// ================================================================
-
-function closeMessage() {
-    var messageBox = document.getElementById('messageBox');
-    if (messageBox) messageBox.style.display = 'none';
-}
-
-setTimeout(function() {
-    var messageBox = document.getElementById('messageBox');
-    if (messageBox) messageBox.style.display = 'none';
-}, 5000);
-
-function generateBatch(type) {
-    var now = new Date();
-    var dateStr = now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0');
-    var random = Math.random().toString(36).substring(2, 8).toUpperCase();
-    var prefix = type === 'med' ? 'BATCH' : 'EQP';
-    var batch = prefix + '-' + dateStr + '-' + random;
-    var inputId = type === 'med' ? 'purchaseBatchInput' : 'purchaseEquipBatchInput';
-    var input = document.getElementById(inputId);
-    if (input) input.value = batch;
-}
-
-function toggleCategory(type) {
-    var select, manual;
-    if (type === 'med') {
-        select = document.getElementById('purchaseCategorySelect');
-        manual = document.getElementById('purchaseCategoryManual');
-    } else if (type === 'equip') {
-        select = document.getElementById('purchaseEquipCategorySelect');
-        manual = document.getElementById('purchaseEquipCategoryManual');
-    } else return;
-    
-    if (!select || !manual) return;
-    
-    if (manual.style.display === 'none') {
-        manual.style.display = 'block';
-        select.style.display = 'none';
-        manual.focus();
-        manual.required = true;
-        select.required = false;
-        select.value = '';
-    } else {
-        manual.style.display = 'none';
-        select.style.display = 'block';
-        select.value = '';
-        manual.required = false;
-        select.required = true;
-    }
-}
-
-function toggleUnit(type) {
-    var select, manual;
-    if (type === 'med') {
-        select = document.getElementById('purchaseUnit');
-        manual = document.getElementById('purchaseUnitManual');
-    } else if (type === 'equip') {
-        select = document.getElementById('purchaseEquipUnit');
-        manual = document.getElementById('purchaseEquipUnitManual');
-    } else return;
-    
-    if (!select || !manual) return;
-    
-    if (manual.style.display === 'none') {
-        manual.style.display = 'block';
-        select.style.display = 'none';
-        manual.focus();
-        manual.required = true;
-        select.required = false;
-        select.value = '';
-    } else {
-        manual.style.display = 'none';
-        select.style.display = 'block';
-        select.value = '';
-        manual.required = false;
-        select.required = true;
-        manual.value = '';
-    }
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    var medUnitSelect = document.getElementById('purchaseUnit');
-    var medUnitManual = document.getElementById('purchaseUnitManual');
-    var equipUnitSelect = document.getElementById('purchaseEquipUnit');
-    var equipUnitManual = document.getElementById('purchaseEquipUnitManual');
-    
-    if (medUnitSelect && medUnitManual) {
-        medUnitSelect.addEventListener('change', function() {
-            if (this.value === '__other__') {
-                medUnitManual.style.display = 'block';
-                this.style.display = 'none';
-                medUnitManual.focus();
-                medUnitManual.required = true;
-                this.required = false;
-            }
-        });
-    }
-    
-    if (equipUnitSelect && equipUnitManual) {
-        equipUnitSelect.addEventListener('change', function() {
-            if (this.value === '__other__') {
-                equipUnitManual.style.display = 'block';
-                this.style.display = 'none';
-                equipUnitManual.focus();
-                equipUnitManual.required = true;
-                this.required = false;
-            }
-        });
-    }
-});
-
-function openCancelModal(purchaseId, invoiceNumber) {
-    var modal = document.getElementById('cancelModal');
-    if (!modal) return;
-    
-    document.getElementById('cancelPurchaseId').value = purchaseId;
-    document.getElementById('cancelInvoiceNumber').textContent = 'Invoice: ' + invoiceNumber;
-    document.getElementById('cancelReason').value = '';
-    
-    modal.classList.add('show');
-    document.body.style.overflow = 'hidden';
-}
-
-function closeCancelModal() {
-    var modal = document.getElementById('cancelModal');
-    if (modal) {
-        modal.classList.remove('show');
-        document.body.style.overflow = 'auto';
-    }
-}
-
-document.getElementById('cancelModal')?.addEventListener('click', function(e) {
-    if (e.target === this) closeCancelModal();
-});
-
-function openPDFView(purchaseId) {
-    var modal = document.getElementById('pdfModal');
-    var content = document.getElementById('pdfInvoiceContent');
-    
-    modal.classList.add('show');
-    document.body.style.overflow = 'hidden';
-    
-    content.innerHTML = '<div style="text-align:center;padding:30px;color:#64748B;"><i class="fas fa-spinner fa-spin" style="font-size:2rem;"></i><p>Loading...</p></div>';
-    
-    fetch('get_invoice.php?id=' + purchaseId)
-        .then(function(r) { return r.text(); })
-        .then(function(html) { content.innerHTML = html; })
-        .catch(function(error) {
-            content.innerHTML = '<div style="text-align:center;padding:30px;color:#DC2626;"><i class="fas fa-exclamation-circle" style="font-size:2rem;"></i><p>Error: ' + error.message + '</p></div>';
-        });
-}
-
-function closePDF() {
-    var modal = document.getElementById('pdfModal');
-    modal.classList.remove('show');
-    document.body.style.overflow = 'auto';
-}
-
-document.getElementById('pdfModal')?.addEventListener('click', function(e) {
-    if (e.target === this) closePDF();
-});
-
-function printPDFInvoice() {
-    var content = document.getElementById('pdfInvoiceContent');
-    if (!content) return;
-    
-    var printContents = content.innerHTML;
-    var win = window.open('', '_blank', 'width=900,height=700');
-    if (!win) {
-        var originalContents = document.body.innerHTML;
-        document.body.innerHTML = printContents;
-        window.print();
-        document.body.innerHTML = originalContents;
-        return;
-    }
-    
-    win.document.write('<!DOCTYPE html><html><head><title>Invoice</title>');
-    win.document.write('<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">');
-    win.document.write('<style>body{font-family:Arial;padding:20px;}</style>');
-    win.document.write('</head><body>');
-    win.document.write('<div class="invoice-container">' + printContents + '</div>');
-    win.document.write('</body></html>');
-    win.document.close();
-    
-    setTimeout(function() { win.focus(); win.print(); win.close(); }, 500);
-}
-
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') {
-        closeCancelModal();
-        closePDF();
-    }
-});
-
-// MONEY FORMATTING
-(function() {
-    function formatWithCommas(value) {
-        if (!value) return '';
-        var clean = value.toString().replace(/[^0-9.]/g, '');
-        var parts = clean.split('.');
-        var integerPart = parts[0] || '0';
-        var decimalPart = parts.length > 1 ? '.' + parts[1] : '';
-        
-        if (integerPart.length > 3) {
-            var formatted = '';
-            var counter = 0;
-            for (var i = integerPart.length - 1; i >= 0; i--) {
-                counter++;
-                formatted = integerPart[i] + formatted;
-                if (counter % 3 === 0 && i !== 0) formatted = ',' + formatted;
-            }
-            integerPart = formatted;
-        }
-        return integerPart + decimalPart;
-    }
-    
-    function initMoneyInputs() {
-        document.querySelectorAll('.money-input').forEach(function(input) {
-            if (input.dataset.moneyInit) return;
-            input.dataset.moneyInit = 'true';
+    // ================================================================
+    // ✅ NUMERIC-ONLY INPUTS
+    // ================================================================
+    function setupNumericOnlyInputsPurch() {
+        document.querySelectorAll('.numeric-only').forEach(function(input) {
+            if (input.dataset.numericInit) return;
+            input.dataset.numericInit = 'true';
+            
+            input.addEventListener('keypress', function(e) {
+                var char = String.fromCharCode(e.which);
+                if (!/[0-9]/.test(char) && e.which !== 8 && e.which !== 0 && e.which !== 46) {
+                    e.preventDefault();
+                }
+            });
             
             input.addEventListener('input', function() {
                 var cursorPos = this.selectionStart;
-                var before = this.value.length;
-                var formatted = formatWithCommas(this.value);
-                if (formatted !== this.value) {
-                    this.value = formatted;
-                    var diff = formatted.length - before;
-                    this.setSelectionRange(cursorPos + diff, cursorPos + diff);
+                var oldVal = this.value;
+                this.value = this.value.replace(/[^0-9]/g, '');
+                if (oldVal !== this.value) {
+                    this.setSelectionRange(cursorPos - 1, cursorPos - 1);
                 }
             });
             
-            input.addEventListener('focus', function() {
-                this.value = this.value.replace(/,/g, '');
-                this.select();
+            input.addEventListener('wheel', function(e) {
+                e.preventDefault();
+                this.blur();
+            }, { passive: false });
+            
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
             });
             
-            input.addEventListener('blur', function() {
-                if (this.value) this.value = formatWithCommas(this.value);
-                else this.value = '0';
+            input.addEventListener('paste', function(e) {
+                e.preventDefault();
+                var pasted = (e.clipboardData || window.clipboardData).getData('text');
+                var numbers = pasted.replace(/[^0-9]/g, '');
+                if (numbers) document.execCommand('insertText', false, numbers);
             });
         });
     }
-    
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initMoneyInputs);
-    else initMoneyInputs();
-    
-    new MutationObserver(function() { setTimeout(initMoneyInputs, 100); }).observe(document.body, { childList: true, subtree: true });
-})();
 
-// AUTOCOMPLETE - MEDICINE
-(function() {
-    var medicineData = <?= json_encode($all_medicines) ?>;
-    var input = document.getElementById('purchaseMedicineName');
-    var autocomplete = document.getElementById('purchaseMedicineAutocomplete');
-    var medicineIdInput = document.getElementById('purchaseMedicineId');
-    
-    if (!input || !autocomplete) return;
-    
-    input.addEventListener('input', function() {
-        var query = this.value.toLowerCase().trim();
-        if (query.length < 1) { autocomplete.classList.remove('show'); return; }
+    document.addEventListener('DOMContentLoaded', setupNumericOnlyInputsPurch);
+    new MutationObserver(function() { setTimeout(setupNumericOnlyInputsPurch, 100); }).observe(document.body, { childList: true, subtree: true });
+
+    // ================================================================
+    // PAGE-SPECIFIC JAVASCRIPT
+    // ================================================================
+    function closeMessage() {
+        var messageBox = document.getElementById('messageBox');
+        if (messageBox) messageBox.style.display = 'none';
+    }
+
+    setTimeout(function() {
+        var messageBox = document.getElementById('messageBox');
+        if (messageBox) messageBox.style.display = 'none';
+    }, 5000);
+
+    function generateBatch(type) {
+        var now = new Date();
+        var dateStr = now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0');
+        var random = Math.random().toString(36).substring(2, 8).toUpperCase();
+        var prefix = type === 'med' ? 'BATCH' : 'EQP';
+        var batch = prefix + '-' + dateStr + '-' + random;
+        var inputId = type === 'med' ? 'purchaseBatchInput' : 'purchaseEquipBatchInput';
+        var input = document.getElementById(inputId);
+        if (input) input.value = batch;
+    }
+
+    function toggleCategory(type) {
+        var select, manual;
+        if (type === 'med') {
+            select = document.getElementById('purchaseCategorySelect');
+            manual = document.getElementById('purchaseCategoryManual');
+        } else if (type === 'equip') {
+            select = document.getElementById('purchaseEquipCategorySelect');
+            manual = document.getElementById('purchaseEquipCategoryManual');
+        } else return;
         
-        var matches = medicineData.filter(function(item) {
-            return item.medication_name.toLowerCase().includes(query);
-        });
+        if (!select || !manual) return;
         
-        if (matches.length === 0) { autocomplete.classList.remove('show'); return; }
+        if (manual.style.display === 'none') {
+            manual.style.display = 'block';
+            select.style.display = 'none';
+            manual.focus();
+            manual.required = true;
+            select.required = false;
+            select.value = '';
+        } else {
+            manual.style.display = 'none';
+            select.style.display = 'block';
+            select.value = '';
+            manual.required = false;
+            select.required = true;
+        }
+    }
+
+    function toggleUnit(type) {
+        var select, manual;
+        if (type === 'med') {
+            select = document.getElementById('purchaseUnit');
+            manual = document.getElementById('purchaseUnitManual');
+        } else if (type === 'equip') {
+            select = document.getElementById('purchaseEquipUnit');
+            manual = document.getElementById('purchaseEquipUnitManual');
+        } else return;
         
-        var html = '';
-        matches.forEach(function(item) {
-            html += '<div class="autocomplete-item" data-id="' + item.id + '" data-name="' + escapeHtml(item.medication_name) + '" data-unit="' + escapeHtml(item.unit || 'pcs') + '" data-cost="' + (item.unit_cost || 0) + '" data-price="' + (item.selling_price || 0) + '" data-reorder="' + (item.reorder_level || 10) + '" data-supplier="' + escapeHtml(item.supplier || '') + '">' +
-                '<strong>' + escapeHtml(item.medication_name) + '</strong>' +
-                '<span class="item-detail">Unit: ' + escapeHtml(item.unit || 'pcs') + ' | Buy: TSh ' + Number(item.unit_cost || 0).toLocaleString() + ' | Sell: TSh ' + Number(item.selling_price || 0).toLocaleString() + '</span>' +
-                '</div>';
-        });
+        if (!select || !manual) return;
         
-        autocomplete.innerHTML = html;
-        autocomplete.classList.add('show');
+        if (manual.style.display === 'none') {
+            manual.style.display = 'block';
+            select.style.display = 'none';
+            manual.focus();
+            manual.required = true;
+            select.required = false;
+            select.value = '';
+        } else {
+            manual.style.display = 'none';
+            select.style.display = 'block';
+            select.value = '';
+            manual.required = false;
+            select.required = true;
+            manual.value = '';
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        var medUnitSelect = document.getElementById('purchaseUnit');
+        var medUnitManual = document.getElementById('purchaseUnitManual');
+        var equipUnitSelect = document.getElementById('purchaseEquipUnit');
+        var equipUnitManual = document.getElementById('purchaseEquipUnitManual');
         
-        autocomplete.querySelectorAll('.autocomplete-item').forEach(function(item) {
-            item.addEventListener('click', function() {
-                input.value = this.dataset.name;
-                if (medicineIdInput) medicineIdInput.value = this.dataset.id;
-                autocomplete.classList.remove('show');
-                
-                if (document.getElementById('purchaseBuyingPrice')) {
-                    document.getElementById('purchaseBuyingPrice').value = Number(this.dataset.cost || 0).toLocaleString();
-                }
-                if (document.getElementById('purchaseUnitPrice')) {
-                    document.getElementById('purchaseUnitPrice').value = Number(this.dataset.price || 0).toLocaleString();
-                }
-                if (document.getElementById('purchaseReorderLevel')) {
-                    document.getElementById('purchaseReorderLevel').value = this.dataset.reorder || 10;
-                }
-                if (document.getElementById('purchaseSupplier')) {
-                    document.getElementById('purchaseSupplier').value = this.dataset.supplier || '';
-                }
-                
-                var unitVal = this.dataset.unit;
-                var unitSelect = document.getElementById('purchaseUnit');
-                var unitManual = document.getElementById('purchaseUnitManual');
-                if (unitSelect && unitManual && unitVal) {
-                    var found = false;
-                    for (var i = 0; i < unitSelect.options.length; i++) {
-                        if (unitSelect.options[i].value === unitVal) {
-                            unitSelect.value = unitVal;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        unitManual.style.display = 'block';
-                        unitSelect.style.display = 'none';
-                        unitManual.value = unitVal;
-                        unitManual.required = true;
-                        unitSelect.required = false;
-                    }
+        if (medUnitSelect && medUnitManual) {
+            medUnitSelect.addEventListener('change', function() {
+                if (this.value === '__other__') {
+                    medUnitManual.style.display = 'block';
+                    this.style.display = 'none';
+                    medUnitManual.focus();
+                    medUnitManual.required = true;
+                    this.required = false;
                 }
             });
-        });
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (!e.target.closest('.autocomplete-container')) autocomplete.classList.remove('show');
-    });
-})();
-
-// AUTOCOMPLETE - EQUIPMENT
-(function() {
-    var equipmentData = <?= json_encode($all_equipment) ?>;
-    var input = document.getElementById('purchaseEquipmentName');
-    var autocomplete = document.getElementById('purchaseEquipmentAutocomplete');
-    var equipmentIdInput = document.getElementById('purchaseEquipmentId');
-    
-    if (!input || !autocomplete) return;
-    
-    input.addEventListener('input', function() {
-        var query = this.value.toLowerCase().trim();
-        if (query.length < 1) { autocomplete.classList.remove('show'); return; }
+        }
         
-        var matches = equipmentData.filter(function(item) {
-            return item.equipment_name.toLowerCase().includes(query);
-        });
-        
-        if (matches.length === 0) { autocomplete.classList.remove('show'); return; }
-        
-        var html = '';
-        matches.forEach(function(item) {
-            html += '<div class="autocomplete-item" data-id="' + item.id + '" data-name="' + escapeHtml(item.equipment_name) + '" data-unit="' + escapeHtml(item.unit || 'pcs') + '" data-cost="' + (item.unit_cost || 0) + '" data-price="' + (item.selling_price || 0) + '" data-reorder="' + (item.reorder_level || 5) + '" data-supplier="' + escapeHtml(item.supplier || '') + '">' +
-                '<strong>' + escapeHtml(item.equipment_name) + '</strong>' +
-                '<span class="item-detail">Unit: ' + escapeHtml(item.unit || 'pcs') + ' | Buy: TSh ' + Number(item.unit_cost || 0).toLocaleString() + ' | Sell: TSh ' + Number(item.selling_price || 0).toLocaleString() + '</span>' +
-                '</div>';
-        });
-        
-        autocomplete.innerHTML = html;
-        autocomplete.classList.add('show');
-        
-        autocomplete.querySelectorAll('.autocomplete-item').forEach(function(item) {
-            item.addEventListener('click', function() {
-                input.value = this.dataset.name;
-                if (equipmentIdInput) equipmentIdInput.value = this.dataset.id;
-                autocomplete.classList.remove('show');
-                
-                if (document.getElementById('purchaseEquipBuyingPrice')) {
-                    document.getElementById('purchaseEquipBuyingPrice').value = Number(this.dataset.cost || 0).toLocaleString();
-                }
-                if (document.getElementById('purchaseEquipSellingPrice')) {
-                    document.getElementById('purchaseEquipSellingPrice').value = Number(this.dataset.price || 0).toLocaleString();
-                }
-                if (document.getElementById('purchaseEquipReorderLevel')) {
-                    document.getElementById('purchaseEquipReorderLevel').value = this.dataset.reorder || 5;
-                }
-                if (document.getElementById('purchaseEquipSupplier')) {
-                    document.getElementById('purchaseEquipSupplier').value = this.dataset.supplier || '';
-                }
-                
-                var unitVal = this.dataset.unit;
-                var unitSelect = document.getElementById('purchaseEquipUnit');
-                var unitManual = document.getElementById('purchaseEquipUnitManual');
-                if (unitSelect && unitManual && unitVal) {
-                    var found = false;
-                    for (var i = 0; i < unitSelect.options.length; i++) {
-                        if (unitSelect.options[i].value === unitVal) {
-                            unitSelect.value = unitVal;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        unitManual.style.display = 'block';
-                        unitSelect.style.display = 'none';
-                        unitManual.value = unitVal;
-                        unitManual.required = true;
-                        unitSelect.required = false;
-                    }
+        if (equipUnitSelect && equipUnitManual) {
+            equipUnitSelect.addEventListener('change', function() {
+                if (this.value === '__other__') {
+                    equipUnitManual.style.display = 'block';
+                    this.style.display = 'none';
+                    equipUnitManual.focus();
+                    equipUnitManual.required = true;
+                    this.required = false;
                 }
             });
+        }
+    });
+
+    function openCancelModal(purchaseId, invoiceNumber) {
+        var modal = document.getElementById('cancelModal');
+        if (!modal) return;
+        
+        document.getElementById('cancelPurchaseId').value = purchaseId;
+        document.getElementById('cancelInvoiceNumber').textContent = 'Invoice: ' + invoiceNumber;
+        document.getElementById('cancelReason').value = '';
+        
+        modal.classList.add('show');
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeCancelModal() {
+        var modal = document.getElementById('cancelModal');
+        if (modal) {
+            modal.classList.remove('show');
+            document.body.style.overflow = 'auto';
+        }
+    }
+
+    document.getElementById('cancelModal')?.addEventListener('click', function(e) {
+        if (e.target === this) closeCancelModal();
+    });
+
+    function openPDFView(purchaseId) {
+        var modal = document.getElementById('pdfModal');
+        var content = document.getElementById('pdfInvoiceContent');
+        
+        modal.classList.add('show');
+        document.body.style.overflow = 'hidden';
+        
+        content.innerHTML = '<div style="text-align:center;padding:30px;color:#64748B;"><i class="fas fa-spinner fa-spin" style="font-size:2rem;"></i><p>Loading...</p></div>';
+        
+        fetch('get_invoice.php?id=' + purchaseId)
+            .then(function(r) { return r.text(); })
+            .then(function(html) { content.innerHTML = html; })
+            .catch(function(error) {
+                content.innerHTML = '<div style="text-align:center;padding:30px;color:#DC2626;"><i class="fas fa-exclamation-circle" style="font-size:2rem;"></i><p>Error: ' + error.message + '</p></div>';
+            });
+    }
+
+    function closePDF() {
+        var modal = document.getElementById('pdfModal');
+        modal.classList.remove('show');
+        document.body.style.overflow = 'auto';
+    }
+
+    document.getElementById('pdfModal')?.addEventListener('click', function(e) {
+        if (e.target === this) closePDF();
+    });
+
+    function printPDFInvoice() {
+        var content = document.getElementById('pdfInvoiceContent');
+        if (!content) return;
+        
+        var printContents = content.innerHTML;
+        var win = window.open('', '_blank', 'width=900,height=700');
+        if (!win) {
+            var originalContents = document.body.innerHTML;
+            document.body.innerHTML = printContents;
+            window.print();
+            document.body.innerHTML = originalContents;
+            return;
+        }
+        
+        win.document.write('<!DOCTYPE html><html><head><title>Invoice</title>');
+        win.document.write('<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">');
+        win.document.write('<style>body{font-family:Arial;padding:20px;}</style>');
+        win.document.write('</head><body>');
+        win.document.write('<div class="invoice-container">' + printContents + '</div>');
+        win.document.write('</body></html>');
+        win.document.close();
+        
+        setTimeout(function() { win.focus(); win.print(); win.close(); }, 500);
+    }
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeCancelModal();
+            closePDF();
+        }
+    });
+
+    // MONEY FORMATTING
+    (function() {
+        function formatWithCommas(value) {
+            if (!value) return '';
+            var clean = value.toString().replace(/[^0-9.]/g, '');
+            var parts = clean.split('.');
+            var integerPart = parts[0] || '0';
+            var decimalPart = parts.length > 1 ? '.' + parts[1] : '';
+            
+            if (integerPart.length > 3) {
+                var formatted = '';
+                var counter = 0;
+                for (var i = integerPart.length - 1; i >= 0; i--) {
+                    counter++;
+                    formatted = integerPart[i] + formatted;
+                    if (counter % 3 === 0 && i !== 0) formatted = ',' + formatted;
+                }
+                integerPart = formatted;
+            }
+            return integerPart + decimalPart;
+        }
+        
+        function initMoneyInputs() {
+            document.querySelectorAll('.money-input').forEach(function(input) {
+                if (input.dataset.moneyInit) return;
+                input.dataset.moneyInit = 'true';
+                
+                input.addEventListener('input', function() {
+                    var cursorPos = this.selectionStart;
+                    var before = this.value.length;
+                    var formatted = formatWithCommas(this.value);
+                    if (formatted !== this.value) {
+                        this.value = formatted;
+                        var diff = formatted.length - before;
+                        this.setSelectionRange(cursorPos + diff, cursorPos + diff);
+                    }
+                });
+                
+                input.addEventListener('focus', function() {
+                    this.value = this.value.replace(/,/g, '');
+                    this.select();
+                });
+                
+                input.addEventListener('blur', function() {
+                    if (this.value) this.value = formatWithCommas(this.value);
+                    else this.value = '0';
+                });
+            });
+        }
+        
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initMoneyInputs);
+        else initMoneyInputs();
+        
+        new MutationObserver(function() { setTimeout(initMoneyInputs, 100); }).observe(document.body, { childList: true, subtree: true });
+    })();
+
+    // AUTOCOMPLETE - MEDICINE
+    (function() {
+        var medicineData = <?= json_encode($all_medicines) ?>;
+        var input = document.getElementById('purchaseMedicineName');
+        var autocomplete = document.getElementById('purchaseMedicineAutocomplete');
+        var medicineIdInput = document.getElementById('purchaseMedicineId');
+        
+        if (!input || !autocomplete) return;
+        
+        input.addEventListener('input', function() {
+            var query = this.value.toLowerCase().trim();
+            if (query.length < 1) { autocomplete.classList.remove('show'); return; }
+            
+            var matches = medicineData.filter(function(item) {
+                return item.medication_name.toLowerCase().includes(query);
+            });
+            
+            if (matches.length === 0) { autocomplete.classList.remove('show'); return; }
+            
+            var html = '';
+            matches.forEach(function(item) {
+                html += '<div class="autocomplete-item-purch" data-id="' + item.id + '" data-name="' + escapeHtml(item.medication_name) + '" data-unit="' + escapeHtml(item.unit || 'pcs') + '" data-cost="' + (item.unit_cost || 0) + '" data-price="' + (item.selling_price || 0) + '" data-reorder="' + (item.reorder_level || 10) + '" data-supplier="' + escapeHtml(item.supplier || '') + '">' +
+                    '<strong>' + escapeHtml(item.medication_name) + '</strong>' +
+                    '<span class="item-detail-purch">Unit: ' + escapeHtml(item.unit || 'pcs') + ' | Buy: TSh ' + Number(item.unit_cost || 0).toLocaleString() + ' | Sell: TSh ' + Number(item.selling_price || 0).toLocaleString() + '</span>' +
+                    '</div>';
+            });
+            
+            autocomplete.innerHTML = html;
+            autocomplete.classList.add('show');
+            
+            autocomplete.querySelectorAll('.autocomplete-item-purch').forEach(function(item) {
+                item.addEventListener('click', function() {
+                    input.value = this.dataset.name;
+                    if (medicineIdInput) medicineIdInput.value = this.dataset.id;
+                    autocomplete.classList.remove('show');
+                    
+                    if (document.getElementById('purchaseBuyingPrice')) document.getElementById('purchaseBuyingPrice').value = Number(this.dataset.cost || 0).toLocaleString();
+                    if (document.getElementById('purchaseUnitPrice')) document.getElementById('purchaseUnitPrice').value = Number(this.dataset.price || 0).toLocaleString();
+                    if (document.getElementById('purchaseReorderLevel')) document.getElementById('purchaseReorderLevel').value = this.dataset.reorder || 10;
+                    if (document.getElementById('purchaseSupplier')) document.getElementById('purchaseSupplier').value = this.dataset.supplier || '';
+                    
+                    var unitVal = this.dataset.unit;
+                    var unitSelect = document.getElementById('purchaseUnit');
+                    var unitManual = document.getElementById('purchaseUnitManual');
+                    if (unitSelect && unitManual && unitVal) {
+                        var found = false;
+                        for (var i = 0; i < unitSelect.options.length; i++) {
+                            if (unitSelect.options[i].value === unitVal) {
+                                unitSelect.value = unitVal;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            unitManual.style.display = 'block';
+                            unitSelect.style.display = 'none';
+                            unitManual.value = unitVal;
+                            unitManual.required = true;
+                            unitSelect.required = false;
+                        }
+                    }
+                });
+            });
         });
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (!e.target.closest('.autocomplete-container')) autocomplete.classList.remove('show');
-    });
-})();
+        
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.autocomplete-container-purch')) autocomplete.classList.remove('show');
+        });
+    })();
 
-function escapeHtml(text) {
-    if (!text) return '';
-    var div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
+    // AUTOCOMPLETE - EQUIPMENT
+    (function() {
+        var equipmentData = <?= json_encode($all_equipment) ?>;
+        var input = document.getElementById('purchaseEquipmentName');
+        var autocomplete = document.getElementById('purchaseEquipmentAutocomplete');
+        var equipmentIdInput = document.getElementById('purchaseEquipmentId');
+        
+        if (!input || !autocomplete) return;
+        
+        input.addEventListener('input', function() {
+            var query = this.value.toLowerCase().trim();
+            if (query.length < 1) { autocomplete.classList.remove('show'); return; }
+            
+            var matches = equipmentData.filter(function(item) {
+                return item.equipment_name.toLowerCase().includes(query);
+            });
+            
+            if (matches.length === 0) { autocomplete.classList.remove('show'); return; }
+            
+            var html = '';
+            matches.forEach(function(item) {
+                html += '<div class="autocomplete-item-purch" data-id="' + item.id + '" data-name="' + escapeHtml(item.equipment_name) + '" data-unit="' + escapeHtml(item.unit || 'pcs') + '" data-cost="' + (item.unit_cost || 0) + '" data-price="' + (item.selling_price || 0) + '" data-reorder="' + (item.reorder_level || 5) + '" data-supplier="' + escapeHtml(item.supplier || '') + '">' +
+                    '<strong>' + escapeHtml(item.equipment_name) + '</strong>' +
+                    '<span class="item-detail-purch">Unit: ' + escapeHtml(item.unit || 'pcs') + ' | Buy: TSh ' + Number(item.unit_cost || 0).toLocaleString() + ' | Sell: TSh ' + Number(item.selling_price || 0).toLocaleString() + '</span>' +
+                    '</div>';
+            });
+            
+            autocomplete.innerHTML = html;
+            autocomplete.classList.add('show');
+            
+            autocomplete.querySelectorAll('.autocomplete-item-purch').forEach(function(item) {
+                item.addEventListener('click', function() {
+                    input.value = this.dataset.name;
+                    if (equipmentIdInput) equipmentIdInput.value = this.dataset.id;
+                    autocomplete.classList.remove('show');
+                    
+                    if (document.getElementById('purchaseEquipBuyingPrice')) document.getElementById('purchaseEquipBuyingPrice').value = Number(this.dataset.cost || 0).toLocaleString();
+                    if (document.getElementById('purchaseEquipSellingPrice')) document.getElementById('purchaseEquipSellingPrice').value = Number(this.dataset.price || 0).toLocaleString();
+                    if (document.getElementById('purchaseEquipReorderLevel')) document.getElementById('purchaseEquipReorderLevel').value = this.dataset.reorder || 5;
+                    if (document.getElementById('purchaseEquipSupplier')) document.getElementById('purchaseEquipSupplier').value = this.dataset.supplier || '';
+                    
+                    var unitVal = this.dataset.unit;
+                    var unitSelect = document.getElementById('purchaseEquipUnit');
+                    var unitManual = document.getElementById('purchaseEquipUnitManual');
+                    if (unitSelect && unitManual && unitVal) {
+                        var found = false;
+                        for (var i = 0; i < unitSelect.options.length; i++) {
+                            if (unitSelect.options[i].value === unitVal) {
+                                unitSelect.value = unitVal;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            unitManual.style.display = 'block';
+                            unitSelect.style.display = 'none';
+                            unitManual.value = unitVal;
+                            unitManual.required = true;
+                            unitSelect.required = false;
+                        }
+                    }
+                });
+            });
+        });
+        
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.autocomplete-container-purch')) autocomplete.classList.remove('show');
+        });
+    })();
 
-console.log('%c💊 Braick - Admin Purchases', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ EMBEDDED HEADER (same as shared)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Uses SHARED admin_sidebar.php', 'font-size:13px; color:#34D399;');
+    function escapeHtml(text) {
+        if (!text) return '';
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    console.log('%c💊 Braick - Admin Purchases', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ NO duplicate header JavaScript', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Mouse scroll hairuhusiwi kupunguza quantities', 'font-size:13px; color:#34D399;');
+    console.log('%c🌙 Dark mode: Handled by header', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>

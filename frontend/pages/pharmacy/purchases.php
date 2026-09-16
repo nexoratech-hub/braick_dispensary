@@ -5,6 +5,8 @@
 // FIXED: Duplicate invoice error + Branch ID aware + Join OR Create New
 // ✅ Back button inarudi select_purchase.php kwa IN_PROGRESS
 // ✅ FIXED: Unit inaweza kujazwa manually AU kuchaguliwa dropdown
+// ✅ FIXED: Mouse scroll hairuhusiwi kupunguza quantity (type=text + validation)
+// ✅ FIXED: Akiselect dawa iliyopo, quantities zake zinaonekana (stock info)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -219,9 +221,7 @@ $message_type = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
-    // ================================================================
     // JOIN PURCHASE
-    // ================================================================
     if ($action === 'join_purchase') {
         $purchase_id_join = (int)($_POST['purchase_id'] ?? 0);
         
@@ -240,9 +240,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // ================================================================
-    // CREATE NEW PURCHASE - FIXED (Unique invoice globally)
-    // ================================================================
+    // CREATE NEW PURCHASE
     if ($action === 'create_purchase') {
         $purchase_type_new = $_POST['purchase_type'] ?? 'medicine';
         $force_new = isset($_POST['force_new']) ? (int)$_POST['force_new'] : 0;
@@ -313,10 +311,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // ================================================================
     // ADD MEDICINE TO PURCHASE
-    // ✅ FIXED: Unit inaweza kujazwa manually AU kuchaguliwa dropdown
-    // ================================================================
     if ($action === 'add_medicine') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         $medicine_id = (int)($_POST['medicine_id'] ?? 0);
@@ -328,13 +323,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $batch_number = trim($_POST['batch_number'] ?? '');
         $category = trim($_POST['category'] ?? '');
         
-        // ✅ UNIT: Chukua kutoka dropdown AU manual input
         $unit = trim($_POST['unit'] ?? 'pcs');
         if (empty($unit) && !empty($_POST['unit_manual'])) {
             $unit = trim($_POST['unit_manual']);
         }
         if (empty($unit)) {
-            $unit = 'pcs'; // Default
+            $unit = 'pcs';
         }
         
         if (empty($category) && !empty($_POST['category_manual'])) {
@@ -399,7 +393,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $medicine_id = $existing_medicine['id'];
                     $is_new = false;
                     
-                    // ✅ Update unit kama imebadilika
                     $stmt = $db->prepare("UPDATE medications_inventory SET unit = ?, updated_at = NOW() WHERE id = ? AND branch_id = ?");
                     $stmt->execute([$unit, $medicine_id, $user_branch_id]);
                 }
@@ -462,10 +455,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // ================================================================
     // ADD EQUIPMENT TO PURCHASE
-    // ✅ FIXED: Unit inaweza kujazwa manually AU kuchaguliwa dropdown
-    // ================================================================
     if ($action === 'add_equipment') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         $equipment_id = (int)($_POST['equipment_id'] ?? 0);
@@ -477,13 +467,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $batch_number = trim($_POST['batch_number'] ?? '');
         $category = trim($_POST['category'] ?? '');
         
-        // ✅ UNIT: Chukua kutoka dropdown AU manual input
         $unit = trim($_POST['unit'] ?? 'pcs');
         if (empty($unit) && !empty($_POST['unit_manual'])) {
             $unit = trim($_POST['unit_manual']);
         }
         if (empty($unit)) {
-            $unit = 'pcs'; // Default
+            $unit = 'pcs';
         }
         
         if (empty($category) && !empty($_POST['category_manual'])) {
@@ -545,7 +534,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $equipment_id = $existing_equipment['id'];
                     $is_new = false;
                     
-                    // ✅ Update unit kama imebadilika
                     $stmt = $db->prepare("UPDATE medical_equipment SET unit = ?, updated_at = NOW() WHERE id = ? AND branch_id = ?");
                     $stmt->execute([$unit, $equipment_id, $user_branch_id]);
                 }
@@ -608,9 +596,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // ================================================================
     // COMPLETE PURCHASE
-    // ================================================================
     if ($action === 'complete_purchase') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         
@@ -692,9 +678,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // ================================================================
     // CANCEL PURCHASE
-    // ================================================================
     if ($action === 'cancel_purchase') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         $cancel_reason = trim($_POST['cancel_reason_final'] ?? $_POST['cancel_reason'] ?? 'Cancelled by creator');
@@ -739,9 +723,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // ================================================================
     // DELETE PURCHASE ITEM
-    // ================================================================
     if ($action === 'delete_item') {
         $item_id = (int)($_POST['item_id'] ?? 0);
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
@@ -842,11 +824,51 @@ if ($purchase_id > 0) {
         $stmt->execute([$purchase_id]);
         $purchase_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
-        $stmt = $db->prepare("SELECT id, medication_name, category, unit, selling_price, reorder_level, unit_cost, supplier FROM medications_inventory WHERE branch_id = ? AND status = 'active' ORDER BY medication_name");
+        // ============================================================
+        // ✅ MEDICINES: Grouped by name, show TOTAL quantity + batches
+        // ============================================================
+        $stmt = $db->prepare("
+            SELECT 
+                medication_name,
+                MIN(id) as id,
+                MIN(category) as category,
+                MIN(unit) as unit,
+                MIN(selling_price) as selling_price,
+                MIN(reorder_level) as reorder_level,
+                MIN(unit_cost) as unit_cost,
+                MIN(supplier) as supplier,
+                COALESCE(SUM(CASE WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') THEN quantity ELSE 0 END), 0) as quantity,
+                MIN(expiry_date) as expiry_date,
+                COUNT(*) as batch_count
+            FROM medications_inventory 
+            WHERE branch_id = ?
+            GROUP BY medication_name
+            ORDER BY medication_name
+        ");
         $stmt->execute([$user_branch_id]);
         $all_medicines = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
-        $stmt = $db->prepare("SELECT id, equipment_name, category, unit, selling_price, reorder_level, unit_cost, supplier FROM medical_equipment WHERE branch_id = ? AND status = 'active' ORDER BY equipment_name");
+        // ============================================================
+        // ✅ EQUIPMENT: Grouped by name, show TOTAL quantity + batches
+        // ============================================================
+        $stmt = $db->prepare("
+            SELECT 
+                equipment_name,
+                MIN(id) as id,
+                MIN(category) as category,
+                MIN(unit) as unit,
+                MIN(selling_price) as selling_price,
+                MIN(reorder_level) as reorder_level,
+                MIN(unit_cost) as unit_cost,
+                MIN(supplier) as supplier,
+                COALESCE(SUM(CASE WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') THEN quantity ELSE 0 END), 0) as quantity,
+                MIN(expiry_date) as expiry_date,
+                COUNT(*) as batch_count
+            FROM medical_equipment 
+            WHERE branch_id = ?
+            GROUP BY equipment_name
+            ORDER BY equipment_name
+        ");
         $stmt->execute([$user_branch_id]);
         $all_equipment = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
@@ -1381,7 +1403,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             border: 2px solid var(--border-color);
             border-top: none;
             border-radius: 0 0 8px 8px;
-            z-index: 100; max-height: 200px; overflow-y: auto;
+            z-index: 100; max-height: 250px; overflow-y: auto;
             display: none; box-shadow: var(--shadow-lg);
         }
         
@@ -1405,6 +1427,108 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .autocomplete-item .item-detail {
             font-size: 0.65rem; color: var(--text-muted);
             display: block;
+        }
+        
+        /* ✅ STOCK INFO BOX */
+        .stock-info-box {
+            display: none;
+            margin-top: 10px;
+            padding: 12px 16px;
+            background: linear-gradient(135deg, var(--primary-light), #FFFFFF);
+            border: 2px solid var(--primary);
+            border-radius: 10px;
+            animation: slideDown 0.3s ease;
+        }
+        
+        .stock-info-box.equip {
+            background: linear-gradient(135deg, var(--purple-light), #FFFFFF);
+            border-color: var(--purple);
+        }
+        
+        .stock-info-box.show { display: block; }
+        
+        .stock-info-header {
+            display: flex; justify-content: space-between;
+            align-items: center; flex-wrap: wrap; gap: 8px;
+            margin-bottom: 8px;
+        }
+        
+        .stock-info-header .stock-title {
+            font-size: 0.8rem; font-weight: 700;
+            color: var(--primary); display: flex;
+            align-items: center; gap: 6px;
+        }
+        
+        .stock-info-box.equip .stock-info-header .stock-title { color: var(--purple); }
+        
+        .stock-info-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-top: 8px;
+        }
+        
+        .stock-info-stat {
+            background: white;
+            padding: 8px 10px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            text-align: center;
+        }
+        
+        .stock-info-stat .stat-label {
+            font-size: 0.55rem;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            font-weight: 600;
+            letter-spacing: 0.05em;
+        }
+        
+        .stock-info-stat .stat-value {
+            font-size: 1.1rem;
+            font-weight: 700;
+            margin-top: 2px;
+        }
+        
+        .stock-info-stat.qty .stat-value { color: var(--primary); }
+        .stock-info-stat.batches .stat-value { color: var(--warning); }
+        .stock-info-stat.total .stat-value { color: var(--success); }
+        
+        .stock-info-box.equip .stock-info-stat.qty .stat-value { color: var(--purple); }
+        
+        .stock-batches-list {
+            margin-top: 8px;
+            padding: 8px 10px;
+            background: white;
+            border-radius: 6px;
+            border: 1px dashed var(--border-color);
+            font-size: 0.7rem;
+            max-height: 100px;
+            overflow-y: auto;
+        }
+        
+        .stock-batches-list .batch-row {
+            display: flex; justify-content: space-between;
+            padding: 3px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .stock-batches-list .batch-row:last-child { border-bottom: none; }
+        
+        .stock-batches-list .batch-number {
+            font-family: monospace;
+            font-weight: 600;
+            color: var(--primary);
+        }
+        
+        .stock-batches-list .batch-qty {
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        
+        .stock-batches-list .batch-expiry {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
         }
         
         .table-wrapper { overflow-x: auto; }
@@ -1623,6 +1747,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         [data-theme="dark"] .unit-badge { background: #134E4A; color: #5EEAD4; }
         
+        /* ✅ ZUIA SCROLL WHEEL KUBADILISHA NUMBER INPUTS */
+        input[type="number"] {
+            -moz-appearance: textfield;
+        }
+        input[type="number"]::-webkit-outer-spin-button,
+        input[type="number"]::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 14px; }
             .grid-3 { grid-template-columns: 1fr 1fr; }
@@ -1644,6 +1778,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             .form-actions .btn-cancel { width: 100%; justify-content: center; }
             .purchase-info-grid { grid-template-columns: 1fr 1fr; }
             .modal-content { padding: 16px; }
+            .stock-info-grid { grid-template-columns: 1fr 1fr; }
         }
     </style>
 </head>
@@ -1651,9 +1786,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER - BACK BUTTON IMBADILISHWA -->
-    <!-- ================================================================ -->
+    <!-- PAGE HEADER -->
     <div class="page-header-box">
         <div>
             <h1 class="page-title">
@@ -1667,17 +1800,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
         <div class="header-actions">
             <?php if ($purchase_id && $current_purchase && $current_purchase['status'] === 'IN_PROGRESS'): ?>
-                <!-- ✅ Back to Select Purchase (IN_PROGRESS) -->
                 <a href="select_purchase.php?type=<?= $current_purchase['purchase_type'] ?>" class="btn-back">
                     <i class="fas fa-arrow-left"></i> Back to Select Purchase
                 </a>
             <?php elseif ($purchase_id && $current_purchase): ?>
-                <!-- Back to Purchases List (COMPLETED au CANCELLED) -->
                 <a href="purchases.php" class="btn-back">
                     <i class="fas fa-arrow-left"></i> Back to List
                 </a>
             <?php else: ?>
-                <!-- Back to Inventory (list view) -->
                 <a href="inventory.php" class="btn-back">
                     <i class="fas fa-arrow-left"></i> Back to Inventory
                 </a>
@@ -1693,9 +1823,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- VIEW SPECIFIC PURCHASE -->
-    <!-- ================================================================ -->
     <?php if ($purchase_id && $current_purchase): ?>
         
         <div class="card">
@@ -1822,6 +1950,43 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     <input type="hidden" name="medicine_id" id="purchaseMedicineId" value="">
                                     <div class="autocomplete-list" id="purchaseMedicineAutocomplete"></div>
                                 </div>
+                                
+                                <!-- ✅ STOCK INFO BOX - Inaonyesha quantities za dawa iliyopo -->
+                                <div class="stock-info-box" id="medicineStockInfo">
+                                    <div class="stock-info-header">
+                                        <div class="stock-title">
+                                            <i class="fas fa-boxes"></i> 
+                                            <span id="medStockName">Stock Information</span>
+                                        </div>
+                                        <span style="font-size:0.65rem;background:var(--success);color:white;padding:2px 10px;border-radius:12px;font-weight:600;">
+                                            <i class="fas fa-check-circle"></i> Ipo Inventory
+                                        </span>
+                                    </div>
+                                    
+                                    <div class="stock-info-grid">
+                                        <div class="stock-info-stat qty">
+                                            <div class="stat-label">Stock ya Sasa</div>
+                                            <div class="stat-value" id="existingStockQty">0</div>
+                                        </div>
+                                        <div class="stock-info-stat batches">
+                                            <div class="stat-label">Batches</div>
+                                            <div class="stat-value" id="existingBatchCount">0</div>
+                                        </div>
+                                        <div class="stock-info-stat total">
+                                            <div class="stat-label">Baada ya Kuongeza</div>
+                                            <div class="stat-value" id="totalAfterAdd">0</div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="stock-batches-list" id="medStockBatchesList">
+                                        <!-- Batches zitaonyeshwa hapa -->
+                                    </div>
+                                    
+                                    <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border-color);font-size:0.7rem;color:var(--text-secondary);">
+                                        <i class="fas fa-info-circle" style="color:var(--primary);"></i>
+                                        Ongeza <strong>quantity ya batch mpya</strong> hapa chini. Stock ya sasa itaongezwa.
+                                    </div>
+                                </div>
                             </div>
                             
                             <div class="form-row">
@@ -1841,7 +2006,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 </div>
                             </div>
                             
-                            <!-- ✅ UNIT: Dropdown + Manual Input -->
                             <div class="form-row">
                                 <label class="form-label">Unit <span class="required">*</span></label>
                                 <div class="unit-input-group">
@@ -1859,24 +2023,34 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 </div>
                             </div>
                             
+                            <!-- ✅ QUANTITY - type=text + inputmode=numeric ili scroll isibadilishe -->
                             <div class="form-row">
-                                <label class="form-label">Quantity <span class="required">*</span></label>
-                                <input type="number" name="quantity" id="purchaseQuantity" class="form-control" placeholder="0" min="1" required>
+                                <label class="form-label">
+                                    Quantity (Batch Mpya) <span class="required">*</span>
+                                    <span id="qtyHint" style="font-size:0.6rem;font-weight:400;color:var(--primary);"></span>
+                                </label>
+                                <input type="text" name="quantity" id="purchaseQuantity" class="form-control numeric-only" 
+                                       placeholder="Ingiza quantity ya batch mpya" inputmode="numeric" 
+                                       pattern="[0-9]*" required autocomplete="off">
+                                <div class="help-text">
+                                    <i class="fas fa-info-circle"></i> 
+                                    Quantity hii itaongezwa kwenye stock iliyopo
+                                </div>
                             </div>
                             
                             <div class="form-row">
                                 <label class="form-label">Reorder Level</label>
-                                <input type="number" name="reorder_level" id="purchaseReorderLevel" class="form-control" value="10" min="0">
+                                <input type="text" name="reorder_level" id="purchaseReorderLevel" class="form-control numeric-only" value="10" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
                             </div>
                             
                             <div class="form-row">
                                 <label class="form-label">Buying Price (TSh) <span class="required">*</span></label>
-                                <input type="text" name="buying_price" id="purchaseBuyingPrice" class="form-control money-input" value="0" required>
+                                <input type="text" name="buying_price" id="purchaseBuyingPrice" class="form-control money-input" value="0" required autocomplete="off">
                             </div>
                             
                             <div class="form-row">
                                 <label class="form-label">Selling Price (TSh) <span class="required">*</span></label>
-                                <input type="text" name="selling_price" id="purchaseUnitPrice" class="form-control money-input" value="0" required>
+                                <input type="text" name="selling_price" id="purchaseUnitPrice" class="form-control money-input" value="0" required autocomplete="off">
                             </div>
                             
                             <div class="form-row">
@@ -1943,6 +2117,43 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     <input type="hidden" name="equipment_id" id="purchaseEquipmentId" value="">
                                     <div class="autocomplete-list" id="purchaseEquipmentAutocomplete"></div>
                                 </div>
+                                
+                                <!-- ✅ STOCK INFO BOX - Equipment -->
+                                <div class="stock-info-box equip" id="equipmentStockInfo">
+                                    <div class="stock-info-header">
+                                        <div class="stock-title">
+                                            <i class="fas fa-tools"></i> 
+                                            <span id="equipStockName">Stock Information</span>
+                                        </div>
+                                        <span style="font-size:0.65rem;background:var(--success);color:white;padding:2px 10px;border-radius:12px;font-weight:600;">
+                                            <i class="fas fa-check-circle"></i> Ipo Inventory
+                                        </span>
+                                    </div>
+                                    
+                                    <div class="stock-info-grid">
+                                        <div class="stock-info-stat qty">
+                                            <div class="stat-label">Stock ya Sasa</div>
+                                            <div class="stat-value" id="existingEquipStockQty">0</div>
+                                        </div>
+                                        <div class="stock-info-stat batches">
+                                            <div class="stat-label">Batches</div>
+                                            <div class="stat-value" id="existingEquipBatchCount">0</div>
+                                        </div>
+                                        <div class="stock-info-stat total">
+                                            <div class="stat-label">Baada ya Kuongeza</div>
+                                            <div class="stat-value" id="totalEquipAfterAdd">0</div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="stock-batches-list" id="equipStockBatchesList">
+                                        <!-- Batches zitaonyeshwa hapa -->
+                                    </div>
+                                    
+                                    <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border-color);font-size:0.7rem;color:var(--text-secondary);">
+                                        <i class="fas fa-info-circle" style="color:var(--purple);"></i>
+                                        Ongeza <strong>quantity ya batch mpya</strong> hapa chini. Stock ya sasa itaongezwa.
+                                    </div>
+                                </div>
                             </div>
                             
                             <div class="form-row">
@@ -1962,7 +2173,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 </div>
                             </div>
                             
-                            <!-- ✅ UNIT: Dropdown + Manual Input -->
                             <div class="form-row">
                                 <label class="form-label">Unit <span class="required">*</span></label>
                                 <div class="unit-input-group">
@@ -1988,24 +2198,34 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 </div>
                             </div>
                             
+                            <!-- ✅ QUANTITY - type=text + inputmode=numeric -->
                             <div class="form-row">
-                                <label class="form-label">Quantity <span class="required">*</span></label>
-                                <input type="number" name="quantity" id="purchaseEquipQuantity" class="form-control" placeholder="0" min="1" required>
+                                <label class="form-label">
+                                    Quantity (Batch Mpya) <span class="required">*</span>
+                                    <span id="equipQtyHint" style="font-size:0.6rem;font-weight:400;color:var(--purple);"></span>
+                                </label>
+                                <input type="text" name="quantity" id="purchaseEquipQuantity" class="form-control numeric-only" 
+                                       placeholder="Ingiza quantity ya batch mpya" inputmode="numeric" 
+                                       pattern="[0-9]*" required autocomplete="off">
+                                <div class="help-text">
+                                    <i class="fas fa-info-circle"></i> 
+                                    Quantity hii itaongezwa kwenye stock iliyopo
+                                </div>
                             </div>
                             
                             <div class="form-row">
                                 <label class="form-label">Reorder Level</label>
-                                <input type="number" name="reorder_level" id="purchaseEquipReorderLevel" class="form-control" value="5" min="0">
+                                <input type="text" name="reorder_level" id="purchaseEquipReorderLevel" class="form-control numeric-only" value="5" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
                             </div>
                             
                             <div class="form-row">
                                 <label class="form-label">Buying Price (TSh) <span class="required">*</span></label>
-                                <input type="text" name="buying_price" id="purchaseEquipBuyingPrice" class="form-control money-input" value="0" required>
+                                <input type="text" name="buying_price" id="purchaseEquipBuyingPrice" class="form-control money-input" value="0" required autocomplete="off">
                             </div>
                             
                             <div class="form-row">
                                 <label class="form-label">Selling Price (TSh) <span class="required">*</span></label>
-                                <input type="text" name="selling_price" id="purchaseEquipSellingPrice" class="form-control money-input" value="0" required>
+                                <input type="text" name="selling_price" id="purchaseEquipSellingPrice" class="form-control money-input" value="0" required autocomplete="off">
                             </div>
                             
                             <div class="form-row">
@@ -2159,9 +2379,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </div>
         </div>
         
-    <!-- ================================================================ -->
     <!-- VIEW LIST -->
-    <!-- ================================================================ -->
     <?php else: ?>
         
         <!-- IN PROGRESS PURCHASES -->
@@ -2453,6 +2671,95 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
 <script>
 // ================================================================
+// ✅ ZUIA SCROLL WHEEL KUBADILISHA NUMBER INPUTS
+// ================================================================
+document.addEventListener('wheel', function(e) {
+    if (document.activeElement && 
+        (document.activeElement.type === 'number' || 
+         document.activeElement.classList.contains('numeric-only'))) {
+        document.activeElement.blur();
+    }
+}, { passive: true });
+
+// ================================================================
+// ✅ NUMERIC-ONLY INPUTS (Quantity, Reorder Level)
+// ================================================================
+function setupNumericOnlyInputs() {
+    document.querySelectorAll('.numeric-only').forEach(function(input) {
+        if (input.dataset.numericInit) return;
+        input.dataset.numericInit = 'true';
+        
+        // Block non-numeric keys
+        input.addEventListener('keypress', function(e) {
+            var char = String.fromCharCode(e.which);
+            if (!/[0-9]/.test(char) && e.which !== 8 && e.which !== 0 && e.which !== 46) {
+                e.preventDefault();
+            }
+        });
+        
+        // Sanitize on input
+        input.addEventListener('input', function() {
+            var cursorPos = this.selectionStart;
+            var oldVal = this.value;
+            this.value = this.value.replace(/[^0-9]/g, '');
+            if (oldVal !== this.value) {
+                this.setSelectionRange(cursorPos - 1, cursorPos - 1);
+            }
+            // Update total preview
+            updateTotalPreview(input);
+        });
+        
+        // Block scroll wheel
+        input.addEventListener('wheel', function(e) {
+            e.preventDefault();
+            this.blur();
+        }, { passive: false });
+        
+        // Block arrow up/down
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                e.preventDefault();
+            }
+        });
+    });
+}
+
+// Update total preview when quantity changes
+function updateTotalPreview(input) {
+    var qty = parseInt(input.value) || 0;
+    
+    // Medicine
+    if (input.id === 'purchaseQuantity') {
+        var existingQty = parseInt(document.getElementById('existingStockQty')?.textContent) || 0;
+        var totalEl = document.getElementById('totalAfterAdd');
+        if (totalEl) {
+            totalEl.textContent = (existingQty + qty).toLocaleString();
+        }
+        var hint = document.getElementById('qtyHint');
+        if (hint && qty > 0) {
+            hint.textContent = '(+' + qty + ' units)';
+        } else if (hint) {
+            hint.textContent = '';
+        }
+    }
+    
+    // Equipment
+    if (input.id === 'purchaseEquipQuantity') {
+        var existingQtyEquip = parseInt(document.getElementById('existingEquipStockQty')?.textContent) || 0;
+        var totalElEquip = document.getElementById('totalEquipAfterAdd');
+        if (totalElEquip) {
+            totalElEquip.textContent = (existingQtyEquip + qty).toLocaleString();
+        }
+        var hintEquip = document.getElementById('equipQtyHint');
+        if (hintEquip && qty > 0) {
+            hintEquip.textContent = '(+' + qty + ' units)';
+        } else if (hintEquip) {
+            hintEquip.textContent = '';
+        }
+    }
+}
+
+// ================================================================
 // CANCEL MODAL FUNCTIONS
 // ================================================================
 function openCancelModal() {
@@ -2560,9 +2867,7 @@ function generateBatch(type) {
     if (input) input.value = batch;
 }
 
-// ================================================================
-// CATEGORY TOGGLE - Dropdown au Manual
-// ================================================================
+// CATEGORY TOGGLE
 function toggleCategory(type) {
     var select, manual;
     if (type === 'med') {
@@ -2590,9 +2895,7 @@ function toggleCategory(type) {
     }
 }
 
-// ================================================================
-// ✅ UNIT TOGGLE - Dropdown au Manual (MPYA)
-// ================================================================
+// UNIT TOGGLE
 function toggleUnit(type) {
     var select, manual;
     if (type === 'med') {
@@ -2605,7 +2908,6 @@ function toggleUnit(type) {
     if (!select || !manual) return;
     
     if (manual.style.display === 'none') {
-        // Switch to manual input
         manual.style.display = 'block';
         select.style.display = 'none';
         manual.focus();
@@ -2613,7 +2915,6 @@ function toggleUnit(type) {
         select.required = false;
         select.value = '';
     } else {
-        // Switch back to dropdown
         manual.style.display = 'none';
         select.style.display = 'block';
         select.value = '';
@@ -2623,9 +2924,7 @@ function toggleUnit(type) {
     }
 }
 
-// ================================================================
-// ✅ AUTO-DETECT "__other__" SELECTION FOR UNIT (MPYA)
-// ================================================================
+// AUTO-DETECT "__other__" SELECTION FOR UNIT
 document.addEventListener('DOMContentLoaded', function() {
     var medUnitSelect = document.getElementById('purchaseUnit');
     var medUnitManual = document.getElementById('purchaseUnitManual');
@@ -2657,57 +2956,69 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// ================================================================
-// ✅ RESET UNIT FIELDS ON FORM RESET (MPYA)
-// ================================================================
+// RESET UNIT FIELDS ON FORM RESET
 document.querySelectorAll('form').forEach(function(form) {
     form.addEventListener('reset', function() {
-        // Reset Medicine Unit
-        var medUnitSelect = document.getElementById('purchaseUnit');
-        var medUnitManual = document.getElementById('purchaseUnitManual');
-        if (medUnitSelect && medUnitManual) {
-            medUnitSelect.style.display = 'block';
-            medUnitManual.style.display = 'none';
-            medUnitSelect.value = '';
-            medUnitManual.value = '';
-            medUnitSelect.required = true;
-            medUnitManual.required = false;
-        }
-        
-        // Reset Equipment Unit
-        var equipUnitSelect = document.getElementById('purchaseEquipUnit');
-        var equipUnitManual = document.getElementById('purchaseEquipUnitManual');
-        if (equipUnitSelect && equipUnitManual) {
-            equipUnitSelect.style.display = 'block';
-            equipUnitManual.style.display = 'none';
-            equipUnitSelect.value = '';
-            equipUnitManual.value = '';
-            equipUnitSelect.required = true;
-            equipUnitManual.required = false;
-        }
-        
-        // Reset Category too
-        var medCatSelect = document.getElementById('purchaseCategorySelect');
-        var medCatManual = document.getElementById('purchaseCategoryManual');
-        if (medCatSelect && medCatManual) {
-            medCatSelect.style.display = 'block';
-            medCatManual.style.display = 'none';
-            medCatSelect.value = '';
-            medCatManual.value = '';
-            medCatSelect.required = true;
-            medCatManual.required = false;
-        }
-        
-        var equipCatSelect = document.getElementById('purchaseEquipCategorySelect');
-        var equipCatManual = document.getElementById('purchaseEquipCategoryManual');
-        if (equipCatSelect && equipCatManual) {
-            equipCatSelect.style.display = 'block';
-            equipCatManual.style.display = 'none';
-            equipCatSelect.value = '';
-            equipCatManual.value = '';
-            equipCatSelect.required = true;
-            equipCatManual.required = false;
-        }
+        setTimeout(function() {
+            // Reset Medicine Unit
+            var medUnitSelect = document.getElementById('purchaseUnit');
+            var medUnitManual = document.getElementById('purchaseUnitManual');
+            if (medUnitSelect && medUnitManual) {
+                medUnitSelect.style.display = 'block';
+                medUnitManual.style.display = 'none';
+                medUnitSelect.value = '';
+                medUnitManual.value = '';
+                medUnitSelect.required = true;
+                medUnitManual.required = false;
+            }
+            
+            // Reset Equipment Unit
+            var equipUnitSelect = document.getElementById('purchaseEquipUnit');
+            var equipUnitManual = document.getElementById('purchaseEquipUnitManual');
+            if (equipUnitSelect && equipUnitManual) {
+                equipUnitSelect.style.display = 'block';
+                equipUnitManual.style.display = 'none';
+                equipUnitSelect.value = '';
+                equipUnitManual.value = '';
+                equipUnitSelect.required = true;
+                equipUnitManual.required = false;
+            }
+            
+            // Reset Category
+            var medCatSelect = document.getElementById('purchaseCategorySelect');
+            var medCatManual = document.getElementById('purchaseCategoryManual');
+            if (medCatSelect && medCatManual) {
+                medCatSelect.style.display = 'block';
+                medCatManual.style.display = 'none';
+                medCatSelect.value = '';
+                medCatManual.value = '';
+                medCatSelect.required = true;
+                medCatManual.required = false;
+            }
+            
+            var equipCatSelect = document.getElementById('purchaseEquipCategorySelect');
+            var equipCatManual = document.getElementById('purchaseEquipCategoryManual');
+            if (equipCatSelect && equipCatManual) {
+                equipCatSelect.style.display = 'block';
+                equipCatManual.style.display = 'none';
+                equipCatSelect.value = '';
+                equipCatManual.value = '';
+                equipCatSelect.required = true;
+                equipCatManual.required = false;
+            }
+            
+            // Hide stock info boxes
+            var medStockInfo = document.getElementById('medicineStockInfo');
+            var equipStockInfo = document.getElementById('equipmentStockInfo');
+            if (medStockInfo) medStockInfo.classList.remove('show');
+            if (equipStockInfo) equipStockInfo.classList.remove('show');
+            
+            // Clear hints
+            var qtyHint = document.getElementById('qtyHint');
+            var equipQtyHint = document.getElementById('equipQtyHint');
+            if (qtyHint) qtyHint.textContent = '';
+            if (equipQtyHint) equipQtyHint.textContent = '';
+        }, 50);
     });
 });
 
@@ -2834,13 +3145,14 @@ document.getElementById('cancelModal')?.addEventListener('click', function(e) {
 })();
 
 // ================================================================
-// AUTO-SEARCH Medicine - WITH UNIT MANUAL SUPPORT
+// ✅ AUTO-SEARCH Medicine - WITH STOCK INFO DISPLAY
 // ================================================================
 (function() {
     var medicineData = <?= json_encode($all_medicines) ?>;
     var input = document.getElementById('purchaseMedicineName');
     var autocomplete = document.getElementById('purchaseMedicineAutocomplete');
     var medicineIdInput = document.getElementById('purchaseMedicineId');
+    var stockInfoBox = document.getElementById('medicineStockInfo');
     
     var categorySelect = document.getElementById('purchaseCategorySelect');
     var categoryManual = document.getElementById('purchaseCategoryManual');
@@ -2853,6 +3165,38 @@ document.getElementById('cancelModal')?.addEventListener('click', function(e) {
     var quantityInput = document.getElementById('purchaseQuantity');
     
     if (!input || !autocomplete) return;
+    
+    function updateStockInfo(selected) {
+        if (!stockInfoBox || !selected) {
+            if (stockInfoBox) stockInfoBox.classList.remove('show');
+            return;
+        }
+        
+        // Update stock info values
+        document.getElementById('medStockName').textContent = selected.medication_name;
+        document.getElementById('existingStockQty').textContent = parseInt(selected.quantity || 0).toLocaleString();
+        document.getElementById('existingBatchCount').textContent = selected.batch_count || 0;
+        
+        // Update total preview
+        var qty = parseInt(quantityInput?.value) || 0;
+        document.getElementById('totalAfterAdd').textContent = (parseInt(selected.quantity || 0) + qty).toLocaleString();
+        
+        // Update batch list
+        var batchList = document.getElementById('medStockBatchesList');
+        if (batchList) {
+            batchList.innerHTML = `
+                <div style="font-size:0.65rem;color:var(--text-secondary);font-weight:600;margin-bottom:4px;">
+                    <i class="fas fa-layer-group"></i> Batches zilizopo:
+                </div>
+                <div class="batch-row">
+                    <span class="batch-number">${escapeHtml(selected.batch_number || 'N/A')}</span>
+                    <span class="batch-qty">${parseInt(selected.quantity || 0).toLocaleString()} units</span>
+                </div>
+            `;
+        }
+        
+        stockInfoBox.classList.add('show');
+    }
     
     function autoFillMedicine(medicineId) {
         var selected = medicineData.find(function(m) { return m.id == medicineId; });
@@ -2884,7 +3228,7 @@ document.getElementById('cancelModal')?.addEventListener('click', function(e) {
                 }
             }
             
-            // ✅ UNIT: Auto-fill dropdown AU manual
+            // Unit
             if (unitSelect && selected.unit) {
                 var unitFound = false;
                 for (var j = 0; j < unitSelect.options.length; j++) {
@@ -2895,7 +3239,6 @@ document.getElementById('cancelModal')?.addEventListener('click', function(e) {
                     }
                 }
                 if (!unitFound && selected.unit) {
-                    // Unit haipo kwenye dropdown - weka kwenye manual
                     unitManual.style.display = 'block';
                     unitSelect.style.display = 'none';
                     unitManual.value = selected.unit;
@@ -2914,13 +3257,25 @@ document.getElementById('cancelModal')?.addEventListener('click', function(e) {
             if (sellingPriceInput) sellingPriceInput.value = Number(selected.selling_price || 0).toLocaleString();
             if (reorderInput && selected.reorder_level > 0) reorderInput.value = selected.reorder_level;
             if (supplierInput && selected.supplier) supplierInput.value = selected.supplier;
-            if (quantityInput && selected.reorder_level > 0) quantityInput.value = selected.reorder_level;
+            
+            // ✅ FOCUS on quantity input
+            if (quantityInput) {
+                quantityInput.value = '';
+                quantityInput.focus();
+            }
+            
+            // ✅ ONYESHA STOCK INFO
+            updateStockInfo(selected);
         }
     }
     
     input.addEventListener('input', function() {
         var query = this.value.toLowerCase().trim();
-        if (query.length < 1) { autocomplete.classList.remove('show'); return; }
+        if (query.length < 1) { 
+            autocomplete.classList.remove('show'); 
+            if (stockInfoBox) stockInfoBox.classList.remove('show');
+            return; 
+        }
         
         var matches = medicineData.filter(function(item) {
             return item.medication_name.toLowerCase().includes(query);
@@ -2930,9 +3285,14 @@ document.getElementById('cancelModal')?.addEventListener('click', function(e) {
         
         var html = '';
         matches.forEach(function(item) {
+            var qty = parseInt(item.quantity || 0);
+            var qtyBadge = qty > 0 
+                ? `<span style="background:var(--success);color:white;padding:1px 8px;border-radius:10px;font-size:0.6rem;font-weight:600;margin-left:6px;">Stock: ${qty.toLocaleString()}</span>`
+                : `<span style="background:var(--danger);color:white;padding:1px 8px;border-radius:10px;font-size:0.6rem;font-weight:600;margin-left:6px;">0 Qty</span>`;
+            
             html += `<div class="autocomplete-item" data-id="${item.id}" data-name="${escapeHtml(item.medication_name)}">
-                <strong>${escapeHtml(item.medication_name)}</strong>
-                <span class="item-detail">Category: ${escapeHtml(item.category || 'N/A')} | Unit: ${escapeHtml(item.unit || 'pcs')} | Buy: TSh ${Number(item.unit_cost || 0).toLocaleString()} | Sell: TSh ${Number(item.selling_price || 0).toLocaleString()}</span>
+                <strong>${escapeHtml(item.medication_name)}</strong>${qtyBadge}
+                <span class="item-detail">Category: ${escapeHtml(item.category || 'N/A')} | Unit: ${escapeHtml(item.unit || 'pcs')} | Buy: TSh ${Number(item.unit_cost || 0).toLocaleString()} | Sell: TSh ${Number(item.selling_price || 0).toLocaleString()} | Batches: ${item.batch_count || 0}</span>
             </div>`;
         });
         
@@ -2957,13 +3317,14 @@ document.getElementById('cancelModal')?.addEventListener('click', function(e) {
 })();
 
 // ================================================================
-// AUTO-SEARCH Equipment - WITH UNIT MANUAL SUPPORT
+// ✅ AUTO-SEARCH Equipment - WITH STOCK INFO DISPLAY
 // ================================================================
 (function() {
     var equipmentData = <?= json_encode($all_equipment) ?>;
     var input = document.getElementById('purchaseEquipmentName');
     var autocomplete = document.getElementById('purchaseEquipmentAutocomplete');
     var equipmentIdInput = document.getElementById('purchaseEquipmentId');
+    var stockInfoBox = document.getElementById('equipmentStockInfo');
     
     var categorySelect = document.getElementById('purchaseEquipCategorySelect');
     var categoryManual = document.getElementById('purchaseEquipCategoryManual');
@@ -2977,12 +3338,40 @@ document.getElementById('cancelModal')?.addEventListener('click', function(e) {
     
     if (!input || !autocomplete) return;
     
+    function updateStockInfo(selected) {
+        if (!stockInfoBox || !selected) {
+            if (stockInfoBox) stockInfoBox.classList.remove('show');
+            return;
+        }
+        
+        document.getElementById('equipStockName').textContent = selected.equipment_name;
+        document.getElementById('existingEquipStockQty').textContent = parseInt(selected.quantity || 0).toLocaleString();
+        document.getElementById('existingEquipBatchCount').textContent = selected.batch_count || 0;
+        
+        var qty = parseInt(quantityInput?.value) || 0;
+        document.getElementById('totalEquipAfterAdd').textContent = (parseInt(selected.quantity || 0) + qty).toLocaleString();
+        
+        var batchList = document.getElementById('equipStockBatchesList');
+        if (batchList) {
+            batchList.innerHTML = `
+                <div style="font-size:0.65rem;color:var(--text-secondary);font-weight:600;margin-bottom:4px;">
+                    <i class="fas fa-layer-group"></i> Batches zilizopo:
+                </div>
+                <div class="batch-row">
+                    <span class="batch-number">${escapeHtml(selected.batch_number || 'N/A')}</span>
+                    <span class="batch-qty">${parseInt(selected.quantity || 0).toLocaleString()} units</span>
+                </div>
+            `;
+        }
+        
+        stockInfoBox.classList.add('show');
+    }
+    
     function autoFillEquipment(equipmentId) {
         var selected = equipmentData.find(function(m) { return m.id == equipmentId; });
         if (selected) {
             if (equipmentIdInput) equipmentIdInput.value = selected.id;
             
-            // Category
             if (categorySelect && selected.category) {
                 var catFound = false;
                 for (var i = 0; i < categorySelect.options.length; i++) {
@@ -3007,7 +3396,6 @@ document.getElementById('cancelModal')?.addEventListener('click', function(e) {
                 }
             }
             
-            // ✅ UNIT: Auto-fill dropdown AU manual
             if (unitSelect && selected.unit) {
                 var unitFound = false;
                 for (var j = 0; j < unitSelect.options.length; j++) {
@@ -3018,7 +3406,6 @@ document.getElementById('cancelModal')?.addEventListener('click', function(e) {
                     }
                 }
                 if (!unitFound && selected.unit) {
-                    // Unit haipo kwenye dropdown - weka kwenye manual
                     unitManual.style.display = 'block';
                     unitSelect.style.display = 'none';
                     unitManual.value = selected.unit;
@@ -3037,13 +3424,23 @@ document.getElementById('cancelModal')?.addEventListener('click', function(e) {
             if (sellingPriceInput) sellingPriceInput.value = Number(selected.selling_price || 0).toLocaleString();
             if (reorderInput && selected.reorder_level > 0) reorderInput.value = selected.reorder_level;
             if (supplierInput && selected.supplier) supplierInput.value = selected.supplier;
-            if (quantityInput && selected.reorder_level > 0) quantityInput.value = selected.reorder_level;
+            
+            if (quantityInput) {
+                quantityInput.value = '';
+                quantityInput.focus();
+            }
+            
+            updateStockInfo(selected);
         }
     }
     
     input.addEventListener('input', function() {
         var query = this.value.toLowerCase().trim();
-        if (query.length < 1) { autocomplete.classList.remove('show'); return; }
+        if (query.length < 1) { 
+            autocomplete.classList.remove('show'); 
+            if (stockInfoBox) stockInfoBox.classList.remove('show');
+            return; 
+        }
         
         var matches = equipmentData.filter(function(item) {
             return item.equipment_name.toLowerCase().includes(query);
@@ -3053,9 +3450,14 @@ document.getElementById('cancelModal')?.addEventListener('click', function(e) {
         
         var html = '';
         matches.forEach(function(item) {
+            var qty = parseInt(item.quantity || 0);
+            var qtyBadge = qty > 0 
+                ? `<span style="background:var(--success);color:white;padding:1px 8px;border-radius:10px;font-size:0.6rem;font-weight:600;margin-left:6px;">Stock: ${qty.toLocaleString()}</span>`
+                : `<span style="background:var(--danger);color:white;padding:1px 8px;border-radius:10px;font-size:0.6rem;font-weight:600;margin-left:6px;">0 Qty</span>`;
+            
             html += `<div class="autocomplete-item" data-id="${item.id}" data-name="${escapeHtml(item.equipment_name)}">
-                <strong>${escapeHtml(item.equipment_name)}</strong>
-                <span class="item-detail">Category: ${escapeHtml(item.category || 'N/A')} | Unit: ${escapeHtml(item.unit || 'pcs')} | Buy: TSh ${Number(item.unit_cost || 0).toLocaleString()} | Sell: TSh ${Number(selected.selling_price || 0).toLocaleString()}</span>
+                <strong>${escapeHtml(item.equipment_name)}</strong>${qtyBadge}
+                <span class="item-detail">Category: ${escapeHtml(item.category || 'N/A')} | Unit: ${escapeHtml(item.unit || 'pcs')} | Buy: TSh ${Number(item.unit_cost || 0).toLocaleString()} | Sell: TSh ${Number(item.selling_price || 0).toLocaleString()} | Batches: ${item.batch_count || 0}</span>
             </div>`;
         });
         
@@ -3086,11 +3488,34 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// ================================================================
+// INITIALIZE
+// ================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    setupNumericOnlyInputs();
+    
+    // Update total preview on quantity change
+    var medQty = document.getElementById('purchaseQuantity');
+    var equipQty = document.getElementById('purchaseEquipQuantity');
+    
+    if (medQty) {
+        medQty.addEventListener('input', function() { updateTotalPreview(this); });
+    }
+    if (equipQty) {
+        equipQty.addEventListener('input', function() { updateTotalPreview(this); });
+    }
+});
+
+// Re-init numeric inputs when DOM changes
+new MutationObserver(function() { 
+    setTimeout(setupNumericOnlyInputs, 100); 
+}).observe(document.body, { childList: true, subtree: true });
+
 console.log('%c💊 Braick - Pharmacy Purchases', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ FIXED: Back button inarudi select_purchase.php kwa IN_PROGRESS', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ FIXED: Duplicate invoice error - Unique number generation', 'font-size:13px; color:#34D399;');
-console.log('%c✅ FIXED: Unit inaweza kujazwa MANUALLY au kuchaguliwa DROPDOWN', 'font-size:13px; color:#FBBF24; font-weight:bold;');
-console.log('%c✅ FIXED: Auto-fill Unit inafanya kazi vizuri kwa Medicine & Equipment', 'font-size:13px; color:#34D399;');
+console.log('%c✅ FIXED: Mouse scroll hairuhusiwi kupunguza quantity (type=text + validation)', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ FIXED: Akiselect dawa iliyopo, quantities zake zinaonekana (stock info box)', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ FIXED: Autocomplete inaonyesha stock ya kila dawa', 'font-size:13px; color:#34D399;');
+console.log('%c✅ FIXED: Unit inaweza kujazwa MANUALLY au kuchaguliwa DROPDOWN', 'font-size:13px; color:#FBBF24;');
 </script>
 
 </body>

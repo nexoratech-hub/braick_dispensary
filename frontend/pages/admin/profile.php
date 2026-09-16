@@ -2,15 +2,11 @@
 // ================================================================
 // FILE: frontend/pages/admin/profile.php
 // SUPER ADMIN - PROFILE PAGE
-// VIEW AND EDIT ADMIN PROFILE
-// WITH PROFILE PICTURE UPLOAD & USERNAME CHANGE
-// ✅ MOBILE SIDEBAR FIXED - Full width page on mobile
-// BRAICK DISPENSARY - USING EXISTING DB TABLES
+// ✅ Uses SHARED header & sidebar (NO DUPLICATES)
+// ✅ Blue theme + full dark mode support via --page-* variables
+// ✅ Profile picture upload & username change
 // ================================================================
 
-// ================================================================
-// SESSION START
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -23,9 +19,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     exit;
 }
 
-// ================================================================
-// ROLE CHECK - ONLY ADMIN CAN ACCESS
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -34,13 +27,14 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../../auth/login.php'); break;
     }
     exit;
 }
 
 // ================================================================
-// GET ADMIN DATA FROM SESSION
+// GET ADMIN DATA
 // ================================================================
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
@@ -50,7 +44,6 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// Include database
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
@@ -59,13 +52,8 @@ $db = Database::getInstance()->getConnection();
 // ================================================================
 // GET USER DATA
 // ================================================================
-$user_id = $_SESSION['user_id'] ?? 1;
-
 $stmt = $db->prepare("
-    SELECT 
-        u.*,
-        b.name as branch_name,
-        b.location as branch_location
+    SELECT u.*, b.name as branch_name, b.location as branch_location
     FROM users u
     LEFT JOIN branches b ON u.branch_id = b.id
     WHERE u.id = ?
@@ -75,22 +63,17 @@ $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$user) {
     $user = [
-        'id' => $_SESSION['user_id'] ?? 1,
-        'username' => $_SESSION['username'] ?? 'admin',
-        'full_name' => $_SESSION['full_name'] ?? 'Admin John',
-        'email' => $_SESSION['email'] ?? 'admin@braick.com',
+        'id' => $user_id, 'username' => $username ?: 'admin',
+        'full_name' => $user_full_name, 'email' => $_SESSION['email'] ?? 'admin@braick.com',
         'phone' => $_SESSION['phone'] ?? '+255 700 000 000',
-        'role' => $_SESSION['role'] ?? 'admin',
-        'branch_id' => $_SESSION['branch_id'] ?? 1,
-        'branch_name' => 'Dodoma',
-        'branch_location' => 'Dodoma City, Tanzania',
-        'profile_pic' => $_SESSION['profile_pic'] ?? '',
-        'created_at' => date('Y-m-d H:i:s')
+        'role' => $user_role, 'branch_id' => $user_branch_id,
+        'branch_name' => 'Dodoma', 'branch_location' => 'Dodoma City, Tanzania',
+        'profile_pic' => $profile_pic, 'created_at' => date('Y-m-d H:i:s')
     ];
 }
 
 // ================================================================
-// CREATE UPLOAD DIRECTORY IF NOT EXISTS
+// CREATE UPLOAD DIRECTORY
 // ================================================================
 $upload_dir = $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/';
 if (!file_exists($upload_dir)) {
@@ -98,7 +81,7 @@ if (!file_exists($upload_dir)) {
 }
 
 // ================================================================
-// HANDLE PROFILE UPDATE
+// HANDLE FORM SUBMISSIONS
 // ================================================================
 $message = '';
 $message_type = '';
@@ -107,9 +90,7 @@ $errors = [];
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
-    // ================================================================
     // UPDATE PROFILE
-    // ================================================================
     if ($action === 'update_profile') {
         $full_name = trim($_POST['full_name'] ?? '');
         $username = trim($_POST['username'] ?? '');
@@ -135,11 +116,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         if (empty($errors)) {
             try {
-                $stmt = $db->prepare("
-                    UPDATE users 
-                    SET full_name = ?, username = ?, email = ?, phone = ?, updated_at = NOW()
-                    WHERE id = ?
-                ");
+                $stmt = $db->prepare("UPDATE users SET full_name = ?, username = ?, email = ?, phone = ?, updated_at = NOW() WHERE id = ?");
                 $stmt->execute([$full_name, $username, $email, $phone, $user_id]);
                 
                 $_SESSION['full_name'] = $full_name;
@@ -153,29 +130,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $user['phone'] = $phone;
                 
                 try {
-                    $stmt = $db->prepare("
-                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
-                        VALUES (?, ?, 'profile_updated', ?, NOW())
-                    ");
+                    $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'profile_updated', ?, NOW())");
                     $stmt->execute([$user_id, $user_branch_id, "Profile updated by: $full_name"]);
                 } catch (Exception $e) {}
                 
-                $message = 'Profile updated successfully!';
+                $message = '✅ Profile updated successfully!';
                 $message_type = 'success';
             } catch (Exception $e) {
                 $errors[] = 'Failed to update profile: ' . $e->getMessage();
             }
         }
         
-        if (!empty($errors)) {
-            $message = implode('<br>', $errors);
-            $message_type = 'error';
-        }
+        if (!empty($errors)) { $message = '❌ ' . implode('<br>❌ ', $errors); $message_type = 'error'; }
     }
     
-    // ================================================================
     // UPDATE PASSWORD
-    // ================================================================
     if ($action === 'update_password') {
         $current_password = $_POST['current_password'] ?? '';
         $new_password = $_POST['new_password'] ?? '';
@@ -197,29 +166,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([$hashed_password, $user_id]);
                 
                 try {
-                    $stmt = $db->prepare("
-                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
-                        VALUES (?, ?, 'password_changed', ?, NOW())
-                    ");
+                    $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'password_changed', ?, NOW())");
                     $stmt->execute([$user_id, $user_branch_id, "Password changed for user: {$user['username']}"]);
                 } catch (Exception $e) {}
                 
-                $message = 'Password changed successfully!';
+                $message = '✅ Password changed successfully!';
                 $message_type = 'success';
             } else {
                 $errors[] = 'Current password is incorrect';
             }
         }
         
-        if (!empty($errors)) {
-            $message = implode('<br>', $errors);
-            $message_type = 'error';
-        }
+        if (!empty($errors)) { $message = '❌ ' . implode('<br>❌ ', $errors); $message_type = 'error'; }
     }
     
-    // ================================================================
-    // UPLOAD PROFILE PICTURE
-    // ================================================================
+    // UPLOAD PROFILE PIC
     if ($action === 'upload_profile_pic') {
         if (isset($_FILES['profile_pic']) && $_FILES['profile_pic']['error'] === UPLOAD_ERR_OK) {
             $file = $_FILES['profile_pic'];
@@ -230,13 +191,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $allowed_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
             $file_type = mime_content_type($file_tmp);
             
-            if (!in_array($file_type, $allowed_types)) {
-                $errors[] = 'Only JPG, PNG, GIF, and WEBP images are allowed';
-            }
-            
-            if ($file_size > 2 * 1024 * 1024) {
-                $errors[] = 'File size must be less than 2MB';
-            }
+            if (!in_array($file_type, $allowed_types)) $errors[] = 'Only JPG, PNG, GIF, WEBP allowed';
+            if ($file_size > 2 * 1024 * 1024) $errors[] = 'File size must be less than 2MB';
             
             if (empty($errors)) {
                 $extension = pathinfo($file_name, PATHINFO_EXTENSION);
@@ -255,25 +211,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $_SESSION['profile_pic'] = $new_filename;
                     $user['profile_pic'] = $new_filename;
                     
-                    $message = 'Profile picture updated successfully!';
+                    $message = '✅ Profile picture updated!';
                     $message_type = 'success';
                 } else {
                     $errors[] = 'Failed to upload image';
                 }
             }
         } else {
-            $errors[] = 'Please select an image to upload';
+            $errors[] = 'Please select an image';
         }
         
-        if (!empty($errors)) {
-            $message = implode('<br>', $errors);
-            $message_type = 'error';
-        }
+        if (!empty($errors)) { $message = '❌ ' . implode('<br>❌ ', $errors); $message_type = 'error'; }
     }
     
-    // ================================================================
-    // REMOVE PROFILE PICTURE
-    // ================================================================
+    // REMOVE PROFILE PIC
     if ($action === 'remove_profile_pic') {
         if (!empty($user['profile_pic'])) {
             $old_file = $upload_dir . $user['profile_pic'];
@@ -285,14 +236,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['profile_pic'] = '';
             $user['profile_pic'] = '';
             
-            $message = 'Profile picture removed successfully!';
+            $message = '✅ Profile picture removed!';
             $message_type = 'success';
         }
     }
 }
 
 // ================================================================
-// GET PROFILE PICTURE
+// PROFILE PICTURE URL
 // ================================================================
 $profile_pic = $user['profile_pic'] ?? '';
 $profile_pic_url = '';
@@ -306,472 +257,131 @@ if (!empty($profile_pic)) {
         $show_initial = false;
     } else {
         $_SESSION['profile_pic'] = '';
-        $profile_pic = '';
         $user['profile_pic'] = '';
     }
 }
 
-$profile_pic_avatar = !empty($profile_pic_url) 
-    ? $profile_pic_url 
-    : 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" rx="50%" fill="#0B5ED7"/><text x="20" y="26" text-anchor="middle" fill="white" font-size="18" font-weight="bold" font-family="Arial">' . $initial . '</text></svg>');
+$profile_pic_avatar = !empty($profile_pic_url) ? $profile_pic_url : 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" rx="50%" fill="#0B5ED7"/><text x="20" y="26" text-anchor="middle" fill="white" font-size="18" font-weight="bold" font-family="Arial">' . $initial . '</text></svg>');
 
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// GET BRANCHES
-// ================================================================
-$branches = [];
-$stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active' ORDER BY name");
-$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// ✅ SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
 include_once '../../components/admin_sidebar.php';
 ?>
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_avatar ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= $initial ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
-
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
-<main class="main-content">
-
-    <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
-        <div>
-            <h1 class="page-title">
-                <i class="fas fa-user-circle mr-2"></i> My Profile
-            </h1>
-            <p class="page-subtitle">
-                View and manage your profile information
-                <span class="branch-tag ml-2">
-                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user['branch_name'] ?? 'N/A') ?>
-                </span>
-                <span class="ml-2 date-badge">
-                    <i class="fas fa-calendar-day mr-1"></i> <?= date('F d, Y') ?>
-                </span>
-            </p>
-        </div>
-        <div class="flex gap-2 flex-wrap">
-            <a href="dashboard.php" class="btn btn-outline btn-sm">
-                <i class="fas fa-arrow-left"></i> Back to Dashboard
-            </a>
-        </div>
-    </div>
-
-    <!-- Message -->
-    <?php if ($message): ?>
-        <div class="alert alert-<?= $message_type === 'success' ? 'success' : 'error' ?> mb-5">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
-            <span><?= $message ?></span>
-            <button class="alert-close" onclick="this.parentElement.style.display='none'">&times;</button>
-        </div>
-    <?php endif; ?>
-
-    <!-- ================================================================ -->
-    <!-- PROFILE CARDS -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        
-        <!-- PROFILE CARD WITH PICTURE UPLOAD -->
-        <div class="profile-card">
-            <div class="profile-avatar">
-                <?php if ($show_initial): ?>
-                    <div class="avatar-large">
-                        <?= $initial ?>
-                    </div>
-                <?php else: ?>
-                    <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar-large-img">
-                <?php endif; ?>
-                
-                <!-- Upload button -->
-                <form method="POST" action="" enctype="multipart/form-data" id="uploadForm" style="position:relative;">
-                    <input type="hidden" name="action" value="upload_profile_pic">
-                    <label class="avatar-upload-btn" title="Upload Profile Picture" for="profile_pic_input">
-                        <i class="fas fa-camera"></i>
-                    </label>
-                    <input type="file" id="profile_pic_input" name="profile_pic" accept="image/*" style="display:none;" onchange="document.getElementById('uploadForm').submit();">
-                </form>
-                
-                <?php if (!$show_initial): ?>
-                    <form method="POST" action="" id="removePicForm" style="position:absolute; bottom:50px; right:4px;">
-                        <input type="hidden" name="action" value="remove_profile_pic">
-                        <button type="submit" class="avatar-remove-btn" title="Remove Profile Picture" onclick="return confirm('Are you sure you want to remove your profile picture?');">
-                            <i class="fas fa-trash-alt"></i>
-                        </button>
-                    </form>
-                <?php endif; ?>
-            </div>
-            <div class="profile-name">
-                <h2><?= htmlspecialchars($user['full_name'] ?? 'Admin User') ?></h2>
-                <p class="profile-role">
-                    <span class="badge badge-blue">
-                        <i class="fas fa-user-tie"></i> <?= ucfirst($user['role'] ?? 'Admin') ?>
-                    </span>
-                </p>
-                <p class="profile-username">
-                    <i class="fas fa-at"></i> @<?= htmlspecialchars($user['username'] ?? 'admin') ?>
-                </p>
-            </div>
-            <div class="profile-stats">
-                <div class="stat-item">
-                    <span class="stat-number"><?= date('Y', strtotime($user['created_at'] ?? 'now')) ?></span>
-                    <span class="stat-label">Member Since</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-number">1</span>
-                    <span class="stat-label">Branch</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-number"><?= date('M d', strtotime($user['created_at'] ?? 'now')) ?></span>
-                    <span class="stat-label">Joined Date</span>
-                </div>
-            </div>
-        </div>
-        
-        <!-- PROFILE INFO -->
-        <div class="card lg:col-span-2">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-user-edit title-blue mr-2"></i> Profile Information
-                </h3>
-            </div>
-            
-            <form method="POST" action="" class="profile-form" id="profileForm">
-                <input type="hidden" name="action" value="update_profile">
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label class="form-label">
-                            <i class="fas fa-user"></i> Full Name
-                            <span class="required">*</span>
-                        </label>
-                        <input type="text" name="full_name" class="form-control" 
-                               value="<?= htmlspecialchars($user['full_name'] ?? '') ?>" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label class="form-label">
-                            <i class="fas fa-at"></i> Username
-                            <span class="required">*</span>
-                        </label>
-                        <input type="text" name="username" class="form-control" 
-                               value="<?= htmlspecialchars($user['username'] ?? '') ?>" required>
-                        <span class="form-help">Username must be unique</span>
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label class="form-label">
-                            <i class="fas fa-envelope"></i> Email
-                            <span class="required">*</span>
-                        </label>
-                        <input type="email" name="email" class="form-control" 
-                               value="<?= htmlspecialchars($user['email'] ?? '') ?>" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label class="form-label">
-                            <i class="fas fa-phone"></i> Phone Number
-                        </label>
-                        <input type="tel" name="phone" class="form-control" 
-                               value="<?= htmlspecialchars($user['phone'] ?? '') ?>">
-                    </div>
-                </div>
-                
-                <div class="form-row single">
-                    <div class="form-group">
-                        <label class="form-label">
-                            <i class="fas fa-store-alt"></i> Branch
-                        </label>
-                        <input type="text" class="form-control" 
-                               value="<?= htmlspecialchars($user['branch_name'] ?? 'N/A') ?> - <?= htmlspecialchars($user['branch_location'] ?? '') ?>" disabled>
-                        <span class="form-help">Branch is assigned by system administrator</span>
-                    </div>
-                </div>
-                
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">
-                        <i class="fas fa-save"></i> Update Profile
-                    </button>
-                </div>
-            </form>
-        </div>
-        
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- CHANGE PASSWORD -->
-    <!-- ================================================================ -->
-    <div class="card mt-5">
-        <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-key title-orange mr-2"></i> Change Password
-            </h3>
-        </div>
-        
-        <form method="POST" action="" class="profile-form" id="passwordForm">
-            <input type="hidden" name="action" value="update_password">
-            
-            <div class="form-row">
-                <div class="form-group">
-                    <label class="form-label">
-                        <i class="fas fa-lock"></i> Current Password
-                        <span class="required">*</span>
-                    </label>
-                    <input type="password" name="current_password" class="form-control" 
-                           placeholder="Enter current password" required>
-                </div>
-                
-                <div class="form-group">
-                    <label class="form-label">
-                        <i class="fas fa-lock"></i> New Password
-                        <span class="required">*</span>
-                    </label>
-                    <input type="password" name="new_password" class="form-control" 
-                           placeholder="Enter new password (min 6 characters)" required>
-                </div>
-            </div>
-            
-            <div class="form-row single">
-                <div class="form-group">
-                    <label class="form-label">
-                        <i class="fas fa-check-circle"></i> Confirm New Password
-                        <span class="required">*</span>
-                    </label>
-                    <input type="password" name="confirm_password" class="form-control" 
-                           placeholder="Confirm new password" required>
-                </div>
-            </div>
-            
-            <div class="form-actions">
-                <button type="submit" class="btn btn-orange">
-                    <i class="fas fa-key"></i> Change Password
-                </button>
-            </div>
-        </form>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
-    <footer class="footer">
-        <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
-            Profile
-            <span class="text-gray-300 mx-2">|</span>
-            <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
-        </p>
-    </footer>
-
-</main>
-
+<!-- ================================================================
+     PAGE-SPECIFIC CSS - TUMIA VARIABLES ZA HEADER (--page-*)
+     ================================================================ -->
 <style>
-    /* ================================================================
-       ✅ MOBILE FIX - SIDEBAR & LAYOUT
-       ================================================================ */
-    @media (max-width: 1024px) {
-        /* Top nav inaanza kutoka 0 (full width) */
-        .top-nav {
-            left: 0 !important;
-            right: 0 !important;
-            padding: 0 16px !important;
-        }
-        
-        /* Main content inaanza kutoka 0 (full width) */
-        .main-content {
-            margin-left: 0 !important;
-            margin-right: 0 !important;
-            padding: 16px !important;
-            width: 100% !important;
-            max-width: 100% !important;
-            overflow-x: hidden;
-        }
-        
-        /* Sidebar imefichwa kwa default */
-        #sidebar,
-        .sidebar {
-            transform: translateX(-100%) !important;
-            transition: transform 0.3s ease !important;
-            z-index: 1000 !important;
-            position: fixed !important;
-            top: 0 !important;
-            left: 0 !important;
-            height: 100vh !important;
-        }
-        
-        /* Sidebar inaonekana ikiwa na class 'open' */
-        #sidebar.open,
-        .sidebar.open {
-            transform: translateX(0) !important;
-        }
-        
-        /* Overlay nyuma ya sidebar */
-        .sidebar-overlay {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.5);
-            z-index: 999;
-            backdrop-filter: blur(2px);
-        }
-        
-        .sidebar-overlay.show {
-            display: block;
-        }
-        
-        /* Profile card full width */
-        .profile-card {
-            width: 100% !important;
-        }
-        
-        /* Grid single column */
-        .grid.grid-cols-1.lg\:grid-cols-3 {
-            grid-template-columns: 1fr !important;
-        }
-        
-        .lg\:col-span-2 {
-            grid-column: span 1 !important;
-        }
-        
-        /* Form rows single column */
-        .form-row {
-            grid-template-columns: 1fr !important;
-        }
+    /* PAGE HEADER */
+    .page-header-profile {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        border-radius: 18px;
+        padding: 24px 32px;
+        margin-bottom: 24px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+        position: relative;
+        overflow: hidden;
     }
 
-    @media (max-width: 640px) {
-        .main-content {
-            padding: 10px !important;
-        }
-        
-        .top-nav {
-            padding: 0 10px !important;
-        }
-        
-        .page-header {
-            flex-direction: column !important;
-            align-items: stretch !important;
-        }
-        
-        .page-header .flex.gap-2 {
-            width: 100% !important;
-        }
-        
-        .page-header .btn {
-            width: 100% !important;
-            justify-content: center !important;
-        }
+    .page-header-profile::before {
+        content: '';
+        position: absolute;
+        top: -60%; right: -10%;
+        width: 400px; height: 400px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
     }
 
-    /* ================================================================
-       PROFILE PAGE STYLES
-       ================================================================ */
-    :root {
-        --bg-body: #F1F5F9;
-        --bg-card: #FFFFFF;
-        --text-primary: #0F172A;
-        --text-secondary: #64748B;
-        --border-color: #E2E8F0;
-        --shadow-sm: 0 2px 8px rgba(0,0,0,0.06);
-        --shadow-md: 0 4px 20px rgba(0,0,0,0.08);
-        --radius: 16px;
-        --radius-sm: 10px;
-        --blue: #0B5ED7;
-        --blue-light: #EFF6FF;
-        --orange: #D97706;
-        --orange-light: #FFFBEB;
-        --green: #059669;
-        --success: #059669;
-        --danger: #EF4444;
+    .page-header-profile .page-title-profile {
+        color: white;
+        font-size: 1.5rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
     }
-    
-    [data-theme="dark"] {
-        --bg-body: #0F172A;
-        --bg-card: #1E293B;
-        --text-primary: #F1F5F9;
-        --text-secondary: #94A3B8;
-        --border-color: #334155;
-        --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
-        --shadow-md: 0 4px 20px rgba(0,0,0,0.4);
-        --blue-light: #1E3A5F;
-        --orange-light: #3D2E0A;
+
+    .page-header-profile .page-subtitle-profile {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.85rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 6px;
     }
-    
-    .main-content {
-        padding: 20px 24px;
-        background: var(--bg-body);
-        min-height: 100vh;
-        transition: all 0.3s ease;
+
+    .page-header-profile .branch-tag-profile {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
     }
-    
-    .profile-card {
-        background: var(--bg-card);
-        border-radius: var(--radius);
-        border: 1px solid var(--border-color);
+
+    .page-header-profile .btn-back-profile {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.2);
+        padding: 8px 16px;
+        border-radius: 12px;
+        font-weight: 500;
+        font-size: 0.8rem;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition: all 0.3s;
+        position: relative;
+        z-index: 1;
+    }
+
+    .page-header-profile .btn-back-profile:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        color: white;
+    }
+
+    /* PROFILE CARD */
+    .profile-card-profile {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        border: 1px solid var(--page-border, #E2E8F0);
         padding: 24px;
         text-align: center;
-        box-shadow: var(--shadow-sm);
+        box-shadow: var(--page-shadow-sm);
         transition: all 0.3s ease;
     }
-    
-    .profile-card:hover {
-        box-shadow: var(--shadow-md);
-        border-color: var(--blue);
+
+    .profile-card-profile:hover {
+        box-shadow: var(--page-shadow-md);
+        border-color: var(--page-primary, #0B5ED7);
     }
-    
-    .profile-avatar {
+
+    .profile-avatar-profile {
         position: relative;
         display: inline-block;
         margin-bottom: 16px;
     }
-    
-    .avatar-large {
+
+    .avatar-large-profile {
         width: 120px;
         height: 120px;
         border-radius: 50%;
@@ -782,29 +392,30 @@ include_once '../../components/admin_sidebar.php';
         font-size: 3rem;
         font-weight: 700;
         color: white;
-        border: 4px solid var(--border-color);
+        border: 4px solid var(--page-border, #E2E8F0);
         margin: 0 auto;
     }
-    
-    .avatar-large-img {
+
+    .avatar-large-img-profile {
         width: 120px;
         height: 120px;
         border-radius: 50%;
         object-fit: cover;
-        border: 4px solid var(--border-color);
+        border: 4px solid var(--page-border, #E2E8F0);
         margin: 0 auto;
+        display: block;
     }
-    
-    .avatar-upload-btn {
+
+    .avatar-upload-btn-profile {
         position: absolute;
         bottom: 4px;
         right: 4px;
         width: 36px;
         height: 36px;
         border-radius: 50%;
-        background: var(--blue);
+        background: var(--page-primary, #0B5ED7);
         color: white;
-        border: 2px solid var(--bg-card);
+        border: 2px solid var(--page-bg-card, #FFFFFF);
         cursor: pointer;
         transition: all 0.3s ease;
         display: flex;
@@ -812,22 +423,22 @@ include_once '../../components/admin_sidebar.php';
         justify-content: center;
         font-size: 0.9rem;
     }
-    
-    .avatar-upload-btn:hover {
+
+    .avatar-upload-btn-profile:hover {
         background: #0A4CA8;
         transform: scale(1.1);
     }
-    
-    .avatar-remove-btn {
+
+    .avatar-remove-btn-profile {
         position: absolute;
         bottom: 50px;
         right: 4px;
         width: 36px;
         height: 36px;
         border-radius: 50%;
-        background: var(--danger);
+        background: #DC2626;
         color: white;
-        border: 2px solid var(--bg-card);
+        border: 2px solid var(--page-bg-card, #FFFFFF);
         cursor: pointer;
         transition: all 0.3s ease;
         display: flex;
@@ -835,190 +446,189 @@ include_once '../../components/admin_sidebar.php';
         justify-content: center;
         font-size: 0.9rem;
     }
-    
-    .avatar-remove-btn:hover {
-        background: #DC2626;
+
+    .avatar-remove-btn-profile:hover {
+        background: #B91C1C;
         transform: scale(1.1);
     }
-    
-    .profile-name h2 {
+
+    .profile-name-profile h2 {
         font-size: 1.3rem;
         font-weight: 700;
-        color: var(--text-primary);
+        color: var(--page-text-primary, #1E293B);
         margin: 0;
     }
-    
-    .profile-role {
-        margin-top: 4px;
-    }
-    
-    .profile-role .badge {
+
+    .profile-badge-profile {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 14px;
+        border-radius: 20px;
         font-size: 0.7rem;
-        padding: 4px 16px;
+        font-weight: 600;
+        color: white;
+        background: #0B5ED7;
     }
-    
-    .profile-username {
+
+    .profile-username-profile {
         font-size: 0.85rem;
-        color: var(--text-secondary);
+        color: var(--page-text-secondary, #64748B);
         margin-top: 4px;
     }
-    
-    .profile-username i {
-        color: var(--blue);
+
+    .profile-username-profile i {
+        color: var(--page-primary, #0B5ED7);
     }
-    
-    .profile-stats {
+
+    .profile-stats-profile {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
         gap: 8px;
         margin-top: 16px;
         padding-top: 16px;
-        border-top: 1px solid var(--border-color);
+        border-top: 1px solid var(--page-border, #E2E8F0);
     }
-    
-    .profile-stats .stat-item {
+
+    .profile-stats-profile .stat-item-profile {
         text-align: center;
     }
-    
-    .profile-stats .stat-number {
+
+    .profile-stats-profile .stat-number-profile {
         display: block;
         font-size: 1.1rem;
         font-weight: 700;
-        color: var(--text-primary);
+        color: var(--page-text-primary, #1E293B);
     }
-    
-    .profile-stats .stat-label {
+
+    .profile-stats-profile .stat-label-profile {
         font-size: 0.6rem;
-        color: var(--text-secondary);
+        color: var(--page-text-secondary, #64748B);
         text-transform: uppercase;
         letter-spacing: 0.03em;
     }
-    
-    .card {
-        background: var(--bg-card);
-        border-radius: var(--radius);
-        border: 1px solid var(--border-color);
+
+    /* CARD */
+    .card-profile {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        border: 1px solid var(--page-border, #E2E8F0);
         overflow: hidden;
         transition: all 0.3s ease;
-        box-shadow: var(--shadow-sm);
+        box-shadow: var(--page-shadow-sm);
+        margin-bottom: 20px;
     }
-    
-    .card:hover {
-        box-shadow: var(--shadow-md);
+
+    .card-profile:hover {
+        box-shadow: var(--page-shadow-md);
     }
-    
-    .card-header {
+
+    .card-header-profile {
         padding: 16px 24px;
-        background: var(--bg-body);
-        border-bottom: 1px solid var(--border-color);
+        background: var(--page-hover, #F8FAFC);
+        border-bottom: 1px solid var(--page-border, #E2E8F0);
         display: flex;
         justify-content: space-between;
         align-items: center;
     }
-    
-    [data-theme="dark"] .card-header {
+
+    [data-theme="dark"] .card-header-profile {
         background: #0F172A;
     }
-    
-    .card-title {
+
+    .card-title-profile {
         font-size: 0.9rem;
         font-weight: 600;
-        color: var(--text-primary);
+        color: var(--page-text-primary, #1E293B);
         margin: 0;
         display: flex;
         align-items: center;
     }
-    
-    .title-blue { color: var(--blue); }
-    .title-orange { color: var(--orange); }
-    
-    .profile-form {
-        padding: 24px;
-    }
-    
-    .form-row {
+
+    .title-blue-profile { color: var(--page-primary, #0B5ED7); }
+    .title-orange-profile { color: #D97706; }
+
+    /* FORM */
+    .profile-form-profile { padding: 24px; }
+
+    .form-row-profile {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 20px;
         margin-bottom: 16px;
     }
-    
-    .form-row.single {
-        grid-template-columns: 1fr;
-    }
-    
-    .form-group {
-        margin-bottom: 0;
-    }
-    
-    .form-label {
+
+    .form-row-profile.single { grid-template-columns: 1fr; }
+
+    .form-group-profile { margin-bottom: 0; }
+
+    .form-label-profile {
         display: block;
         font-size: 0.8rem;
         font-weight: 600;
-        color: var(--text-primary);
+        color: var(--page-text-primary, #1E293B);
         margin-bottom: 6px;
     }
-    
-    .form-label i {
+
+    .form-label-profile i {
         margin-right: 6px;
-        color: var(--blue);
+        color: var(--page-primary, #0B5ED7);
         width: 16px;
         text-align: center;
     }
-    
-    [data-theme="dark"] .form-label i {
-        color: #6EA8FE;
-    }
-    
-    .form-label .required {
-        color: var(--danger);
+
+    .form-label-profile .required-profile {
+        color: #DC2626;
         margin-left: 2px;
     }
-    
-    .form-control {
+
+    .form-control-profile {
         width: 100%;
         padding: 10px 14px;
         font-size: 0.9rem;
-        color: var(--text-primary);
-        background: var(--bg-card);
-        border: 1.5px solid var(--border-color);
+        color: var(--page-text-primary, #1E293B);
+        background: var(--page-input-bg, #FFFFFF);
+        border: 1.5px solid var(--page-border, #E2E8F0);
         border-radius: 8px;
         transition: all 0.3s ease;
         outline: none;
+        font-family: inherit;
     }
-    
-    .form-control:focus {
-        border-color: var(--blue);
+
+    .form-control-profile:focus {
+        border-color: var(--page-primary, #0B5ED7);
         box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
     }
-    
-    .form-control:disabled {
+
+    .form-control-profile:disabled {
         opacity: 0.6;
         cursor: not-allowed;
-        background: var(--bg-body);
+        background: var(--page-hover, #F8FAFC);
     }
-    
-    .form-control::placeholder {
-        color: var(--text-secondary);
+
+    .form-control-profile::placeholder {
+        color: var(--page-text-muted, #94A3B8);
         opacity: 0.6;
     }
-    
-    .form-help {
+
+    .form-help-profile {
         display: block;
         font-size: 0.7rem;
-        color: var(--text-secondary);
+        color: var(--page-text-secondary, #64748B);
         margin-top: 4px;
     }
-    
-    .form-actions {
+
+    .form-actions-profile {
         display: flex;
         gap: 12px;
         margin-top: 8px;
         padding-top: 16px;
-        border-top: 1px solid var(--border-color);
+        border-top: 1px solid var(--page-border, #E2E8F0);
+        flex-wrap: wrap;
     }
-    
-    .btn {
+
+    /* BUTTONS */
+    .btn-profile {
         display: inline-flex;
         align-items: center;
         gap: 6px;
@@ -1028,398 +638,399 @@ include_once '../../components/admin_sidebar.php';
         font-size: 0.85rem;
         transition: all 0.3s ease;
         cursor: pointer;
-        border: none;
         text-decoration: none;
-        background: var(--bg-card);
-        color: var(--text-primary);
-        border: 1.5px solid var(--border-color);
+        background: var(--page-bg-card, #FFFFFF);
+        color: var(--page-text-primary, #1E293B);
+        border: 1.5px solid var(--page-border, #E2E8F0);
+        font-family: inherit;
     }
-    
-    .btn:hover {
+
+    .btn-profile:hover {
         transform: translateY(-2px);
-        box-shadow: var(--shadow-md);
+        box-shadow: var(--page-shadow-md);
     }
-    
-    .btn-sm {
-        padding: 5px 12px;
-        font-size: 0.7rem;
-        border-radius: 6px;
-    }
-    
-    .btn-primary {
-        background: var(--blue);
+
+    .btn-primary-profile {
+        background: var(--page-primary, #0B5ED7);
         color: white;
-        border-color: var(--blue);
+        border-color: var(--page-primary, #0B5ED7);
     }
-    
-    .btn-primary:hover {
+
+    .btn-primary-profile:hover {
         background: #0A4CA8;
         border-color: #0A4CA8;
         color: white;
         box-shadow: 0 4px 12px rgba(11, 94, 215, 0.35);
     }
-    
-    .btn-orange {
-        background: var(--orange);
+
+    .btn-orange-profile {
+        background: #D97706;
         color: white;
-        border-color: var(--orange);
+        border-color: #D97706;
     }
-    
-    .btn-orange:hover {
+
+    .btn-orange-profile:hover {
         background: #B45309;
         border-color: #B45309;
         color: white;
-        box-shadow: 0 4px 12px rgba(217, 119, 6, 0.35);
     }
-    
-    .btn-outline {
+
+    .btn-outline-profile {
         background: transparent;
-        color: var(--text-secondary);
-        border: 1.5px solid var(--border-color);
+        color: var(--page-text-secondary, #64748B);
+        border: 1.5px solid var(--page-border, #E2E8F0);
     }
-    
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: var(--blue);
-        color: var(--blue);
+
+    .btn-outline-profile:hover {
+        background: var(--page-hover, #F8FAFC);
+        border-color: var(--page-primary, #0B5ED7);
+        color: var(--page-primary, #0B5ED7);
     }
-    
-    .alert {
+
+    /* MESSAGE BOX */
+    .message-box-profile {
+        padding: 12px 18px;
+        border-radius: 10px;
+        font-size: 0.9rem;
         display: flex;
         align-items: center;
         gap: 12px;
-        padding: 12px 18px;
-        border-radius: var(--radius-sm);
-        font-size: 0.9rem;
+        margin-bottom: 16px;
         border: 1px solid transparent;
         position: relative;
+        animation: slideDownProfile 0.4s ease;
     }
-    
-    .alert-success {
+
+    @keyframes slideDownProfile {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .message-box-profile.success {
         background: #ECFDF5;
         color: #065F46;
         border-color: #A7F3D0;
     }
-    
-    .alert-error {
+
+    .message-box-profile.error {
         background: #FEF2F2;
         color: #991B1B;
         border-color: #FECACA;
     }
-    
-    [data-theme="dark"] .alert-success {
+
+    [data-theme="dark"] .message-box-profile.success {
         background: #1A3A2A;
         color: #34D399;
         border-color: #065F46;
     }
-    
-    [data-theme="dark"] .alert-error {
+
+    [data-theme="dark"] .message-box-profile.error {
         background: #3A1A1A;
         color: #F87171;
         border-color: #7F1D1D;
     }
-    
-    .alert i {
-        font-size: 1.1rem;
-        flex-shrink: 0;
+
+    /* GRID HELPERS */
+    .grid-profile {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 20px;
     }
-    
-    .alert-close {
-        background: none;
-        border: none;
-        font-size: 1.3rem;
-        cursor: pointer;
-        color: inherit;
-        opacity: 0.5;
-        margin-left: auto;
-        padding: 0 4px;
-        transition: opacity 0.3s;
+
+    @media (min-width: 1024px) {
+        .grid-profile {
+            grid-template-columns: 1fr 2fr;
+        }
     }
-    
-    .alert-close:hover {
-        opacity: 1;
-    }
-    
-    .badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        color: white;
-        letter-spacing: 0.02em;
-    }
-    
-    .badge-blue { background: var(--blue); }
-    .badge-green { background: var(--green); }
-    .badge-orange { background: var(--orange); }
-    
-    .page-title {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: var(--text-primary);
-        margin: 0;
-        display: flex;
-        align-items: center;
-    }
-    
-    .page-title i {
-        color: var(--blue);
-    }
-    
-    .page-subtitle {
-        font-size: 0.85rem;
-        color: var(--text-secondary);
-        margin: 4px 0 0 0;
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 4px;
-    }
-    
-    .branch-tag {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        background: var(--blue-light);
-        color: var(--blue);
-        padding: 2px 10px;
-        border-radius: 12px;
-        font-size: 0.7rem;
-        font-weight: 500;
-    }
-    
-    [data-theme="dark"] .branch-tag {
-        background: #1E3A5F;
-        color: #6EA8FE;
-    }
-    
-    .date-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        color: var(--text-secondary);
-        font-size: 0.75rem;
-    }
-    
-    .mt-5 { margin-top: 20px; }
-    
-    .footer {
+
+    /* FOOTER */
+    .footer-profile {
         margin-top: 30px;
         padding: 16px 20px;
-        background: var(--bg-card);
-        border-radius: var(--radius);
-        border: 1px solid var(--border-color);
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        border: 1px solid var(--page-border, #E2E8F0);
         text-align: center;
     }
-    
-    .footer p {
+
+    .footer-profile p {
         margin: 0;
         font-size: 0.8rem;
-        color: var(--text-secondary);
+        color: var(--page-text-secondary, #64748B);
     }
-    
-    .footer-brand {
+
+    .footer-brand-profile {
         font-weight: 700;
-        color: var(--blue);
+        color: var(--page-primary, #0B5ED7);
     }
-    
-    @media (max-width: 1024px) {
-        .main-content { padding: 16px; }
-        .grid-cols-1 { grid-template-columns: 1fr; }
-        .lg\:col-span-2 { grid-column: span 1; }
-    }
-    
+
+    /* RESPONSIVE */
     @media (max-width: 768px) {
-        .main-content { padding: 12px; }
-        .form-row { grid-template-columns: 1fr; gap: 12px; }
-        .profile-card { padding: 16px; }
-        .avatar-large, .avatar-large-img { width: 100px; height: 100px; font-size: 2.5rem; }
-        .profile-stats { grid-template-columns: repeat(3, 1fr); }
-        .form-actions { flex-direction: column; }
-        .form-actions .btn { width: 100%; justify-content: center; }
-        .page-title { font-size: 1.2rem; }
-        .page-subtitle { font-size: 0.75rem; }
-        .card-header { padding: 12px 16px; }
-        .profile-form { padding: 16px; }
+        .form-row-profile { grid-template-columns: 1fr; gap: 12px; }
+        .profile-card-profile { padding: 16px; }
+        .avatar-large-profile, .avatar-large-img-profile { width: 100px; height: 100px; font-size: 2.5rem; }
+        .form-actions-profile { flex-direction: column; }
+        .form-actions-profile .btn-profile { width: 100%; justify-content: center; }
+        .page-header-profile { padding: 16px 18px; }
+        .page-header-profile .page-title-profile { font-size: 1.2rem; }
+        .card-header-profile { padding: 12px 16px; }
+        .profile-form-profile { padding: 16px; }
     }
-    
+
     @media (max-width: 480px) {
-        .main-content { padding: 10px; }
-        .profile-stats { grid-template-columns: 1fr; gap: 4px; }
-        .avatar-large, .avatar-large-img { width: 80px; height: 80px; font-size: 2rem; }
-        .profile-name h2 { font-size: 1.1rem; }
-        .btn { font-size: 0.8rem; padding: 8px 14px; }
-    }
-    
-    @media print {
-        .top-nav, .sidebar, #sidebarToggle, .btn, .dark-toggle-btn,
-        .icon-btn, .search-wrapper, .page-header .flex.gap-2, .footer,
-        .form-actions { display: none !important; }
-        
-        .main-content { padding: 0 !important; background: white !important; }
-        .card, .profile-card { box-shadow: none !important; border: 1px solid #ddd !important; }
-        .avatar-large { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        .badge { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        .badge-blue { background: #0B5ED7 !important; color: white !important; }
+        .profile-stats-profile { grid-template-columns: 1fr; gap: 4px; }
+        .avatar-large-profile, .avatar-large-img-profile { width: 80px; height: 80px; font-size: 2rem; }
+        .profile-name-profile h2 { font-size: 1.1rem; }
     }
 </style>
 
+<!-- ================================================================ -->
+<!-- MAIN CONTENT -->
+<!-- ================================================================ -->
+<main class="main-content">
+
+    <!-- PAGE HEADER -->
+    <div class="page-header-profile">
+        <div>
+            <h1 class="page-title-profile">
+                <i class="fas fa-user-circle"></i> My Profile
+            </h1>
+            <p class="page-subtitle-profile">
+                View and manage your profile information
+                <span class="branch-tag-profile">
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user['branch_name'] ?? 'N/A') ?>
+                </span>
+            </p>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <a href="dashboard.php" class="btn-back-profile">
+                <i class="fas fa-arrow-left"></i> Back to Dashboard
+            </a>
+        </div>
+    </div>
+
+    <!-- MESSAGE -->
+    <?php if ($message): ?>
+        <div class="message-box-profile <?= $message_type === 'success' ? 'success' : 'error' ?>">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+            <div><?= $message ?></div>
+        </div>
+    <?php endif; ?>
+
+    <!-- PROFILE GRID -->
+    <div class="grid-profile">
+
+        <!-- PROFILE CARD -->
+        <div class="profile-card-profile">
+            <div class="profile-avatar-profile">
+                <?php if ($show_initial): ?>
+                    <div class="avatar-large-profile"><?= $initial ?></div>
+                <?php else: ?>
+                    <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar-large-img-profile">
+                <?php endif; ?>
+                
+                <form method="POST" action="" enctype="multipart/form-data" id="uploadFormProfile" style="position:relative;">
+                    <input type="hidden" name="action" value="upload_profile_pic">
+                    <label class="avatar-upload-btn-profile" title="Upload Profile Picture" for="profile_pic_input_profile">
+                        <i class="fas fa-camera"></i>
+                    </label>
+                    <input type="file" id="profile_pic_input_profile" name="profile_pic" accept="image/*" style="display:none;">
+                </form>
+                
+                <?php if (!$show_initial): ?>
+                    <form method="POST" action="" id="removePicFormProfile" style="position:absolute;bottom:50px;right:4px;">
+                        <input type="hidden" name="action" value="remove_profile_pic">
+                        <button type="submit" class="avatar-remove-btn-profile" title="Remove Profile Picture" onclick="return confirm('Remove your profile picture?');">
+                            <i class="fas fa-trash-alt"></i>
+                        </button>
+                    </form>
+                <?php endif; ?>
+            </div>
+            
+            <div class="profile-name-profile">
+                <h2><?= htmlspecialchars($user['full_name'] ?? 'Admin User') ?></h2>
+                <p style="margin-top:4px;">
+                    <span class="profile-badge-profile">
+                        <i class="fas fa-user-tie"></i> <?= ucfirst($user['role'] ?? 'Admin') ?>
+                    </span>
+                </p>
+                <p class="profile-username-profile">
+                    <i class="fas fa-at"></i> @<?= htmlspecialchars($user['username'] ?? 'admin') ?>
+                </p>
+            </div>
+            
+            <div class="profile-stats-profile">
+                <div class="stat-item-profile">
+                    <span class="stat-number-profile"><?= date('Y', strtotime($user['created_at'] ?? 'now')) ?></span>
+                    <span class="stat-label-profile">Member Since</span>
+                </div>
+                <div class="stat-item-profile">
+                    <span class="stat-number-profile">1</span>
+                    <span class="stat-label-profile">Branch</span>
+                </div>
+                <div class="stat-item-profile">
+                    <span class="stat-number-profile"><?= date('M d', strtotime($user['created_at'] ?? 'now')) ?></span>
+                    <span class="stat-label-profile">Joined Date</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- PROFILE INFO -->
+        <div class="card-profile">
+            <div class="card-header-profile">
+                <h3 class="card-title-profile">
+                    <i class="fas fa-user-edit title-blue-profile" style="margin-right:8px;"></i> Profile Information
+                </h3>
+            </div>
+            
+            <form method="POST" action="" class="profile-form-profile" id="profileFormProfile">
+                <input type="hidden" name="action" value="update_profile">
+                
+                <div class="form-row-profile">
+                    <div class="form-group-profile">
+                        <label class="form-label-profile">
+                            <i class="fas fa-user"></i> Full Name
+                            <span class="required-profile">*</span>
+                        </label>
+                        <input type="text" name="full_name" class="form-control-profile" 
+                               value="<?= htmlspecialchars($user['full_name'] ?? '') ?>" required>
+                    </div>
+                    
+                    <div class="form-group-profile">
+                        <label class="form-label-profile">
+                            <i class="fas fa-at"></i> Username
+                            <span class="required-profile">*</span>
+                        </label>
+                        <input type="text" name="username" class="form-control-profile" 
+                               value="<?= htmlspecialchars($user['username'] ?? '') ?>" required>
+                        <span class="form-help-profile">Username must be unique</span>
+                    </div>
+                </div>
+                
+                <div class="form-row-profile">
+                    <div class="form-group-profile">
+                        <label class="form-label-profile">
+                            <i class="fas fa-envelope"></i> Email
+                            <span class="required-profile">*</span>
+                        </label>
+                        <input type="email" name="email" class="form-control-profile" 
+                               value="<?= htmlspecialchars($user['email'] ?? '') ?>" required>
+                    </div>
+                    
+                    <div class="form-group-profile">
+                        <label class="form-label-profile">
+                            <i class="fas fa-phone"></i> Phone Number
+                        </label>
+                        <input type="tel" name="phone" class="form-control-profile" 
+                               value="<?= htmlspecialchars($user['phone'] ?? '') ?>">
+                    </div>
+                </div>
+                
+                <div class="form-row-profile single">
+                    <div class="form-group-profile">
+                        <label class="form-label-profile">
+                            <i class="fas fa-store-alt"></i> Branch
+                        </label>
+                        <input type="text" class="form-control-profile" 
+                               value="<?= htmlspecialchars($user['branch_name'] ?? 'N/A') ?> - <?= htmlspecialchars($user['branch_location'] ?? '') ?>" disabled>
+                        <span class="form-help-profile">Branch is assigned by system administrator</span>
+                    </div>
+                </div>
+                
+                <div class="form-actions-profile">
+                    <button type="submit" class="btn-profile btn-primary-profile">
+                        <i class="fas fa-save"></i> Update Profile
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- CHANGE PASSWORD -->
+    <div class="card-profile" style="margin-top:20px;">
+        <div class="card-header-profile">
+            <h3 class="card-title-profile">
+                <i class="fas fa-key title-orange-profile" style="margin-right:8px;"></i> Change Password
+            </h3>
+        </div>
+        
+        <form method="POST" action="" class="profile-form-profile" id="passwordFormProfile">
+            <input type="hidden" name="action" value="update_password">
+            
+            <div class="form-row-profile">
+                <div class="form-group-profile">
+                    <label class="form-label-profile">
+                        <i class="fas fa-lock"></i> Current Password
+                        <span class="required-profile">*</span>
+                    </label>
+                    <input type="password" name="current_password" class="form-control-profile" 
+                           placeholder="Enter current password" required>
+                </div>
+                
+                <div class="form-group-profile">
+                    <label class="form-label-profile">
+                        <i class="fas fa-lock"></i> New Password
+                        <span class="required-profile">*</span>
+                    </label>
+                    <input type="password" name="new_password" class="form-control-profile" 
+                           placeholder="Enter new password (min 6 characters)" required>
+                </div>
+            </div>
+            
+            <div class="form-row-profile single">
+                <div class="form-group-profile">
+                    <label class="form-label-profile">
+                        <i class="fas fa-check-circle"></i> Confirm New Password
+                        <span class="required-profile">*</span>
+                    </label>
+                    <input type="password" name="confirm_password" class="form-control-profile" 
+                           placeholder="Confirm new password" required>
+                </div>
+            </div>
+            
+            <div class="form-actions-profile">
+                <button type="submit" class="btn-profile btn-orange-profile">
+                    <i class="fas fa-key"></i> Change Password
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- FOOTER -->
+    <footer class="footer-profile">
+        <p>
+            <span class="footer-brand-profile">Braick Dispensary</span> Management System
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
+            Profile
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
+            <span id="footerTime"><?= date('H:i:s') ?></span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
+            &copy; <?= date('Y') ?> All rights reserved
+        </p>
+    </footer>
+
+</main>
+
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
+<!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // FOOTER TIME ONLY
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
-        }
-    });
-
-    // ================================================================
-    // ✅ SIDEBAR TOGGLE - MOBILE FRIENDLY
-    // ================================================================
-    var sidebar = document.getElementById('sidebar') || document.querySelector('.sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    
-    // Create overlay if not exists
-    if (sidebar && !document.querySelector('.sidebar-overlay')) {
-        var overlay = document.createElement('div');
-        overlay.className = 'sidebar-overlay';
-        document.body.appendChild(overlay);
-    }
-    
-    var sidebarOverlay = document.querySelector('.sidebar-overlay');
-    
-    // Toggle sidebar
-    sidebarToggle?.addEventListener('click', function(e) {
-        e.stopPropagation();
-        if (sidebar) {
-            sidebar.classList.toggle('open');
-            if (sidebarOverlay) {
-                sidebarOverlay.classList.toggle('show');
-            }
-            
-            // Prevent body scroll when sidebar is open
-            if (sidebar.classList.contains('open')) {
-                document.body.style.overflow = 'hidden';
-            } else {
-                document.body.style.overflow = '';
-            }
-        }
-    });
-    
-    // Close sidebar when clicking overlay
-    sidebarOverlay?.addEventListener('click', function() {
-        if (sidebar) {
-            sidebar.classList.remove('open');
-            this.classList.remove('show');
-            document.body.style.overflow = '';
-        }
-    });
-    
-    // Close sidebar when clicking outside (mobile only)
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (sidebar && sidebarToggle && 
-                !sidebar.contains(e.target) && 
-                !sidebarToggle.contains(e.target) &&
-                sidebar.classList.contains('open')) {
-                sidebar.classList.remove('open');
-                if (sidebarOverlay) sidebarOverlay.classList.remove('show');
-                document.body.style.overflow = '';
-            }
-        }
-    });
-    
-    // Close sidebar on window resize (if going to desktop)
-    window.addEventListener('resize', function() {
-        if (window.innerWidth > 1024) {
-            if (sidebar) {
-                sidebar.classList.remove('open');
-            }
-            if (sidebarOverlay) {
-                sidebarOverlay.classList.remove('show');
-            }
-            document.body.style.overflow = '';
-        }
-    });
-    
-    // Close sidebar on Escape key
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && sidebar && sidebar.classList.contains('open')) {
-            sidebar.classList.remove('open');
-            if (sidebarOverlay) sidebarOverlay.classList.remove('show');
-            document.body.style.overflow = '';
-        }
-    });
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query);
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
+    setInterval(function() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
         var ftEl = document.getElementById('footerTime');
         if (ftEl) ftEl.textContent = timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    }, 1000);
 
     // ================================================================
     // PROFILE PICTURE UPLOAD
     // ================================================================
-    document.getElementById('profile_pic_input')?.addEventListener('change', function(e) {
+    document.getElementById('profile_pic_input_profile')?.addEventListener('change', function(e) {
         var file = this.files[0];
         if (file) {
             if (file.size > 2 * 1024 * 1024) {
@@ -1427,22 +1038,20 @@ include_once '../../components/admin_sidebar.php';
                 this.value = '';
                 return;
             }
-            
             var validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
             if (!validTypes.includes(file.type)) {
                 alert('⚠️ Only JPG, PNG, GIF, and WEBP images are allowed!');
                 this.value = '';
                 return;
             }
-            
-            document.getElementById('uploadForm').submit();
+            document.getElementById('uploadFormProfile').submit();
         }
     });
 
     // ================================================================
     // FORM VALIDATION
     // ================================================================
-    document.getElementById('profileForm')?.addEventListener('submit', function(e) {
+    document.getElementById('profileFormProfile')?.addEventListener('submit', function(e) {
         var username = document.querySelector('input[name="username"]').value.trim();
         var email = document.querySelector('input[name="email"]').value.trim();
         
@@ -1451,47 +1060,30 @@ include_once '../../components/admin_sidebar.php';
             alert('⚠️ Username must be at least 3 characters long!');
             return false;
         }
-        
         if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
             e.preventDefault();
             alert('⚠️ Please enter a valid email address!');
             return false;
         }
-        
         return true;
     });
 
-    document.getElementById('passwordForm')?.addEventListener('submit', function(e) {
+    document.getElementById('passwordFormProfile')?.addEventListener('submit', function(e) {
         var currentPass = document.querySelector('input[name="current_password"]').value;
         var newPass = document.querySelector('input[name="new_password"]').value;
         var confirmPass = document.querySelector('input[name="confirm_password"]').value;
         
-        if (!currentPass) {
-            e.preventDefault();
-            alert('⚠️ Please enter your current password!');
-            return false;
-        }
-        
-        if (newPass.length < 6) {
-            e.preventDefault();
-            alert('⚠️ New password must be at least 6 characters long!');
-            return false;
-        }
-        
-        if (newPass !== confirmPass) {
-            e.preventDefault();
-            alert('⚠️ Passwords do not match!');
-            return false;
-        }
-        
+        if (!currentPass) { e.preventDefault(); alert('⚠️ Please enter your current password!'); return false; }
+        if (newPass.length < 6) { e.preventDefault(); alert('⚠️ New password must be at least 6 characters!'); return false; }
+        if (newPass !== confirmPass) { e.preventDefault(); alert('⚠️ Passwords do not match!'); return false; }
         return true;
     });
 
-    console.log('%c👤 Braick Dispensary - Profile Page', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ MOBILE FIX: Sidebar toggle inafanya page full width', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 Braick - Profile', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#059669;');
+    console.log('%c✅ NO duplicate dark mode JavaScript', 'font-size:13px; color:#059669;');
+    console.log('%c🌙 Dark mode: Handled by header', 'font-size:13px; color:#7C3AED;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user['full_name'] ?? 'Admin') ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📧 Email: <?= htmlspecialchars($user['email'] ?? '') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($user['branch_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

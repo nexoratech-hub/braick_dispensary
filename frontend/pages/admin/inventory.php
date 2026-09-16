@@ -5,6 +5,9 @@
 // ✅ EMBEDDED HEADER (same as shared admin_header.php)
 // ✅ Uses SHARED admin_sidebar.php
 // ✅ Branch filter inafanya kazi vizuri
+// ✅ FIXED: All filters working (All, Active, Inactive, Low Stock, Out of Stock, Expiring Soon, Has Expired)
+// ✅ FIXED: Dawa zilizo 0 Qty = ACTIVE (inaonekana, haiwezi kuuzwa)
+// ✅ FIXED: Expired pekee = INACTIVE
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -387,11 +390,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
                         <div class="form-row">
                             <label class="form-label">Quantity <span class="required">*</span></label>
-                            <input type="number" name="quantity" class="form-control" value="<?= $edit_data['quantity'] ?>" min="0" required>
+                            <input type="text" name="quantity" class="form-control numeric-only" value="<?= $edit_data['quantity'] ?>" inputmode="numeric" pattern="[0-9]*" required autocomplete="off">
                         </div>
                         <div class="form-row">
                             <label class="form-label">Reorder Level</label>
-                            <input type="number" name="reorder_level" class="form-control" value="<?= $edit_data['reorder_level'] ?>" min="0">
+                            <input type="text" name="reorder_level" class="form-control numeric-only" value="<?= $edit_data['reorder_level'] ?>" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
                         </div>
                         <div class="form-row">
                             <label class="form-label">Buying Price</label>
@@ -483,11 +486,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
                         <div class="form-row">
                             <label class="form-label">Quantity <span class="required">*</span></label>
-                            <input type="number" name="quantity" class="form-control" value="<?= $edit_data['quantity'] ?>" min="0" required>
+                            <input type="text" name="quantity" class="form-control numeric-only" value="<?= $edit_data['quantity'] ?>" inputmode="numeric" pattern="[0-9]*" required autocomplete="off">
                         </div>
                         <div class="form-row">
                             <label class="form-label">Reorder Level</label>
-                            <input type="number" name="reorder_level" class="form-control" value="<?= $edit_data['reorder_level'] ?>" min="0">
+                            <input type="text" name="reorder_level" class="form-control numeric-only" value="<?= $edit_data['reorder_level'] ?>" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
                         </div>
                         <div class="form-row">
                             <label class="form-label">Buying Price</label>
@@ -598,7 +601,9 @@ try {
 } catch (Exception $e) { $branches = []; }
 
 // ================================================================
-// MEDICINES QUERY
+// ✅ FIXED: MEDICINES QUERY - All filters working correctly
+// ✅ FIXED: Quantity 0 = ACTIVE (batch yoyote active & haijaexpire)
+// ✅ FIXED: Expired pekee = INACTIVE
 // ================================================================
 $med_query = "
     SELECT 
@@ -611,24 +616,42 @@ $med_query = "
         GROUP_CONCAT(m.quantity SEPARATOR '|') as batch_quantities, GROUP_CONCAT(m.expiry_date SEPARATOR '|') as batch_expiries,
         GROUP_CONCAT(m.status SEPARATOR '|') as batch_statuses,
         MIN(DATEDIFF(CASE WHEN m.expiry_date = '0000-00-00' THEN NULL ELSE m.expiry_date END, CURDATE())) as days_remaining,
-        CASE WHEN SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') THEN m.quantity ELSE 0 END) > 0 THEN 'active' ELSE 'inactive' END as computed_status
+        CASE 
+            WHEN SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') THEN 1 ELSE 0 END) > 0 
+            THEN 'active' 
+            ELSE 'inactive' 
+        END as computed_status
     FROM medications_inventory m
     LEFT JOIN users u ON m.added_by = u.id
     LEFT JOIN branches b ON m.branch_id = b.id
     WHERE 1=1
 ";
+
 $med_params = [];
 
+// Branch filter
 if ($filter_by_branch && $filter_branch_id > 0) { 
     $med_query .= " AND m.branch_id = ?"; 
     $med_params[] = $filter_branch_id; 
 }
 
+// Category filter
 if (!empty($category_filter)) { 
     $med_query .= " AND m.category = ?"; 
     $med_params[] = $category_filter; 
 }
 
+// Expiry filter (WHERE clause - before GROUP BY)
+if ($expiry_filter === 'expiring') { 
+    $med_query .= " AND m.expiry_date IS NOT NULL AND m.expiry_date != '0000-00-00' AND m.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"; 
+}
+if ($expiry_filter === 'expired') { 
+    $med_query .= " AND m.expiry_date IS NOT NULL AND m.expiry_date != '0000-00-00' AND m.expiry_date < CURDATE()"; 
+}
+
+$med_query .= " GROUP BY m.medication_name, m.category, m.unit, m.branch_id";
+
+// HAVING clause (after GROUP BY)
 if ($status_filter === 'active') { 
     $med_query .= " HAVING computed_status = 'active'"; 
 } elseif ($status_filter === 'inactive') { 
@@ -638,24 +661,19 @@ if ($status_filter === 'active') {
 if ($stock_filter === 'low') { 
     $med_query .= " HAVING total_quantity > 0 AND total_quantity <= reorder_level AND computed_status = 'active'"; 
 } elseif ($stock_filter === 'out') { 
-    $med_query .= " HAVING total_quantity = 0"; 
+    $med_query .= " HAVING total_quantity = 0 AND computed_status = 'active'"; 
 }
 
-if ($expiry_filter === 'expiring') { 
-    $med_query .= " AND m.expiry_date IS NOT NULL AND m.expiry_date != '0000-00-00' AND m.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"; 
-}
-if ($expiry_filter === 'expired') { 
-    $med_query .= " AND m.expiry_date IS NOT NULL AND m.expiry_date != '0000-00-00' AND m.expiry_date < CURDATE()"; 
-}
-
-$med_query .= " GROUP BY m.medication_name, m.category, m.unit, m.branch_id ORDER BY m.medication_name ASC";
+$med_query .= " ORDER BY m.medication_name ASC";
 
 $stmt = $db->prepare($med_query);
 $stmt->execute($med_params);
 $medicines = $stmt->fetchAll();
 
 // ================================================================
-// EQUIPMENT QUERY
+// ✅ FIXED: EQUIPMENT QUERY - All filters working correctly
+// ✅ FIXED: Quantity 0 = ACTIVE (batch yoyote active & haijaexpire)
+// ✅ FIXED: Expired pekee = INACTIVE
 // ================================================================
 $equip_query = "
     SELECT 
@@ -668,24 +686,42 @@ $equip_query = "
         GROUP_CONCAT(e.quantity SEPARATOR '|') as batch_quantities, GROUP_CONCAT(e.expiry_date SEPARATOR '|') as batch_expiries,
         GROUP_CONCAT(e.status SEPARATOR '|') as batch_statuses,
         MIN(DATEDIFF(CASE WHEN e.expiry_date = '0000-00-00' THEN NULL ELSE e.expiry_date END, CURDATE())) as days_remaining,
-        CASE WHEN SUM(CASE WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') THEN e.quantity ELSE 0 END) > 0 THEN 'active' ELSE 'inactive' END as computed_status
+        CASE 
+            WHEN SUM(CASE WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') THEN 1 ELSE 0 END) > 0 
+            THEN 'active' 
+            ELSE 'inactive' 
+        END as computed_status
     FROM medical_equipment e
     LEFT JOIN users u ON e.added_by = u.id
     LEFT JOIN branches b ON e.branch_id = b.id
     WHERE 1=1
 ";
+
 $equip_params = [];
 
+// Branch filter
 if ($filter_by_branch && $filter_branch_id > 0) { 
     $equip_query .= " AND e.branch_id = ?"; 
     $equip_params[] = $filter_branch_id; 
 }
 
+// Category filter
 if (!empty($category_filter)) { 
     $equip_query .= " AND e.category = ?"; 
     $equip_params[] = $category_filter; 
 }
 
+// Expiry filter (WHERE clause - before GROUP BY)
+if ($expiry_filter === 'expiring') { 
+    $equip_query .= " AND e.expiry_date IS NOT NULL AND e.expiry_date != '0000-00-00' AND e.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"; 
+}
+if ($expiry_filter === 'expired') { 
+    $equip_query .= " AND e.expiry_date IS NOT NULL AND e.expiry_date != '0000-00-00' AND e.expiry_date < CURDATE()"; 
+}
+
+$equip_query .= " GROUP BY e.equipment_name, e.category, e.unit, e.branch_id";
+
+// HAVING clause (after GROUP BY)
 if ($status_filter === 'active') { 
     $equip_query .= " HAVING computed_status = 'active'"; 
 } elseif ($status_filter === 'inactive') { 
@@ -695,17 +731,10 @@ if ($status_filter === 'active') {
 if ($stock_filter === 'low') { 
     $equip_query .= " HAVING total_quantity > 0 AND total_quantity <= reorder_level AND computed_status = 'active'"; 
 } elseif ($stock_filter === 'out') { 
-    $equip_query .= " HAVING total_quantity = 0"; 
+    $equip_query .= " HAVING total_quantity = 0 AND computed_status = 'active'"; 
 }
 
-if ($expiry_filter === 'expiring') { 
-    $equip_query .= " AND e.expiry_date IS NOT NULL AND e.expiry_date != '0000-00-00' AND e.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"; 
-}
-if ($expiry_filter === 'expired') { 
-    $equip_query .= " AND e.expiry_date IS NOT NULL AND e.expiry_date != '0000-00-00' AND e.expiry_date < CURDATE()"; 
-}
-
-$equip_query .= " GROUP BY e.equipment_name, e.category, e.unit, e.branch_id ORDER BY e.equipment_name ASC";
+$equip_query .= " ORDER BY e.equipment_name ASC";
 
 $stmt = $db->prepare($equip_query);
 $stmt->execute($equip_params);
@@ -713,6 +742,7 @@ $equipment = $stmt->fetchAll();
 
 // ================================================================
 // STATISTICS
+// ✅ FIXED: Inactive = status='inactive' AU imeexpire (SI quantity 0)
 // ================================================================
 $stats_branch_condition = "";
 $stats_params = [];
@@ -743,7 +773,8 @@ $stmt = $db->prepare($sql); $stmt->execute($stats_params); $med_expiring = $stmt
 $sql = "SELECT COUNT(DISTINCT medication_name) as count FROM medications_inventory WHERE expiry_date IS NOT NULL AND expiry_date != '0000-00-00' AND expiry_date < CURDATE() $stats_branch_condition";
 $stmt = $db->prepare($sql); $stmt->execute($stats_params); $med_expired = $stmt->fetch()['count'] ?? 0;
 
-$sql = "SELECT COUNT(DISTINCT medication_name) as count FROM medications_inventory WHERE status = 'inactive' $stats_branch_condition";
+// ✅ FIXED: Inactive = status='inactive' AU imeexpire (SI quantity 0)
+$sql = "SELECT COUNT(DISTINCT medication_name) as count FROM medications_inventory WHERE (status = 'inactive' OR (expiry_date IS NOT NULL AND expiry_date != '0000-00-00' AND expiry_date < CURDATE())) $stats_branch_condition";
 $stmt = $db->prepare($sql); $stmt->execute($stats_params); $med_inactive = $stmt->fetch()['count'] ?? 0;
 
 $sql = "SELECT COALESCE(SUM(quantity * selling_price), 0) as total_value FROM medications_inventory WHERE status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') $stats_branch_condition";
@@ -770,7 +801,8 @@ $stmt = $db->prepare($sql); $stmt->execute($stats_params); $equip_expiring = $st
 $sql = "SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE expiry_date IS NOT NULL AND expiry_date != '0000-00-00' AND expiry_date < CURDATE() $stats_branch_condition";
 $stmt = $db->prepare($sql); $stmt->execute($stats_params); $equip_expired = $stmt->fetch()['count'] ?? 0;
 
-$sql = "SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE status = 'inactive' $stats_branch_condition";
+// ✅ FIXED: Inactive = status='inactive' AU imeexpire (SI quantity 0)
+$sql = "SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE (status = 'inactive' OR (expiry_date IS NOT NULL AND expiry_date != '0000-00-00' AND expiry_date < CURDATE())) $stats_branch_condition";
 $stmt = $db->prepare($sql); $stmt->execute($stats_params); $equip_inactive = $stmt->fetch()['count'] ?? 0;
 
 $sql = "SELECT COALESCE(SUM(quantity * selling_price), 0) as total_value FROM medical_equipment WHERE status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') $stats_branch_condition";
@@ -839,9 +871,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        /* ================================================================
-           ✅ EMBEDDED HEADER - SAME AS SHARED admin_header.php
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -1014,12 +1043,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-color: var(--primary);
         }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content { margin-left: 270px; margin-top: 68px; padding: 28px 32px; min-height: calc(100vh - 68px); }
         
-        /* BRANCH INFO */
         .branch-info-card {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 16px; padding: 14px 24px; margin-bottom: 20px;
@@ -1038,7 +1063,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             background: rgba(255,255,255,0.1); padding: 3px 10px; border-radius: 20px;
         }
         
-        /* PAGE HEADER */
         .page-header-box {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 16px; padding: 18px 24px; margin-bottom: 20px;
@@ -1090,7 +1114,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .btn-add-equipment { background: var(--purple); }
         .btn-purchase-history { background: var(--warning); }
         
-        /* MESSAGE */
         .message-box {
             padding: 12px 18px; border-radius: 10px; margin-bottom: 16px;
             display: flex; align-items: center; gap: 10px;
@@ -1100,7 +1123,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .message-box.success { background: #D1FAE5; color: #065F46; border-left: 5px solid #059669; }
         .message-box.error { background: #FEE2E2; color: #991B1B; border-left: 5px solid #DC2626; }
         
-        /* STATS */
         .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
         .stat-card {
             border-radius: 12px; padding: 16px 18px; text-decoration: none;
@@ -1118,10 +1140,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .stat-card.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
         .stat-card.indigo { background: linear-gradient(135deg, #4F46E5, #4338CA); }
         
-        /* CARD */
         .card { background: var(--bg-card); border-radius: 12px; padding: 14px 18px; border: 2px solid var(--border-color); margin-bottom: 20px; }
         
-        /* FILTERS */
         .filter-group { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
         .filter-btn {
             padding: 3px 12px; border-radius: 14px; font-size: 0.65rem;
@@ -1132,7 +1152,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .filter-btn:hover { border-color: var(--primary); color: var(--primary); }
         .filter-btn.active { background: var(--primary); border-color: var(--primary); color: white; }
         
-        /* TABLE */
         .table-header-bar {
             display: flex; justify-content: space-between; align-items: center;
             flex-wrap: wrap; gap: 12px; margin-bottom: 12px;
@@ -1197,7 +1216,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .col-name { min-width: 160px; }
         .col-category { min-width: 100px; }
         .col-branch { min-width: 90px; }
-        .col-qty { min-width: 60px; text-align: center; }
+        .col-qty { min-width: 80px; text-align: center; }
         .col-reorder { min-width: 60px; text-align: center; }
         .col-stock { min-width: 90px; }
         .col-price { min-width: 100px; }
@@ -1225,6 +1244,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .stock-badge.ok { background: var(--success-light); color: var(--success); }
         .stock-badge.low { background: var(--warning-light); color: var(--warning); }
         .stock-badge.out { background: var(--danger-light); color: var(--danger); }
+        
+        /* ✅ Zero qty warning */
+        .zero-qty-warning {
+            font-size: 0.5rem;
+            display: block;
+            color: var(--warning);
+            font-weight: 600;
+            margin-top: 1px;
+        }
         
         .expiry-badge {
             padding: 1px 6px; border-radius: 6px; font-size: 0.55rem;
@@ -1275,7 +1303,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .action-btn-sm.edit { background: var(--warning); }
         .action-btn-sm.delete { background: var(--danger); }
         
-        /* TABS */
         .tabs-container {
             display: flex; gap: 4px; background: var(--bg-card);
             border-radius: 12px; padding: 4px;
@@ -1295,7 +1322,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .tab-content { display: none; }
         .tab-content.active { display: block; }
         
-        /* MODAL */
         .modal-overlay {
             display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             background: rgba(0,0,0,0.6); z-index: 2000;
@@ -1359,7 +1385,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         .btn-toggle:hover { background: var(--primary-dark); }
         
-        /* MANAGE PURCHASES PAGE */
         .manage-header {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 16px; padding: 24px 28px; margin-bottom: 24px;
@@ -1498,6 +1523,21 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
+        /* ✅ ZUIA SCROLL WHEEL KUBADILISHA NUMBER INPUTS */
+        input[type="number"] {
+            -moz-appearance: textfield;
+        }
+        input[type="number"]::-webkit-outer-spin-button,
+        input[type="number"]::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        
+        input.numeric-only {
+            text-align: left;
+            letter-spacing: 0.5px;
+        }
+        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 14px; }
@@ -1519,9 +1559,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 </head>
 <body>
 
-<!-- ================================================================ -->
-<!-- ✅ EMBEDDED HEADER - SAME AS SHARED admin_header.php -->
-<!-- ================================================================ -->
 <nav class="top-nav">
     <div style="display:flex;align-items:center;gap:16px;flex:1;">
         <button id="sidebarToggle" class="lg:hidden icon-btn" style="display:none;">
@@ -1572,10 +1609,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <main class="main-content">
 
 <?php if ($show_manage_purchases): ?>
-    <!-- ================================================================ -->
     <!-- MANAGE PURCHASES PAGE -->
-    <!-- ================================================================ -->
-    
     <div class="manage-header">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
             <div style="flex:1;min-width:0;">
@@ -1602,7 +1636,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
     
-    <!-- CREATE NEW BOX -->
     <div class="create-new-box">
         <div class="create-icon">
             <i class="fas fa-plus-circle"></i>
@@ -1625,7 +1658,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </form>
     </div>
     
-    <!-- EXISTING PURCHASES LIST -->
     <?php if (count($manage_purchases) > 0): ?>
         <div class="card" style="padding:20px 24px;">
             <h3 style="font-size:1rem;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px;">
@@ -1690,9 +1722,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <?php endif; ?>
 
 <?php else: ?>
-    <!-- ================================================================ -->
     <!-- NORMAL INVENTORY PAGE -->
-    <!-- ================================================================ -->
     
     <div class="branch-info-card">
         <div class="branch-title">
@@ -1783,7 +1813,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="stat-icon"><i class="fas fa-times-circle"></i></span>
                 <div class="stat-number"><?= $med_out_of_stock ?></div>
                 <div class="stat-label">Out of Stock</div>
-                <div class="stat-sub">Quantity = 0</div>
+                <div class="stat-sub">Active but 0 Qty</div>
             </a>
             <a href="inventory.php?tab=medicines&expiry=expiring&branch=<?= $selected_branch_id ?>" class="stat-card teal">
                 <span class="stat-icon"><i class="fas fa-clock"></i></span>
@@ -1807,7 +1837,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="stat-icon"><i class="fas fa-archive"></i></span>
                 <div class="stat-number"><?= $med_inactive ?></div>
                 <div class="stat-label">Inactive</div>
-                <div class="stat-sub">No active batches</div>
+                <div class="stat-sub">Expired/Manual off</div>
             </a>
             <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="stat-card indigo">
                 <span class="stat-icon"><i class="fas fa-coins"></i></span>
@@ -1819,7 +1849,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
         <div class="card">
             <div class="filter-group">
-                <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="filter-btn <?= empty($status_filter) && empty($stock_filter) && empty($expiry_filter) ? 'active' : '' ?>">All</a>
+                <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="filter-btn <?= (empty($status_filter) || $status_filter === 'all') && empty($stock_filter) && empty($expiry_filter) ? 'active' : '' ?>">All</a>
                 <a href="inventory.php?tab=medicines&status=active&branch=<?= $selected_branch_id ?>" class="filter-btn <?= $status_filter === 'active' ? 'active' : '' ?>">Active</a>
                 <a href="inventory.php?tab=medicines&status=inactive&branch=<?= $selected_branch_id ?>" class="filter-btn <?= $status_filter === 'inactive' ? 'active' : '' ?>">Inactive</a>
                 <a href="inventory.php?tab=medicines&stock=low&branch=<?= $selected_branch_id ?>" class="filter-btn <?= $stock_filter === 'low' ? 'active' : '' ?>">Low Stock</a>
@@ -1925,7 +1955,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     </td>
                                     <td class="col-category"><?= htmlspecialchars($category_display) ?></td>
                                     <td class="col-branch"><span style="font-weight:600;color:var(--primary);font-size:0.65rem;">🏥 <?= htmlspecialchars($branch_name) ?></span></td>
-                                    <td class="col-qty"><strong><?= $active_qty ?></strong></td>
+                                    <!-- ✅ FIXED: Qty with 0 badge -->
+                                    <td class="col-qty">
+                                        <strong><?= $active_qty ?></strong>
+                                        <?php if ($active_qty == 0 && $display_status === 'active'): ?>
+                                            <span class="zero-qty-warning">
+                                                <i class="fas fa-exclamation-triangle"></i> 0 Qty
+                                            </span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="col-reorder"><?= $item['reorder_level'] ?></td>
                                     <td class="col-stock">
                                         <span class="stock-badge <?= $stock_status ?>">
@@ -2003,7 +2041,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="stat-icon"><i class="fas fa-times-circle"></i></span>
                 <div class="stat-number"><?= $equip_out_of_stock ?></div>
                 <div class="stat-label">Out of Stock</div>
-                <div class="stat-sub">Qty = 0</div>
+                <div class="stat-sub">Active but 0 Qty</div>
             </a>
             <a href="inventory.php?tab=equipment&expiry=expiring&branch=<?= $selected_branch_id ?>" class="stat-card teal">
                 <span class="stat-icon"><i class="fas fa-clock"></i></span>
@@ -2027,7 +2065,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="stat-icon"><i class="fas fa-archive"></i></span>
                 <div class="stat-number"><?= $equip_inactive ?></div>
                 <div class="stat-label">Inactive</div>
-                <div class="stat-sub">No active batches</div>
+                <div class="stat-sub">Expired/Manual off</div>
             </a>
             <a href="inventory.php?tab=equipment&branch=<?= $selected_branch_id ?>" class="stat-card indigo">
                 <span class="stat-icon"><i class="fas fa-coins"></i></span>
@@ -2039,7 +2077,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
         <div class="card">
             <div class="filter-group">
-                <a href="inventory.php?tab=equipment&branch=<?= $selected_branch_id ?>" class="filter-btn <?= empty($status_filter) && empty($stock_filter) && empty($expiry_filter) ? 'active' : '' ?>">All</a>
+                <a href="inventory.php?tab=equipment&branch=<?= $selected_branch_id ?>" class="filter-btn <?= (empty($status_filter) || $status_filter === 'all') && empty($stock_filter) && empty($expiry_filter) ? 'active' : '' ?>">All</a>
                 <a href="inventory.php?tab=equipment&status=active&branch=<?= $selected_branch_id ?>" class="filter-btn <?= $status_filter === 'active' ? 'active' : '' ?>">Active</a>
                 <a href="inventory.php?tab=equipment&status=inactive&branch=<?= $selected_branch_id ?>" class="filter-btn <?= $status_filter === 'inactive' ? 'active' : '' ?>">Inactive</a>
                 <a href="inventory.php?tab=equipment&stock=low&branch=<?= $selected_branch_id ?>" class="filter-btn <?= $stock_filter === 'low' ? 'active' : '' ?>">Low Stock</a>
@@ -2145,7 +2183,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     </td>
                                     <td class="col-category"><?= htmlspecialchars($category_display) ?></td>
                                     <td class="col-branch"><span style="font-weight:600;color:var(--primary);font-size:0.65rem;">🏥 <?= htmlspecialchars($branch_name) ?></span></td>
-                                    <td class="col-qty"><strong><?= $active_qty ?></strong></td>
+                                    <!-- ✅ FIXED: Qty with 0 badge -->
+                                    <td class="col-qty">
+                                        <strong><?= $active_qty ?></strong>
+                                        <?php if ($active_qty == 0 && $display_status === 'active'): ?>
+                                            <span class="zero-qty-warning">
+                                                <i class="fas fa-exclamation-triangle"></i> 0 Qty
+                                            </span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="col-reorder"><?= $item['reorder_level'] ?></td>
                                     <td class="col-stock">
                                         <span class="stock-badge <?= $stock_status ?>">
@@ -2286,6 +2332,69 @@ function updateClock() {
 }
 updateClock();
 setInterval(updateClock, 1000);
+
+// ================================================================
+// ✅ ZUIA SCROLL WHEEL KUBADILISHA NUMBER INPUTS
+// ================================================================
+document.addEventListener('wheel', function(e) {
+    if (document.activeElement && 
+        (document.activeElement.type === 'number' || 
+         document.activeElement.classList.contains('numeric-only'))) {
+        document.activeElement.blur();
+    }
+}, { passive: true });
+
+// ================================================================
+// ✅ NUMERIC-ONLY INPUTS
+// ================================================================
+function setupNumericOnlyInputs() {
+    document.querySelectorAll('.numeric-only').forEach(function(input) {
+        if (input.dataset.numericInit) return;
+        input.dataset.numericInit = 'true';
+        
+        input.addEventListener('keypress', function(e) {
+            var char = String.fromCharCode(e.which);
+            if (!/[0-9]/.test(char) && e.which !== 8 && e.which !== 0 && e.which !== 46) {
+                e.preventDefault();
+            }
+        });
+        
+        input.addEventListener('input', function() {
+            var cursorPos = this.selectionStart;
+            var oldVal = this.value;
+            this.value = this.value.replace(/[^0-9]/g, '');
+            if (oldVal !== this.value) {
+                this.setSelectionRange(cursorPos - 1, cursorPos - 1);
+            }
+        });
+        
+        input.addEventListener('wheel', function(e) {
+            e.preventDefault();
+            this.blur();
+        }, { passive: false });
+        
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                e.preventDefault();
+            }
+        });
+        
+        input.addEventListener('paste', function(e) {
+            e.preventDefault();
+            var pasted = (e.clipboardData || window.clipboardData).getData('text');
+            var numbers = pasted.replace(/[^0-9]/g, '');
+            if (numbers) {
+                document.execCommand('insertText', false, numbers);
+            }
+        });
+    });
+}
+
+document.addEventListener('DOMContentLoaded', setupNumericOnlyInputs);
+
+new MutationObserver(function() { 
+    setTimeout(setupNumericOnlyInputs, 100); 
+}).observe(document.body, { childList: true, subtree: true });
 
 // ================================================================
 // DELETE
@@ -2442,10 +2551,12 @@ function openViewModal(data, type) {
             expDisp = new Date(exp).toLocaleDateString('en-GB');
         }
         if (st === 'inactive') { stLbl = 'Inactive'; stCls = 'inactive'; }
+        // ✅ Batch yenye quantity 0 bado ni ACTIVE
+        else if (q == 0) { stLbl = 'Active (0 Qty)'; stCls = 'active'; }
         
         batchesHtml += '<tr style="border-bottom:1px solid var(--border-color);">'
             + '<td style="padding:5px;"><span class="batch-number">' + bNum + '</span></td>'
-            + '<td style="text-align:center;font-weight:600;">' + q + '</td>'
+            + '<td style="text-align:center;font-weight:600;">' + q + (q == 0 ? ' <span class="zero-qty-warning"><i class="fas fa-exclamation-triangle"></i> 0 Qty</span>' : '') + '</td>'
             + '<td><span class="expiry-badge ' + expCls + '">' + expDisp + '</span></td>'
             + '<td style="text-align:center;"><span class="days-remaining ' + dCls + '">' + (dL === '∞' ? '∞' : (dL < 0 ? 'EXP' : dL + 'd')) + '</span></td>'
             + '<td style="text-align:center;"><span class="status-badge ' + stCls + '">' + stLbl + '</span></td>'
@@ -2468,7 +2579,9 @@ function openViewModal(data, type) {
         + '<div style="grid-column:1/-1;padding:8px;background:var(--bg-body);border-radius:6px;"><div style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Name</div><div style="font-size:0.85rem;font-weight:600;">' + (data.name || 'N/A') + '</div></div>'
         + '<div style="padding:8px;background:var(--bg-body);border-radius:6px;"><div style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Category</div><div style="font-size:0.85rem;font-weight:600;">' + (data.category || 'N/A') + '</div></div>'
         + '<div style="padding:8px;background:var(--bg-body);border-radius:6px;"><div style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Unit</div><div style="font-size:0.85rem;font-weight:600;">' + (data.unit || 'pcs') + '</div></div>'
-        + '<div style="padding:8px;background:var(--bg-body);border-radius:6px;"><div style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Total Qty</div><div style="font-size:0.85rem;font-weight:600;">' + total + ' <span class="stock-badge ' + stockBadge + '">' + stockText + '</span></div></div>'
+        + '<div style="padding:8px;background:var(--bg-body);border-radius:6px;"><div style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Total Qty</div><div style="font-size:0.85rem;font-weight:600;">' + total + ' <span class="stock-badge ' + stockBadge + '">' + stockText + '</span>'
+            + (total === 0 ? ' <span style="font-size:0.6rem;color:var(--warning);font-weight:600;"><i class="fas fa-exclamation-triangle"></i> Cannot be sold</span>' : '')
+        + '</div></div>'
         + '<div style="padding:8px;background:var(--bg-body);border-radius:6px;"><div style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Selling Price</div><div style="font-size:0.85rem;font-weight:600;">' + (data.selling_price > 0 ? 'TSh ' + Number(data.selling_price).toLocaleString() : 'FREE') + '</div></div>'
         + '</div>'
         + '<div style="font-size:0.75rem;font-weight:600;margin-bottom:6px;"><i class="fas fa-layer-group"></i> Batches (' + bIds.length + ')</div>'
@@ -2500,7 +2613,7 @@ function openEditMedicineModal(id, name) {
     fd.append('id', id);
     fetch(window.location.href, { method: 'POST', body: fd })
         .then(function(r) { return r.text(); })
-        .then(function(h) { document.getElementById('editModalBody').innerHTML = h; });
+        .then(function(h) { document.getElementById('editModalBody').innerHTML = h; setupNumericOnlyInputs(); });
 }
 
 function openEditEquipmentModal(id, name) {
@@ -2516,7 +2629,7 @@ function openEditEquipmentModal(id, name) {
     fd.append('id', id);
     fetch(window.location.href, { method: 'POST', body: fd })
         .then(function(r) { return r.text(); })
-        .then(function(h) { document.getElementById('editModalBody').innerHTML = h; });
+        .then(function(h) { document.getElementById('editModalBody').innerHTML = h; setupNumericOnlyInputs(); });
 }
 
 function toggleCategoryEdit() {
@@ -2606,10 +2719,11 @@ setTimeout(function() {
     if (m) m.style.display = 'none';
 }, 5000);
 
-console.log('%c📦 Admin Inventory - ✅ EMBEDDED HEADER (Same as shared)', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ Embedded header HTML in file', 'font-size:13px;color:#34D399;');
-console.log('%c✅ Uses SHARED admin_sidebar.php', 'font-size:13px;color:#34D399;');
-console.log('%c✅ Header style matches shared admin_header.php', 'font-size:13px;color:#34D399;');
+console.log('%c📦 Admin Inventory', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ FIXED: Dawa zilizo 0 Qty = ACTIVE (inaonekana, haiwezi kuuzwa)', 'font-size:13px;color:#34D399;font-weight:bold;');
+console.log('%c✅ FIXED: Expired/Inactive manual pekee = INACTIVE', 'font-size:13px;color:#34D399;');
+console.log('%c✅ FIXED: All filters working correctly', 'font-size:13px;color:#34D399;');
+console.log('%c✅ FIXED: Mouse scroll hairuhusiwi kupunguza quantities', 'font-size:13px;color:#34D399;');
 </script>
 
 </body>

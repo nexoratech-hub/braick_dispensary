@@ -8,6 +8,7 @@
 // ✅ ADDED: Premium from bills.premium_amount column
 // ✅ ADDED: Premium in 4 cards (replaced/added as 5th card)
 // ✅ ADDED: Premium in bill summary
+// ✅ REMOVED: Make Payment button
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -92,8 +93,7 @@ try {
     }
     
     // ================================================================
-    // GET BILL DETAILS - USING bills TABLE
-    // ✅ ADDED: premium_amount and premium_note
+    // GET BILL DETAILS
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
@@ -149,46 +149,38 @@ try {
         $subtotal += (float)$item['total_price'];
     }
     
-    // ================================================================
-    // ✅ FIXED: GET DISCOUNTS FROM BILLS TABLE
-    // ================================================================
+    // Get discounts from bills table
     $discount_amount = (float)($bill['discount_amount'] ?? 0);
     $pharmacy_discount = (float)($bill['pharmacy_discount'] ?? 0);
     $cashier_discount = (float)($bill['cashier_discount'] ?? 0);
     $total_discount = (float)($bill['total_discount'] ?? 0);
     $discount_percent = (float)($bill['discount_percent'] ?? 0);
     
-    // ✅ ADDED: Get premium amount
+    // Get premium amount
     $premium_amount = (float)($bill['premium_amount'] ?? 0);
     $premium_note = $bill['premium_note'] ?? '';
     $has_premium = $premium_amount > 0;
     
-    // ✅ FIXED: If total_discount is not set or zero, calculate it correctly
-    // TOTAL_DISCOUNT = DISCOUNT_AMOUNT + CASHIER_DISCOUNT
+    // If total_discount is not set or zero, calculate it
     if ($total_discount == 0 && ($discount_amount > 0 || $pharmacy_discount > 0 || $cashier_discount > 0)) {
         $total_discount = $discount_amount + $pharmacy_discount + $cashier_discount;
     }
     
-    // ✅ FIXED: Get values from bill
+    // Get values from bill
     $total_amount = (float)$bill['total_amount'];
     $paid_amount = (float)$bill['paid_amount'];
     $balance = (float)$bill['balance'];
     
-    // ✅ FIXED: Recalculate balance to ensure it's correct
-    // FORMULA: REMAINING = TOTAL_AMOUNT - PAID_AMOUNT - TOTAL_DISCOUNT
+    // Recalculate balance
     $calculated_balance = $total_amount - $paid_amount - $total_discount;
     if ($calculated_balance < 0) $calculated_balance = 0;
     
-    // If database balance doesn't match calculated balance, update it
     if (abs($balance - $calculated_balance) > 0.01) {
         $balance = $calculated_balance;
-        // Update the database with correct balance
         try {
             $stmt = $db->prepare("UPDATE bills SET balance = ? WHERE id = ?");
             $stmt->execute([$balance, $bill_id]);
-        } catch (Exception $e) {
-            // Silent fail - don't break the page
-        }
+        } catch (Exception $e) {}
     }
     
     $after_discount = $total_amount - $total_discount;
@@ -367,9 +359,7 @@ include_once '../../components/cashier_sidebar.php';
             transition: background 0.3s ease;
         }
         
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
+        /* PAGE HEADER */
         .page-header {
             background: linear-gradient(135deg, var(--page-header-bg-from), var(--page-header-bg-to));
             border-radius: var(--radius-lg);
@@ -465,9 +455,7 @@ include_once '../../components/cashier_sidebar.php';
             transform: translateY(-1px);
         }
         
-        /* ================================================================ */
-        /* ✅ FIXED: 5 SUMMARY CARDS (Added Premium) */
-        /* ================================================================ */
+        /* 5 SUMMARY CARDS */
         .summary-cards {
             display: grid;
             grid-template-columns: repeat(5, 1fr);
@@ -513,7 +501,6 @@ include_once '../../components/cashier_sidebar.php';
             font-family: monospace;
         }
         
-        /* Card Colors */
         .summary-card.total-card { border-color: var(--primary); }
         .summary-card.total-card .card-value { color: var(--primary); }
         
@@ -531,9 +518,7 @@ include_once '../../components/cashier_sidebar.php';
         .summary-card.premium-card { border-color: var(--premium-color); }
         .summary-card.premium-card .card-value { color: var(--premium-color); }
         
-        /* ================================================================
-           DISCOUNT CARD
-           ================================================================ */
+        /* DISCOUNT CARD */
         .discount-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -614,9 +599,7 @@ include_once '../../components/cashier_sidebar.php';
             text-align: center;
         }
         
-        /* ================================================================
-           BILL SUMMARY CARD
-           ================================================================ */
+        /* BILL SUMMARY CARD */
         .bill-summary-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -665,9 +648,6 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--badge-cancelled-text);
         }
         
-        /* ================================================================
-           BILL SUMMARY GRID - 3 COLUMNS
-           ================================================================ */
         .bill-summary-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -701,25 +681,12 @@ include_once '../../components/cashier_sidebar.php';
             margin-top: 1px;
         }
         
-        .bill-summary-grid .summary-item .value.green {
-            color: var(--success);
-        }
+        .bill-summary-grid .summary-item .value.green { color: var(--success); }
+        .bill-summary-grid .summary-item .value.red { color: var(--danger); }
+        .bill-summary-grid .summary-item .value.blue { color: var(--primary); }
+        .bill-summary-grid .summary-item .value.premium { color: var(--premium-color); }
         
-        .bill-summary-grid .summary-item .value.red {
-            color: var(--danger);
-        }
-        
-        .bill-summary-grid .summary-item .value.blue {
-            color: var(--primary);
-        }
-        
-        .bill-summary-grid .summary-item .value.premium {
-            color: var(--premium-color);
-        }
-        
-        /* ================================================================
-           PATIENT INFO CARD
-           ================================================================ */
+        /* PATIENT INFO CARD */
         .patient-info-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -775,9 +742,7 @@ include_once '../../components/cashier_sidebar.php';
             font-size: 0.7rem;
         }
         
-        /* ================================================================
-           TABLE
-           ================================================================ */
+        /* TABLE */
         .table-wrapper {
             background: var(--bg-card);
             border-radius: var(--radius);
@@ -856,9 +821,7 @@ include_once '../../components/cashier_sidebar.php';
         
         .data-table .item-total { font-weight: 600; }
         
-        /* ================================================================
-           STATUS BADGE
-           ================================================================ */
+        /* STATUS BADGE */
         .status-badge {
             display: inline-block;
             font-size: 0.6rem;
@@ -883,9 +846,7 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--badge-cancelled-text);
         }
         
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
+        /* BUTTONS */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -941,9 +902,7 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
         }
         
-        /* ================================================================
-           PDF MODAL
-           ================================================================ */
+        /* PDF MODAL */
         .pdf-modal-overlay {
             display: none;
             position: fixed;
@@ -1252,9 +1211,7 @@ include_once '../../components/cashier_sidebar.php';
             color: #94A3B8;
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
+        /* TOAST */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1282,9 +1239,7 @@ include_once '../../components/cashier_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
+        /* FOOTER */
         .footer {
             padding: 12px 0;
             border-top: 2px solid var(--footer-border);
@@ -1299,9 +1254,7 @@ include_once '../../components/cashier_sidebar.php';
             font-weight: 600; 
         }
         
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
+        /* EMPTY STATE */
         .empty-state {
             text-align: center;
             padding: 50px 20px;
@@ -1325,9 +1278,7 @@ include_once '../../components/cashier_sidebar.php';
             font-size: 0.9rem;
         }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
+        /* ANIMATIONS */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(16px); }
             to { opacity: 1; transform: translateY(0); }
@@ -1337,9 +1288,7 @@ include_once '../../components/cashier_sidebar.php';
             opacity: 0;
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
+        /* RESPONSIVE */
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
             .summary-cards { grid-template-columns: repeat(3, 1fr); }
@@ -1464,27 +1413,20 @@ include_once '../../components/cashier_sidebar.php';
 
     <?php if ($bill): ?>
         
-    <!-- ================================================================ -->
-    <!-- ✅ FIXED: 5 SUMMARY CARDS WITH CORRECT VALUES (Added Premium) -->
-    <!-- FORMULA: REMAINING = TOTAL_AMOUNT - PAID_AMOUNT - TOTAL_DISCOUNT -->
-    <!-- ================================================================ -->
+    <!-- 5 SUMMARY CARDS -->
     <div class="summary-cards animate-fade-in-up">
-        <!-- Card 1: Total Amount -->
         <div class="summary-card total-card">
             <span class="card-icon">📋</span>
             <span class="card-label">Total Amount</span>
             <span class="card-value"><?= $currency ?> <?= number_format($total_amount, 0) ?></span>
         </div>
         
-        <!-- Card 2: Paid Amount -->
         <div class="summary-card paid-card">
             <span class="card-icon">✅</span>
             <span class="card-label">Paid Amount</span>
             <span class="card-value"><?= $currency ?> <?= number_format($paid_amount, 0) ?></span>
         </div>
         
-        <!-- Card 3: Remaining Balance -->
-        <!-- ✅ FIXED: This shows the correct remaining balance -->
         <div class="summary-card balance-card <?= $balance <= 0 ? 'zero-balance' : '' ?>">
             <span class="card-icon">⚖️</span>
             <span class="card-label">Remaining Balance</span>
@@ -1500,8 +1442,6 @@ include_once '../../components/cashier_sidebar.php';
             <?php endif; ?>
         </div>
         
-        <!-- Card 4: Total Discount -->
-        <!-- ✅ FIXED: This shows total_discount = discount_amount + cashier_discount -->
         <div class="summary-card discount-card">
             <span class="card-icon">🏷️</span>
             <span class="card-label">Total Discount</span>
@@ -1513,8 +1453,6 @@ include_once '../../components/cashier_sidebar.php';
             <?php endif; ?>
         </div>
         
-        <!-- Card 5: Premium Amount -->
-        <!-- ✅ ADDED: Premium card -->
         <div class="summary-card premium-card">
             <span class="card-icon">👑</span>
             <span class="card-label">Premium Amount</span>
@@ -1527,9 +1465,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
         
-    <!-- ================================================================ -->
     <!-- DISCOUNT CARD -->
-    <!-- ================================================================ -->
     <div class="discount-card animate-fade-in-up" style="animation-delay:0.05s;">
         <div class="discount-title">
             <i class="fas fa-tags"></i>
@@ -1599,9 +1535,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
         
-    <!-- ================================================================ -->
     <!-- BILL SUMMARY -->
-    <!-- ================================================================ -->
     <div class="bill-summary-card animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="flex flex-wrap justify-between items-center gap-3">
             <div>
@@ -1773,13 +1707,8 @@ include_once '../../components/cashier_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- ACTION BUTTONS -->
+    <!-- ✅ ACTION BUTTONS - MAKE PAYMENT BUTTON REMOVED -->
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;">
-        <?php if ($bill['status'] !== 'paid' && $bill['status'] !== 'cancelled'): ?>
-            <a href="make_payment.php?bill_id=<?= $bill_id ?>" class="btn btn-success">
-                <i class="fas fa-money-bill-wave"></i> Make Payment
-            </a>
-        <?php endif; ?>
         <a href="paid_bills.php" class="btn btn-primary">
             <i class="fas fa-list"></i> Paid Bills
         </a>
@@ -1826,9 +1755,7 @@ include_once '../../components/cashier_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
 <!-- PDF MODAL -->
-<!-- ================================================================ -->
 <div class="pdf-modal-overlay" id="pdfModal">
     <div class="pdf-modal">
         <div class="pdf-modal-header">
@@ -1856,9 +1783,7 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle"></i>
     <div>
@@ -1867,13 +1792,8 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
-    // ================================================================
     // DARK MODE
-    // ================================================================
     (function() {
         var htmlElement = document.documentElement;
         function syncDarkMode() {
@@ -1897,9 +1817,7 @@ include_once '../../components/cashier_sidebar.php';
         });
     })();
 
-    // ================================================================
     // SIDEBAR TOGGLE
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
@@ -1917,9 +1835,7 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    // ================================================================
     // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var timeStr = now.toLocaleTimeString('en-US', {
@@ -1934,9 +1850,7 @@ include_once '../../components/cashier_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
     // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1954,9 +1868,7 @@ include_once '../../components/cashier_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
     // ADMIN FUNCTIONS
-    // ================================================================
     function editBill(billId) {
         showToast('✏️ Edit Bill', 'Redirecting to edit page...', 'info');
         setTimeout(function() {
@@ -1986,9 +1898,7 @@ include_once '../../components/cashier_sidebar.php';
         }
     }
 
-    // ================================================================
-    // PDF GENERATION - WITH 5 CARDS - CORRECT VALUES
-    // ================================================================
+    // PDF GENERATION
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
         var content = document.getElementById('pdfContent');
@@ -2038,7 +1948,6 @@ include_once '../../components/cashier_sidebar.php';
             counter++;
         <?php endforeach; ?>
         
-        // Discount rows
         var discountRows = '';
         if (totalDiscount > 0 || premiumAmount > 0) {
             if (totalDiscount > 0) {
@@ -2064,7 +1973,6 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         var html = `
-            <!-- PDF HEADER -->
             <div class="pdf-header">
                 <div class="pdf-logo">
                     <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" style="height:55px;width:auto;object-fit:contain;display:block;margin:0 auto;" onerror="this.style.display='none'">
@@ -2081,7 +1989,6 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
             </div>
             
-            <!-- 5 SUMMARY CARDS - CORRECT VALUES -->
             <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:10px;">
                 <div style="background:#E8F0FE;padding:6px 4px;border-radius:6px;text-align:center;border:1px solid #0B5ED7;">
                     <div style="font-size:15px;font-weight:700;color:#0B5ED7;">${currency} ${total.toLocaleString()}</div>
@@ -2105,7 +2012,6 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
             </div>
             
-            <!-- BILL SUMMARY -->
             <div style="margin-bottom:8px;">
                 <div class="pdf-section-title"><i class="fas fa-file-invoice"></i> Bill Summary</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px 14px;font-size:14px;">
@@ -2120,7 +2026,6 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
             </div>
             
-            <!-- PATIENT INFORMATION -->
             <div style="margin-bottom:8px;">
                 <div class="pdf-section-title"><i class="fas fa-user"></i> Patient Information</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px 14px;font-size:14px;">
@@ -2133,7 +2038,6 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
             </div>
             
-            <!-- BILL ITEMS -->
             <div style="margin-bottom:8px;">
                 <div class="pdf-section-title"><i class="fas fa-list-ul"></i> Bill Items (${totalItems})</div>
                 <div class="pdf-table-wrap">
@@ -2159,7 +2063,6 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
             </div>
             
-            <!-- PDF FOOTER WITH OFFICIAL STAMP -->
             <div class="pdf-footer">
                 <div class="footer-stamp">
                     <div class="footer-left">
@@ -2223,9 +2126,7 @@ include_once '../../components/cashier_sidebar.php';
         html2pdf().set(opt).from(element).save();
     }
 
-    // ================================================================
     // KEYBOARD SHORTCUTS
-    // ================================================================
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             closePDFModal();
@@ -2238,22 +2139,11 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    // ================================================================
-    // ✅ LOG CORRECT VALUES
-    // ================================================================
-    console.log('%c🟢 Braick - View Bill (FIXED - 5 Cards + Premium)', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c🟢 Braick - View Bill (Make Payment Button REMOVED)', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c✅ Make Payment button IMETOLEWA', 'font-size:13px; color:#DC2626; font-weight:bold;');
     console.log('%c✅ 5 Cards: Total | Paid | Remaining | Discount | Premium', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ FORMULA: REMAINING = TOTAL_AMOUNT - PAID_AMOUNT - TOTAL_DISCOUNT', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ TOTAL_DISCOUNT = DISCOUNT_AMOUNT + CASHIER_DISCOUNT', 'font-size:12px; color:#34D399;');
-    console.log('%c👑 ADDED: Premium from bills.premium_amount column', 'font-size:12px; color:#D97706;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#059669;');
     console.log('%c📋 Bill #: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:12px; color:#059669;');
-    console.log('%c💰 Total: <?= $currency ?> <?= number_format($total_amount, 0) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c✅ Paid: <?= $currency ?> <?= number_format($paid_amount, 0) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c🏷️ Total Discount: <?= $currency ?> <?= number_format($total_discount, 0) ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c👑 Premium: <?= $currency ?> <?= number_format($premium_amount, 0) ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c⚖️ Remaining: <?= $currency ?> <?= number_format($balance, 0) ?>', 'font-size:12px; color:#DC2626;');
-    console.log('%c📐 Balance Formula: <?= $total_amount ?> - <?= $paid_amount ?> - <?= $total_discount ?> = <?= $balance ?>', 'font-size:12px; color:#059669;');
 </script>
 
 </body>

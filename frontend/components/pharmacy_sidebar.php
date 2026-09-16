@@ -1,13 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/components/pharmacy_sidebar.php
-// PHARMACY - SHARED SIDEBAR (DIRECT AJAX - NO EXTERNAL API)
-// ✅ BLUE THEME - MODERN GRADIENT
-// ✅ FONTS ZOTE NYEUPE
-// ✅ COMPACT SPACING - Punguza nafasi
-// ✅ OTC HISTORY - INOYESHA ZOTE
-// ✅ PRESCRIPTION HISTORY - INOYESHA ZOTE
-// ✅ DIRECT AJAX - HAKUNA API YA NJE
+// PHARMACY - SHARED SIDEBAR
+// ✅ SAME DESIGN AS LABORATORY SIDEBAR
+// ✅ Same fonts, colors, spacing, animations
+// ✅ Direct AJAX - Hakuna API ya nje
+// ✅ Prescriptions + OTC + Inventory badges
 // ================================================================
 
 // ================================================================
@@ -54,7 +52,7 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 $user_is_online = $_SESSION['is_online'] ?? 1;
 
 // ================================================================
-// INCLUDE DATABASE FOR INITIAL DATA
+// INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../backend/config/database.php';
 
@@ -65,11 +63,10 @@ try {
 }
 
 // ================================================================
-// GET SYSTEM SETTINGS - JINA NA LOGO LA DISPENSARY
+// GET SITE NAME
 // ================================================================
 $site_name = 'Braick Dispensary';
 $site_logo = '';
-$site_logo_path = '';
 
 if ($db !== null) {
     try {
@@ -86,15 +83,10 @@ if ($db !== null) {
         if ($result && !empty($result['setting_value'])) {
             $site_logo = $result['setting_value'];
         }
-        
-    } catch (Exception $e) {
-        error_log("Error fetching system settings: " . $e->getMessage());
-    }
+    } catch (Exception $e) {}
 }
 
-// ================================================================
-// SITE LOGO PATH
-// ================================================================
+// Site logo path
 if (!empty($site_logo)) {
     $site_logo_path = '/dispensary_system/frontend/assets/uploads/settings/' . $site_logo;
 } else {
@@ -102,7 +94,7 @@ if (!empty($site_logo)) {
 }
 
 // ================================================================
-// GET INITIAL STATISTICS FOR BADGES - DIRECT FROM DATABASE
+// GET INITIAL STATISTICS FOR BADGES
 // ================================================================
 $pending_prescriptions = 0;
 $low_stock_count = 0;
@@ -181,7 +173,7 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $total_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
     } catch (Exception $e) {
-        error_log("Pharmacy sidebar initial stats error: " . $e->getMessage());
+        error_log("Pharmacy sidebar stats error: " . $e->getMessage());
     }
 }
 
@@ -232,281 +224,375 @@ $initial_data = [
 
 <style>
     /* ================================================================
-       SIDEBAR - MODERN BLUE THEME WITH COMPACT SPACING
+       PHARMACY SIDEBAR - SAME DESIGN AS LABORATORY SIDEBAR
        ================================================================ */
     
-    .sidebar-modern {
+    .sidebar {
         position: fixed;
         top: 0;
         left: 0;
         bottom: 0;
-        width: 270px;
-        background: linear-gradient(180deg, #0B5ED7 0%, #0A4CA8 50%, #083A7A 100%);
-        color: #ffffff !important;
+        width: 260px;
+        background: linear-gradient(180deg, #0B4EA8 0%, #0A3D7A 100%);
+        color: white;
         z-index: 9999;
         overflow-y: auto;
         overflow-x: hidden;
-        transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-        transform: translateX(-100%);
-        box-shadow: 4px 0 30px rgba(11, 94, 215, 0.4);
-        padding-bottom: 8px;
+        transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+        transform: translateX(0);
+        box-shadow: 4px 0 30px rgba(0,0,0,0.3);
+        padding-bottom: 20px;
+        scroll-behavior: smooth;
         font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
     }
     
-    [data-theme="dark"] .sidebar-modern {
-        background: linear-gradient(180deg, #0A4CA8 0%, #083A7A 50%, #062A5A 100%);
-        box-shadow: 4px 0 30px rgba(0,0,0,0.6);
+    [data-theme="dark"] .sidebar {
+        background: linear-gradient(180deg, #0A3D7A 0%, #082F5E 100%);
+        box-shadow: 4px 0 30px rgba(0,0,0,0.5);
     }
     
-    .sidebar-modern.open {
+    .sidebar.hidden {
+        transform: translateX(-100%) !important;
+    }
+    
+    .sidebar.visible {
         transform: translateX(0) !important;
     }
     
-    .sidebar-modern * {
-        color: #ffffff !important;
+    .sidebar::-webkit-scrollbar { width: 4px; }
+    .sidebar::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
+    .sidebar::-webkit-scrollbar-thumb { background: #6EA8FE; border-radius: 10px; }
+    .sidebar::-webkit-scrollbar-thumb:hover { background: #9EC5FE; }
+    
+    /* ================================================================
+       SIDEBAR TOGGLE BUTTON - FLOATING
+       ================================================================ */
+    .sidebar-toggle-float {
+        position: fixed;
+        top: 14px;
+        left: 14px;
+        z-index: 10000;
+        width: 40px;
+        height: 40px;
+        border-radius: 10px;
+        background: #0B5ED7;
+        color: white;
+        border: none;
+        font-size: 0.95rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        display: none;
+        opacity: 0;
+        pointer-events: none;
     }
     
-    .sidebar-modern::-webkit-scrollbar { width: 4px; }
-    .sidebar-modern::-webkit-scrollbar-track { background: transparent; }
-    .sidebar-modern::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 10px; }
-    .sidebar-modern::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.35); }
+    .sidebar-toggle-float.show {
+        display: flex !important;
+        opacity: 1;
+        pointer-events: auto;
+    }
+    
+    .sidebar-toggle-float:hover {
+        transform: scale(1.08);
+        box-shadow: 0 6px 24px rgba(11, 94, 215, 0.5);
+    }
+    
+    .sidebar-toggle-float .toggle-icon {
+        transition: transform 0.3s ease;
+        font-size: 0.95rem;
+    }
+    
+    [data-theme="dark"] .sidebar-toggle-float {
+        background: #1E3A5F;
+        box-shadow: 0 4px 16px rgba(30, 58, 95, 0.4);
+    }
+    
+    [data-theme="dark"] .sidebar-toggle-float:hover {
+        box-shadow: 0 6px 24px rgba(30, 58, 95, 0.6);
+    }
+    
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 1024px) {
+        .sidebar-toggle-float {
+            display: none !important;
+        }
+        .sidebar-toggle-float.show {
+            display: flex !important;
+        }
+        .sidebar {
+            transform: translateX(-100%);
+            border-radius: 0 12px 12px 0;
+        }
+        .sidebar.visible {
+            transform: translateX(0) !important;
+        }
+        .sidebar.hidden {
+            transform: translateX(-100%) !important;
+        }
+    }
+    
+    @media (min-width: 1025px) {
+        .sidebar-toggle-float {
+            display: none !important;
+        }
+        .sidebar {
+            transform: translateX(0) !important;
+        }
+        .sidebar.hidden {
+            transform: translateX(-100%) !important;
+        }
+    }
     
     /* ================================================================
        OVERLAY
        ================================================================ */
-    #sidebarOverlayModern {
+    #sidebarOverlay {
         position: fixed;
         top: 0;
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(0,0,0,0.5);
+        background: rgba(0,0,0,0.6);
         z-index: 9998;
         display: none;
-        backdrop-filter: blur(3px);
-        -webkit-backdrop-filter: blur(3px);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
         transition: opacity 0.3s ease;
     }
-    
-    #sidebarOverlayModern.active {
+    #sidebarOverlay.active {
         display: block !important;
     }
     
     /* ================================================================
-       SIDEBAR BRAND - COMPACT
+       SIDEBAR BRAND
        ================================================================ */
-    .sidebar-brand-modern {
-        padding: 12px 14px 10px;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
+    .sidebar-brand {
+        padding: 16px 14px 12px;
+        border-bottom: 2px solid rgba(255,255,255,0.08);
         background: rgba(0,0,0,0.1);
         position: sticky;
         top: 0;
         z-index: 5;
         backdrop-filter: blur(10px);
-        margin-bottom: 4px;
     }
-    
-    .sidebar-brand-modern .logo-modern {
-        width: 36px;
-        height: 36px;
+    .sidebar-brand .logo {
+        width: 38px;
+        height: 38px;
         border-radius: 10px;
         object-fit: cover;
         background: white;
         padding: 4px;
-        border: 1px solid rgba(255,255,255,0.2);
+        border: 2px solid rgba(255,255,255,0.15);
         transition: transform 0.3s ease;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     }
-    
-    .sidebar-brand-modern .logo-modern:hover {
+    .sidebar-brand .logo:hover {
         transform: rotate(-5deg) scale(1.05);
     }
-    
-    .sidebar-brand-modern .brand-text-modern {
-        color: #ffffff !important;
+    .sidebar-brand .brand-text {
+        color: white;
         font-weight: 700;
-        font-size: 0.9rem;
+        font-size: 0.95rem;
         line-height: 1.2;
-        letter-spacing: -0.01em;
+        letter-spacing: 0.5px;
+    }
+    .sidebar-brand .brand-sub {
+        color: #9EC5FE;
+        font-size: 0.65rem;
+        font-weight: 500;
+        letter-spacing: 0.3px;
     }
     
-    .sidebar-brand-modern .brand-sub-modern {
-        color: rgba(255,255,255,0.7) !important;
-        font-size: 0.55rem;
-        font-weight: 600;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        margin-top: 1px;
-    }
-    
-    .sidebar-close-btn-modern {
+    .sidebar-close-btn {
         display: none;
         background: rgba(255,255,255,0.1);
         border: none;
-        color: rgba(255,255,255,0.8) !important;
-        font-size: 0.9rem;
+        color: white;
+        font-size: 1.2rem;
         cursor: pointer;
-        padding: 5px 9px;
+        padding: 3px 8px;
         border-radius: 6px;
         transition: all 0.3s ease;
         margin-left: auto;
     }
-    
-    .sidebar-close-btn-modern:hover {
+    .sidebar-close-btn:hover {
         background: rgba(255,255,255,0.2);
-        color: #ffffff !important;
-        transform: rotate(90deg);
+        transform: scale(1.05);
+        color: white;
     }
-    
     @media (max-width: 1024px) {
-        .sidebar-close-btn-modern { display: block; }
+        .sidebar-close-btn {
+            display: block;
+        }
     }
     
     /* ================================================================
-       NAVIGATION - COMPACT SPACING
+       NAVIGATION
        ================================================================ */
-    .sidebar-nav-modern {
-        padding: 4px 8px 8px;
+    .sidebar-nav {
+        padding: 6px 8px 12px;
     }
-    
-    /* Section Labels - Compact */
-    .sidebar-nav-modern .nav-label-modern {
-        font-size: 0.52rem;
+    .sidebar-nav .nav-label {
+        font-size: 0.55rem;
         text-transform: uppercase;
         letter-spacing: 0.08em;
-        color: rgba(255,255,255,0.45) !important;
-        padding: 8px 10px 3px;
+        color: #6EA8FE;
+        padding: 8px 10px 4px;
+        margin: 8px 0 2px;
         font-weight: 700;
-        display: flex;
-        align-items: center;
-        gap: 5px;
-        position: relative;
+        opacity: 0.8;
     }
-    
-    .sidebar-nav-modern .nav-label-modern:first-of-type {
-        padding-top: 4px;
+    .sidebar-nav .nav-label:first-of-type {
+        margin-top: 0;
     }
-    
-    /* Divider line under section label */
-    .sidebar-nav-modern .nav-label-modern::after {
-        content: '';
-        flex: 1;
-        height: 1px;
-        background: linear-gradient(90deg, rgba(255,255,255,0.15), transparent);
-        margin-left: 5px;
+    .sidebar-nav .nav-label .label-icon {
+        margin-right: 4px;
     }
     
     /* ================================================================
-       SIDEBAR LINKS - COMPACT
+       SIDEBAR LINKS
        ================================================================ */
-    .sidebar-link-modern {
+    .sidebar-link {
         display: flex;
         align-items: center;
-        gap: 9px;
-        padding: 7px 10px;
-        border-radius: 7px;
-        color: rgba(255,255,255,0.85) !important;
+        gap: 10px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        color: #D2E3FC;
         text-decoration: none;
-        transition: all 0.2s ease;
-        font-size: 0.74rem;
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        font-size: 0.85rem;
         font-weight: 500;
-        margin: 1px 0;
+        margin: 2px 0;
         background: transparent;
         cursor: pointer;
         border: none;
         width: 100%;
         text-align: left;
         position: relative;
-        letter-spacing: 0.01em;
     }
-    
-    .sidebar-link-modern:hover {
-        background: rgba(255,255,255,0.12);
-        color: #ffffff !important;
-        transform: translateX(3px);
+    .sidebar-link:hover {
+        background: rgba(10, 168, 79, 0.4);
+        color: white;
+        transform: translateX(4px);
+        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.2);
     }
-    
-    .sidebar-link-modern.active {
-        background: rgba(255,255,255,0.18);
-        color: #ffffff !important;
-        box-shadow: inset 3px 0 0 #6EA8FE;
-        font-weight: 600;
+    .sidebar-link.active {
+        background: rgba(10, 168, 79, 0.5);
+        color: white;
+        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.3);
     }
-    
-    .sidebar-link-modern i {
-        width: 16px;
+    .sidebar-link.active::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 15%;
+        bottom: 15%;
+        width: 4px;
+        background: #0AA84F;
+        border-radius: 0 4px 4px 0;
+        box-shadow: 0 0 12px rgba(10, 168, 79, 0.5);
+    }
+    .sidebar-link i {
+        width: 20px;
         text-align: center;
-        font-size: 0.78rem;
+        font-size: 0.9rem;
         flex-shrink: 0;
-        color: rgba(255,255,255,0.7) !important;
-        transition: color 0.2s ease;
+        opacity: 0.8;
     }
-    
-    .sidebar-link-modern.active i {
-        color: #ffffff !important;
+    .sidebar-link:hover i,
+    .sidebar-link.active i {
+        opacity: 1;
     }
-    
-    .sidebar-link-modern:hover i {
-        color: #ffffff !important;
+    .sidebar-link .link-text {
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: 0.85rem;
     }
     
     /* ================================================================
-       BADGES - COMPACT
+       BADGES
        ================================================================ */
-    .sidebar-link-modern .badge-modern {
+    .sidebar-link .badge {
         margin-left: auto;
         background: rgba(255,255,255,0.12);
-        padding: 2px 7px;
-        border-radius: 10px;
-        font-size: 0.55rem;
-        font-weight: 700;
-        color: rgba(255,255,255,0.8) !important;
+        padding: 2px 10px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        color: white;
         transition: all 0.3s ease;
         flex-shrink: 0;
-        min-width: 18px;
+        min-width: 20px;
         text-align: center;
-        border: 1px solid rgba(255,255,255,0.1);
+        border: 1px solid rgba(255,255,255,0.05);
     }
-    
-    .sidebar-link-modern .badge-modern.danger {
-        background: rgba(239, 68, 68, 0.35);
-        color: #FCA5A5 !important;
-        border-color: rgba(239, 68, 68, 0.4);
-        animation: pulse-badge-modern 2s infinite;
+    .sidebar-link .badge.danger {
+        background: #EF4444;
+        animation: pulse-badge 2s infinite;
+        border-color: #EF4444;
     }
-    
-    .sidebar-link-modern .badge-modern.green {
-        background: rgba(52, 211, 153, 0.2);
-        color: #6EE7B7 !important;
-        border-color: rgba(52, 211, 153, 0.3);
+    .sidebar-link .badge.warning {
+        background: #D97706;
+        border-color: #D97706;
     }
-    
-    .sidebar-link-modern .badge-modern.red {
-        background: rgba(239, 68, 68, 0.35);
-        color: #FCA5A5 !important;
-        border-color: rgba(239, 68, 68, 0.4);
-        animation: pulse-badge-modern 2s infinite;
+    .sidebar-link .badge.success {
+        background: #059669;
+        border-color: #059669;
     }
-    
-    .sidebar-link-modern:hover .badge-modern {
+    .sidebar-link .badge.blue {
+        background: #0B5ED7;
+        border-color: #0B5ED7;
+    }
+    .sidebar-link .badge.purple {
+        background: #7C3AED;
+        border-color: #7C3AED;
+    }
+    .sidebar-link .badge.orange {
+        background: #EA580C;
+        border-color: #EA580C;
+    }
+    .sidebar-link .badge.teal {
+        background: #0D9488;
+        border-color: #0D9488;
+    }
+    .sidebar-link .badge.green {
+        background: #059669;
+        border-color: #059669;
+    }
+    .sidebar-link .badge.red {
+        background: #DC2626;
+        border-color: #DC2626;
+        animation: pulse-badge 2s infinite;
+    }
+    .sidebar-link:hover .badge {
         background: rgba(255,255,255,0.2);
-        color: #ffffff !important;
+        transform: scale(1.05);
+    }
+    .sidebar-link.active .badge {
+        background: rgba(255,255,255,0.2);
+        color: white;
     }
     
-    .sidebar-link-modern.active .badge-modern {
-        background: rgba(255,255,255,0.2);
-        color: #ffffff !important;
-        border-color: rgba(255,255,255,0.25);
+    @keyframes pulse-badge {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.08); }
     }
     
     /* ================================================================
        BADGE UPDATE ANIMATION
        ================================================================ */
-    .badge-update-modern {
-        animation: badgePop-modern 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    .badge-update {
+        animation: badgePop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
-    
-    @keyframes badgePop-modern {
+    @keyframes badgePop {
         0% { transform: scale(0.3); opacity: 0; }
         60% { transform: scale(1.3); }
         100% { transform: scale(1); opacity: 1; }
@@ -515,46 +601,61 @@ $initial_data = [
     /* ================================================================
        DATA CHANGED FLASH
        ================================================================ */
-    .sidebar-data-flash-modern {
-        animation: flashBlue 0.6s ease;
+    .sidebar-data-flash {
+        animation: flashGreen 0.6s ease;
     }
-    @keyframes flashBlue {
-        0% { background: rgba(52, 211, 153, 0.15); }
-        50% { background: rgba(52, 211, 153, 0.03); }
+    @keyframes flashGreen {
+        0% { background: rgba(52, 211, 153, 0.2); }
+        50% { background: rgba(52, 211, 153, 0.05); }
         100% { background: transparent; }
     }
     
     /* ================================================================
-       LOGOUT LINK - COMPACT
+       LOGOUT LINK
        ================================================================ */
-    .sidebar-link-modern.logout-link-modern {
-        border-top: 1px solid rgba(255,255,255,0.1);
-        padding-top: 9px;
-        margin-top: 8px;
-        color: rgba(252, 165, 165, 0.7) !important;
-        font-size: 0.74rem;
-        border-radius: 0;
-        background: transparent;
+    .sidebar-link.logout-link {
+        border-top: 2px solid rgba(255,255,255,0.06);
+        padding-top: 10px;
+        margin-top: 4px;
+        color: #FCA5A5;
     }
-    
-    .sidebar-link-modern.logout-link-modern:hover {
-        background: rgba(220, 38, 38, 0.2);
-        color: #FCA5A5 !important;
-        box-shadow: none;
-        transform: translateX(3px);
-        border-radius: 7px;
+    .sidebar-link.logout-link:hover {
+        background: #DC2626;
+        color: white;
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
+        transform: translateX(4px);
     }
-    
-    .sidebar-link-modern.logout-link-modern:hover i {
-        color: #FCA5A5 !important;
+    .sidebar-link.logout-link i {
+        opacity: 1;
     }
     
     /* ================================================================
-       SIDEBAR STATUS FOOTER - COMPACT
+       LIVE INDICATOR
        ================================================================ */
-    .sidebar-status-modern {
-        padding: 7px 14px;
-        border-top: 1px solid rgba(255,255,255,0.1);
+    .sidebar-live-indicator {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 0.5rem;
+        color: #34D399;
+        margin-left: auto;
+        font-weight: 500;
+    }
+    .sidebar-live-indicator .dot {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: #34D399;
+        animation: pulse-dot 1.5s infinite;
+        display: inline-block;
+    }
+    
+    /* ================================================================
+       SIDEBAR STATUS FOOTER
+       ================================================================ */
+    .sidebar-status {
+        padding: 8px 14px;
+        border-top: 2px solid rgba(255,255,255,0.06);
         display: flex;
         align-items: center;
         gap: 8px;
@@ -562,53 +663,37 @@ $initial_data = [
         position: sticky;
         bottom: 0;
         backdrop-filter: blur(10px);
-        margin-top: 4px;
     }
-    
-    .sidebar-status-modern .status-dot-modern {
+    .sidebar-status .status-dot {
         width: 6px;
         height: 6px;
         border-radius: 50%;
         display: inline-block;
+        transition: all 0.3s ease;
     }
-    
-    .sidebar-status-modern .status-dot-modern.online {
+    .sidebar-status .status-dot.online {
         background: #34D399;
-        animation: pulse-dot-modern 1.5s infinite;
-        box-shadow: 0 0 8px rgba(52, 211, 153, 0.5);
+        box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
+        animation: pulse-dot 1.5s infinite;
     }
-    
-    .sidebar-status-modern .status-dot-modern.offline {
+    .sidebar-status .status-dot.offline {
         background: #94A3B8;
     }
-    
-    .sidebar-status-modern .status-text-modern {
-        font-size: 0.58rem;
-        color: rgba(255,255,255,0.7) !important;
-        font-weight: 600;
+    .sidebar-status .status-text {
+        font-size: 0.65rem;
+        color: #D2E3FC;
+        font-weight: 500;
     }
-    
-    .sidebar-status-modern .status-time-modern {
-        font-size: 0.55rem;
-        color: rgba(255,255,255,0.5) !important;
+    .sidebar-status .update-time {
+        font-size: 0.5rem;
+        color: #6EA8FE;
         margin-left: auto;
         display: flex;
         align-items: center;
         gap: 4px;
-        font-weight: 500;
     }
     
-    .sidebar-status-modern .status-time-modern .live-dot-modern {
-        width: 5px;
-        height: 5px;
-        border-radius: 50%;
-        background: #34D399;
-        display: inline-block;
-        animation: pulse-dot-modern 1.5s infinite;
-        box-shadow: 0 0 6px rgba(52, 211, 153, 0.5);
-    }
-    
-    @keyframes pulse-dot-modern {
+    @keyframes pulse-dot {
         0%, 100% { opacity: 1; transform: scale(1); }
         50% { opacity: 0.3; transform: scale(0.8); }
     }
@@ -616,73 +701,140 @@ $initial_data = [
     /* ================================================================
        RESPONSIVE BREAKPOINTS
        ================================================================ */
-    
-    @media (min-width: 1025px) {
-        .sidebar-modern {
-            transform: translateX(0) !important;
-            z-index: 50;
-            box-shadow: 2px 0 16px rgba(11, 94, 215, 0.2);
-        }
-        #sidebarOverlayModern { display: none !important; }
-        .sidebar-close-btn-modern { display: none !important; }
-    }
-    
     @media (max-width: 1024px) {
-        .sidebar-modern {
-            width: 280px;
-            transform: translateX(-100%);
-            z-index: 9999;
+        .sidebar {
+            width: 260px;
             border-radius: 0 12px 12px 0;
-            box-shadow: 4px 0 30px rgba(11, 94, 215, 0.4);
         }
-        .sidebar-modern.open { transform: translateX(0) !important; }
-        #sidebarOverlayModern { display: none; z-index: 9998; }
-        #sidebarOverlayModern.active { display: block !important; }
-        .sidebar-brand-modern { padding: 10px 12px 8px; }
-        .sidebar-brand-modern .logo-modern { width: 32px; height: 32px; }
-        .sidebar-brand-modern .brand-text-modern { font-size: 0.85rem; }
-        .sidebar-link-modern { padding: 6px 10px; font-size: 0.7rem; gap: 8px; }
-        .sidebar-link-modern i { width: 15px; font-size: 0.72rem; }
-        .sidebar-link-modern .badge-modern { font-size: 0.52rem; padding: 2px 6px; min-width: 16px; }
-        .sidebar-nav-modern .nav-label-modern { font-size: 0.5rem; padding: 6px 8px 2px; }
-        .sidebar-status-modern { padding: 6px 12px; }
-        .sidebar-status-modern .status-text-modern { font-size: 0.55rem; }
-        .sidebar-status-modern .status-time-modern { font-size: 0.5rem; }
+        .sidebar.visible {
+            transform: translateX(0) !important;
+        }
+        .sidebar.hidden {
+            transform: translateX(-100%) !important;
+        }
+        #sidebarOverlay {
+            display: none;
+            z-index: 9998;
+        }
+        #sidebarOverlay.active {
+            display: block !important;
+        }
+        .sidebar-brand {
+            padding: 12px 12px 10px;
+        }
+        .sidebar-brand .logo {
+            width: 34px;
+            height: 34px;
+        }
+        .sidebar-brand .brand-text {
+            font-size: 0.85rem;
+        }
+        .sidebar-link {
+            padding: 6px 10px;
+            font-size: 0.8rem;
+            gap: 8px;
+        }
+        .sidebar-link i {
+            width: 18px;
+            font-size: 0.85rem;
+        }
+        .sidebar-link .badge {
+            font-size: 0.6rem;
+            padding: 1px 8px;
+        }
     }
     
     @media (max-width: 768px) {
-        .sidebar-modern { width: 290px; border-radius: 0 14px 14px 0; }
-        .sidebar-brand-modern { padding: 9px 11px 7px; }
-        .sidebar-brand-modern .logo-modern { width: 30px; height: 30px; }
-        .sidebar-brand-modern .brand-text-modern { font-size: 0.82rem; }
-        .sidebar-brand-modern .brand-sub-modern { font-size: 0.5rem; }
-        .sidebar-link-modern { padding: 6px 9px; font-size: 0.68rem; gap: 7px; }
-        .sidebar-link-modern i { width: 14px; font-size: 0.7rem; }
-        .sidebar-link-modern .badge-modern { font-size: 0.5rem; padding: 1px 6px; min-width: 15px; }
-        .sidebar-nav-modern .nav-label-modern { font-size: 0.48rem; padding: 5px 8px 2px; }
-        .sidebar-status-modern { padding: 5px 11px; }
-        .sidebar-status-modern .status-text-modern { font-size: 0.52rem; }
-        .sidebar-status-modern .status-time-modern { font-size: 0.48rem; }
+        .sidebar {
+            width: 280px;
+        }
+        .sidebar-toggle-float {
+            width: 36px;
+            height: 36px;
+            font-size: 0.85rem;
+            top: 12px;
+            left: 12px;
+        }
+        .sidebar-toggle-float .toggle-icon {
+            font-size: 0.85rem;
+        }
+        .sidebar-brand {
+            padding: 10px 12px 8px;
+        }
+        .sidebar-brand .logo {
+            width: 32px;
+            height: 32px;
+        }
+        .sidebar-brand .brand-text {
+            font-size: 0.8rem;
+        }
+        .sidebar-link {
+            padding: 5px 8px;
+            font-size: 0.75rem;
+        }
+        .sidebar-link i {
+            width: 16px;
+            font-size: 0.8rem;
+        }
     }
     
     @media (max-width: 480px) {
-        .sidebar-modern {
+        .sidebar {
             width: 100%;
             max-width: 300px;
-            border-radius: 0 16px 16px 0;
         }
-        .sidebar-brand-modern { padding: 8px 10px 6px; }
-        .sidebar-brand-modern .logo-modern { width: 28px; height: 28px; }
-        .sidebar-brand-modern .brand-text-modern { font-size: 0.78rem; }
-        .sidebar-brand-modern .brand-sub-modern { font-size: 0.48rem; }
-        .sidebar-link-modern { padding: 5px 8px; font-size: 0.65rem; gap: 6px; }
-        .sidebar-link-modern i { width: 13px; font-size: 0.65rem; }
-        .sidebar-link-modern .badge-modern { font-size: 0.48rem; padding: 1px 5px; min-width: 14px; }
-        .sidebar-nav-modern .nav-label-modern { font-size: 0.45rem; padding: 4px 7px 1px; }
-        .sidebar-status-modern { padding: 4px 10px; }
-        .sidebar-status-modern .status-text-modern { font-size: 0.48rem; }
-        .sidebar-status-modern .status-time-modern { font-size: 0.44rem; }
-        .sidebar-status-modern .status-dot-modern { width: 5px; height: 5px; }
+        .sidebar-toggle-float {
+            width: 32px;
+            height: 32px;
+            font-size: 0.75rem;
+            top: 10px;
+            left: 10px;
+        }
+        .sidebar-toggle-float .toggle-icon {
+            font-size: 0.75rem;
+        }
+        .sidebar-brand {
+            padding: 8px 10px 8px;
+        }
+        .sidebar-brand .logo {
+            width: 28px;
+            height: 28px;
+        }
+        .sidebar-brand .brand-text {
+            font-size: 0.75rem;
+        }
+        .sidebar-link {
+            padding: 4px 8px;
+            font-size: 0.7rem;
+            gap: 6px;
+        }
+        .sidebar-link i {
+            width: 14px;
+            font-size: 0.75rem;
+        }
+        .sidebar-link .badge {
+            font-size: 0.55rem;
+            padding: 1px 6px;
+            min-width: 16px;
+        }
+        .sidebar-nav .nav-label {
+            font-size: 0.45rem;
+        }
+        .sidebar-status .status-text {
+            font-size: 0.55rem;
+        }
+    }
+    
+    @media print {
+        .sidebar {
+            display: none !important;
+        }
+        #sidebarOverlay {
+            display: none !important;
+        }
+        .sidebar-toggle-float {
+            display: none !important;
+        }
     }
     
     /* ================================================================
@@ -693,35 +845,42 @@ $initial_data = [
     .gap-2 { gap: 6px; }
     .gap-3 { gap: 10px; }
     .mt-2 { margin-top: 6px; }
-    .mt-1 { margin-top: 3px; }
+    .mt-1 { margin-top: 4px; }
     .ml-auto { margin-left: auto; }
     .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 
 <!-- ================================================================ -->
+<!-- FLOATING TOGGLE BUTTON -->
+<!-- ================================================================ -->
+<button class="sidebar-toggle-float" id="sidebarToggleFloat" aria-label="Toggle Sidebar">
+    <i class="fas fa-bars toggle-icon" id="toggleFloatIcon"></i>
+</button>
+
+<!-- ================================================================ -->
 <!-- SIDEBAR OVERLAY -->
 <!-- ================================================================ -->
-<div id="sidebarOverlayModern"></div>
+<div id="sidebarOverlay"></div>
 
 <!-- ================================================================ -->
 <!-- SIDEBAR -->
 <!-- ================================================================ -->
-<aside class="sidebar-modern" id="sidebarModern">
+<aside class="sidebar hidden" id="sidebar" role="navigation" aria-label="Pharmacy Sidebar">
     
     <!-- ================================================================ -->
-    <!-- BRAND / HEADER -->
+    <!-- BRAND -->
     <!-- ================================================================ -->
-    <div class="sidebar-brand-modern">
+    <div class="sidebar-brand">
         <div class="flex items-center gap-3">
             <img src="<?= $site_logo_path ?>" 
                  alt="<?= htmlspecialchars($site_name) ?>" 
-                 class="logo-modern"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2236%22 height=%2236%22%3E%3Crect width=%2236%22 height=%2236%22 fill=%22%230B5ED7%22 rx=%2210%22/%3E%3Ctext x=%2218%22 y=%2224%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2216%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
+                 class="logo"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
             <div class="truncate">
-                <p class="brand-text-modern" id="sidebarSiteName"><?= htmlspecialchars($site_name) ?></p>
-                <p class="brand-sub-modern">💊 Pharmacy Panel</p>
+                <p class="brand-text" id="sidebarSiteName"><?= htmlspecialchars($site_name) ?></p>
+                <p class="brand-sub">💊 Pharmacy Panel</p>
             </div>
-            <button class="sidebar-close-btn-modern" id="sidebarCloseBtnModern" aria-label="Close Sidebar">
+            <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close Sidebar">
                 <i class="fas fa-times"></i>
             </button>
         </div>
@@ -730,101 +889,251 @@ $initial_data = [
     <!-- ================================================================ -->
     <!-- NAVIGATION -->
     <!-- ================================================================ -->
-    <nav class="sidebar-nav-modern">
+    <nav class="sidebar-nav" id="sidebarNav">
         
-        <!-- Pharmacy -->
-        <div class="nav-label-modern">📋 PHARMACY</div>
+        <div class="nav-label"><span class="label-icon">📋</span> Pharmacy</div>
         
-        <a href="/dispensary_system/frontend/pages/pharmacy/dashboard.php" class="sidebar-link-modern <?= isActive('dashboard.php') ?>">
-            <i class="fas fa-home"></i> Dashboard
+        <a href="/dispensary_system/frontend/pages/pharmacy/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
+            <i class="fas fa-home"></i>
+            <span class="link-text">Dashboard</span>
         </a>
         
-        <!-- Prescription Sales -->
-        <div class="nav-label-modern">💊 PRESCRIPTIONS</div>
+        <div class="nav-label"><span class="label-icon">💊</span> Prescriptions</div>
         
-        <a href="/dispensary_system/frontend/pages/pharmacy/pending_prescriptions.php" class="sidebar-link-modern <?= isActive('pending_prescriptions.php') ?>">
-            <i class="fas fa-prescription"></i> Prescriptions
-            <?php if ($pending_prescriptions > 0): ?>
-                <span class="badge-modern danger" id="sidebarPendingBadgeModern"><?= $pending_prescriptions ?></span>
-            <?php else: ?>
-                <span class="badge-modern" id="sidebarPendingBadgeModern">0</span>
-            <?php endif; ?>
+        <a href="/dispensary_system/frontend/pages/pharmacy/pending_prescriptions.php" class="sidebar-link <?= isActive('pending_prescriptions.php') ?>" id="sidebarPendingLink">
+            <i class="fas fa-prescription"></i>
+            <span class="link-text">Prescriptions</span>
+            <span class="badge <?= $pending_prescriptions > 0 ? 'danger' : '' ?>" id="sidebarPendingBadge"><?= $pending_prescriptions ?></span>
         </a>
         
-        <a href="/dispensary_system/frontend/pages/pharmacy/prescription_history.php" class="sidebar-link-modern <?= isActive('prescription_history.php') ?>">
-            <i class="fas fa-history"></i> Prescription History
-            <span class="badge-modern green" id="sidebarTotalPrescriptionsModern"><?= $total_prescriptions ?></span>
+        <a href="/dispensary_system/frontend/pages/pharmacy/prescription_history.php" class="sidebar-link <?= isActive('prescription_history.php') ?>" id="sidebarTotalPrescriptionsLink">
+            <i class="fas fa-history"></i>
+            <span class="link-text">Prescription History</span>
+            <span class="badge <?= $total_prescriptions > 0 ? 'green' : '' ?>" id="sidebarTotalPrescriptionsBadge"><?= $total_prescriptions ?></span>
         </a>
         
-        <!-- OTC Sales -->
-        <div class="nav-label-modern">🛒 OTC SALES</div>
+        <div class="nav-label"><span class="label-icon">🛒</span> OTC Sales</div>
         
-        <a href="/dispensary_system/frontend/pages/pharmacy/new_otc_sale.php" class="sidebar-link-modern <?= isActive('new_otc_sale.php') ?>">
-            <i class="fas fa-plus-circle"></i> New OTC Sale
+        <a href="/dispensary_system/frontend/pages/pharmacy/new_otc_sale.php" class="sidebar-link <?= isActive('new_otc_sale.php') ?>">
+            <i class="fas fa-plus-circle"></i>
+            <span class="link-text">New OTC Sale</span>
         </a>
         
-        <a href="/dispensary_system/frontend/pages/pharmacy/otc_history.php" class="sidebar-link-modern <?= isActive('otc_history.php') ?>">
-            <i class="fas fa-shopping-cart"></i> OTC History
-            <span class="badge-modern green" id="sidebarTotalOtcModern"><?= $total_otc ?></span>
+        <a href="/dispensary_system/frontend/pages/pharmacy/otc_history.php" class="sidebar-link <?= isActive('otc_history.php') ?>" id="sidebarTotalOtcLink">
+            <i class="fas fa-shopping-cart"></i>
+            <span class="link-text">OTC History</span>
+            <span class="badge <?= $total_otc > 0 ? 'green' : '' ?>" id="sidebarTotalOtcBadge"><?= $total_otc ?></span>
         </a>
         
-        <!-- Medicines -->
-        <div class="nav-label-modern">📦 MEDICINES</div>
+        <div class="nav-label"><span class="label-icon">📦</span> Medicines</div>
         
-        <a href="/dispensary_system/frontend/pages/pharmacy/inventory.php" class="sidebar-link-modern <?= isActive('inventory.php') ?>">
-            <i class="fas fa-warehouse"></i> Inventory
+        <a href="/dispensary_system/frontend/pages/pharmacy/inventory.php" class="sidebar-link <?= isActive('inventory.php') ?>">
+            <i class="fas fa-warehouse"></i>
+            <span class="link-text">Inventory</span>
         </a>
         
-        <a href="/dispensary_system/frontend/pages/pharmacy/low_stock.php" class="sidebar-link-modern <?= isActive('low_stock.php') ?>">
-            <i class="fas fa-exclamation-triangle"></i> Low Stock
-            <?php if ($low_stock_count > 0): ?>
-                <span class="badge-modern danger" id="sidebarLowStockBadgeModern"><?= $low_stock_count ?></span>
-            <?php else: ?>
-                <span class="badge-modern" id="sidebarLowStockBadgeModern">0</span>
-            <?php endif; ?>
+        <a href="/dispensary_system/frontend/pages/pharmacy/low_stock.php" class="sidebar-link <?= isActive('low_stock.php') ?>" id="sidebarLowStockLink">
+            <i class="fas fa-exclamation-triangle"></i>
+            <span class="link-text">Low Stock</span>
+            <span class="badge <?= $low_stock_count > 0 ? 'danger' : '' ?>" id="sidebarLowStockBadge"><?= $low_stock_count ?></span>
         </a>
         
-        <a href="/dispensary_system/frontend/pages/pharmacy/expired.php" class="sidebar-link-modern <?= isActive('expired.php') ?>">
-            <i class="fas fa-skull"></i> Expired Stock
-            <?php if ($expired_count > 0): ?>
-                <span class="badge-modern red" id="sidebarExpiredBadgeModern"><?= $expired_count ?></span>
-            <?php else: ?>
-                <span class="badge-modern" id="sidebarExpiredBadgeModern">0</span>
-            <?php endif; ?>
+        <a href="/dispensary_system/frontend/pages/pharmacy/expired.php" class="sidebar-link <?= isActive('expired.php') ?>" id="sidebarExpiredLink">
+            <i class="fas fa-skull"></i>
+            <span class="link-text">Expired Stock</span>
+            <span class="badge <?= $expired_count > 0 ? 'red' : '' ?>" id="sidebarExpiredBadge"><?= $expired_count ?></span>
         </a>
         
-        <!-- Account -->
-        <div class="nav-label-modern">👤 ACCOUNT</div>
+        <div class="nav-label"><span class="label-icon">👤</span> Account</div>
         
-        <a href="/dispensary_system/frontend/pages/pharmacy/profile.php" class="sidebar-link-modern <?= isActive('profile.php') ?>">
-            <i class="fas fa-user-circle"></i> Profile
+        <a href="/dispensary_system/frontend/pages/pharmacy/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
+            <i class="fas fa-user-circle"></i>
+            <span class="link-text">Profile</span>
         </a>
         
-        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link-modern logout-link-modern">
-            <i class="fas fa-sign-out-alt"></i> Logout
+        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link">
+            <i class="fas fa-sign-out-alt"></i>
+            <span class="link-text">Logout</span>
         </a>
         
     </nav>
     
     <!-- ================================================================ -->
-    <!-- SIDEBAR STATUS -->
+    <!-- STATUS FOOTER -->
     <!-- ================================================================ -->
-    <div class="sidebar-status-modern">
-        <span class="status-dot-modern online" id="sidebarStatusDotModern"></span>
-        <span class="status-text-modern" id="sidebarStatusTextModern">Online</span>
-        <span class="status-time-modern" id="sidebarStatusTimeModern">
-            <span class="live-dot-modern"></span>
-            <span id="sidebarLiveTimeModern"><?= date('H:i:s') ?></span>
+    <div class="sidebar-status" id="sidebarStatusFooter">
+        <span class="status-dot <?= $user_is_online ? 'online' : 'offline' ?>" id="sidebarFooterDot"></span>
+        <span class="status-text" id="sidebarFooterText"><?= $user_is_online ? 'Online' : 'Offline' ?></span>
+        <span class="update-time" id="sidebarUpdateTime">
+            <span class="sidebar-live-indicator">
+                <span class="dot"></span> Live
+            </span>
         </span>
     </div>
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - DIRECT AJAX (NO EXTERNAL API) -->
+<!-- JAVASCRIPT - SIDEBAR TOGGLE + AJAX -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // CONFIGURATION - DIRECT AJAX (NO EXTERNAL API)
+    // SIDEBAR TOGGLE - SMOOTH SLIDE TRANSITION (SAME AS LAB)
+    // ================================================================
+    (function() {
+        var sidebar = document.getElementById('sidebar');
+        var toggleBtn = document.getElementById('sidebarToggleFloat');
+        var toggleIcon = document.getElementById('toggleFloatIcon');
+        var closeBtn = document.getElementById('sidebarCloseBtn');
+        var overlay = document.getElementById('sidebarOverlay');
+        
+        if (!sidebar || !toggleBtn) {
+            console.warn('⚠️ Sidebar or toggle button not found');
+            return;
+        }
+        
+        console.log('✅ Pharmacy Sidebar toggle initialized');
+        
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'sidebarOverlay';
+            overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9998;display:none;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
+            document.body.appendChild(overlay);
+        }
+        
+        function updateToggleButton(show) {
+            if (show) {
+                toggleBtn.classList.add('show');
+                toggleBtn.style.display = 'flex';
+            } else {
+                toggleBtn.classList.remove('show');
+                toggleBtn.style.display = 'none';
+            }
+        }
+        
+        function openSidebar() {
+            sidebar.classList.remove('hidden');
+            sidebar.classList.add('visible');
+            
+            if (overlay) {
+                overlay.style.display = 'block';
+                overlay.classList.add('active');
+            }
+            document.body.style.overflow = 'hidden';
+            
+            if (toggleIcon) {
+                toggleIcon.className = 'fas fa-times toggle-icon';
+            }
+            
+            updateToggleButton(false);
+            
+            if (toggleBtn) {
+                toggleBtn.style.background = '#DC2626';
+                toggleBtn.style.boxShadow = '0 4px 16px rgba(220, 38, 38, 0.4)';
+            }
+            console.log('🔓 Sidebar opened');
+        }
+        
+        function closeSidebar() {
+            sidebar.classList.add('hidden');
+            sidebar.classList.remove('visible');
+            
+            if (overlay) {
+                overlay.style.display = 'none';
+                overlay.classList.remove('active');
+            }
+            document.body.style.overflow = '';
+            
+            if (toggleIcon) {
+                toggleIcon.className = 'fas fa-bars toggle-icon';
+            }
+            
+            updateToggleButton(true);
+            
+            if (toggleBtn) {
+                toggleBtn.style.background = '';
+                toggleBtn.style.boxShadow = '';
+            }
+            console.log('🔒 Sidebar closed');
+        }
+        
+        function toggleSidebar() {
+            if (sidebar.classList.contains('hidden')) {
+                openSidebar();
+            } else {
+                closeSidebar();
+            }
+        }
+        
+        toggleBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('🔘 Toggle button clicked!');
+            toggleSidebar();
+        });
+        
+        if (closeBtn) {
+            closeBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                closeSidebar();
+            });
+        }
+        
+        if (overlay) {
+            overlay.addEventListener('click', function(e) {
+                if (e.target === overlay) {
+                    closeSidebar();
+                }
+            });
+        }
+        
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && !sidebar.classList.contains('hidden')) {
+                closeSidebar();
+            }
+        });
+        
+        window.addEventListener('resize', function() {
+            if (window.innerWidth > 1024) {
+                sidebar.classList.remove('hidden');
+                sidebar.classList.add('visible');
+                if (overlay) {
+                    overlay.style.display = 'none';
+                    overlay.classList.remove('active');
+                }
+                if (toggleIcon) {
+                    toggleIcon.className = 'fas fa-times toggle-icon';
+                }
+                updateToggleButton(false);
+            } else {
+                if (!sidebar.classList.contains('hidden') && !sidebar.classList.contains('visible')) {
+                    sidebar.classList.add('hidden');
+                }
+            }
+        });
+        
+        if (window.innerWidth > 1024) {
+            sidebar.classList.remove('hidden');
+            sidebar.classList.add('visible');
+            if (toggleIcon) {
+                toggleIcon.className = 'fas fa-times toggle-icon';
+            }
+            updateToggleButton(false);
+        } else {
+            sidebar.classList.add('hidden');
+            sidebar.classList.remove('visible');
+            if (toggleIcon) {
+                toggleIcon.className = 'fas fa-bars toggle-icon';
+            }
+            updateToggleButton(true);
+        }
+        
+        console.log('✅ Pharmacy Sidebar toggle ready');
+        console.log('📱 State:', sidebar.classList.contains('hidden') ? 'HIDDEN' : 'VISIBLE');
+    })();
+
+    // ================================================================
+    // CONFIGURATION
     // ================================================================
     var SIDEBAR_CONFIG = {
         AJAX_URL: '/dispensary_system/backend/api/pharmacy_sidebar_ajax.php',
@@ -848,96 +1157,7 @@ $initial_data = [
     };
     
     // ================================================================
-    // SIDEBAR TOGGLE - INAITWA KUTOKA HEADER
-    // ================================================================
-    (function() {
-        function initSidebar() {
-            var sidebar = document.getElementById('sidebarModern');
-            var closeBtn = document.getElementById('sidebarCloseBtnModern');
-            var overlay = document.getElementById('sidebarOverlayModern');
-            
-            if (!sidebar) return;
-            
-            if (!overlay) {
-                overlay = document.createElement('div');
-                overlay.id = 'sidebarOverlayModern';
-                document.body.appendChild(overlay);
-            }
-            
-            function openSidebar() {
-                sidebar.classList.add('open');
-                overlay.style.display = 'block';
-                overlay.classList.add('active');
-                document.body.style.overflow = 'hidden';
-                var headerBtn = document.getElementById('sidebarToggleBtn');
-                if (headerBtn) {
-                    headerBtn.innerHTML = '<i class="fas fa-times"></i><span class="toggle-label">CLOSE</span>';
-                }
-            }
-            
-            function closeSidebar() {
-                sidebar.classList.remove('open');
-                overlay.style.display = 'none';
-                overlay.classList.remove('active');
-                document.body.style.overflow = '';
-                var headerBtn = document.getElementById('sidebarToggleBtn');
-                if (headerBtn) {
-                    headerBtn.innerHTML = '<i class="fas fa-bars"></i><span class="toggle-label">MENU</span>';
-                }
-            }
-            
-            function toggleSidebar() {
-                if (sidebar.classList.contains('open')) {
-                    closeSidebar();
-                } else {
-                    openSidebar();
-                }
-            }
-            
-            window.togglePharmacySidebar = toggleSidebar;
-            window.openPharmacySidebar = openSidebar;
-            window.closePharmacySidebar = closeSidebar;
-            
-            if (closeBtn) {
-                closeBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    closeSidebar();
-                });
-            }
-            
-            if (overlay) {
-                overlay.addEventListener('click', function(e) {
-                    if (e.target === overlay) {
-                        closeSidebar();
-                    }
-                });
-            }
-            
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape' && sidebar.classList.contains('open')) {
-                    closeSidebar();
-                }
-            });
-            
-            window.addEventListener('resize', function() {
-                if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
-                    closeSidebar();
-                }
-            });
-            
-            console.log('✅ Pharmacy Sidebar toggle ready');
-        }
-        
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initSidebar);
-        } else {
-            initSidebar();
-        }
-    })();
-
-    // ================================================================
-    // UPDATE BADGES
+    // UPDATE SIDEBAR BADGES
     // ================================================================
     function updateSidebarBadges(data) {
         if (!data) return false;
@@ -945,108 +1165,115 @@ $initial_data = [
         var hasChanges = false;
         
         // 1. Pending Prescriptions
-        var pendingBadge = document.getElementById('sidebarPendingBadgeModern');
+        var pendingBadge = document.getElementById('sidebarPendingBadge');
         if (pendingBadge && data.pending_prescriptions !== undefined) {
             var oldVal = pendingBadge.textContent;
             var newVal = data.pending_prescriptions;
             if (oldVal !== String(newVal)) {
                 hasChanges = true;
                 pendingBadge.textContent = newVal;
-                pendingBadge.className = parseInt(newVal) > 0 ? 'badge-modern danger' : 'badge-modern';
-                pendingBadge.classList.remove('badge-update-modern');
+                pendingBadge.className = parseInt(newVal) > 0 ? 'badge danger' : 'badge';
+                pendingBadge.classList.remove('badge-update');
                 void pendingBadge.offsetWidth;
-                pendingBadge.classList.add('badge-update-modern');
+                pendingBadge.classList.add('badge-update');
+                console.log('🔄 Pending: ' + oldVal + ' → ' + newVal);
             }
         }
         
         // 2. Low Stock
-        var lowStockBadge = document.getElementById('sidebarLowStockBadgeModern');
+        var lowStockBadge = document.getElementById('sidebarLowStockBadge');
         if (lowStockBadge && data.low_stock !== undefined) {
             var oldVal = lowStockBadge.textContent;
             var newVal = data.low_stock;
             if (oldVal !== String(newVal)) {
                 hasChanges = true;
                 lowStockBadge.textContent = newVal;
-                lowStockBadge.className = parseInt(newVal) > 0 ? 'badge-modern danger' : 'badge-modern';
-                lowStockBadge.classList.remove('badge-update-modern');
+                lowStockBadge.className = parseInt(newVal) > 0 ? 'badge danger' : 'badge';
+                lowStockBadge.classList.remove('badge-update');
                 void lowStockBadge.offsetWidth;
-                lowStockBadge.classList.add('badge-update-modern');
+                lowStockBadge.classList.add('badge-update');
+                console.log('🔄 Low Stock: ' + oldVal + ' → ' + newVal);
             }
         }
         
         // 3. Expired
-        var expiredBadge = document.getElementById('sidebarExpiredBadgeModern');
+        var expiredBadge = document.getElementById('sidebarExpiredBadge');
         if (expiredBadge && data.expired !== undefined) {
             var oldVal = expiredBadge.textContent;
             var newVal = data.expired;
             if (oldVal !== String(newVal)) {
                 hasChanges = true;
                 expiredBadge.textContent = newVal;
-                expiredBadge.className = parseInt(newVal) > 0 ? 'badge-modern red' : 'badge-modern';
-                expiredBadge.classList.remove('badge-update-modern');
+                expiredBadge.className = parseInt(newVal) > 0 ? 'badge red' : 'badge';
+                expiredBadge.classList.remove('badge-update');
                 void expiredBadge.offsetWidth;
-                expiredBadge.classList.add('badge-update-modern');
+                expiredBadge.classList.add('badge-update');
+                console.log('🔄 Expired: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // 4. TOTAL Prescriptions
-        var totalPrescBadge = document.getElementById('sidebarTotalPrescriptionsModern');
+        // 4. Total Prescriptions
+        var totalPrescBadge = document.getElementById('sidebarTotalPrescriptionsBadge');
         if (totalPrescBadge && data.total_prescriptions !== undefined) {
             var oldVal = totalPrescBadge.textContent;
             var newVal = data.total_prescriptions;
             if (oldVal !== String(newVal)) {
                 hasChanges = true;
                 totalPrescBadge.textContent = newVal;
-                totalPrescBadge.className = parseInt(newVal) > 0 ? 'badge-modern green' : 'badge-modern';
-                totalPrescBadge.classList.remove('badge-update-modern');
+                totalPrescBadge.className = parseInt(newVal) > 0 ? 'badge green' : 'badge';
+                totalPrescBadge.classList.remove('badge-update');
                 void totalPrescBadge.offsetWidth;
-                totalPrescBadge.classList.add('badge-update-modern');
+                totalPrescBadge.classList.add('badge-update');
+                console.log('🔄 Total Prescriptions: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // 5. TOTAL OTC
-        var totalOtcBadge = document.getElementById('sidebarTotalOtcModern');
+        // 5. Total OTC
+        var totalOtcBadge = document.getElementById('sidebarTotalOtcBadge');
         if (totalOtcBadge && data.total_otc !== undefined) {
             var oldVal = totalOtcBadge.textContent;
             var newVal = data.total_otc;
             if (oldVal !== String(newVal)) {
                 hasChanges = true;
                 totalOtcBadge.textContent = newVal;
-                totalOtcBadge.className = parseInt(newVal) > 0 ? 'badge-modern green' : 'badge-modern';
-                totalOtcBadge.classList.remove('badge-update-modern');
+                totalOtcBadge.className = parseInt(newVal) > 0 ? 'badge green' : 'badge';
+                totalOtcBadge.classList.remove('badge-update');
                 void totalOtcBadge.offsetWidth;
-                totalOtcBadge.classList.add('badge-update-modern');
+                totalOtcBadge.classList.add('badge-update');
+                console.log('🔄 Total OTC: ' + oldVal + ' → ' + newVal);
             }
         }
         
         // 6. Update timestamp
-        var timeEl = document.getElementById('sidebarLiveTimeModern');
+        var timeEl = document.getElementById('sidebarUpdateTime');
         if (timeEl) {
             var now = new Date();
             var timeStr = now.toLocaleTimeString('en-US', {
                 hour: '2-digit', minute: '2-digit', second: '2-digit'
             });
-            if (timeEl.textContent !== timeStr) {
-                timeEl.textContent = timeStr;
+            var newHtml = '<span class="sidebar-live-indicator"><span class="dot"></span> Live ' + timeStr;
+            if (timeEl.innerHTML !== newHtml) {
+                timeEl.innerHTML = newHtml;
             }
         }
         
         // Flash sidebar if data changed
         if (hasChanges) {
-            var sidebarEl = document.getElementById('sidebarModern');
+            var sidebarEl = document.getElementById('sidebar');
             if (sidebarEl) {
-                sidebarEl.classList.remove('sidebar-data-flash-modern');
+                sidebarEl.classList.remove('sidebar-data-flash');
                 void sidebarEl.offsetWidth;
-                sidebarEl.classList.add('sidebar-data-flash-modern');
+                sidebarEl.classList.add('sidebar-data-flash');
             }
             sidebarState.changeCount++;
+            console.log('📊 Sidebar updated: ' + sidebarState.changeCount + ' changes');
         }
         
         return hasChanges;
     }
 
     // ================================================================
-    // FETCH SIDEBAR DATA - DIRECT AJAX (NO EXTERNAL API)
+    // FETCH SIDEBAR DATA - DIRECT AJAX
     // ================================================================
     function fetchSidebarData(forceUpdate) {
         if (sidebarState.isUpdating && !forceUpdate) return;
@@ -1060,6 +1287,8 @@ $initial_data = [
         if (forceUpdate) {
             formData.append('force_update', '1');
         }
+        
+        console.log('📡 Fetching sidebar data via AJAX... (force: ' + (forceUpdate ? 'YES' : 'NO') + ')');
         
         fetch(SIDEBAR_CONFIG.AJAX_URL, {
             method: 'POST',
@@ -1076,12 +1305,13 @@ $initial_data = [
             sidebarState.isUpdating = false;
             
             if (data.success) {
+                console.log('📥 AJAX Response: has_changed=' + data.has_changed);
+                
                 if (data.has_changed && data.data) {
-                    var hasUpdates = updateSidebarBadges(data.data);
-                    if (hasUpdates) {
-                        sidebarState.dataHash = data.hash;
-                    }
+                    updateSidebarBadges(data.data);
+                    sidebarState.dataHash = data.hash;
                     sidebarState.hasInitialData = true;
+                    sidebarState.lastUpdate = new Date();
                     
                     var event = new CustomEvent('sidebarDataUpdated', {
                         detail: {
@@ -1092,25 +1322,28 @@ $initial_data = [
                     });
                     document.dispatchEvent(event);
                     
+                    console.log('✅ Sidebar data updated at:', sidebarState.lastUpdate.toLocaleTimeString());
+                    
                 } else if (data.has_changed === false) {
-                    var timeEl = document.getElementById('sidebarLiveTimeModern');
+                    var timeEl = document.getElementById('sidebarUpdateTime');
                     if (timeEl) {
                         var now = new Date();
                         var timeStr = now.toLocaleTimeString('en-US', {
                             hour: '2-digit', minute: '2-digit', second: '2-digit'
                         });
-                        if (timeEl.textContent !== timeStr) {
-                            timeEl.textContent = timeStr;
+                        var newHtml = '<span class="sidebar-live-indicator"><span class="dot"></span> Live ' + timeStr;
+                        if (timeEl.innerHTML !== newHtml) {
+                            timeEl.innerHTML = newHtml;
                         }
                     }
                     sidebarState.hasInitialData = true;
                 }
                 
-                var statusDot = document.getElementById('sidebarStatusDotModern');
+                var statusDot = document.getElementById('sidebarFooterDot');
                 if (statusDot) {
-                    statusDot.className = 'status-dot-modern online';
+                    statusDot.className = 'status-dot online';
                 }
-                var statusText = document.getElementById('sidebarStatusTextModern');
+                var statusText = document.getElementById('sidebarFooterText');
                 if (statusText) {
                     statusText.textContent = 'Online';
                 }
@@ -1119,16 +1352,18 @@ $initial_data = [
                 if (data.message && data.message.includes('Unauthorized')) {
                     window.location.href = '/dispensary_system/frontend/pages/login.php';
                 }
+                console.warn('⚠️ AJAX Error:', data.message);
             }
         })
         .catch(function(error) {
             sidebarState.isUpdating = false;
+            console.warn('❌ Sidebar AJAX error:', error.message);
             
-            var statusDot = document.getElementById('sidebarStatusDotModern');
+            var statusDot = document.getElementById('sidebarFooterDot');
             if (statusDot) {
-                statusDot.className = 'status-dot-modern offline';
+                statusDot.className = 'status-dot offline';
             }
-            var statusText = document.getElementById('sidebarStatusTextModern');
+            var statusText = document.getElementById('sidebarFooterText');
             if (statusText) {
                 statusText.textContent = 'Offline';
             }
@@ -1161,6 +1396,10 @@ $initial_data = [
                 fetchSidebarData(true);
             }
         }, SIDEBAR_CONFIG.FORCE_INTERVAL);
+        
+        console.log('🔄 Sidebar auto-update started (check: ' + 
+            SIDEBAR_CONFIG.CHECK_INTERVAL/1000 + 's, force: ' + 
+            SIDEBAR_CONFIG.FORCE_INTERVAL/1000 + 's)');
     }
 
     function stopSidebarAutoUpdate() {
@@ -1172,19 +1411,14 @@ $initial_data = [
             clearInterval(sidebarState.forceInterval);
             sidebarState.forceInterval = null;
         }
+        console.log('🔄 Sidebar auto-update stopped');
     }
 
-    // ================================================================
-    // MANUAL REFRESH
-    // ================================================================
     function refreshSidebarData() {
         fetchSidebarData(true);
         return true;
     }
 
-    // ================================================================
-    // EXPOSE FUNCTIONS
-    // ================================================================
     window.refreshSidebarData = refreshSidebarData;
     window.fetchSidebarData = fetchSidebarData;
     window.startSidebarAutoUpdate = startSidebarAutoUpdate;
@@ -1192,9 +1426,6 @@ $initial_data = [
     window.getSidebarState = function() { return sidebarState; };
     window.getSidebarHash = function() { return sidebarState.dataHash; };
 
-    // ================================================================
-    // VISIBILITY CHANGE
-    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopSidebarAutoUpdate();
@@ -1206,22 +1437,29 @@ $initial_data = [
         }
     });
 
-    // ================================================================
-    // DOM READY
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         setTimeout(function() {
             startSidebarAutoUpdate();
         }, 1500);
     });
 
-    // ================================================================
-    // CONSOLE LOG
-    // ================================================================
-    console.log('%c💊 Braick Pharmacy Sidebar (COMPACT BLUE THEME)', 
+    console.log('%c💊 Braick Dispensary - Pharmacy Sidebar (AJAX)', 
         'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🏥 Site: <?= htmlspecialchars($site_name) ?>', 
-        'font-size:12px; color:#34D399;');
-    console.log('%c📊 Pending: <?= $pending_prescriptions ?>, Low Stock: <?= $low_stock_count ?>, Expired: <?= $expired_count ?>', 
-        'font-size:12px; color:#F59E0B;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 
+        'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 
+        'font-size:13px; color:#6EA8FE;');
+    console.log('%c📊 Initial Data:', 'font-size:13px; font-weight:bold; color:#D97706;');
+    console.log('   Pending: <?= $pending_prescriptions ?>, Low Stock: <?= $low_stock_count ?>, Expired: <?= $expired_count ?>');
+    console.log('   Total Presc: <?= $total_prescriptions ?>, Total OTC: <?= $total_otc ?>');
+    console.log('%c⚡ Auto-Update: Every 2s (only if data changed)', 
+        'font-size:13px; color:#34D399;');
+    console.log('%c🔄 Force refresh: Every 5s (safety net)', 
+        'font-size:13px; color:#F59E0B;');
+    console.log('%c✅ SAME DESIGN AS LABORATORY SIDEBAR', 
+        'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ Font size: links 0.85rem, badges 0.65rem', 
+        'font-size:13px; color:#34D399;');
+    console.log('%c✅ Slow slide: 0.6s cubic-bezier', 
+        'font-size:13px; color:#34D399;');
 </script>

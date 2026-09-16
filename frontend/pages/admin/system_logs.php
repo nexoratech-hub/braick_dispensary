@@ -2,8 +2,11 @@
 // ================================================================
 // FILE: frontend/pages/admin/system_logs.php
 // ADMIN - SYSTEM ACTIVITY LOGS
-// With embedded header (like admin) + auto-search filter
-// Smaller header search bar
+// ✅ Uses SHARED header & sidebar (NO DUPLICATES)
+// ✅ Blue theme + full dark mode support via --page-* variables
+// ✅ Auto-search filter + scroll buttons
+// ✅ DELETE ALL + DELETE ROW functionality
+// ✅ Removed IP Address column
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -23,6 +26,7 @@ if ($_SESSION['role'] !== 'admin') {
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
         case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
@@ -38,18 +42,105 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 $user_is_online = $_SESSION['is_online'] ?? 1;
 
 $selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
-if ($selected_branch_id === 'all') {
-    $branch_id_for_query = null;
-} else {
-    $branch_id_for_query = (int)$selected_branch_id;
-}
 
 require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     die("Database connection failed: " . $e->getMessage());
+}
+
+// ================================================================
+// HANDLE DELETE ACTIONS
+// ================================================================
+$message = '';
+$message_type = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    $action = $_POST['action'];
+    
+    // DELETE SINGLE ROW
+    if ($action === 'delete_log') {
+        $log_id = (int)($_POST['log_id'] ?? 0);
+        
+        if ($log_id > 0) {
+            try {
+                $stmt = $db->prepare("DELETE FROM activity_logs WHERE id = ?");
+                $stmt->execute([$log_id]);
+                
+                $_SESSION['syslogs_message'] = "✅ Log entry #$log_id deleted successfully!";
+                $_SESSION['syslogs_message_type'] = 'success';
+            } catch (Exception $e) {
+                $_SESSION['syslogs_message'] = "❌ Error deleting log: " . $e->getMessage();
+                $_SESSION['syslogs_message_type'] = 'error';
+            }
+        }
+        
+        header('Location: system_logs.php?branch=' . urlencode($selected_branch_id));
+        exit;
+    }
+    
+    // DELETE ALL LOGS (with optional filters)
+    if ($action === 'delete_all_logs') {
+        try {
+            $delete_where = "1=1";
+            $delete_params = [];
+            
+            // Respect current filters when deleting all
+            if (!empty($_POST['filter_action'])) { 
+                $delete_where .= " AND action = ?"; 
+                $delete_params[] = $_POST['filter_action']; 
+            }
+            if (!empty($_POST['filter_user']) && (int)$_POST['filter_user'] > 0) { 
+                $delete_where .= " AND user_id = ?"; 
+                $delete_params[] = (int)$_POST['filter_user']; 
+            }
+            if (!empty($_POST['filter_date_from'])) { 
+                $delete_where .= " AND DATE(created_at) >= ?"; 
+                $delete_params[] = $_POST['filter_date_from']; 
+            }
+            if (!empty($_POST['filter_date_to'])) { 
+                $delete_where .= " AND DATE(created_at) <= ?"; 
+                $delete_params[] = $_POST['filter_date_to']; 
+            }
+            if (isset($_POST['filter_branch']) && $_POST['filter_branch'] !== 'all' && is_numeric($_POST['filter_branch'])) {
+                $delete_where .= " AND branch_id = ?";
+                $delete_params[] = (int)$_POST['filter_branch'];
+            }
+            
+            // Count first
+            $count_stmt = $db->prepare("SELECT COUNT(*) as c FROM activity_logs WHERE $delete_where");
+            $count_stmt->execute($delete_params);
+            $delete_count = (int)($count_stmt->fetch(PDO::FETCH_ASSOC)['c'] ?? 0);
+            
+            if ($delete_count > 0) {
+                $stmt = $db->prepare("DELETE FROM activity_logs WHERE $delete_where");
+                $stmt->execute($delete_params);
+                
+                $_SESSION['syslogs_message'] = "✅ <strong>$delete_count</strong> log entries deleted successfully!";
+                $_SESSION['syslogs_message_type'] = 'success';
+            } else {
+                $_SESSION['syslogs_message'] = "ℹ️ No logs found to delete with current filters.";
+                $_SESSION['syslogs_message_type'] = 'info';
+            }
+        } catch (Exception $e) {
+            $_SESSION['syslogs_message'] = "❌ Error deleting logs: " . $e->getMessage();
+            $_SESSION['syslogs_message_type'] = 'error';
+        }
+        
+        header('Location: system_logs.php?branch=' . urlencode($selected_branch_id));
+        exit;
+    }
+}
+
+// Get flash message
+if (isset($_SESSION['syslogs_message'])) {
+    $message = $_SESSION['syslogs_message'];
+    $message_type = $_SESSION['syslogs_message_type'] ?? 'info';
+    unset($_SESSION['syslogs_message']);
+    unset($_SESSION['syslogs_message_type']);
 }
 
 // ================================================================
@@ -60,103 +151,6 @@ try {
     $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $branches = []; }
-
-// ================================================================
-// SIDEBAR STATISTICS
-// ================================================================
-$total_employees_sidebar = 0;
-$total_doctors_sidebar = 0;
-$total_branches_sidebar = 0;
-$module_counts = ['pharmacy' => 0, 'reception' => 0, 'laboratory' => 0, 'cashier' => 0];
-$total_patients_sidebar = 0;
-$today_patients_sidebar = 0;
-$total_services_sidebar = 0;
-$today_services_sidebar = 0;
-$pending_prescriptions_sidebar = 0;
-$pending_lab_tests_sidebar = 0;
-
-try {
-    $stats_branch = $selected_branch_id;
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin' AND status = 'active'");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE role != 'admin' AND status = 'active' AND branch_id = ?");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $total_employees_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ?");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $total_doctors_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    $modules = ['pharmacy', 'reception', 'laboratory', 'cashier'];
-    foreach ($modules as $module) {
-        if ($stats_branch === 'all') {
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE role = ? AND status = 'active'");
-            $stmt->execute([$module]);
-        } else {
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE role = ? AND status = 'active' AND branch_id = ?");
-            $stmt->execute([$module, (int)$stats_branch]);
-        }
-        $module_counts[$module] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    }
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM patients");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $total_patients_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM patients WHERE DATE(created_at) = CURDATE()");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $today_patients_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM bill_items WHERE status != 'cancelled'");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM bill_items WHERE branch_id = ? AND status != 'cancelled'");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $total_services_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM bill_items WHERE status != 'cancelled' AND DATE(created_at) = CURDATE()");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM bill_items WHERE branch_id = ? AND status != 'cancelled' AND DATE(created_at) = CURDATE()");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $today_services_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM prescriptions WHERE status IN ('pending', 'confirmed')");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status IN ('pending', 'confirmed')");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $pending_prescriptions_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests WHERE status IN ('pending', 'in_progress')");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = ? AND status IN ('pending', 'in_progress')");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $pending_lab_tests_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
-    $total_branches_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-} catch (Exception $e) {}
 
 // ================================================================
 // FILTERS
@@ -172,33 +166,17 @@ $date_to = isset($_GET['date_to']) ? trim($_GET['date_to']) : '';
 $where = "1=1";
 $params = [];
 
-if (!empty($action_filter)) {
-    $where .= " AND al.action = ?";
-    $params[] = $action_filter;
-}
-
-if ($user_filter > 0) {
-    $where .= " AND al.user_id = ?";
-    $params[] = $user_filter;
-}
-
-if (!empty($date_from)) {
-    $where .= " AND DATE(al.created_at) >= ?";
-    $params[] = $date_from;
-}
-
-if (!empty($date_to)) {
-    $where .= " AND DATE(al.created_at) <= ?";
-    $params[] = $date_to;
-}
-
+if (!empty($action_filter)) { $where .= " AND al.action = ?"; $params[] = $action_filter; }
+if ($user_filter > 0) { $where .= " AND al.user_id = ?"; $params[] = $user_filter; }
+if (!empty($date_from)) { $where .= " AND DATE(al.created_at) >= ?"; $params[] = $date_from; }
+if (!empty($date_to)) { $where .= " AND DATE(al.created_at) <= ?"; $params[] = $date_to; }
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     $where .= " AND al.branch_id = ?";
     $params[] = (int)$selected_branch_id;
 }
 
 // ================================================================
-// FETCH ALL LOGS (NO PAGINATION)
+// FETCH LOGS
 // ================================================================
 $logs = [];
 try {
@@ -288,795 +266,538 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     }
 }
 
-$unread_notifications = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-} catch (Exception $e) {}
-
-$is_dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true';
+// ================================================================
+// INCLUDE SHARED HEADER & SIDEBAR
+// ================================================================
+include_once '../../components/admin_header.php';
+include_once '../../components/admin_sidebar.php';
 ?>
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= $is_dark_mode ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>System Logs - Braick Dispensary</title>
-    
-    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
-    <link rel="apple-touch-icon" href="<?= $logo_path ?>">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
-    <style>
-        :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #E8F0FE;
-            --success: #059669;
-            --success-light: #D1FAE5;
-            --warning: #D97706;
-            --warning-light: #FEF3C7;
-            --danger: #DC2626;
-            --danger-light: #FEE2E2;
-            --purple: #7C3AED;
-            --purple-light: #EDE9FE;
-            --bg-body: #F1F5F9;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --border-color: #E2E8F0;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --text-muted: #94A3B8;
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --border-color: #334155;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --text-muted: #64748B;
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s, color 0.3s;
-        }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ============================================================
-           SIDEBAR
-           ============================================================ */
-        .sidebar {
-            position: fixed; top: 0; left: 0; bottom: 0;
-            width: 270px;
-            background: linear-gradient(180deg, #0B4EA8 0%, #0A3D7A 100%);
-            color: white; z-index: 50; overflow-y: auto;
-        }
-        
-        .sidebar-brand {
-            padding: 18px 16px 14px;
-            border-bottom: 2px solid rgba(255,255,255,0.08);
-            background: rgba(0,0,0,0.1);
-            position: sticky; top: 0; z-index: 5;
-        }
-        
-        .sidebar-brand .logo {
-            width: 42px; height: 42px; border-radius: 10px;
-            background: white; padding: 4px;
-        }
-        
-        .sidebar-brand .brand-text { color: white; font-weight: 700; font-size: 0.95rem; }
-        .sidebar-brand .brand-sub { color: #9EC5FE; font-size: 0.65rem; font-weight: 500; }
-        
-        .sidebar-branch-selector {
-            padding: 10px 14px;
-            border-bottom: 2px solid rgba(255,255,255,0.06);
-            background: rgba(0,0,0,0.05);
-        }
-        
-        .sidebar-branch-selector select {
-            width: 100%; padding: 7px 10px; border-radius: 8px; border: none;
-            background: rgba(255,255,255,0.12); color: white; font-size: 0.75rem;
-            outline: none; cursor: pointer;
-        }
-        
-        .sidebar-branch-selector select option { background: #0B4EA8; color: white; }
-        
-        .sidebar-nav { padding: 10px 8px 20px; }
-        
-        .sidebar-nav .nav-label {
-            font-size: 0.5rem; text-transform: uppercase;
-            letter-spacing: 0.08em; color: #6EA8FE;
-            padding: 8px 10px 4px; margin: 8px 0 2px;
-            font-weight: 700;
-        }
-        
-        .sidebar-link {
-            display: flex; align-items: center; gap: 10px;
-            padding: 8px 12px; border-radius: 8px;
-            color: #D2E3FC; text-decoration: none;
-            font-size: 0.8rem; font-weight: 500;
-            margin: 1px 0;
-        }
-        
-        .sidebar-link:hover {
-            background: rgba(10, 168, 79, 0.4); color: white;
-            transform: translateX(4px);
-        }
-        
-        .sidebar-link.active {
-            background: rgba(10, 168, 79, 0.5); color: white;
-        }
-        
-        .sidebar-link i { width: 20px; text-align: center; font-size: 0.9rem; }
-        
-        .sidebar-link .badge {
-            margin-left: auto; background: rgba(255,255,255,0.12);
-            padding: 1px 8px; border-radius: 20px;
-            font-size: 0.6rem; font-weight: 600;
-        }
-        
-        .sidebar-status {
-            padding: 10px 16px; border-top: 2px solid rgba(255,255,255,0.06);
-            display: flex; align-items: center; gap: 10px;
-            background: rgba(0,0,0,0.1); position: sticky; bottom: 0;
-        }
-        
-        .sidebar-status .status-dot { width: 8px; height: 8px; border-radius: 50%; }
-        .sidebar-status .status-dot.online { background: #34D399; }
-        .sidebar-status .status-dot.offline { background: #94A3B8; }
-        .sidebar-status .status-text { font-size: 0.65rem; color: #D2E3FC; }
-        
-        @media (max-width: 1024px) {
-            .sidebar { width: 280px; transform: translateX(-100%); z-index: 9999; transition: transform 0.3s; }
-            .sidebar.open { transform: translateX(0) !important; }
-        }
-        
-        /* ============================================================
-           EMBEDDED HEADER (SMALLER SEARCH BAR)
-           ============================================================ */
-        .embedded-header {
-            position: fixed; top: 0; left: 270px; right: 0;
-            height: 68px; background: var(--bg-nav); z-index: 40;
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 0 24px; border-bottom: 2px solid var(--border-color);
-        }
-        
-        /* ✅ SMALLER SEARCH BAR */
-        .search-wrapper {
-            display: flex; 
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 8px;
-            border: 2px solid var(--border-color);
-            flex: 0 1 auto;
-            max-width: 260px;
-            min-width: 160px;
-            height: 36px;
-            transition: border-color 0.3s;
-        }
-        
-        .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
-        }
-        
-        .search-wrapper i {
-            color: var(--text-muted);
-            margin-left: 10px;
-            font-size: 0.75rem;
-            pointer-events: none;
-        }
-        
-        .search-wrapper input {
-            border: none; 
-            background: transparent; 
-            padding: 4px 8px;
-            width: 100%; 
-            font-size: 0.75rem; 
-            outline: none;
-            color: var(--text-primary);
-            height: 100%;
-        }
-        
-        .search-wrapper input::placeholder {
-            font-size: 0.72rem;
-            color: var(--text-muted);
-        }
-        
-        .search-wrapper .search-btn {
-            background: var(--primary); 
-            color: white; 
-            border: none;
-            padding: 0 12px;
-            border-radius: 0 6px 6px 0;
-            cursor: pointer; 
-            font-size: 0.72rem;
-            height: 100%;
-            display: flex; 
-            align-items: center;
-            transition: background 0.3s;
-        }
-        
-        .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        
-        .datetime { 
-            font-size: 0.75rem; 
-            color: var(--text-secondary); 
-            display: flex; 
-            align-items: center; 
-            gap: 6px; 
-            white-space: nowrap;
-        }
-        
-        .avatar { 
-            width: 38px; 
-            height: 38px; 
-            border-radius: 50%; 
-            object-fit: cover; 
-            border: 2px solid var(--border-color); 
-        }
-        
-        .icon-btn {
-            width: 36px; 
-            height: 36px; 
-            border-radius: 50%;
-            display: flex; 
-            align-items: center; 
-            justify-content: center;
-            color: var(--text-secondary); 
-            background: transparent;
-            border: none; 
-            cursor: pointer; 
-            position: relative;
-        }
-        
-        .icon-btn:hover { background: var(--bg-body); color: var(--primary); }
-        
-        .notif-dot {
-            position: absolute; top: 4px; right: 4px;
-            width: 8px; height: 8px; border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--text-muted); }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body); 
-            border: 2px solid var(--border-color);
-            border-radius: 8px; 
-            padding: 5px 10px;
-            cursor: pointer; 
-            font-size: 0.75rem; 
-            color: var(--text-primary);
-            display: flex; 
-            align-items: center; 
-            gap: 5px;
-            transition: border-color 0.3s;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-        }
-        
-        .branch-selector {
-            background: var(--bg-body); 
-            border: 2px solid var(--border-color);
-            border-radius: 8px; 
-            padding: 5px 10px;
-            font-size: 0.75rem; 
-            color: var(--text-primary);
-            outline: none; 
-            cursor: pointer;
-            max-width: 150px;
-        }
-        
-        /* ============================================================
-           MAIN CONTENT
-           ============================================================ */
-        .main-content {
-            margin-left: 270px; margin-top: 68px;
-            padding: 28px 32px; min-height: calc(100vh - 68px);
-        }
-        
-        /* ============================================================
-           PAGE HEADER
-           ============================================================ */
-        .page-header-box {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            border-radius: 16px; padding: 18px 24px;
-            margin-bottom: 20px;
-            display: flex; justify-content: space-between; align-items: center;
-            flex-wrap: wrap; gap: 10px;
-        }
-        
-        .page-header-box .page-title {
-            color: white; font-size: 1.4rem; font-weight: 700;
-            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-        }
-        
-        .page-header-box .role-badge {
-            background: rgba(255,255,255,0.2); color: white;
-            padding: 2px 10px; border-radius: 20px;
-            font-size: 0.55rem; font-weight: 600; text-transform: uppercase;
-        }
-        
-        .page-header-box .branch-name {
-            background: rgba(255,255,255,0.15);
-            padding: 2px 12px; border-radius: 20px;
-            font-size: 0.7rem; font-weight: 500; color: white;
-        }
-        
-        .page-header-box .btn-back {
-            background: var(--success); color: white;
-            padding: 5px 16px; border-radius: 20px;
-            font-size: 0.7rem; font-weight: 600;
-            text-decoration: none;
-            display: inline-flex; align-items: center; gap: 6px;
-        }
-        
-        .page-header-box .page-subtitle {
-            color: rgba(255,255,255,0.85); font-size: 0.8rem;
-            display: flex; align-items: center; gap: 6px;
-            flex-wrap: wrap; margin-top: 4px;
-        }
-        
-        /* ============================================================
-           STATS
-           ============================================================ */
-        .stats-grid {
-            display: grid; grid-template-columns: repeat(4, 1fr);
-            gap: 14px; margin-bottom: 20px;
-        }
-        
-        .stat-card {
-            border-radius: 12px; padding: 16px 18px;
-            color: white; min-height: 85px;
-            text-decoration: none;
-            transition: transform 0.3s;
-        }
-        
-        .stat-card:hover { transform: translateY(-4px); }
-        
-        .stat-card .stat-number { font-size: 1.6rem; font-weight: 700; }
-        .stat-card .stat-label {
-            font-size: 0.6rem; color: rgba(255,255,255,0.9);
-            font-weight: 500; text-transform: uppercase; margin-top: 2px;
-        }
-        .stat-card .stat-icon { font-size: 1.3rem; opacity: 0.7; float: right; margin-top: -5px; }
-        
-        .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .stat-card.green { background: linear-gradient(135deg, #059669, #047857); }
-        .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
-        .stat-card.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-        
-        /* ============================================================
-           CARD
-           ============================================================ */
-        .card {
-            background: var(--bg-card); border-radius: 12px;
-            padding: 14px 18px;
-            border: 2px solid var(--border-color);
-            margin-bottom: 20px;
-        }
-        
-        /* ============================================================
-           FILTER FORM
-           ============================================================ */
-        .filter-form {
-            display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
-        }
-        
-        .filter-form select,
-        .filter-form input[type="date"] {
-            padding: 8px 12px;
-            border: 2px solid var(--border-color);
-            border-radius: 8px; font-size: 0.8rem;
-            background: var(--bg-card); color: var(--text-primary);
-            outline: none;
-        }
-        
-        .filter-form select:focus,
-        .filter-form input:focus {
-            border-color: var(--primary);
-        }
-        
-        .btn-search {
-            padding: 8px 20px; border-radius: 8px;
-            font-weight: 600; font-size: 0.8rem;
-            border: none; background: var(--primary);
-            color: white; cursor: pointer;
-            display: inline-flex; align-items: center; gap: 6px;
-        }
-        
-        .btn-search:hover { background: var(--primary-dark); }
-        
-        .btn-reset {
-            padding: 8px 16px; border-radius: 8px;
-            font-weight: 600; font-size: 0.8rem;
-            border: 2px solid var(--border-color);
-            background: transparent; color: var(--text-secondary);
-            text-decoration: none;
-            display: inline-flex; align-items: center; gap: 6px;
-        }
-        
-        .btn-reset:hover { border-color: var(--danger); color: var(--danger); }
-        
-        /* ============================================================
-           TABLE HEADER BAR
-           ============================================================ */
-        .table-header-bar {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 12px;
-            margin-bottom: 12px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid var(--border-color);
-        }
-        
-        .table-header-left {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            flex: 1;
-            min-width: 0;
-        }
-        
-        .table-header-right {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-shrink: 0;
-        }
-        
-        .table-search-box {
-            position: relative;
-            min-width: 280px;
-            flex: 1;
-            max-width: 400px;
-        }
-        
-        .table-search-box i {
-            position: absolute;
-            left: 14px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: rgba(255,255,255,0.9);
-            font-size: 0.85rem;
-            pointer-events: none;
-            z-index: 1;
-        }
-        
-        .table-search-box input {
-            width: 100%;
-            padding: 10px 14px 10px 40px;
-            border: 2px solid var(--primary);
-            border-radius: 10px;
-            font-size: 0.85rem;
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            color: white;
-            outline: none;
-            font-weight: 500;
-            height: 42px;
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
-        }
-        
-        .table-search-box input::placeholder { color: rgba(255,255,255,0.85); }
-        
-        .table-search-box input:focus {
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.2);
-        }
-        
-        .scroll-btn-header {
-            width: 38px; height: 38px; border-radius: 8px;
-            border: 2px solid var(--border-color);
-            background: var(--bg-card); color: var(--text-primary);
-            cursor: pointer;
-            display: inline-flex; align-items: center; justify-content: center;
-            transition: all 0.3s;
-        }
-        
-        .scroll-btn-header:hover {
-            background: var(--primary); border-color: var(--primary); color: white;
-        }
-        
-        .scroll-btn-header:disabled { opacity: 0.35; cursor: not-allowed; }
-        
-        .search-results-info {
-            font-size: 0.7rem; color: var(--primary);
-            padding: 6px 12px; background: var(--primary-light);
-            border-radius: 8px; display: none;
-            font-weight: 600; border: 1px solid var(--primary);
-        }
-        
-        .result-count { font-size: 0.75rem; color: var(--text-secondary); }
-        .result-count strong { color: var(--primary); }
-        
-        /* ============================================================
-           TABLE
-           ============================================================ */
-        .table-scroll-container {
-            overflow-x: auto; overflow-y: auto;
-            max-height: 600px;
-        }
-        
-        .table-scroll-container::-webkit-scrollbar { height: 8px; width: 8px; }
-        .table-scroll-container::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
-        
-        .data-table {
-            width: 100%; min-width: 1100px;
-            border-collapse: separate; border-spacing: 0;
-            font-size: 0.78rem;
-        }
-        
-        .data-table thead th {
-            position: sticky; top: 0; z-index: 10;
-            background: var(--primary); color: white;
-            padding: 10px 12px;
-            font-size: 0.62rem; text-transform: uppercase;
-            font-weight: 700; white-space: nowrap; text-align: left;
-        }
-        
-        .data-table thead th:first-child { border-radius: 8px 0 0 0; }
-        .data-table thead th:last-child { border-radius: 0 8px 0 0; }
-        
-        .data-table tbody tr:nth-child(even) { background: var(--primary-light); }
-        .data-table tbody tr:hover td { background: var(--success-light); }
-        
-        [data-theme="dark"] .data-table tbody tr:nth-child(even) { background: #1E293B; }
-        [data-theme="dark"] .data-table tbody tr:hover td { background: #1A3A2A; }
-        
-        .data-table td {
-            padding: 10px 12px;
-            border-bottom: 1px solid var(--border-color);
-            vertical-align: middle;
-        }
-        
-        .badge {
-            display: inline-flex; align-items: center; gap: 4px;
-            padding: 2px 10px; border-radius: 12px;
-            font-size: 0.6rem; font-weight: 600;
-        }
-        
-        .badge-blue { background: var(--primary-light); color: var(--primary); }
-        .badge-green { background: var(--success-light); color: var(--success); }
-        .badge-orange { background: var(--warning-light); color: var(--warning); }
-        .badge-red { background: var(--danger-light); color: var(--danger); }
-        .badge-purple { background: var(--purple-light); color: var(--purple); }
-        .badge-gray { background: #F1F5F9; color: var(--text-secondary); }
-        
-        [data-theme="dark"] .badge-gray { background: #334155; color: #94A3B8; }
-        
-        .no-results-row td {
-            text-align: center;
-            padding: 40px 20px !important;
-            color: var(--text-secondary);
-        }
-        
-        .no-results-row i {
-            font-size: 2.5rem; color: var(--border-color);
-            display: block; margin-bottom: 10px;
-        }
-        
-        /* ============================================================
-           FOOTER
-           ============================================================ */
-        .footer {
-            padding: 10px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 16px; text-align: center;
-            font-size: 0.6rem; color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
-        /* ============================================================
-           RESPONSIVE
-           ============================================================ */
-        @media (max-width: 1024px) {
-            .main-content { margin-left: 0; padding: 14px; }
-            .embedded-header { left: 0; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-        }
-        
-        @media (max-width: 768px) {
-            .stats-grid { grid-template-columns: 1fr 1fr; }
-            .page-header-box { flex-direction: column; align-items: stretch; }
-            .filter-form { flex-direction: column; align-items: stretch; }
-            .table-header-bar { flex-direction: column; align-items: stretch; }
-            .table-search-box { min-width: 100%; max-width: 100%; }
-            
-            /* ✅ Smaller header search on mobile */
-            .search-wrapper {
-                max-width: 180px;
-                min-width: 120px;
-                height: 34px;
-            }
-            
-            .search-wrapper input {
-                font-size: 0.7rem;
-                padding: 4px 6px;
-            }
-            
-            .search-wrapper .search-btn {
-                padding: 0 10px;
-                font-size: 0.68rem;
-            }
-            
-            .datetime { display: none; }
-        }
-        
-        @media (max-width: 480px) {
-            .search-wrapper {
-                max-width: 140px;
-                min-width: 100px;
-                height: 32px;
-            }
-            
-            .search-wrapper input {
-                font-size: 0.65rem;
-            }
-            
-            .search-wrapper i {
-                font-size: 0.65rem;
-                margin-left: 8px;
-            }
-            
-            .search-wrapper .search-btn {
-                padding: 0 8px;
-                font-size: 0.65rem;
-            }
-        }
-    </style>
-</head>
-<body>
 
-<!-- SIDEBAR OVERLAY -->
-<div id="sidebarOverlay" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:45;display:none;"></div>
+<!-- ================================================================
+     PAGE-SPECIFIC CSS
+     ================================================================ -->
+<style>
+    /* PAGE HEADER */
+    .page-header-syslogs {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        border-radius: 16px;
+        padding: 18px 24px;
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+        position: relative;
+        overflow: hidden;
+    }
 
-<!-- SIDEBAR -->
-<aside class="sidebar" id="sidebar">
-    <div class="sidebar-brand">
-        <div style="display:flex;align-items:center;gap:10px;">
-            <img src="<?= $logo_path ?>" alt="Braick Logo" class="logo" onerror="this.style.display='none'">
-            <div>
-                <p class="brand-text">Braick Dispensary</p>
-                <p class="brand-sub">👑 Super Admin</p>
-            </div>
-        </div>
-    </div>
-    
-    <div class="sidebar-branch-selector">
-        <select onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-    </div>
-    
-    <nav class="sidebar-nav">
-        <div class="nav-label">📋 Main Menu</div>
-        <a href="dashboard.php?branch=<?= $selected_branch_id ?>" class="sidebar-link"><i class="fas fa-home"></i> <span>Dashboard</span></a>
-        <a href="employees.php?branch=<?= $selected_branch_id ?>" class="sidebar-link"><i class="fas fa-users"></i> <span>Employees</span><span class="badge"><?= $total_employees_sidebar ?></span></a>
-        <a href="patients.php?branch=<?= $selected_branch_id ?>" class="sidebar-link"><i class="fas fa-user-injured"></i> <span>Patients</span><span class="badge"><?= $total_patients_sidebar ?></span></a>
-        <a href="inventory.php?branch=<?= $selected_branch_id ?>" class="sidebar-link"><i class="fas fa-warehouse"></i> <span>Inventory</span></a>
-        
-        <div class="nav-label">⚙️ Modules</div>
-        <a href="doctors_list.php?branch=<?= $selected_branch_id ?>" class="sidebar-link"><i class="fas fa-user-md"></i> <span>Doctors</span><span class="badge"><?= $total_doctors_sidebar ?></span></a>
-        <a href="view_pharmacy.php?branch=<?= $selected_branch_id ?>" class="sidebar-link"><i class="fas fa-prescription"></i> <span>Pharmacy</span><span class="badge"><?= $module_counts['pharmacy'] ?? 0 ?></span></a>
-        <a href="view_reception.php?branch=<?= $selected_branch_id ?>" class="sidebar-link"><i class="fas fa-headset"></i> <span>Reception</span><span class="badge"><?= $module_counts['reception'] ?? 0 ?></span></a>
-        <a href="view_laboratory.php?branch=<?= $selected_branch_id ?>" class="sidebar-link"><i class="fas fa-flask"></i> <span>Laboratory</span><span class="badge"><?= $module_counts['laboratory'] ?? 0 ?></span></a>
-        <a href="view_cashier.php?branch=<?= $selected_branch_id ?>" class="sidebar-link"><i class="fas fa-cash-register"></i> <span>Cashier</span><span class="badge"><?= $module_counts['cashier'] ?? 0 ?></span></a>
-        
-        <div class="nav-label">💼 Management</div>
-        <a href="branches.php?branch=<?= $selected_branch_id ?>" class="sidebar-link"><i class="fas fa-store-alt"></i> <span>Branches</span><span class="badge"><?= $total_branches_sidebar ?></span></a>
-        <a href="departments.php?branch=<?= $selected_branch_id ?>" class="sidebar-link"><i class="fas fa-building"></i> <span>Departments</span></a>
-        <a href="reports.php?branch=<?= $selected_branch_id ?>" class="sidebar-link"><i class="fas fa-chart-bar"></i> <span>Reports</span></a>
-        
-        <div class="nav-label">🔧 System</div>
-        <a href="settings.php?branch=<?= $selected_branch_id ?>" class="sidebar-link"><i class="fas fa-cog"></i> <span>Settings</span></a>
-        <a href="system_logs.php?branch=<?= $selected_branch_id ?>" class="sidebar-link active"><i class="fas fa-history"></i> <span>System Logs</span></a>
-        
-        <div class="nav-label">👤 Account</div>
-        <a href="profile.php" class="sidebar-link"><i class="fas fa-user-circle"></i> <span>Profile</span></a>
-        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link" style="color:#FCA5A5;"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
-    </nav>
-    
-    <div class="sidebar-status">
-        <span class="status-dot <?= $user_is_online ? 'online' : 'offline' ?>"></span>
-        <span class="status-text"><?= $user_is_online ? 'Online' : 'Offline' ?></span>
-    </div>
-</aside>
+    .page-header-syslogs::before {
+        content: '';
+        position: absolute;
+        top: -60%; right: -10%;
+        width: 400px; height: 400px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
+    }
 
-<!-- ============================================================
-     EMBEDDED HEADER (SMALLER SEARCH BAR)
-     ============================================================ -->
-<header class="embedded-header">
-    <div style="display:flex;align-items:center;gap:12px;flex:1;">
-        <button id="sidebarToggle" class="icon-btn" style="display:none;">
-            <i class="fas fa-bars"></i>
-        </button>
-        
-        <!-- ✅ SMALLER SEARCH BAR -->
-        <div class="search-wrapper">
-            <i class="fas fa-search"></i>
-            <input type="text" id="globalSearchInput" placeholder="Search...">
-            <button class="search-btn" onclick="globalSearch()"><i class="fas fa-search"></i></button>
-        </div>
-    </div>
-    
-    <div style="display:flex;align-items:center;gap:10px;">
-        <select class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime">
-            <i class="fas fa-clock" style="color:#059669;"></i>
-            <span id="clockDisplay"><?= date('d M Y • H:i:s') ?></span>
-        </span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn" onclick="window.location.href='notifications.php'">
-            <i class="fas fa-bell"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar" onerror="this.style.display='none'">
-        </a>
-    </div>
-</header>
+    .page-header-syslogs .page-title-syslogs {
+        color: white;
+        font-size: 1.4rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+    }
 
-<!-- ============================================================
-     MAIN CONTENT
-     ============================================================ -->
+    .page-header-syslogs .role-badge-syslogs {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 2px 10px;
+        border-radius: 20px;
+        font-size: 0.55rem;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+
+    .page-header-syslogs .branch-name-syslogs {
+        background: rgba(255,255,255,0.15);
+        padding: 2px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        color: white;
+    }
+
+    .page-header-syslogs .btn-back-syslogs {
+        background: #059669;
+        color: white;
+        padding: 5px 16px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        position: relative;
+        z-index: 1;
+    }
+
+    .page-header-syslogs .btn-back-syslogs:hover {
+        background: #047857;
+        transform: translateY(-1px);
+        color: white;
+    }
+
+    .page-header-syslogs .page-subtitle-syslogs {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.8rem;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 4px;
+    }
+
+    /* STATS */
+    .stats-grid-syslogs {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 14px;
+        margin-bottom: 20px;
+    }
+
+    .stat-card-syslogs {
+        border-radius: 12px;
+        padding: 16px 18px;
+        color: white;
+        min-height: 85px;
+        text-decoration: none;
+        transition: transform 0.3s;
+    }
+
+    .stat-card-syslogs:hover {
+        transform: translateY(-4px);
+        color: white;
+    }
+
+    .stat-card-syslogs .stat-number-syslogs {
+        font-size: 1.6rem;
+        font-weight: 700;
+    }
+
+    .stat-card-syslogs .stat-label-syslogs {
+        font-size: 0.6rem;
+        color: rgba(255,255,255,0.9);
+        font-weight: 500;
+        text-transform: uppercase;
+        margin-top: 2px;
+    }
+
+    .stat-card-syslogs .stat-icon-syslogs {
+        font-size: 1.3rem;
+        opacity: 0.7;
+        float: right;
+        margin-top: -5px;
+    }
+
+    .stat-card-syslogs.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+    .stat-card-syslogs.green { background: linear-gradient(135deg, #059669, #047857); }
+    .stat-card-syslogs.orange { background: linear-gradient(135deg, #D97706, #B45309); }
+    .stat-card-syslogs.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+
+    /* MESSAGE BOX */
+    .message-box-syslogs {
+        padding: 14px 20px;
+        border-radius: 12px;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        font-weight: 500;
+        font-size: 0.9rem;
+        animation: slideDown 0.3s ease;
+        max-width: 1200px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .message-box-syslogs.success { background: #D1FAE5; color: #065F46; border: 2px solid #6EE7B7; }
+    .message-box-syslogs.error { background: #FEE2E2; color: #991B1B; border: 2px solid #FCA5A5; }
+    .message-box-syslogs.info { background: #E8F0FE; color: #0B5ED7; border: 2px solid #6EA8FE; }
+
+    [data-theme="dark"] .message-box-syslogs.success { background: #1A3A2A; color: #34D399; border-color: #34D399; }
+    [data-theme="dark"] .message-box-syslogs.error { background: #3A1A1A; color: #F87171; border-color: #F87171; }
+    [data-theme="dark"] .message-box-syslogs.info { background: #1E3A5F; color: #6EA8FE; border-color: #6EA8FE; }
+
+    /* CARD */
+    .card-syslogs {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 12px;
+        padding: 14px 18px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        margin-bottom: 20px;
+    }
+
+    [data-theme="dark"] .card-syslogs { background: #1E293B; border-color: #334155; }
+
+    /* FILTER FORM */
+    .filter-form-syslogs {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+    .filter-form-syslogs select,
+    .filter-form-syslogs input[type="date"] {
+        padding: 8px 12px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        border-radius: 8px;
+        font-size: 0.8rem;
+        background: var(--page-input-bg, #FFFFFF);
+        color: var(--page-text-primary, #1E293B);
+        outline: none;
+        font-family: inherit;
+    }
+
+    .filter-form-syslogs select:focus,
+    .filter-form-syslogs input:focus {
+        border-color: var(--page-primary, #0B5ED7);
+    }
+
+    .btn-search-syslogs {
+        padding: 8px 20px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.8rem;
+        border: none;
+        background: var(--page-primary, #0B5ED7);
+        color: white;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: inherit;
+    }
+
+    .btn-search-syslogs:hover { background: #0A4CA8; }
+
+    .btn-reset-syslogs {
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.8rem;
+        border: 2px solid var(--page-border, #E2E8F0);
+        background: transparent;
+        color: var(--page-text-secondary, #64748B);
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .btn-reset-syslogs:hover { border-color: #DC2626; color: #DC2626; }
+
+    /* DELETE ALL BUTTON */
+    .btn-delete-all-syslogs {
+        padding: 8px 18px;
+        border-radius: 8px;
+        font-weight: 700;
+        font-size: 0.78rem;
+        border: 2px solid #DC2626;
+        background: #DC2626;
+        color: white;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition: all 0.3s;
+        font-family: inherit;
+        box-shadow: 0 2px 8px rgba(220, 38, 38, 0.25);
+    }
+
+    .btn-delete-all-syslogs:hover {
+        background: #B91C1C;
+        border-color: #B91C1C;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
+    }
+
+    /* TABLE HEADER BAR */
+    .table-header-bar-syslogs {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-bottom: 12px;
+        padding-bottom: 10px;
+        border-bottom: 2px solid var(--page-border, #E2E8F0);
+    }
+
+    .table-search-box-syslogs {
+        position: relative;
+        min-width: 280px;
+        flex: 1;
+        max-width: 400px;
+    }
+
+    .table-search-box-syslogs i {
+        position: absolute;
+        left: 14px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: rgba(255,255,255,0.9);
+        font-size: 0.85rem;
+        pointer-events: none;
+        z-index: 1;
+    }
+
+    .table-search-box-syslogs input {
+        width: 100%;
+        padding: 10px 14px 10px 40px;
+        border: 2px solid var(--page-primary, #0B5ED7);
+        border-radius: 10px;
+        font-size: 0.85rem;
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+        outline: none;
+        font-weight: 500;
+        height: 42px;
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
+        font-family: inherit;
+    }
+
+    .table-search-box-syslogs input::placeholder { color: rgba(255,255,255,0.85); }
+
+    .table-search-box-syslogs input:focus {
+        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.2);
+    }
+
+    .scroll-btn-header-syslogs {
+        width: 38px;
+        height: 38px;
+        border-radius: 8px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        background: var(--page-bg-card, #FFFFFF);
+        color: var(--page-text-primary, #1E293B);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.3s;
+    }
+
+    .scroll-btn-header-syslogs:hover {
+        background: var(--page-primary, #0B5ED7);
+        border-color: var(--page-primary, #0B5ED7);
+        color: white;
+    }
+
+    .scroll-btn-header-syslogs:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    .search-results-info-syslogs {
+        font-size: 0.7rem;
+        color: var(--page-primary, #0B5ED7);
+        padding: 6px 12px;
+        background: #E8F0FE;
+        border-radius: 8px;
+        display: none;
+        font-weight: 600;
+        border: 1px solid var(--page-primary, #0B5ED7);
+    }
+
+    .result-count-syslogs {
+        font-size: 0.75rem;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .result-count-syslogs strong { color: var(--page-primary, #0B5ED7); }
+
+    /* TABLE */
+    .table-scroll-syslogs {
+        overflow-x: auto;
+        overflow-y: auto;
+        max-height: 600px;
+    }
+
+    .table-scroll-syslogs::-webkit-scrollbar { height: 8px; width: 8px; }
+    .table-scroll-syslogs::-webkit-scrollbar-thumb { background: #0B5ED7; border-radius: 4px; }
+
+    .data-table-syslogs {
+        width: 100%;
+        min-width: 1000px;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 0.78rem;
+    }
+
+    .data-table-syslogs thead th {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: #0B5ED7;
+        color: white;
+        padding: 10px 12px;
+        font-size: 0.62rem;
+        text-transform: uppercase;
+        font-weight: 700;
+        white-space: nowrap;
+        text-align: left;
+    }
+
+    .data-table-syslogs thead th:first-child { border-radius: 8px 0 0 0; }
+    .data-table-syslogs thead th:last-child { border-radius: 0 8px 0 0; }
+
+    .data-table-syslogs tbody tr:nth-child(even) { background: #E8F0FE; }
+    .data-table-syslogs tbody tr:hover td { background: #D1FAE5; }
+
+    [data-theme="dark"] .data-table-syslogs tbody tr:nth-child(even) { background: #1E293B; }
+    [data-theme="dark"] .data-table-syslogs tbody tr:hover td { background: #1A3A2A; }
+
+    .data-table-syslogs td {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--page-border, #E2E8F0);
+        vertical-align: middle;
+        color: var(--page-text-primary, #1E293B);
+    }
+
+    /* BADGES */
+    .badge-syslogs {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 0.6rem;
+        font-weight: 600;
+    }
+
+    .badge-blue-syslogs { background: #E8F0FE; color: #0B5ED7; }
+    .badge-green-syslogs { background: #D1FAE5; color: #059669; }
+    .badge-orange-syslogs { background: #FEF3C7; color: #D97706; }
+    .badge-red-syslogs { background: #FEE2E2; color: #DC2626; }
+    .badge-purple-syslogs { background: #EDE9FE; color: #7C3AED; }
+    .badge-gray-syslogs { background: #F1F5F9; color: #64748B; }
+
+    [data-theme="dark"] .badge-gray-syslogs { background: #334155; color: #94A3B8; }
+    [data-theme="dark"] .badge-blue-syslogs { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .badge-green-syslogs { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .badge-orange-syslogs { background: #3A2A1A; color: #FBBF24; }
+    [data-theme="dark"] .badge-red-syslogs { background: #3A1A1A; color: #F87171; }
+    [data-theme="dark"] .badge-purple-syslogs { background: #2D1B4E; color: #A78BFA; }
+
+    /* DELETE ROW BUTTON */
+    .btn-delete-row-syslogs {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 6px;
+        border: none;
+        background: #FEE2E2;
+        color: #DC2626;
+        cursor: pointer;
+        transition: all 0.3s;
+        font-size: 0.75rem;
+        padding: 0;
+    }
+
+    .btn-delete-row-syslogs:hover {
+        background: #DC2626;
+        color: white;
+        transform: scale(1.1);
+        box-shadow: 0 2px 8px rgba(220, 38, 38, 0.4);
+    }
+
+    [data-theme="dark"] .btn-delete-row-syslogs {
+        background: #3A1A1A;
+        color: #F87171;
+    }
+
+    [data-theme="dark"] .btn-delete-row-syslogs:hover {
+        background: #DC2626;
+        color: white;
+    }
+
+    .no-results-row-syslogs td {
+        text-align: center;
+        padding: 40px 20px !important;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .no-results-row-syslogs i {
+        font-size: 2.5rem;
+        color: var(--page-text-muted, #94A3B8);
+        display: block;
+        margin-bottom: 10px;
+    }
+
+    /* FOOTER */
+    .footer-syslogs {
+        padding: 10px 0;
+        border-top: 1px solid var(--page-border, #E2E8F0);
+        margin-top: 16px;
+        text-align: center;
+        font-size: 0.6rem;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .footer-syslogs .footer-brand-syslogs { color: #0B5ED7; font-weight: 600; }
+
+    /* RESPONSIVE */
+    @media (max-width: 1024px) {
+        .stats-grid-syslogs { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 768px) {
+        .stats-grid-syslogs { grid-template-columns: 1fr 1fr; }
+        .page-header-syslogs { flex-direction: column; align-items: stretch; }
+        .filter-form-syslogs { flex-direction: column; align-items: stretch; }
+        .table-header-bar-syslogs { flex-direction: column; align-items: stretch; }
+        .table-search-box-syslogs { min-width: 100%; max-width: 100%; }
+    }
+
+    @media (max-width: 480px) {
+        .stats-grid-syslogs { grid-template-columns: 1fr; }
+    }
+</style>
+
+<!-- ================================================================ -->
+<!-- MAIN CONTENT -->
+<!-- ================================================================ -->
 <main class="main-content">
 
     <!-- PAGE HEADER -->
-    <div class="page-header-box">
+    <div class="page-header-syslogs">
         <div>
-            <h1 class="page-title">
+            <h1 class="page-title-syslogs">
                 <i class="fas fa-history"></i> System Activity Logs
-                <span class="role-badge">ADMIN</span>
-                <span class="branch-name">
+                <span class="role-badge-syslogs">ADMIN</span>
+                <span class="branch-name-syslogs">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($display_branch_name) ?>
                 </span>
-                <a href="dashboard.php?branch=<?= $selected_branch_id ?>" class="btn-back">
+                <a href="dashboard.php?branch=<?= $selected_branch_id ?>" class="btn-back-syslogs">
                     <i class="fas fa-arrow-left"></i> Back to Dashboard
                 </a>
             </h1>
-            <p class="page-subtitle">
+            <p class="page-subtitle-syslogs">
                 <strong><?= number_format($total_logs) ?></strong> log entries loaded
                 <?php if (!empty($action_filter)): ?> · Action: <strong><?= htmlspecialchars($action_filter) ?></strong><?php endif; ?>
                 <?php if (!empty($date_from) || !empty($date_to)): ?>
@@ -1086,33 +807,41 @@ $is_dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true'
         </div>
     </div>
 
+    <!-- MESSAGE -->
+    <?php if ($message): ?>
+        <div class="message-box-syslogs <?= $message_type ?>">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle') ?>" style="font-size:1.2rem;flex-shrink:0;"></i>
+            <div><?= $message ?></div>
+        </div>
+    <?php endif; ?>
+
     <!-- STATS -->
-    <div class="stats-grid">
-        <a href="system_logs.php?branch=<?= $selected_branch_id ?>" class="stat-card blue">
-            <span class="stat-icon"><i class="fas fa-list"></i></span>
-            <div class="stat-number"><?= number_format($total_activity_count) ?></div>
-            <div class="stat-label">Total Logs</div>
+    <div class="stats-grid-syslogs">
+        <a href="system_logs.php?branch=<?= $selected_branch_id ?>" class="stat-card-syslogs blue">
+            <span class="stat-icon-syslogs"><i class="fas fa-list"></i></span>
+            <div class="stat-number-syslogs"><?= number_format($total_activity_count) ?></div>
+            <div class="stat-label-syslogs">Total Logs</div>
         </a>
-        <a href="system_logs.php?branch=<?= $selected_branch_id ?>&date_from=<?= date('Y-m-d') ?>&date_to=<?= date('Y-m-d') ?>" class="stat-card green">
-            <span class="stat-icon"><i class="fas fa-calendar-day"></i></span>
-            <div class="stat-number"><?= number_format($today_logs_count) ?></div>
-            <div class="stat-label">Today</div>
+        <a href="system_logs.php?branch=<?= $selected_branch_id ?>&date_from=<?= date('Y-m-d') ?>&date_to=<?= date('Y-m-d') ?>" class="stat-card-syslogs green">
+            <span class="stat-icon-syslogs"><i class="fas fa-calendar-day"></i></span>
+            <div class="stat-number-syslogs"><?= number_format($today_logs_count) ?></div>
+            <div class="stat-label-syslogs">Today</div>
         </a>
-        <a href="system_logs.php?branch=<?= $selected_branch_id ?>" class="stat-card orange">
-            <span class="stat-icon"><i class="fas fa-calendar-week"></i></span>
-            <div class="stat-number"><?= number_format($week_logs_count) ?></div>
-            <div class="stat-label">This Week</div>
+        <a href="system_logs.php?branch=<?= $selected_branch_id ?>" class="stat-card-syslogs orange">
+            <span class="stat-icon-syslogs"><i class="fas fa-calendar-week"></i></span>
+            <div class="stat-number-syslogs"><?= number_format($week_logs_count) ?></div>
+            <div class="stat-label-syslogs">This Week</div>
         </a>
-        <a href="system_logs.php?branch=<?= $selected_branch_id ?>" class="stat-card purple">
-            <span class="stat-icon"><i class="fas fa-calendar-alt"></i></span>
-            <div class="stat-number"><?= number_format($month_logs_count) ?></div>
-            <div class="stat-label">This Month</div>
+        <a href="system_logs.php?branch=<?= $selected_branch_id ?>" class="stat-card-syslogs purple">
+            <span class="stat-icon-syslogs"><i class="fas fa-calendar-alt"></i></span>
+            <div class="stat-number-syslogs"><?= number_format($month_logs_count) ?></div>
+            <div class="stat-label-syslogs">This Month</div>
         </a>
     </div>
 
     <!-- FILTERS -->
-    <div class="card">
-        <form method="GET" class="filter-form">
+    <div class="card-syslogs">
+        <form method="GET" class="filter-form-syslogs">
             <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
             
             <select name="action_filter">
@@ -1133,52 +862,59 @@ $is_dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true'
                 <?php endforeach; ?>
             </select>
             
-            <input type="date" name="date_from" value="<?= htmlspecialchars($date_from) ?>" placeholder="From" title="From date">
-            <input type="date" name="date_to" value="<?= htmlspecialchars($date_to) ?>" placeholder="To" title="To date">
+            <input type="date" name="date_from" value="<?= htmlspecialchars($date_from) ?>" title="From date">
+            <input type="date" name="date_to" value="<?= htmlspecialchars($date_to) ?>" title="To date">
             
-            <button type="submit" class="btn-search">
+            <button type="submit" class="btn-search-syslogs">
                 <i class="fas fa-filter"></i> Filter
             </button>
             
-            <a href="system_logs.php?branch=<?= $selected_branch_id ?>" class="btn-reset">
+            <a href="system_logs.php?branch=<?= $selected_branch_id ?>" class="btn-reset-syslogs">
                 <i class="fas fa-times"></i> Reset
             </a>
         </form>
     </div>
 
     <!-- LOGS TABLE -->
-    <div class="card">
-        <div class="table-header-bar">
-            <div class="table-header-left">
+    <div class="card-syslogs">
+        <div class="table-header-bar-syslogs">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;flex:1;min-width:0;">
                 <!-- BLUE SEARCH BOX - AUTO FILTER -->
-                <div class="table-search-box">
+                <div class="table-search-box-syslogs">
                     <i class="fas fa-search"></i>
-                    <input type="text" id="tableSearchInput" placeholder="🔍 Auto-search logs..." autocomplete="off">
+                    <input type="text" id="tableSearchInputSyslogs" placeholder="🔍 Auto-search logs..." autocomplete="off">
                 </div>
                 
-                <h3 class="card-title" style="margin:0;">
-                    <i class="fas fa-list" style="color:var(--primary);"></i> 
-                    <span class="result-count" id="countDisplay">(<strong><?= count($logs) ?></strong> entries)</span>
+                <h3 style="margin:0;font-size:1rem;font-weight:600;color:var(--page-text-primary);">
+                    <i class="fas fa-list" style="color:var(--page-primary);"></i> 
+                    <span class="result-count-syslogs" id="countDisplaySyslogs">(<strong><?= count($logs) ?></strong> entries)</span>
                 </h3>
                 
-                <span class="search-results-info" id="searchInfo">
-                    <i class="fas fa-filter"></i> <strong id="searchCount">0</strong> match
+                <span class="search-results-info-syslogs" id="searchInfoSyslogs">
+                    <i class="fas fa-filter"></i> <strong id="searchCountSyslogs">0</strong> match
                 </span>
             </div>
             
-            <div class="table-header-right">
-                <button type="button" class="scroll-btn-header" id="scrollBtnLeft" onclick="scrollTable('left')" title="Scroll Left">
+            <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap;">
+                <!-- DELETE ALL BUTTON -->
+                <?php if (count($logs) > 0): ?>
+                <button type="button" class="btn-delete-all-syslogs" onclick="confirmDeleteAll()" title="Delete All Logs (respecting filters)">
+                    <i class="fas fa-trash-alt"></i> Delete All
+                </button>
+                <?php endif; ?>
+                
+                <button type="button" class="scroll-btn-header-syslogs" id="scrollBtnLeftSyslogs" onclick="scrollTableSyslogs('left')" title="Scroll Left">
                     <i class="fas fa-chevron-left"></i>
                 </button>
-                <button type="button" class="scroll-btn-header" id="scrollBtnRight" onclick="scrollTable('right')" title="Scroll Right">
+                <button type="button" class="scroll-btn-header-syslogs" id="scrollBtnRightSyslogs" onclick="scrollTableSyslogs('right')" title="Scroll Right">
                     <i class="fas fa-chevron-right"></i>
                 </button>
             </div>
         </div>
 
         <?php if (count($logs) > 0): ?>
-            <div class="table-scroll-container" id="tableWrap">
-                <table class="data-table">
+            <div class="table-scroll-syslogs" id="tableWrapSyslogs">
+                <table class="data-table-syslogs">
                     <thead>
                         <tr>
                             <th style="width:40px;text-align:center;">#</th>
@@ -1187,20 +923,20 @@ $is_dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true'
                             <th style="min-width:140px;">Action</th>
                             <th style="min-width:300px;">Details</th>
                             <th style="min-width:120px;">Branch</th>
-                            <th style="min-width:120px;">IP Address</th>
+                            <th style="width:80px;text-align:center;">Action</th>
                         </tr>
                     </thead>
-                    <tbody id="tableBody">
+                    <tbody id="tableBodySyslogs">
                         <?php 
                         $num = 1;
                         foreach ($logs as $log): 
-                            $badge_class = 'badge-blue';
+                            $badge_class = 'badge-blue-syslogs';
                             $action_lower = strtolower($log['action'] ?? '');
-                            if (strpos($action_lower, 'login') !== false) $badge_class = 'badge-green';
-                            elseif (strpos($action_lower, 'logout') !== false) $badge_class = 'badge-gray';
-                            elseif (strpos($action_lower, 'delete') !== false || strpos($action_lower, 'deactivate') !== false) $badge_class = 'badge-red';
-                            elseif (strpos($action_lower, 'update') !== false || strpos($action_lower, 'edit') !== false) $badge_class = 'badge-orange';
-                            elseif (strpos($action_lower, 'create') !== false || strpos($action_lower, 'add') !== false) $badge_class = 'badge-purple';
+                            if (strpos($action_lower, 'login') !== false) $badge_class = 'badge-green-syslogs';
+                            elseif (strpos($action_lower, 'logout') !== false) $badge_class = 'badge-gray-syslogs';
+                            elseif (strpos($action_lower, 'delete') !== false || strpos($action_lower, 'deactivate') !== false) $badge_class = 'badge-red-syslogs';
+                            elseif (strpos($action_lower, 'update') !== false || strpos($action_lower, 'edit') !== false) $badge_class = 'badge-orange-syslogs';
+                            elseif (strpos($action_lower, 'create') !== false || strpos($action_lower, 'add') !== false) $badge_class = 'badge-purple-syslogs';
                             
                             $search_text = strtolower(
                                 ($log['action'] ?? '') . ' ' .
@@ -1208,30 +944,29 @@ $is_dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true'
                                 ($log['user_full_name'] ?? '') . ' ' .
                                 ($log['user_username'] ?? '') . ' ' .
                                 ($log['user_role'] ?? '') . ' ' .
-                                ($log['branch_name'] ?? '') . ' ' .
-                                ($log['ip_address'] ?? '')
+                                ($log['branch_name'] ?? '')
                             );
                         ?>
-                            <tr class="log-row" data-search="<?= htmlspecialchars($search_text) ?>">
+                            <tr class="log-row-syslogs" data-search="<?= htmlspecialchars($search_text) ?>" data-log-id="<?= (int)$log['id'] ?>">
                                 <td style="text-align:center;"><?= $num++ ?></td>
                                 <td>
                                     <strong><?= date('d/m/Y', strtotime($log['created_at'])) ?></strong>
-                                    <div style="font-size:0.65rem;color:var(--text-secondary);">
+                                    <div style="font-size:0.65rem;color:var(--page-text-secondary);">
                                         <?= date('H:i:s', strtotime($log['created_at'])) ?>
                                     </div>
                                 </td>
                                 <td>
                                     <?php if (!empty($log['user_full_name'])): ?>
                                         <strong><?= htmlspecialchars($log['user_full_name']) ?></strong>
-                                        <div style="font-size:0.6rem;color:var(--text-secondary);">
+                                        <div style="font-size:0.6rem;color:var(--page-text-secondary);">
                                             <?= htmlspecialchars($log['user_role'] ?? '') ?>
                                         </div>
                                     <?php else: ?>
-                                        <span style="color:var(--text-muted);">System</span>
+                                        <span style="color:var(--page-text-muted);">System</span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <span class="badge <?= $badge_class ?>">
+                                    <span class="badge-syslogs <?= $badge_class ?>">
                                         <?= htmlspecialchars($log['action'] ?? 'N/A') ?>
                                     </span>
                                 </td>
@@ -1240,20 +975,25 @@ $is_dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true'
                                 </td>
                                 <td>
                                     <?php if (!empty($log['branch_name'])): ?>
-                                        <span class="badge badge-blue">
+                                        <span class="badge-syslogs badge-blue-syslogs">
                                             🏥 <?= htmlspecialchars($log['branch_name']) ?>
                                         </span>
                                     <?php else: ?>
-                                        <span style="color:var(--text-muted);">-</span>
+                                        <span style="color:var(--page-text-muted);">-</span>
                                     <?php endif; ?>
                                 </td>
-                                <td style="font-size:0.7rem;color:var(--text-secondary);font-family:monospace;">
-                                    <?= htmlspecialchars($log['ip_address'] ?? '-') ?>
+                                <td style="text-align:center;">
+                                    <button type="button" 
+                                            class="btn-delete-row-syslogs" 
+                                            onclick="confirmDeleteLog(<?= (int)$log['id'] ?>, '<?= htmlspecialchars(addslashes($log['action'] ?? 'N/A')) ?>')" 
+                                            title="Delete this log">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                         
-                        <tr class="no-results-row" id="noResults" style="display:none;">
+                        <tr class="no-results-row-syslogs" id="noResultsSyslogs" style="display:none;">
                             <td colspan="7">
                                 <i class="fas fa-search-minus"></i>
                                 <p>No logs match your search</p>
@@ -1263,8 +1003,8 @@ $is_dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true'
                 </table>
             </div>
         <?php else: ?>
-            <div style="text-align:center;padding:40px 20px;color:var(--text-secondary);">
-                <i class="fas fa-history" style="font-size:3rem;color:var(--border-color);display:block;margin-bottom:12px;"></i>
+            <div style="text-align:center;padding:40px 20px;color:var(--page-text-secondary);">
+                <i class="fas fa-history" style="font-size:3rem;color:var(--page-text-muted);display:block;margin-bottom:12px;"></i>
                 <p style="font-size:0.95rem;font-weight:600;">No logs found</p>
                 <p style="font-size:0.8rem;margin-top:4px;">Try adjusting your filters.</p>
             </div>
@@ -1272,226 +1012,420 @@ $is_dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true'
     </div>
 
     <!-- FOOTER -->
-    <footer class="footer">
+    <footer class="footer-syslogs">
         <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span>|</span> System Logs
-            <span>|</span> <?= number_format($total_logs) ?> entries shown
-            <span>|</span> &copy; <?= date('Y') ?>
+            <span class="footer-brand-syslogs">Braick Dispensary</span> Management System
+            <span style="color:#CBD5E1;margin:0 8px;">|</span> System Logs
+            <span style="color:#CBD5E1;margin:0 8px;">|</span> <?= number_format($total_logs) ?> entries shown
+            <span style="color:#CBD5E1;margin:0 8px;">|</span> <span id="footerTime"><?= date('H:i:s') ?></span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span> &copy; <?= date('Y') ?>
         </p>
     </footer>
 
 </main>
 
+<!-- ================================================================ -->
+<!-- DELETE SINGLE LOG MODAL -->
+<!-- ================================================================ -->
+<div id="deleteLogModal" class="modal-syslogs" style="display:none;">
+    <div class="modal-overlay-syslogs" onclick="closeDeleteLogModal()"></div>
+    <div class="modal-content-syslogs">
+        <div class="modal-header-syslogs">
+            <h3><i class="fas fa-exclamation-triangle" style="color:#DC2626;"></i> Delete Log Entry</h3>
+            <button onclick="closeDeleteLogModal()" class="modal-close-syslogs">&times;</button>
+        </div>
+        <div class="modal-body-syslogs">
+            <p style="color:var(--page-text-primary);">Are you sure you want to delete this log entry?</p>
+            <p style="margin-top:8px;font-size:0.85rem;">
+                <strong>Action:</strong> <span id="deleteLogAction" style="color:#DC2626;"></span>
+            </p>
+            <p style="margin-top:8px;font-size:0.8rem;color:#DC2626;font-weight:600;">
+                ⚠️ This action cannot be undone!
+            </p>
+        </div>
+        <form method="POST" style="margin-top:16px;">
+            <input type="hidden" name="action" value="delete_log">
+            <input type="hidden" name="log_id" id="deleteLogId" value="">
+            <div class="modal-actions-syslogs">
+                <button type="button" class="btn-cancel-syslogs" onclick="closeDeleteLogModal()">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+                <button type="submit" class="btn-confirm-delete-syslogs">
+                    <i class="fas fa-trash"></i> Yes, Delete
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- DELETE ALL LOGS MODAL -->
+<!-- ================================================================ -->
+<div id="deleteAllModal" class="modal-syslogs" style="display:none;">
+    <div class="modal-overlay-syslogs" onclick="closeDeleteAllModal()"></div>
+    <div class="modal-content-syslogs" style="max-width:520px;">
+        <div class="modal-header-syslogs">
+            <h3><i class="fas fa-exclamation-triangle" style="color:#DC2626;"></i> Delete All Logs</h3>
+            <button onclick="closeDeleteAllModal()" class="modal-close-syslogs">&times;</button>
+        </div>
+        <div class="modal-body-syslogs">
+            <div style="padding:14px 18px;background:#FEE2E2;border:2px solid #DC2626;border-radius:10px;margin-bottom:16px;">
+                <p style="font-weight:700;color:#991B1B;font-size:0.95rem;margin:0;">
+                    <i class="fas fa-exclamation-circle"></i> WARNING!
+                </p>
+                <p style="color:#991B1B;font-size:0.85rem;margin-top:6px;">
+                    You are about to permanently delete <strong>all activity logs</strong> that match your current filters.
+                </p>
+            </div>
+            
+            <p style="color:var(--page-text-primary);font-size:0.9rem;font-weight:600;">Current filters being applied:</p>
+            <ul style="margin-top:8px;margin-left:20px;font-size:0.85rem;color:var(--page-text-secondary);">
+                <li><strong>Action:</strong> <?= !empty($action_filter) ? htmlspecialchars($action_filter) : 'All' ?></li>
+                <li><strong>User:</strong> <?= $user_filter > 0 ? 'Selected user' : 'All users' ?></li>
+                <li><strong>Date Range:</strong> <?= (!empty($date_from) || !empty($date_to)) ? (htmlspecialchars($date_from ?: 'Any') . ' → ' . htmlspecialchars($date_to ?: 'Any')) : 'All dates' ?></li>
+                <li><strong>Branch:</strong> <?= htmlspecialchars($display_branch_name) ?></li>
+            </ul>
+            
+            <p style="margin-top:16px;font-size:0.8rem;color:#DC2626;font-weight:600;">
+                ⚠️ This action cannot be undone!
+            </p>
+        </div>
+        <form method="POST" style="margin-top:16px;">
+            <input type="hidden" name="action" value="delete_all_logs">
+            <input type="hidden" name="filter_action" value="<?= htmlspecialchars($action_filter) ?>">
+            <input type="hidden" name="filter_user" value="<?= $user_filter ?>">
+            <input type="hidden" name="filter_date_from" value="<?= htmlspecialchars($date_from) ?>">
+            <input type="hidden" name="filter_date_to" value="<?= htmlspecialchars($date_to) ?>">
+            <input type="hidden" name="filter_branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
+            <div class="modal-actions-syslogs">
+                <button type="button" class="btn-cancel-syslogs" onclick="closeDeleteAllModal()">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+                <button type="submit" class="btn-confirm-delete-syslogs">
+                    <i class="fas fa-trash-alt"></i> Delete All Logs
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- MODAL CSS -->
+<!-- ================================================================ -->
+<style>
+    .modal-syslogs {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 99999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+    }
+
+    .modal-overlay-syslogs {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.7);
+        backdrop-filter: blur(4px);
+        cursor: pointer;
+    }
+
+    .modal-content-syslogs {
+        position: relative;
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        padding: 24px 28px;
+        max-width: 500px;
+        width: 100%;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        border: 2px solid var(--page-border, #E2E8F0);
+        animation: modalSlide 0.3s ease;
+    }
+
+    [data-theme="dark"] .modal-content-syslogs {
+        background: #1E293B;
+        border-color: #334155;
+    }
+
+    @keyframes modalSlide {
+        from { opacity: 0; transform: translateY(30px) scale(0.95); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .modal-header-syslogs {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding-bottom: 12px;
+        border-bottom: 2px solid var(--page-border, #E2E8F0);
+        margin-bottom: 16px;
+    }
+
+    [data-theme="dark"] .modal-header-syslogs {
+        border-bottom-color: #334155;
+    }
+
+    .modal-header-syslogs h3 {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: var(--page-text-primary, #1E293B);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0;
+    }
+
+    [data-theme="dark"] .modal-header-syslogs h3 {
+        color: #F1F5F9;
+    }
+
+    .modal-close-syslogs {
+        background: none;
+        border: none;
+        font-size: 1.5rem;
+        cursor: pointer;
+        color: var(--page-text-secondary, #64748B);
+        padding: 0 4px;
+        line-height: 1;
+        transition: color 0.3s;
+    }
+
+    .modal-close-syslogs:hover {
+        color: #DC2626;
+    }
+
+    .modal-body-syslogs {
+        color: var(--page-text-primary, #1E293B);
+        font-size: 0.9rem;
+        line-height: 1.6;
+    }
+
+    [data-theme="dark"] .modal-body-syslogs {
+        color: #F1F5F9;
+    }
+
+    [data-theme="dark"] .modal-body-syslogs div[style*="FEE2E2"] {
+        background: #3A1A1A !important;
+        border-color: #DC2626 !important;
+    }
+
+    [data-theme="dark"] .modal-body-syslogs div[style*="FEE2E2"] p {
+        color: #F87171 !important;
+    }
+
+    .modal-actions-syslogs {
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+        padding-top: 16px;
+        margin-top: 16px;
+        border-top: 2px solid var(--page-border, #E2E8F0);
+        flex-wrap: wrap;
+    }
+
+    [data-theme="dark"] .modal-actions-syslogs {
+        border-top-color: #334155;
+    }
+
+    .btn-cancel-syslogs {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 10px 22px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.85rem;
+        border: 2px solid var(--page-border, #E2E8F0);
+        background: transparent;
+        color: var(--page-text-secondary, #64748B);
+        cursor: pointer;
+        transition: all 0.3s;
+        font-family: inherit;
+    }
+
+    [data-theme="dark"] .btn-cancel-syslogs {
+        border-color: #334155;
+        color: #94A3B8;
+    }
+
+    .btn-cancel-syslogs:hover {
+        border-color: #0B5ED7;
+        color: #0B5ED7;
+    }
+
+    .btn-confirm-delete-syslogs {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 10px 24px;
+        border-radius: 10px;
+        font-weight: 700;
+        font-size: 0.85rem;
+        border: none;
+        background: linear-gradient(135deg, #DC2626, #B91C1C);
+        color: white;
+        cursor: pointer;
+        transition: all 0.3s;
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+        font-family: inherit;
+    }
+
+    .btn-confirm-delete-syslogs:hover {
+        background: linear-gradient(135deg, #B91C1C, #991B1B);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(220, 38, 38, 0.4);
+    }
+</style>
+
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
+<!-- ================================================================ -->
 <script>
-// ================================================================
-// GLOBAL SEARCH (header)
-// ================================================================
-function globalSearch() {
-    var q = document.getElementById('globalSearchInput').value.trim();
-    if (q) {
-        // Filter the table directly instead of navigating
-        var tableInput = document.getElementById('tableSearchInput');
-        if (tableInput) {
-            tableInput.value = q;
-            tableInput.dispatchEvent(new Event('input'));
-            // Scroll to table
-            document.querySelector('.table-scroll-container')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-    }
-}
+    // ================================================================
+    // FOOTER TIME
+    // ================================================================
+    setInterval(function() {
+        var now = new Date();
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var ftEl = document.getElementById('footerTime');
+        if (ftEl) ftEl.textContent = timeStr;
+    }, 1000);
 
-document.getElementById('globalSearchInput')?.addEventListener('keypress', function(e) {
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        globalSearch();
-    }
-});
-
-// ================================================================
-// AUTO SEARCH - TABLE FILTER
-// ================================================================
-(function() {
-    var input = document.getElementById('tableSearchInput');
-    var noResults = document.getElementById('noResults');
-    var countDisplay = document.getElementById('countDisplay');
-    var searchInfo = document.getElementById('searchInfo');
-    var searchCount = document.getElementById('searchCount');
-    
-    if (!input) return;
-    
-    var totalRows = document.querySelectorAll('.log-row').length;
-    
-    input.addEventListener('input', function() {
-        var query = this.value.toLowerCase().trim();
-        var rows = document.querySelectorAll('.log-row');
-        var visibleCount = 0;
+    // ================================================================
+    // AUTO SEARCH - TABLE FILTER
+    // ================================================================
+    (function() {
+        var input = document.getElementById('tableSearchInputSyslogs');
+        var noResults = document.getElementById('noResultsSyslogs');
+        var countDisplay = document.getElementById('countDisplaySyslogs');
+        var searchInfo = document.getElementById('searchInfoSyslogs');
+        var searchCount = document.getElementById('searchCountSyslogs');
         
-        rows.forEach(function(row) {
-            var searchData = row.getAttribute('data-search') || '';
-            if (query === '' || searchData.indexOf(query) !== -1) {
-                row.style.display = '';
-                visibleCount++;
-            } else {
-                row.style.display = 'none';
+        if (!input) return;
+        
+        var totalRows = document.querySelectorAll('.log-row-syslogs').length;
+        
+        input.addEventListener('input', function() {
+            var query = this.value.toLowerCase().trim();
+            var rows = document.querySelectorAll('.log-row-syslogs');
+            var visibleCount = 0;
+            
+            rows.forEach(function(row) {
+                var searchData = row.getAttribute('data-search') || '';
+                if (query === '' || searchData.indexOf(query) !== -1) {
+                    row.style.display = '';
+                    visibleCount++;
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+            
+            if (countDisplay) {
+                countDisplay.innerHTML = query === '' 
+                    ? '(<strong>' + totalRows + '</strong> entries)' 
+                    : '(<strong>' + visibleCount + '</strong> of ' + totalRows + ')';
+            }
+            
+            if (searchInfo && searchCount) {
+                if (query === '') {
+                    searchInfo.style.display = 'none';
+                } else {
+                    searchInfo.style.display = 'inline-flex';
+                    searchCount.textContent = visibleCount;
+                }
+            }
+            
+            if (noResults) {
+                noResults.style.display = (visibleCount === 0 && query !== '') ? '' : 'none';
             }
         });
         
-        if (countDisplay) {
-            countDisplay.innerHTML = query === '' 
-                ? '(<strong>' + totalRows + '</strong> entries)' 
-                : '(<strong>' + visibleCount + '</strong> of ' + totalRows + ')';
-        }
-        
-        if (searchInfo && searchCount) {
-            if (query === '') {
-                searchInfo.style.display = 'none';
-            } else {
-                searchInfo.style.display = 'inline-flex';
-                searchCount.textContent = visibleCount;
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                this.value = '';
+                this.dispatchEvent(new Event('input'));
+                this.blur();
             }
-        }
+        });
+    })();
+
+    // ================================================================
+    // SCROLL FUNCTIONS
+    // ================================================================
+    function scrollTableSyslogs(dir) {
+        var wrap = document.getElementById('tableWrapSyslogs');
+        if (wrap) wrap.scrollBy({ left: dir === 'left' ? -400 : 400, behavior: 'smooth' });
+    }
+
+    function updateScrollButtonsSyslogs() {
+        var wrap = document.getElementById('tableWrapSyslogs');
+        var btnLeft = document.getElementById('scrollBtnLeftSyslogs');
+        var btnRight = document.getElementById('scrollBtnRightSyslogs');
+        if (!wrap || !btnLeft || !btnRight) return;
         
-        if (noResults) {
-            noResults.style.display = (visibleCount === 0 && query !== '') ? '' : 'none';
-        }
-    });
-    
-    // ESC to clear
-    input.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            this.value = '';
-            this.dispatchEvent(new Event('input'));
-            this.blur();
-        }
-    });
-})();
-
-// ================================================================
-// SCROLL FUNCTIONS
-// ================================================================
-function scrollTable(dir) {
-    var wrap = document.getElementById('tableWrap');
-    if (wrap) wrap.scrollBy({ left: dir === 'left' ? -400 : 400, behavior: 'smooth' });
-}
-
-function updateScrollButtons() {
-    var wrap = document.getElementById('tableWrap');
-    var btnLeft = document.getElementById('scrollBtnLeft');
-    var btnRight = document.getElementById('scrollBtnRight');
-    if (!wrap || !btnLeft || !btnRight) return;
-    
-    var scrollLeft = wrap.scrollLeft;
-    var maxScroll = wrap.scrollWidth - wrap.clientWidth;
-    btnLeft.disabled = (scrollLeft <= 5);
-    btnRight.disabled = (scrollLeft >= maxScroll - 5 || maxScroll <= 0);
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    var wrap = document.getElementById('tableWrap');
-    if (wrap) {
-        wrap.addEventListener('scroll', updateScrollButtons);
-        setTimeout(updateScrollButtons, 200);
+        var scrollLeft = wrap.scrollLeft;
+        var maxScroll = wrap.scrollWidth - wrap.clientWidth;
+        btnLeft.disabled = (scrollLeft <= 5);
+        btnRight.disabled = (scrollLeft >= maxScroll - 5 || maxScroll <= 0);
     }
-    window.addEventListener('resize', function() {
-        setTimeout(updateScrollButtons, 200);
+
+    document.addEventListener('DOMContentLoaded', function() {
+        var wrap = document.getElementById('tableWrapSyslogs');
+        if (wrap) {
+            wrap.addEventListener('scroll', updateScrollButtonsSyslogs);
+            setTimeout(updateScrollButtonsSyslogs, 200);
+        }
+        window.addEventListener('resize', function() {
+            setTimeout(updateScrollButtonsSyslogs, 200);
+        });
     });
-});
 
-// ================================================================
-// BRANCH SWITCHER
-// ================================================================
-function switchBranch(branchId) {
-    var url = new URL(window.location.href);
-    url.searchParams.set('branch', branchId);
-    window.location.href = url.toString();
-}
-
-// ================================================================
-// DARK MODE
-// ================================================================
-(function() {
-    var t = document.getElementById('darkModeToggle');
-    var icon = document.getElementById('darkIcon');
-    var text = document.getElementById('darkText');
-    var html = document.documentElement;
-    
-    if (localStorage.getItem('darkMode') === 'true') {
-        html.setAttribute('data-theme', 'dark');
-        if (icon) icon.className = 'fas fa-sun';
-        if (text) text.textContent = 'Light';
+    // ================================================================
+    // DELETE SINGLE LOG MODAL
+    // ================================================================
+    function confirmDeleteLog(logId, action) {
+        document.getElementById('deleteLogId').value = logId;
+        document.getElementById('deleteLogAction').textContent = action;
+        document.getElementById('deleteLogModal').style.display = 'flex';
+        document.body.style.overflow = 'hidden';
     }
-    
-    t?.addEventListener('click', function() {
-        if (html.getAttribute('data-theme') === 'dark') {
-            html.removeAttribute('data-theme');
-            if (icon) icon.className = 'fas fa-moon';
-            if (text) text.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
-        } else {
-            html.setAttribute('data-theme', 'dark');
-            if (icon) icon.className = 'fas fa-sun';
-            if (text) text.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
-        }
-    });
-})();
 
-// ================================================================
-// CLOCK
-// ================================================================
-setInterval(function() {
-    var now = new Date();
-    var d = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-    var tm = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
-    var el = document.getElementById('clockDisplay');
-    if (el) el.textContent = d + ' • ' + tm;
-}, 1000);
-
-// ================================================================
-// SIDEBAR TOGGLE (mobile)
-// ================================================================
-(function() {
-    var sidebar = document.getElementById('sidebar');
-    var toggleBtn = document.getElementById('sidebarToggle');
-    var overlay = document.getElementById('sidebarOverlay');
-    
-    function checkMobile() {
-        if (window.innerWidth <= 1024 && toggleBtn) {
-            toggleBtn.style.display = 'flex';
-        } else if (toggleBtn) {
-            toggleBtn.style.display = 'none';
-        }
-    }
-    
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    
-    toggleBtn?.addEventListener('click', function(e) {
-        e.preventDefault();
-        sidebar.classList.toggle('open');
-        if (sidebar.classList.contains('open')) {
-            overlay.style.display = 'block';
-            document.body.style.overflow = 'hidden';
-        } else {
-            overlay.style.display = 'none';
-            document.body.style.overflow = '';
-        }
-    });
-    
-    overlay?.addEventListener('click', function() {
-        sidebar.classList.remove('open');
-        overlay.style.display = 'none';
+    function closeDeleteLogModal() {
+        document.getElementById('deleteLogModal').style.display = 'none';
         document.body.style.overflow = '';
-    });
-})();
+    }
 
-console.log('%c📋 System Logs - Braick Dispensary', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Total logs: <?= $total_logs ?>', 'font-size:13px; color:#059669;');
-console.log('%c✅ Smaller header search bar (260px max)', 'font-size:13px; color:#FBBF24;');
-console.log('%c✅ Auto-search in table header (blue box)', 'font-size:13px; color:#FBBF24;');
+    // ================================================================
+    // DELETE ALL LOGS MODAL
+    // ================================================================
+    function confirmDeleteAll() {
+        document.getElementById('deleteAllModal').style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeDeleteAllModal() {
+        document.getElementById('deleteAllModal').style.display = 'none';
+        document.body.style.overflow = '';
+    }
+
+    // ================================================================
+    // ESC KEY TO CLOSE MODALS
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeDeleteLogModal();
+            closeDeleteAllModal();
+        }
+    });
+
+    console.log('%c📋 Braick - System Logs', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ DELETE ALL + DELETE ROW buttons added', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ IP Address column removed', 'font-size:13px; color:#34D399;');
+    console.log('%c🌙 Dark mode: Handled by header', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>

@@ -2,31 +2,20 @@
 // ================================================================
 // FILE: frontend/pages/admin/consultation_bills.php
 // ADMIN - VIEW CONSULTATION BILLS ONLY
-// FIXED: Uses bills table (NOT patient_bills)
-// FIXED: Shows correct branch in header
-// FIXED: "All Branches" when no branch selected
-// WITH SHARED HEADER, DARK MODE, CLOCK
-// BLUE THEME
+// ✅ Uses SHARED header & sidebar
+// ✅ Beautiful blue/purple page header + 5 summary cards
+// ✅ Full dark mode support
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// CHECK IF USER IS ADMIN
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -35,14 +24,12 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
 }
 
-// ================================================================
-// GET ADMIN DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
@@ -51,9 +38,6 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
@@ -62,24 +46,19 @@ try {
     die("Database connection failed: " . $e->getMessage());
 }
 
-// ================================================================
-// GET BRANCH ID FROM FILTER
-// ================================================================
 $branch_id = isset($_GET['branch']) ? (int)$_GET['branch'] : 0;
 
 // ================================================================
-// GET BRANCHES FOR FILTER
+// BRANCHES FOR FILTER
 // ================================================================
 $branches = [];
 try {
     $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $branches = [];
-}
+} catch (Exception $e) { $branches = []; }
 
 // ================================================================
-// GET BRANCH NAME - ONLY if a specific branch is selected
+// BRANCH NAME
 // ================================================================
 $branch_name = 'All Branches';
 
@@ -99,7 +78,7 @@ if ($branch_id > 0) {
 }
 
 // ================================================================
-// GET FILTER PARAMETERS
+// FILTERS
 // ================================================================
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : 'all';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
@@ -107,7 +86,7 @@ $from_date = isset($_GET['from_date']) ? trim($_GET['from_date']) : '';
 $to_date = isset($_GET['to_date']) ? trim($_GET['to_date']) : '';
 
 // ================================================================
-// BUILD QUERY FOR CONSULTATION BILLS - USING bills TABLE
+// QUERY - CONSULTATION BILLS
 // ================================================================
 $query = "
     SELECT 
@@ -175,19 +154,16 @@ $query = "
 
 $params = [];
 
-// Branch filter - using patient's branch
 if ($branch_id > 0) {
     $query .= " AND pat.branch_id = ?";
     $params[] = $branch_id;
 }
 
-// Status filter
 if ($status_filter !== 'all') {
     $query .= " AND b.status = ?";
     $params[] = $status_filter;
 }
 
-// Date range filter
 if (!empty($from_date)) {
     $query .= " AND DATE(b.created_at) >= ?";
     $params[] = $from_date;
@@ -197,7 +173,6 @@ if (!empty($to_date)) {
     $params[] = $to_date;
 }
 
-// Search filter
 if (!empty($search)) {
     $query .= " AND (b.bill_number LIKE ? OR pat.full_name LIKE ? OR pat.phone LIKE ?)";
     $search_term = "%$search%";
@@ -208,7 +183,6 @@ if (!empty($search)) {
 
 $query .= " ORDER BY b.created_at DESC";
 
-// Execute query
 $consultation_bills = [];
 try {
     $stmt = $db->prepare($query);
@@ -220,7 +194,7 @@ try {
 }
 
 // ================================================================
-// CALCULATE SUMMARY STATISTICS
+// SUMMARY
 // ================================================================
 $total_bills = count($consultation_bills);
 $total_consultation_revenue = 0;
@@ -232,22 +206,19 @@ $total_cancelled = 0;
 $total_paid_amount = 0;
 $total_balance = 0;
 
-// Track unique branches for display
 $unique_branches = [];
 
 foreach ($consultation_bills as $bill) {
-    // Use consultation_total ONLY (not total_amount)
     $consultation_amount = $bill['consultation_total'] ?? 0;
     $total_consultation_revenue += $consultation_amount;
     $total_bill_amount += $bill['total_amount'] ?? 0;
     $total_paid_amount += $bill['paid_amount'] ?? 0;
     $total_balance += $bill['balance'] ?? 0;
-    
-    // Track unique branches
+
     if (!empty($bill['branch_name']) && !in_array($bill['branch_name'], $unique_branches)) {
         $unique_branches[] = $bill['branch_name'];
     }
-    
+
     switch ($bill['status']) {
         case 'paid': $total_paid++; break;
         case 'pending': $total_pending++; break;
@@ -256,11 +227,7 @@ foreach ($consultation_bills as $bill) {
     }
 }
 
-// ================================================================
-// DETERMINE BRANCH DISPLAY NAME
-// ================================================================
 $branch_display_name = 'All Branches';
-
 if ($branch_id > 0) {
     $branch_display_name = $branch_name;
 } else {
@@ -268,14 +235,9 @@ if ($branch_id > 0) {
         $branch_display_name = $unique_branches[0];
     } elseif (count($unique_branches) > 1) {
         $branch_display_name = 'Multiple Branches (' . count($unique_branches) . ')';
-    } else {
-        $branch_display_name = 'All Branches';
     }
 }
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
@@ -283,250 +245,747 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// STATUS BADGE CLASS
+// HELPERS
 // ================================================================
 function getStatusBadge($status) {
-    $classes = [
-        'pending' => 'warning',
-        'paid' => 'success',
-        'partial' => 'warning',
-        'cancelled' => 'danger'
-    ];
+    $classes = ['pending' => 'warning', 'paid' => 'success', 'partial' => 'warning', 'cancelled' => 'danger'];
     return $classes[$status] ?? 'secondary';
 }
 
 function getStatusIcon($status) {
-    $icons = [
-        'pending' => 'fa-clock',
-        'paid' => 'fa-check-circle',
-        'partial' => 'fa-hourglass-half',
-        'cancelled' => 'fa-times-circle'
-    ];
+    $icons = ['pending' => 'fa-clock', 'paid' => 'fa-check-circle', 'partial' => 'fa-hourglass-half', 'cancelled' => 'fa-times-circle'];
     return $icons[$status] ?? 'fa-circle';
 }
 
-// ================================================================
-// FORMAT CURRENCY
-// ================================================================
 function formatCurrency($amount) {
     return 'TSh ' . number_format($amount, 0);
 }
 
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
 $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
     $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
+} catch (Exception $e) { $unread_notifications = 0; }
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// ✅ INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
-
-// Sidebar stats
-$total_employees_sidebar = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
-$total_employees_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-$total_doctors_sidebar = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
-$total_doctors_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-$total_branches_sidebar = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
-$total_branches_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search bills..." value="<?= htmlspecialchars($search) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="0" <?= $branch_id == 0 ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime">
-            <i class="fas fa-clock" style="color:var(--primary-light);"></i>
-            <span id="clockDisplay" style="font-weight:500;"><?= date('d M Y • h:i:s A') ?></span>
-        </span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+<!-- ================================================================
+     PAGE-SPECIFIC CSS
+     ================================================================ -->
+<style>
+    :root {
+        --page-primary: #0B5ED7;
+        --page-primary-dark: #0A4CA8;
+        --page-primary-bg: #EFF6FF;
+        --page-primary-light: #3B82F6;
+        --page-purple: #7C3AED;
+        --page-purple-bg: #EDE9FE;
+        --page-success: #059669;
+        --page-success-bg: #D1FAE5;
+        --page-danger: #DC2626;
+        --page-danger-bg: #FEE2E2;
+        --page-warning: #D97706;
+        --page-warning-bg: #FEF3C7;
+        --page-bg-body: #EFF6FF;
+        --page-bg-card: #FFFFFF;
+        --page-text-primary: #1E293B;
+        --page-text-secondary: #64748B;
+        --page-border: #BFDBFE;
+        --page-table-hover: #EFF6FF;
+        --page-shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+        --page-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+        --page-shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
+    }
+
+    [data-theme="dark"] {
+        --page-bg-body: #0F172A;
+        --page-bg-card: #1E293B;
+        --page-text-primary: #F1F5F9;
+        --page-text-secondary: #94A3B8;
+        --page-border: #334155;
+        --page-table-hover: #1A2A4A;
+        --page-primary: #3B82F6;
+        --page-primary-bg: #1E3A5F;
+        --page-purple-bg: #2D1B5F;
+        --page-success-bg: #1A3A2A;
+        --page-danger-bg: #3A1A1A;
+        --page-warning-bg: #3D2E0A;
+    }
+
+    body { background: var(--page-bg-body); }
+    html[data-theme="dark"] body { background: #0F172A !important; }
+
+    .main-content { background: var(--page-bg-body); }
+    html[data-theme="dark"] .main-content { background: #0F172A !important; }
+
+    /* ================================================================
+       BLUE/PURPLE PAGE HEADER CARD
+       ================================================================ */
+    .page-header-card {
+        background: linear-gradient(135deg, #0B5ED7 0%, #4F46E5 50%, #7C3AED 100%);
+        border-radius: 20px;
+        padding: 24px 32px;
+        margin-bottom: 24px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        color: white;
+        box-shadow: 0 8px 32px rgba(79, 70, 229, 0.3), 0 4px 12px rgba(124, 58, 237, 0.2);
+        position: relative;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+
+    .page-header-card::before {
+        content: '';
+        position: absolute;
+        top: -50%; right: -10%;
+        width: 400px; height: 400px;
+        background: radial-gradient(circle, rgba(255,255,255,0.12) 0%, transparent 70%);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .page-header-title {
+        font-size: 1.5rem;
+        font-weight: 800;
+        margin: 0 0 8px 0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        color: white;
+        position: relative;
+        z-index: 2;
+    }
+
+    .page-header-title i {
+        width: 44px; height: 44px;
+        background: rgba(255,255,255,0.2);
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2rem;
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255,255,255,0.2);
+    }
+
+    .page-header-subtitle {
+        font-size: 0.9rem;
+        color: rgba(255,255,255,0.95);
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 2;
+    }
+
+    .page-header-subtitle strong { color: white; font-weight: 700; }
+
+    .role-badge-display {
+        background: rgba(255,255,255,0.25);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .page-header-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 12px;
+        background: rgba(255,255,255,0.15);
+        border: 1px solid rgba(255,255,255,0.25);
+        border-radius: 20px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        backdrop-filter: blur(10px);
+    }
+
+    .page-header-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 2;
+    }
+
+    .btn-outline-light {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 20px;
+        background: rgba(255,255,255,0.15);
+        border: 1.5px solid rgba(255,255,255,0.3);
+        border-radius: 12px;
+        color: white;
+        text-decoration: none;
+        font-weight: 600;
+        font-size: 0.85rem;
+        transition: all 0.3s ease;
+        backdrop-filter: blur(10px);
+        white-space: nowrap;
+        cursor: pointer;
+    }
+
+    .btn-outline-light:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        color: white;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    }
+
+    /* ================================================================
+       STATS CARDS - 5 cards
+       ================================================================ */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 14px;
+        margin-bottom: 24px;
+    }
+
+    .stat-card {
+        border-radius: 16px;
+        padding: 18px 20px;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+        color: white;
+        position: relative;
+        overflow: hidden;
+        border: none;
+        min-height: 110px;
+    }
+
+    .stat-card::before {
+        content: '';
+        position: absolute;
+        top: -50%; right: -20%;
+        width: 160px; height: 160px;
+        background: rgba(255,255,255,0.06);
+        border-radius: 50%;
+        pointer-events: none;
+        transition: all 0.5s ease;
+    }
+
+    .stat-card:hover {
+        transform: translateY(-4px) scale(1.01);
+        box-shadow: 0 10px 32px rgba(0,0,0,0.2);
+    }
+
+    .stat-card:hover::before { transform: scale(1.3); right: -10%; }
+
+    .stat-card .stat-label {
+        font-size: 0.62rem;
+        color: rgba(255,255,255,0.9);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-weight: 700;
+        margin: 0 0 4px 0;
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .stat-card .stat-number {
+        font-size: 1.75rem;
+        font-weight: 800;
+        color: white;
+        line-height: 1.1;
+        margin: 0;
+        position: relative;
+        z-index: 1;
+    }
+
+    .stat-card .stat-sub {
+        font-size: 0.62rem;
+        color: rgba(255,255,255,0.9);
+        margin: 4px 0 0 0;
+        position: relative;
+        z-index: 1;
+    }
+
+    .stat-card .stat-icon-bg {
+        position: absolute;
+        right: 14px;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 3rem;
+        color: rgba(255,255,255,0.1);
+        z-index: 0;
+    }
+
+    /* Card Colors */
+    .card-blue-dark { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+    .card-blue-dark:hover { box-shadow: 0 10px 32px rgba(11, 94, 215, 0.4); }
+
+    .card-green { background: linear-gradient(135deg, #059669, #047857); }
+    .card-green:hover { box-shadow: 0 10px 32px rgba(5, 150, 105, 0.4); }
+
+    .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
+    .card-orange:hover { box-shadow: 0 10px 32px rgba(217, 119, 6, 0.4); }
+
+    .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+    .card-red:hover { box-shadow: 0 10px 32px rgba(220, 38, 38, 0.4); }
+
+    .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+    .card-purple:hover { box-shadow: 0 10px 32px rgba(124, 58, 237, 0.4); }
+
+    [data-theme="dark"] .card-blue-dark { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
+    [data-theme="dark"] .card-green { background: linear-gradient(135deg, #059669, #047857); }
+    [data-theme="dark"] .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
+    [data-theme="dark"] .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+    [data-theme="dark"] .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+
+    /* ================================================================
+       FILTER BAR
+       ================================================================ */
+    .filter-bar {
+        background: var(--page-bg-card);
+        border-radius: 16px;
+        padding: 16px 20px;
+        border: 2px solid var(--page-border);
+        margin-bottom: 24px;
+        box-shadow: var(--page-shadow-sm);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+    }
+
+    html[data-theme="dark"] .filter-bar {
+        background: #1E293B;
+        border-color: #334155;
+    }
+
+    .filter-bar .filter-label {
+        font-size: 0.7rem;
+        font-weight: 700;
+        color: var(--page-primary);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .filter-bar select, .filter-bar input {
+        background: var(--page-bg-body);
+        border: 2px solid var(--page-border);
+        border-radius: 10px;
+        padding: 8px 14px;
+        font-size: 0.8rem;
+        color: var(--page-text-primary);
+        outline: none;
+        transition: all 0.3s;
+        min-width: 150px;
+        font-family: inherit;
+    }
+
+    html[data-theme="dark"] .filter-bar select,
+    html[data-theme="dark"] .filter-bar input {
+        background: #0F172A;
+        color: #F1F5F9;
+        border-color: #334155;
+    }
+
+    .filter-bar select:focus, .filter-bar input:focus {
+        border-color: var(--page-primary);
+        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
+    }
+
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 18px;
+        border-radius: 10px;
+        font-weight: 700;
+        font-size: 0.8rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+    }
+
+    .btn-primary {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
+    }
+
+    .btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(11, 94, 215, 0.35);
+        color: white;
+    }
+
+    .btn-outline {
+        background: transparent;
+        color: var(--page-text-secondary);
+        border: 2px solid var(--page-border);
+    }
+
+    html[data-theme="dark"] .btn-outline {
+        color: #94A3B8;
+        border-color: #334155;
+    }
+
+    .btn-outline:hover {
+        border-color: var(--page-primary);
+        color: var(--page-primary);
+    }
+
+    /* ================================================================
+       TABLE
+       ================================================================ */
+    .table-card {
+        background: var(--page-bg-card);
+        border-radius: 18px;
+        border: 2px solid var(--page-border);
+        overflow: hidden;
+        box-shadow: var(--page-shadow-sm);
+        margin-bottom: 20px;
+    }
+
+    html[data-theme="dark"] .table-card {
+        background: #1E293B;
+        border-color: #334155;
+    }
+
+    .table-card .table-card-header {
+        padding: 14px 22px;
+        background: linear-gradient(135deg, #0B5ED7, #4F46E5);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .table-card .table-card-title {
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: white;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .table-card .table-card-action {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.72rem;
+        text-decoration: none;
+        transition: all 0.3s;
+        font-weight: 600;
+        background: transparent;
+        border: none;
+        cursor: pointer;
+    }
+
+    .table-card .table-card-action:hover {
+        color: white;
+    }
+
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.78rem;
+    }
+
+    .data-table thead th {
+        background: var(--page-bg-body);
+        color: var(--page-text-secondary);
+        font-weight: 700;
+        padding: 12px 14px;
+        font-size: 0.62rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-bottom: 2px solid var(--page-border);
+        text-align: left;
+        white-space: nowrap;
+    }
+
+    html[data-theme="dark"] .data-table thead th { background: #0F172A; }
+
+    .data-table td {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--page-border);
+        color: var(--page-text-primary);
+        vertical-align: middle;
+    }
+
+    .data-table tbody tr { transition: background 0.2s ease; }
+    .data-table tbody tr:hover td { background: var(--page-table-hover); }
+    .data-table tbody tr:last-child td { border-bottom: none; }
+
+    /* ================================================================
+       BADGES
+       ================================================================ */
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        color: white;
+        letter-spacing: 0.02em;
+    }
+
+    .badge-success { background: #059669; }
+    .badge-danger { background: #DC2626; }
+    .badge-warning { background: #D97706; color: #1E293B; }
+    .badge-info { background: #0B5ED7; }
+    .badge-secondary { background: #64748B; }
+    .badge-purple { background: #7C3AED; }
+
+    html[data-theme="dark"] .badge-warning { color: #1E293B; }
+
+    /* ================================================================
+       EMPTY STATE
+       ================================================================ */
+    .empty-state {
+        text-align: center;
+        padding: 60px 20px;
+        color: var(--page-text-secondary);
+    }
+
+    .empty-state i {
+        font-size: 3.5rem;
+        color: var(--page-border);
+        margin-bottom: 16px;
+        display: block;
+    }
+
+    .empty-state h3 {
+        font-size: 1.2rem;
+        color: var(--page-text-primary);
+        margin-bottom: 8px;
+    }
+
+    .empty-state p { font-size: 0.9rem; }
+
+    /* ================================================================
+       ANIMATIONS
+       ================================================================ */
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .animate-fade-in-up {
+        animation: fadeInUp 0.5s ease forwards;
+        opacity: 0;
+    }
+
+    /* ================================================================
+       UTILITY
+       ================================================================ */
+    .text-blue { color: #0B5ED7; }
+    .text-purple { color: #7C3AED; }
+    .text-green { color: #059669; }
+    .text-red { color: #DC2626; }
+    .font-mono { font-family: 'Courier New', monospace; }
+    .font-semibold { font-weight: 600; }
+    .text-xs { font-size: 0.7rem; }
+    .text-gray-400 { color: var(--page-text-secondary); }
+
+    html[data-theme="dark"] .text-blue { color: #60A5FA; }
+    html[data-theme="dark"] .text-purple { color: #A78BFA; }
+    html[data-theme="dark"] .text-green { color: #34D399; }
+    html[data-theme="dark"] .text-red { color: #F87171; }
+
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 1200px) {
+        .stats-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+
+    @media (max-width: 1024px) {
+        .stats-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+
+    @media (max-width: 768px) {
+        .page-header-card { padding: 20px; }
+        .page-header-title { font-size: 1.2rem; }
+        .page-header-title i { width: 36px; height: 36px; font-size: 1rem; }
+        .stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+        .stat-card { padding: 14px 16px; min-height: 100px; }
+        .stat-card .stat-number { font-size: 1.4rem; }
+        .stat-card .stat-icon-bg { font-size: 2.2rem; }
+        .filter-bar { flex-direction: column; align-items: stretch; }
+        .filter-bar select, .filter-bar input { width: 100%; min-width: unset; }
+        .data-table { font-size: 0.7rem; }
+        .data-table thead th, .data-table td { padding: 8px 10px; }
+    }
+
+    @media (max-width: 480px) {
+        .stats-grid { grid-template-columns: 1fr; gap: 10px; }
+        .data-table { font-size: 0.62rem; }
+        .data-table thead th, .data-table td { padding: 6px 8px; }
+    }
+
+    /* Print */
+    @media print {
+        .page-header-actions, .btn, .btn-outline-light, .filter-bar { display: none !important; }
+        .page-header-card { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .table-card .table-card-header { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .stat-card, .badge { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER - BLUE THEME -->
-    <!-- ================================================================ -->
-    <div class="page-header animate-fade-in-up">
+    <!-- Blue/Purple Page Header Card -->
+    <div class="page-header-card animate-fade-in-up">
         <div>
-            <h1 class="page-title">
+            <h1 class="page-header-title">
                 <i class="fas fa-stethoscope"></i>
                 Consultation Bills
                 <span class="role-badge-display">ADMIN</span>
-                <span class="consult-badge">
+                <span class="page-header-badge" style="background:rgba(124,58,237,0.35);">
                     <i class="fas fa-filter"></i> Consultations Only
                 </span>
             </h1>
-            <p class="page-subtitle">
+            <p class="page-header-subtitle">
                 <i class="fas fa-store-alt"></i>
                 <strong><?= htmlspecialchars($branch_display_name) ?></strong>
-                <span class="header-badge">
+                <span class="page-header-badge">
                     <i class="fas fa-file-invoice"></i> <?= number_format($total_bills) ?> Bills
                 </span>
-                <span class="header-badge" style="background:rgba(59,130,246,0.2);border-color:rgba(59,130,246,0.3);color:#60A5FA;">
+                <span class="page-header-badge" style="background:rgba(255,255,255,0.25);">
                     <i class="fas fa-money-bill-wave"></i> <?= formatCurrency($total_consultation_revenue) ?> Revenue
                 </span>
-                <span class="header-badge consult" style="background:rgba(147,51,234,0.25);border-color:rgba(147,51,234,0.3);color:#C084FC;">
-                    <i class="fas fa-user-md"></i> <?= number_format($total_consultation_revenue > 0 ? round(($total_consultation_revenue / max($total_bill_amount, 1)) * 100, 1) : 0) ?>% Consult
+                <span class="page-header-badge" style="background:rgba(192,132,252,0.35);">
+                    <i class="fas fa-user-md"></i>
+                    <?= number_format($total_bill_amount > 0 ? round(($total_consultation_revenue / $total_bill_amount) * 100, 1) : 0) ?>% Consult
                 </span>
             </p>
         </div>
-        <div style="position:relative;z-index:1;">
+        <div class="page-header-actions">
             <a href="view_cashier.php?id=<?= $branch_id ?>&branch=<?= $branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- SUMMARY STATS -->
-    <!-- ================================================================ -->
+    <!-- ================================================================
+         5 STATS CARDS
+         ================================================================ -->
     <div class="stats-grid animate-fade-in-up" style="animation-delay:0.05s;">
-        
+
         <div class="stat-card card-blue-dark">
             <div class="stat-icon-bg"><i class="fas fa-file-invoice"></i></div>
-            <p class="stat-label"><i class="fas fa-file-invoice mr-1"></i> Total Bills</p>
+            <p class="stat-label"><i class="fas fa-file-invoice"></i> Total Bills</p>
             <p class="stat-number"><?= number_format($total_bills) ?></p>
             <p class="stat-sub">All consultation bills</p>
         </div>
-        
-        <div class="stat-card card-blue-green">
+
+        <div class="stat-card card-green">
             <div class="stat-icon-bg"><i class="fas fa-check-circle"></i></div>
-            <p class="stat-label"><i class="fas fa-check-circle mr-1"></i> Paid</p>
+            <p class="stat-label"><i class="fas fa-check-circle"></i> Paid</p>
             <p class="stat-number"><?= number_format($total_paid) ?></p>
             <p class="stat-sub"><?= $total_bills > 0 ? round(($total_paid / $total_bills) * 100, 1) : 0 ?>% of total</p>
         </div>
-        
-        <div class="stat-card card-blue-orange">
+
+        <div class="stat-card card-orange">
             <div class="stat-icon-bg"><i class="fas fa-clock"></i></div>
-            <p class="stat-label"><i class="fas fa-clock mr-1"></i> Pending</p>
+            <p class="stat-label"><i class="fas fa-clock"></i> Pending</p>
             <p class="stat-number"><?= number_format($total_pending) ?></p>
             <p class="stat-sub">Awaiting payment</p>
         </div>
-        
-        <div class="stat-card card-blue-red">
+
+        <div class="stat-card card-red">
             <div class="stat-icon-bg"><i class="fas fa-times-circle"></i></div>
-            <p class="stat-label"><i class="fas fa-times-circle mr-1"></i> Cancelled</p>
+            <p class="stat-label"><i class="fas fa-times-circle"></i> Cancelled</p>
             <p class="stat-number"><?= number_format($total_cancelled) ?></p>
             <p class="stat-sub">Voided transactions</p>
         </div>
-        
+
         <div class="stat-card card-purple">
             <div class="stat-icon-bg"><i class="fas fa-money-bill-wave"></i></div>
-            <p class="stat-label"><i class="fas fa-money-bill-wave mr-1"></i> Consult Revenue</p>
+            <p class="stat-label"><i class="fas fa-money-bill-wave"></i> Consult Revenue</p>
             <p class="stat-number"><?= formatCurrency($total_consultation_revenue) ?></p>
-            <p class="stat-sub">From consultation items only</p>
+            <p class="stat-sub">Consultation items only</p>
         </div>
-        
+
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FILTER BAR -->
-    <!-- ================================================================ -->
+    <!-- ================================================================
+         FILTER BAR
+         ================================================================ -->
     <div class="filter-bar animate-fade-in-up" style="animation-delay:0.1s;">
         <span class="filter-label"><i class="fas fa-filter"></i> Filter</span>
-        <form method="GET" class="flex flex-wrap gap-3 items-center w-full">
+        <form method="GET" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;flex:1;">
             <input type="hidden" name="branch" value="<?= $branch_id ?>">
-            
-            <select name="status" class="flex-1 min-w-[150px]">
+
+            <select name="status">
                 <option value="all" <?= $status_filter === 'all' ? 'selected' : '' ?>>All Status</option>
                 <option value="pending" <?= $status_filter === 'pending' ? 'selected' : '' ?>>Pending</option>
                 <option value="paid" <?= $status_filter === 'paid' ? 'selected' : '' ?>>Paid</option>
                 <option value="partial" <?= $status_filter === 'partial' ? 'selected' : '' ?>>Partial</option>
                 <option value="cancelled" <?= $status_filter === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
             </select>
-            
-            <input type="date" name="from_date" value="<?= htmlspecialchars($from_date) ?>" class="min-w-[150px]">
-            <span class="text-gray-400">to</span>
-            <input type="date" name="to_date" value="<?= htmlspecialchars($to_date) ?>" class="min-w-[150px]">
-            
-            <input type="text" name="search" placeholder="Search bill # or patient..." value="<?= htmlspecialchars($search) ?>" class="flex-1 min-w-[200px]">
-            
+
+            <input type="date" name="from_date" value="<?= htmlspecialchars($from_date) ?>">
+            <span style="color:var(--page-text-secondary);font-size:0.8rem;">to</span>
+            <input type="date" name="to_date" value="<?= htmlspecialchars($to_date) ?>">
+
+            <input type="text" name="search" placeholder="Search bill # or patient..." value="<?= htmlspecialchars($search) ?>" style="flex:1;min-width:180px;">
+
             <button type="submit" class="btn btn-primary"><i class="fas fa-search"></i> Apply</button>
             <a href="consultation_bills.php?branch=<?= $branch_id ?>" class="btn btn-outline"><i class="fas fa-times"></i> Reset</a>
         </form>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- TABLE -->
-    <!-- ================================================================ -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.15s;">
-        <div class="card-header">
-            <h3 class="card-title">
+    <!-- ================================================================
+         TABLE
+         ================================================================ -->
+    <div class="table-card animate-fade-in-up" style="animation-delay:0.15s;">
+        <div class="table-card-header">
+            <h3 class="table-card-title">
                 <i class="fas fa-stethoscope"></i>
                 Consultation Bills (<?= number_format($total_bills) ?>)
-                <span style="font-size:0.6rem;opacity:0.7;font-weight:400;margin-left:4px;">
+                <span style="font-size:0.65rem;opacity:0.8;font-weight:400;">
                     <i class="fas fa-filter"></i> Only consultation items
                 </span>
             </h3>
-            <div class="flex items-center gap-3">
-                <span class="card-action">
-                    <i class="fas fa-calendar-alt"></i> 
-                    <?= !empty($from_date) ? date('M d, Y', strtotime($from_date)) : 'All' ?> 
-                    - 
+            <div style="display:flex;align-items:center;gap:12px;">
+                <span class="table-card-action">
+                    <i class="fas fa-calendar-alt"></i>
+                    <?= !empty($from_date) ? date('M d, Y', strtotime($from_date)) : 'All' ?>
+                    -
                     <?= !empty($to_date) ? date('M d, Y', strtotime($to_date)) : 'Now' ?>
                 </span>
-                <button onclick="window.print()" class="card-action">
+                <button onclick="window.print()" class="table-card-action">
                     <i class="fas fa-print"></i> Print
                 </button>
             </div>
         </div>
-        
+
         <?php if (count($consultation_bills) > 0): ?>
-            <div class="overflow-x-auto">
+            <div style="overflow-x:auto;">
                 <table class="data-table">
                     <thead>
                         <tr>
@@ -550,29 +1009,29 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
                                 </td>
                                 <td>
-                                    <div class="font-medium"><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></div>
+                                    <div class="font-semibold"><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></div>
                                     <div class="text-xs text-gray-400"><?= htmlspecialchars($bill['patient_phone'] ?? '') ?></div>
                                 </td>
                                 <td>
-                                    <div class="font-medium text-sm"><?= htmlspecialchars($bill['branch_name'] ?? 'N/A') ?></div>
+                                    <div class="font-semibold" style="font-size:0.75rem;"><?= htmlspecialchars($bill['branch_name'] ?? 'N/A') ?></div>
                                     <div class="text-xs text-gray-400"><?= htmlspecialchars($bill['branch_location'] ?? '') ?></div>
                                 </td>
                                 <td>
-                                    <div class="font-medium"><?= number_format($bill['consultation_count'] ?? 0) ?> items</div>
-                                    <div class="text-xs text-gray-400 truncate max-w-[150px]" title="<?= htmlspecialchars($bill['consultation_items'] ?? '') ?>">
+                                    <div class="font-semibold"><?= number_format($bill['consultation_count'] ?? 0) ?> items</div>
+                                    <div class="text-xs text-gray-400" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<?= htmlspecialchars($bill['consultation_items'] ?? '') ?>">
                                         <?= htmlspecialchars($bill['consultation_items'] ?? '') ?>
                                     </div>
                                 </td>
-                                <td class="font-semibold text-purple-600 dark:text-purple-400">
+                                <td class="font-semibold text-purple">
                                     <?= formatCurrency($bill['consultation_total'] ?? 0) ?>
                                 </td>
                                 <td class="font-semibold"><?= formatCurrency($bill['total_amount'] ?? 0) ?></td>
-                                <td class="text-green-600"><?= formatCurrency($bill['paid_amount'] ?? 0) ?></td>
+                                <td class="text-green"><?= formatCurrency($bill['paid_amount'] ?? 0) ?></td>
                                 <td>
                                     <?php if (($bill['balance'] ?? 0) > 0): ?>
-                                        <span class="text-red-600 font-semibold"><?= formatCurrency($bill['balance'] ?? 0) ?></span>
+                                        <span class="text-red font-semibold"><?= formatCurrency($bill['balance'] ?? 0) ?></span>
                                     <?php else: ?>
-                                        <span class="text-green-600"><?= formatCurrency(0) ?></span>
+                                        <span class="text-green"><?= formatCurrency(0) ?></span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
@@ -583,13 +1042,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 </td>
                                 <td class="text-xs">
                                     <?= date('M d, Y', strtotime($bill['created_at'] ?? 'now')) ?>
-                                    <div class="text-gray-400 text-[0.5rem]">
+                                    <div class="text-gray-400" style="font-size:0.55rem;">
                                         <?= date('h:i A', strtotime($bill['created_at'] ?? 'now')) ?>
                                     </div>
                                 </td>
                                 <td>
                                     <a href="view_bill.php?id=<?= $bill['id'] ?>&branch=<?= $branch_id ?>" 
-                                       class="text-blue text-xs hover:underline font-semibold">
+                                       class="text-blue text-xs font-semibold" style="text-decoration:none;">
                                         <i class="fas fa-eye"></i> View
                                     </a>
                                 </td>
@@ -598,1053 +1057,68 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </tbody>
                 </table>
             </div>
-            
-            <!-- Summary row -->
-            <div style="padding:10px 20px;background:var(--bg-body);border-top:2px solid var(--border-color);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:0.75rem;">
-                <div>
+
+            <!-- Summary Row -->
+            <div style="padding:12px 20px;background:var(--page-bg-body);border-top:2px solid var(--page-border);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:0.75rem;">
+                <div style="color:var(--page-text-secondary);">
                     <span class="font-semibold">Total Bills:</span> <?= number_format($total_bills) ?>
-                    <span class="mx-2 text-gray-400">|</span>
-                    <span class="font-semibold">Consult Revenue:</span> <?= formatCurrency($total_consultation_revenue) ?>
+                    <span style="margin:0 8px;color:var(--page-border);">|</span>
+                    <span class="font-semibold">Consult Revenue:</span> <span class="text-purple font-semibold"><?= formatCurrency($total_consultation_revenue) ?></span>
                     <?php if ($branch_id > 0): ?>
-                        <span class="mx-2 text-gray-400">|</span>
+                        <span style="margin:0 8px;color:var(--page-border);">|</span>
                         <span class="font-semibold">Branch:</span> <?= htmlspecialchars($branch_name) ?>
                     <?php endif; ?>
                 </div>
-                <div class="text-gray-500">
+                <div class="text-gray-400">
                     <i class="fas fa-info-circle"></i> Using <strong class="text-blue">bills</strong> table with <strong class="text-blue">bill_items</strong> join
                 </div>
             </div>
-            
+
         <?php else: ?>
             <div class="empty-state">
                 <i class="fas fa-stethoscope"></i>
                 <h3>No Consultation Bills Found</h3>
-                <p>Try adjusting your filters or <a href="consultation_bills.php?branch=<?= $branch_id ?>" class="text-blue hover:underline">reset all filters</a></p>
+                <p>Try adjusting your filters or <a href="consultation_bills.php?branch=<?= $branch_id ?>" class="text-blue" style="text-decoration:underline;">reset all filters</a></p>
             </div>
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
-    <footer class="footer">
-        <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
-            Consultation Bills - <?= htmlspecialchars($branch_display_name) ?>
-            <span class="text-gray-300 mx-2">|</span>
-            <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
-        </p>
-    </footer>
-
 </main>
 
 <!-- ================================================================ -->
-<!-- STYLES -->
-<!-- ================================================================ -->
-<style>
-    /* ================================================================
-       ROOT VARIABLES - DARK MODE SUPPORT
-       ================================================================ */
-    :root {
-        --primary: #0B5ED7;
-        --primary-dark: #0A4CA8;
-        --primary-light: #3B82F6;
-        --primary-bg: #EFF6FF;
-        --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-        --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #083C8A);
-        --success: #059669;
-        --success-dark: #047857;
-        --success-light: #34D399;
-        --success-bg: #D1FAE5;
-        --danger: #DC2626;
-        --danger-dark: #B91C1C;
-        --danger-light: #F87171;
-        --danger-bg: #FEE2E2;
-        --warning: #D97706;
-        --warning-dark: #B45309;
-        --warning-bg: #FEF3C7;
-        --purple: #7C3AED;
-        --purple-bg: #EDE9FE;
-        --white: #FFFFFF;
-        --gray-50: #F8FAFC;
-        --gray-100: #F1F5F9;
-        --gray-200: #E2E8F0;
-        --gray-300: #CBD5E1;
-        --gray-400: #94A3B8;
-        --gray-500: #64748B;
-        --gray-600: #475569;
-        --gray-700: #334155;
-        --gray-800: #1E293B;
-        --gray-900: #0F172A;
-        --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-        --shadow: 0 1px 3px rgba(0,0,0,0.08);
-        --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-        --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-        --shadow-xl: 0 20px 25px rgba(0,0,0,0.15);
-        --bg-body: #EFF6FF;
-        --bg-card: #FFFFFF;
-        --bg-nav: #FFFFFF;
-        --text-primary: #1E293B;
-        --text-secondary: #64748B;
-        --border-color: #BFDBFE;
-        --radius: 12px;
-        --radius-lg: 18px;
-        --table-hover: #EFF6FF;
-        --primary-light-var: #3B82F6;
-        --transition: all 0.3s ease;
-    }
-    
-    [data-theme="dark"] {
-        --bg-body: #0F172A;
-        --bg-card: #1E293B;
-        --bg-nav: #1E293B;
-        --text-primary: #F1F5F9;
-        --text-secondary: #94A3B8;
-        --border-color: #334155;
-        --primary: #3B82F6;
-        --primary-dark: #2563EB;
-        --primary-light-var: #60A5FA;
-        --primary-bg: #1E3A5F;
-        --table-hover: #1A2A4A;
-        --shadow: 0 1px 3px rgba(0,0,0,0.3);
-        --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-        --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-        --shadow-xl: 0 20px 25px rgba(0,0,0,0.4);
-    }
-
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    
-    body {
-        font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-        background: var(--bg-body);
-        color: var(--text-primary);
-        transition: background 0.3s ease, color 0.3s ease;
-    }
-    
-    ::-webkit-scrollbar { width: 5px; height: 5px; }
-    ::-webkit-scrollbar-track { background: var(--bg-body); }
-    ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-
-    /* ================================================================
-       TOP NAV - SHARED HEADER STYLES
-       ================================================================ */
-    .top-nav {
-        position: fixed;
-        top: 0;
-        left: 270px;
-        right: 0;
-        height: 68px;
-        background: var(--bg-nav);
-        z-index: 40;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 0 24px;
-        border-bottom: 2px solid var(--border-color);
-        transition: all 0.3s ease;
-        backdrop-filter: blur(10px);
-        box-shadow: var(--shadow-sm);
-    }
-    
-    .top-nav .search-wrapper {
-        display: flex;
-        align-items: center;
-        background: var(--bg-body);
-        border-radius: 10px;
-        border: 2px solid var(--border-color);
-        transition: all 0.3s;
-        flex: 1;
-        max-width: 500px;
-    }
-    
-    .top-nav .search-wrapper:focus-within {
-        border-color: #0B5ED7;
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-    }
-    
-    .top-nav .search-wrapper input {
-        border: none;
-        background: transparent;
-        padding: 8px 14px;
-        width: 100%;
-        font-size: 0.85rem;
-        outline: none;
-        color: var(--text-primary);
-    }
-    
-    .top-nav .search-wrapper input::placeholder {
-        color: var(--text-secondary);
-    }
-    
-    .top-nav .search-wrapper .search-btn {
-        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-        color: white;
-        border: none;
-        padding: 8px 16px;
-        border-radius: 0 10px 10px 0;
-        cursor: pointer;
-        font-size: 0.85rem;
-        transition: all 0.3s;
-        white-space: nowrap;
-    }
-    
-    .top-nav .search-wrapper .search-btn:hover {
-        transform: scale(1.02);
-    }
-    
-    .top-nav .branch-selector {
-        border: 2px solid var(--border-color);
-        border-radius: 10px;
-        padding: 6px 12px;
-        background: var(--bg-card);
-        font-size: 0.82rem;
-        font-weight: 500;
-        cursor: pointer;
-        outline: none;
-        min-width: 160px;
-        color: var(--text-primary);
-        transition: all 0.3s;
-    }
-    
-    .top-nav .branch-selector:focus {
-        border-color: #0B5ED7;
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-    }
-    
-    .top-nav .datetime {
-        font-size: 0.78rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-    }
-    
-    .top-nav .datetime i {
-        color: var(--primary-light-var);
-    }
-    
-    .top-nav .avatar {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        object-fit: cover;
-        border: 2px solid var(--border-color);
-        cursor: pointer;
-        transition: all 0.3s;
-    }
-    
-    .top-nav .avatar:hover {
-        border-color: #0B5ED7;
-        transform: scale(1.05);
-    }
-    
-    .top-nav .icon-btn {
-        width: 38px;
-        height: 38px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: var(--text-secondary);
-        transition: all 0.3s;
-        background: transparent;
-        border: none;
-        cursor: pointer;
-        position: relative;
-    }
-    
-    .top-nav .icon-btn:hover {
-        background: var(--bg-body);
-        color: #0B5ED7;
-    }
-    
-    .notif-dot {
-        position: absolute;
-        top: 6px;
-        right: 6px;
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        border: 2px solid var(--bg-nav);
-        animation: pulse-dot 2s infinite;
-    }
-    
-    .notif-dot.has-notif {
-        background: #EF4444;
-    }
-    
-    .notif-dot.no-notif {
-        background: #94A3B8;
-        animation: none;
-    }
-    
-    @keyframes pulse-dot {
-        0%, 100% { transform: scale(1); }
-        50% { transform: scale(1.2); }
-    }
-    
-    .dark-toggle-btn {
-        background: var(--bg-body);
-        border: 2px solid var(--border-color);
-        border-radius: 10px;
-        padding: 6px 12px;
-        cursor: pointer;
-        font-size: 0.82rem;
-        color: var(--text-primary);
-        transition: all 0.3s;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-    }
-    
-    .dark-toggle-btn:hover {
-        border-color: #0B5ED7;
-        background: var(--bg-card);
-    }
-    
-    .dark-toggle-btn i {
-        font-size: 0.9rem;
-    }
-
-    /* ================================================================
-       MAIN CONTENT
-       ================================================================ */
-    .main-content {
-        margin-left: 270px;
-        margin-top: 68px;
-        padding: 28px 32px;
-        min-height: calc(100vh - 68px);
-        transition: var(--transition);
-    }
-    
-    @media (max-width: 1024px) {
-        .top-nav { left: 0; }
-        .main-content { margin-left: 0; padding: 16px; }
-    }
-
-    /* ================================================================
-       PAGE HEADER - BLUE THEME
-       ================================================================ */
-    .page-header {
-        background: var(--primary-gradient-strong);
-        border-radius: var(--radius-lg);
-        padding: 28px 36px;
-        margin-bottom: 28px;
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: space-between;
-        align-items: center;
-        gap: 16px;
-        box-shadow: 0 8px 32px rgba(11, 94, 215, 0.35);
-        position: relative;
-        overflow: hidden;
-    }
-    
-    .page-header::before {
-        content: '';
-        position: absolute;
-        top: -60%;
-        right: -10%;
-        width: 400px;
-        height: 400px;
-        background: rgba(255,255,255,0.05);
-        border-radius: 50%;
-        pointer-events: none;
-    }
-    
-    .page-header::after {
-        content: '';
-        position: absolute;
-        bottom: -40%;
-        left: -5%;
-        width: 300px;
-        height: 300px;
-        background: rgba(255,255,255,0.03);
-        border-radius: 50%;
-        pointer-events: none;
-    }
-    
-    .page-header .page-title {
-        color: white;
-        font-size: 1.8rem;
-        font-weight: 700;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-        position: relative;
-        z-index: 1;
-    }
-    
-    .page-header .page-title i {
-        font-size: 2rem;
-        opacity: 0.9;
-    }
-    
-    .page-header .page-subtitle {
-        color: rgba(255,255,255,0.85);
-        font-size: 0.95rem;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-        position: relative;
-        z-index: 1;
-    }
-    
-    .page-header .page-subtitle strong {
-        color: white;
-        font-weight: 600;
-    }
-    
-    .page-header .role-badge-display {
-        background: rgba(255,255,255,0.2);
-        color: white;
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-size: 0.65rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        backdrop-filter: blur(4px);
-    }
-    
-    .page-header .header-badge {
-        background: rgba(255,255,255,0.12);
-        color: white;
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 500;
-        backdrop-filter: blur(4px);
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        border: 1px solid rgba(255,255,255,0.1);
-        transition: all 0.3s ease;
-    }
-    
-    .page-header .header-badge:hover {
-        background: rgba(255,255,255,0.2);
-        transform: translateY(-1px);
-    }
-    
-    .page-header .header-badge.consult {
-        background: rgba(147, 51, 234, 0.25);
-        border-color: rgba(147, 51, 234, 0.3);
-        color: #C084FC;
-    }
-    
-    .page-header .btn-outline-light {
-        background: rgba(255,255,255,0.12);
-        color: white;
-        border: 1px solid rgba(255,255,255,0.2);
-        padding: 8px 18px;
-        border-radius: var(--radius);
-        font-weight: 500;
-        font-size: 0.82rem;
-        transition: all 0.3s;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        backdrop-filter: blur(4px);
-        position: relative;
-        z-index: 1;
-    }
-    
-    .page-header .btn-outline-light:hover {
-        background: rgba(255,255,255,0.25);
-        transform: translateY(-2px);
-        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-    }
-    
-    /* ================================================================
-       STATS CARDS
-       ================================================================ */
-    .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(5, 1fr);
-        gap: 14px;
-        margin-bottom: 24px;
-    }
-    
-    .stat-card {
-        border-radius: var(--radius);
-        padding: 16px 20px;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-        color: white !important;
-        position: relative;
-        overflow: hidden;
-        border: none;
-    }
-    
-    .stat-card::before {
-        content: '';
-        position: absolute;
-        top: -50%;
-        right: -20%;
-        width: 160px;
-        height: 160px;
-        background: rgba(255,255,255,0.06);
-        border-radius: 50%;
-        pointer-events: none;
-        transition: all 0.5s ease;
-    }
-    
-    .stat-card::after {
-        content: '';
-        position: absolute;
-        bottom: -40%;
-        left: -10%;
-        width: 120px;
-        height: 120px;
-        background: rgba(255,255,255,0.04);
-        border-radius: 50%;
-        pointer-events: none;
-        transition: all 0.5s ease;
-    }
-    
-    .stat-card:hover {
-        transform: translateY(-4px) scale(1.01);
-        box-shadow: 0 10px 32px rgba(0,0,0,0.2);
-    }
-    
-    .stat-card:hover::before { transform: scale(1.3); right: -10%; }
-    .stat-card:hover::after { transform: scale(1.4); bottom: -30%; }
-    
-    .stat-card .stat-label {
-        font-size: 0.6rem;
-        color: rgba(255,255,255,0.85);
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        font-weight: 600;
-        margin: 0 0 2px 0;
-        position: relative;
-        z-index: 1;
-    }
-    
-    .stat-card .stat-number {
-        font-size: 1.8rem;
-        font-weight: 800;
-        color: white !important;
-        line-height: 1.1;
-        margin: 0;
-        position: relative;
-        z-index: 1;
-    }
-    
-    .stat-card .stat-sub {
-        font-size: 0.6rem;
-        color: rgba(255,255,255,0.9);
-        margin: 2px 0 0 0;
-        position: relative;
-        z-index: 1;
-    }
-    
-    .stat-card .stat-icon-bg {
-        position: absolute;
-        right: 12px;
-        top: 50%;
-        transform: translateY(-50%);
-        font-size: 3rem;
-        color: rgba(255,255,255,0.08);
-        z-index: 0;
-    }
-    
-    /* Card Colors */
-    .card-blue-dark { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-    .card-blue-dark:hover { box-shadow: 0 10px 32px rgba(11, 94, 215, 0.4); }
-    
-    .card-blue-green { background: linear-gradient(135deg, #059669, #047857); }
-    .card-blue-green:hover { box-shadow: 0 10px 32px rgba(5, 150, 105, 0.4); }
-    
-    .card-blue-orange { background: linear-gradient(135deg, #D97706, #B45309); }
-    .card-blue-orange:hover { box-shadow: 0 10px 32px rgba(217, 119, 6, 0.4); }
-    
-    .card-blue-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-    .card-blue-red:hover { box-shadow: 0 10px 32px rgba(220, 38, 38, 0.4); }
-    
-    .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-    .card-purple:hover { box-shadow: 0 10px 32px rgba(124, 58, 237, 0.4); }
-    
-    [data-theme="dark"] .card-blue-dark { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
-    [data-theme="dark"] .card-blue-green { background: linear-gradient(135deg, #059669, #047857); }
-    [data-theme="dark"] .card-blue-orange { background: linear-gradient(135deg, #D97706, #B45309); }
-    [data-theme="dark"] .card-blue-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-    [data-theme="dark"] .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-    
-    /* ================================================================
-       FILTER BAR
-       ================================================================ */
-    .filter-bar {
-        background: var(--bg-card);
-        border-radius: var(--radius-lg);
-        padding: 16px 20px;
-        border: 2px solid var(--border-color);
-        margin-bottom: 24px;
-        box-shadow: var(--shadow-sm);
-    }
-    
-    .filter-bar .filter-label {
-        font-size: 0.7rem;
-        font-weight: 600;
-        color: var(--primary);
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-    }
-    
-    .filter-bar select, .filter-bar input {
-        background: var(--bg-body);
-        border: 2px solid var(--border-color);
-        border-radius: var(--radius);
-        padding: 8px 14px;
-        font-size: 0.8rem;
-        color: var(--text-primary);
-        outline: none;
-        transition: all 0.3s;
-        min-width: 150px;
-    }
-    
-    .filter-bar select:focus, .filter-bar input:focus {
-        border-color: var(--primary);
-        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
-    }
-    
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 8px 18px;
-        border-radius: var(--radius);
-        font-weight: 600;
-        font-size: 0.8rem;
-        transition: all 0.3s ease;
-        cursor: pointer;
-        border: none;
-        text-decoration: none;
-    }
-    
-    .btn-primary {
-        background: var(--primary-gradient);
-        color: white;
-    }
-    
-    .btn-primary:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    
-    .btn-outline {
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-    }
-    
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: var(--primary);
-        color: var(--primary);
-    }
-    
-    /* ================================================================
-       TABLE
-       ================================================================ */
-    .table-container {
-        background: var(--bg-card);
-        border-radius: var(--radius-lg);
-        border: 2px solid var(--border-color);
-        overflow: hidden;
-        box-shadow: var(--shadow-sm);
-    }
-    
-    .table-container .card-header {
-        padding: 14px 20px;
-        background: var(--primary-gradient-strong);
-        border-bottom: 2px solid var(--border-color);
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 8px;
-    }
-    
-    .table-container .card-header .card-title {
-        font-size: 0.85rem;
-        font-weight: 700;
-        color: white;
-        margin: 0;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    
-    .table-container .card-header .card-title i {
-        color: rgba(255,255,255,0.8);
-    }
-    
-    .table-container .card-header .card-action {
-        color: rgba(255,255,255,0.7);
-        font-size: 0.65rem;
-        text-decoration: none;
-        transition: all 0.3s;
-    }
-    
-    .table-container .card-header .card-action:hover {
-        color: white;
-    }
-    
-    .data-table {
-        width: 100%;
-        border-collapse: separate;
-        border-spacing: 0;
-        font-size: 0.78rem;
-    }
-    
-    .data-table thead th {
-        background: var(--bg-body);
-        color: var(--text-secondary);
-        font-weight: 700;
-        padding: 10px 14px;
-        font-size: 0.6rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        border-bottom: 2px solid var(--border-color);
-        text-align: left;
-    }
-    
-    [data-theme="dark"] .data-table thead th {
-        background: #0F172A;
-    }
-    
-    .data-table td {
-        padding: 8px 14px;
-        border-bottom: 1px solid var(--border-color);
-        color: var(--text-primary);
-        vertical-align: middle;
-    }
-    
-    .data-table tbody tr:hover td {
-        background: var(--table-hover);
-    }
-    
-    .data-table tbody tr:last-child td {
-        border-bottom: none;
-    }
-    
-    .badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 2px 10px;
-        border-radius: 20px;
-        font-size: 0.6rem;
-        font-weight: 600;
-        color: white;
-        letter-spacing: 0.02em;
-    }
-    
-    .badge-success { background: #059669; }
-    .badge-danger { background: #DC2626; }
-    .badge-warning { background: #D97706; color: #1E293B; }
-    .badge-info { background: #0B5ED7; }
-    .badge-secondary { background: #64748B; }
-    
-    [data-theme="dark"] .badge-warning { color: #1E293B; }
-    
-    .consult-badge {
-        background: rgba(124, 58, 237, 0.12);
-        color: #7C3AED;
-        padding: 2px 10px;
-        border-radius: 12px;
-        font-size: 0.6rem;
-        font-weight: 600;
-        display: inline-block;
-        border: 1px solid rgba(124, 58, 237, 0.2);
-    }
-    
-    [data-theme="dark"] .consult-badge {
-        background: rgba(124, 58, 237, 0.2);
-        color: #C084FC;
-        border-color: rgba(124, 58, 237, 0.3);
-    }
-    
-    /* ================================================================
-       FOOTER
-       ================================================================ */
-    .footer {
-        padding: 14px 0;
-        border-top: 2px solid var(--border-color);
-        margin-top: 24px;
-        text-align: center;
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-    }
-    
-    .footer .footer-brand {
-        color: var(--primary);
-        font-weight: 700;
-    }
-    
-    /* ================================================================
-       EMPTY STATE
-       ================================================================ */
-    .empty-state {
-        text-align: center;
-        padding: 60px 20px;
-        color: var(--text-secondary);
-    }
-    
-    .empty-state i {
-        font-size: 3.5rem;
-        color: var(--border-color);
-        margin-bottom: 16px;
-    }
-    
-    .empty-state h3 {
-        font-size: 1.2rem;
-        color: var(--text-primary);
-        margin-bottom: 8px;
-    }
-    
-    .text-blue { color: #0B5ED7; }
-    .bg-blue { background: #0B5ED7; }
-    .border-blue { border-color: #0B5ED7; }
-    
-    [data-theme="dark"] .text-blue { color: #3B82F6; }
-    [data-theme="dark"] .bg-blue { background: #3B82F6; }
-    
-    /* ================================================================
-       ANIMATIONS
-       ================================================================ */
-    @keyframes fadeInUp {
-        from { opacity: 0; transform: translateY(20px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-    
-    .animate-fade-in-up {
-        animation: fadeInUp 0.5s ease forwards;
-        opacity: 0;
-    }
-    
-    /* ================================================================
-       RESPONSIVE
-       ================================================================ */
-    @media (max-width: 1024px) {
-        .top-nav { left: 0; }
-        .main-content { margin-left: 0; padding: 16px; }
-        .stats-grid { grid-template-columns: repeat(3, 1fr); }
-    }
-    
-    @media (max-width: 768px) {
-        .top-nav .search-wrapper { max-width: 180px; }
-        .top-nav .datetime { display: none; }
-        .page-header { padding: 16px 18px; }
-        .page-header .page-title { font-size: 1.3rem; }
-        .stats-grid { grid-template-columns: 1fr 1fr; }
-        .filter-bar .filter-label { display: none; }
-        .filter-bar select, .filter-bar input { min-width: 100px; }
-        .data-table { font-size: 0.65rem; }
-        .data-table thead th, .data-table td { padding: 6px 8px; }
-    }
-    
-    @media (max-width: 480px) {
-        .main-content { padding: 10px; }
-        .stats-grid { grid-template-columns: 1fr; }
-        .page-header { flex-direction: column; align-items: flex-start !important; }
-        .data-table { font-size: 0.55rem; }
-        .data-table thead th, .data-table td { padding: 4px 6px; }
-    }
-    
-    @media print {
-        .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
-        .search-wrapper, .filter-bar, .btn-outline-light,
-        .footer, #sidebarToggle { display: none !important; }
-        .main-content { margin: 0; padding: 20px; }
-        .stat-card { border: 1px solid #ddd !important; box-shadow: none !important; }
-        .page-header { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        .page-title, .page-subtitle, .role-badge-display, .header-badge { color: white !important; }
-        .badge { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    }
-</style>
-
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE TOGGLE - FIXED
+    // DARK MODE BACKGROUND ENFORCEMENT
     // ================================================================
-    (function() {
-        var darkModeToggle = document.getElementById('darkModeToggle');
-        var darkIcon = document.getElementById('darkIcon');
-        var darkText = document.getElementById('darkText');
-        var htmlElement = document.documentElement;
-        
-        // Check saved dark mode
-        var savedDarkMode = localStorage.getItem('darkMode');
-        var cookieDarkMode = document.cookie.split('; ').find(function(row) {
-            return row.startsWith('dark_mode=');
-        });
-        
-        // Determine initial dark mode
-        var isDark = false;
-        if (savedDarkMode === 'true') {
-            isDark = true;
-        } else if (cookieDarkMode) {
-            isDark = cookieDarkMode.split('=')[1] === 'true';
-        }
-        
-        // Apply dark mode
+    function enforceDarkModeBackground() {
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var body = document.body;
+        var mainContent = document.querySelector('.main-content');
+
         if (isDark) {
-            htmlElement.setAttribute('data-theme', 'dark');
-            if (darkIcon) darkIcon.className = 'fas fa-sun';
-            if (darkText) darkText.textContent = 'Light';
+            if (body) body.style.background = '#0F172A';
+            if (mainContent) mainContent.style.background = '#0F172A';
         } else {
-            htmlElement.removeAttribute('data-theme');
-            if (darkIcon) darkIcon.className = 'fas fa-moon';
-            if (darkText) darkText.textContent = 'Dark';
-        }
-        
-        // Toggle dark mode
-        if (darkModeToggle) {
-            darkModeToggle.addEventListener('click', function(e) {
-                e.preventDefault();
-                var isDarkNow = htmlElement.getAttribute('data-theme') === 'dark';
-                
-                if (isDarkNow) {
-                    htmlElement.removeAttribute('data-theme');
-                    if (darkIcon) darkIcon.className = 'fas fa-moon';
-                    if (darkText) darkText.textContent = 'Dark';
-                    localStorage.setItem('darkMode', 'false');
-                    document.cookie = "dark_mode=false; path=/";
-                } else {
-                    htmlElement.setAttribute('data-theme', 'dark');
-                    if (darkIcon) darkIcon.className = 'fas fa-sun';
-                    if (darkText) darkText.textContent = 'Light';
-                    localStorage.setItem('darkMode', 'true');
-                    document.cookie = "dark_mode=true; path=/";
-                }
-            });
-        }
-    })();
-
-    // ================================================================
-    // BRANCH SWITCH
-    // ================================================================
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        url.searchParams.delete('status');
-        url.searchParams.delete('search');
-        url.searchParams.delete('from_date');
-        url.searchParams.delete('to_date');
-        window.location.href = url.toString();
-    }
-
-    // ================================================================
-    // CLOCK - UPDATE EVERY SECOND
-    // ================================================================
-    function updateClock() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var el = document.getElementById('clockDisplay');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
+            if (body) body.style.background = '#EFF6FF';
+            if (mainContent) mainContent.style.background = '#EFF6FF';
         }
     }
-    setInterval(updateClock, 1000);
-    updateClock();
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-
-    function performSearch() {
-        var query = searchInput.value.trim();
-        var url = new URL(window.location.href);
-        if (query.length > 0) {
-            url.searchParams.set('search', query);
-        } else {
-            url.searchParams.delete('search');
-        }
-        window.location.href = url.toString();
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+    enforceDarkModeBackground();
+    document.addEventListener('darkModeChanged', function() { setTimeout(enforceDarkModeBackground, 50); });
+    new MutationObserver(function(mutations) {
+        mutations.forEach(function(m) {
+            if (m.attributeName === 'data-theme') enforceDarkModeBackground();
         });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
-        var ftEl = document.getElementById('footerTime');
-        if (ftEl) ftEl.textContent = timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    }).observe(document.documentElement, { attributes: true });
 
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-            e.preventDefault();
-            var searchInput = document.querySelector('input[name="search"]');
-            if (searchInput) searchInput.focus();
-        }
-    });
-
-    console.log('%c🔵 Braick Dispensary - Consultation Bills', 'font-size:18px; font-weight:bold; color:#7C3AED;');
-    console.log('%c✅ USING: bills table (NOT patient_bills)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ JOIN: bill_items WHERE item_type = "consultation"', 'font-size:13px; color:#34D399;');
-    console.log('%c🏢 Branch Display: <?= htmlspecialchars($branch_display_name) ?> (Filter ID: <?= $branch_id ?>)', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Total Bills: <?= number_format($total_bills) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c💰 Consult Revenue: <?= formatCurrency($total_consultation_revenue) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🌙 Dark Mode Toggle: WORKING', 'font-size:13px; color:#3B82F6;');
-    console.log('%c🕐 Clock: WORKING', 'font-size:13px; color:#3B82F6;');
+    console.log('%c🔵 Braick - Consultation Bills', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#059669;');
+    console.log('%c🎨 Blue/Purple page header + 5 summary cards', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🌙 FULL DARK MODE works', 'font-size:13px; color:#3B82F6;');
+    console.log('%c💡 USING: bills + bill_items (item_type=consultation)', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

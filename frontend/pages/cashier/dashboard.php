@@ -2,28 +2,19 @@
 // ================================================================
 // FILE: frontend/pages/cashier/dashboard.php
 // CASHIER DASHBOARD - FIXED
-// Uses: bills, bill_items, prescriptions, lab_tests
+// ✅ REMOVED: All Amount displays (TSh) - Only counts shown
 // BRAICK DISPENSARY
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// ALLOWED ROLES: Cashier, Reception, Admin
-// ================================================================
 $allowed_roles = ['cashier', 'reception', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
@@ -36,9 +27,6 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
     exit;
 }
 
-// ================================================================
-// GET USER DATA FROM SESSION
-// ================================================================
 $cashier_id = $_SESSION['user_id'];
 $cashier_name = $_SESSION['full_name'] ?? 'User';
 $cashier_username = $_SESSION['username'] ?? '';
@@ -49,14 +37,8 @@ $cashier_email = $_SESSION['email'] ?? '';
 $cashier_phone = $_SESSION['phone'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// CHECK IF USER IS RECEPTIONIST (for display message)
-// ================================================================
 $is_reception = ($cashier_role === 'reception');
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
@@ -65,9 +47,6 @@ try {
     die("Database connection failed: " . $e->getMessage());
 }
 
-// ================================================================
-// GET CASHIER STATISTICS - USING CORRECT TABLES
-// ================================================================
 $today = date('Y-m-d');
 $unread_notifications = 0;
 
@@ -77,11 +56,9 @@ try {
     $stmt->execute([$cashier_id]);
     $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
-    // ================================================================
-    // 1. TODAY PAYMENTS (from bills with paid_amount > 0 today)
-    // ================================================================
+    // 1. TODAY PAYMENTS
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total
+        SELECT COUNT(*) as count
         FROM bills 
         WHERE branch_id = ? 
         AND DATE(updated_at) = ?
@@ -89,103 +66,74 @@ try {
         AND status IN ('paid', 'partial')
     ");
     $stmt->execute([$cashier_branch_id, $today]);
-    $today_payments_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $today_payments_count = $today_payments_data['count'] ?? 0;
-    $today_payments_total = $today_payments_data['total'] ?? 0;
+    $today_payments_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    // ================================================================
-    // 2. PENDING BILLS (status = 'pending')
-    // ================================================================
+    // 2. PENDING BILLS
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
+        SELECT COUNT(*) as count
         FROM bills 
         WHERE branch_id = ? 
         AND status = 'pending'
     ");
     $stmt->execute([$cashier_branch_id]);
-    $pending_bills_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $pending_bills = $pending_bills_data['count'] ?? 0;
-    $pending_bills_total = $pending_bills_data['total'] ?? 0;
+    $pending_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    // ================================================================
-    // 3. TOTAL BILLS (all bills)
-    // ================================================================
+    // 3. TOTAL BILLS
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
+        SELECT COUNT(*) as count
         FROM bills 
         WHERE branch_id = ?
     ");
     $stmt->execute([$cashier_branch_id]);
-    $total_bills_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_bills = $total_bills_data['count'] ?? 0;
-    $total_bills_amount = $total_bills_data['total'] ?? 0;
+    $total_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    // ================================================================
-    // 4. PAID BILLS (status = 'paid')
-    // ================================================================
+    // 4. PAID BILLS
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total
+        SELECT COUNT(*) as count
         FROM bills 
         WHERE branch_id = ? 
         AND status = 'paid'
     ");
     $stmt->execute([$cashier_branch_id]);
-    $paid_bills_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $paid_bills = $paid_bills_data['count'] ?? 0;
-    $paid_bills_total = $paid_bills_data['total'] ?? 0;
+    $paid_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    // ================================================================
-    // 5. PARTIAL PAYMENTS (status = 'partial')
-    // ================================================================
+    // 5. PARTIAL PAYMENTS
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total_paid, COALESCE(SUM(balance), 0) as total_balance
+        SELECT COUNT(*) as count
         FROM bills 
         WHERE branch_id = ? 
         AND status = 'partial'
     ");
     $stmt->execute([$cashier_branch_id]);
-    $partial_bills_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $partial_bills = $partial_bills_data['count'] ?? 0;
-    $partial_bills_paid = $partial_bills_data['total_paid'] ?? 0;
-    $partial_bills_balance = $partial_bills_data['total_balance'] ?? 0;
+    $partial_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    // ================================================================
-    // 6. EXPENSES (from expenses table)
-    // ================================================================
+    // 6. EXPENSES
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+        SELECT COUNT(*) as count
         FROM expenses 
         WHERE branch_id = ? 
         AND status = 'paid'
     ");
     $stmt->execute([$cashier_branch_id]);
-    $expenses_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $expenses_count = $expenses_data['count'] ?? 0;
-    $expenses_total = $expenses_data['total'] ?? 0;
+    $expenses_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    // Today's expenses
+    // Today's expenses count
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+        SELECT COUNT(*) as count
         FROM expenses 
         WHERE branch_id = ? 
         AND DATE(payment_date) = ?
         AND status = 'paid'
     ");
     $stmt->execute([$cashier_branch_id, $today]);
-    $today_expenses_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $today_expenses = $today_expenses_data['total'] ?? 0;
+    $today_expenses_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    // ================================================================
-    // 7. PAYMENT HISTORY (Recent payments from bills)
-    // ================================================================
+    // 7. PAYMENT HISTORY
     $stmt = $db->prepare("
         SELECT 
             b.id as bill_id,
             b.bill_number,
             b.patient_id,
-            b.total_amount,
-            b.paid_amount,
-            b.balance,
             b.status,
             b.payment_method,
             b.updated_at,
@@ -203,14 +151,11 @@ try {
     $stmt->execute([$cashier_branch_id]);
     $payment_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // ================================================================
-    // ADDITIONAL: Payment Methods Today
-    // ================================================================
+    // Payment Methods Today (count only)
     $stmt = $db->prepare("
         SELECT 
             payment_method,
-            COUNT(*) as count,
-            COALESCE(SUM(paid_amount), 0) as total
+            COUNT(*) as count
         FROM bills 
         WHERE branch_id = ? 
         AND DATE(updated_at) = ?
@@ -221,76 +166,40 @@ try {
     $stmt->execute([$cashier_branch_id, $today]);
     $payment_methods = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // ================================================================
-    // ADDITIONAL: Today's Bill Items Summary
-    // ================================================================
+    // Today's Bill Items Summary (count only)
     $stmt = $db->prepare("
         SELECT 
             bi.item_type,
             COUNT(DISTINCT bi.bill_id) as bill_count,
-            COUNT(bi.id) as item_count,
-            COALESCE(SUM(bi.final_price), 0) as total_amount
+            COUNT(bi.id) as item_count
         FROM bill_items bi
         JOIN bills b ON bi.bill_id = b.id
         WHERE b.branch_id = ?
         AND DATE(b.created_at) = ?
         GROUP BY bi.item_type
-        ORDER BY total_amount DESC
+        ORDER BY item_count DESC
     ");
     $stmt->execute([$cashier_branch_id, $today]);
     $today_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // ================================================================
-    // ADDITIONAL: Monthly Revenue
-    // ================================================================
-    $month_start = date('Y-m-01');
-    $stmt = $db->prepare("
-        SELECT 
-            DATE(created_at) as date,
-            COUNT(*) as bill_count,
-            COALESCE(SUM(total_amount), 0) as total_amount,
-            COALESCE(SUM(paid_amount), 0) as paid_amount
-        FROM bills 
-        WHERE branch_id = ?
-        AND created_at >= ?
-        GROUP BY DATE(created_at)
-        ORDER BY DATE(created_at) ASC
-    ");
-    $stmt->execute([$cashier_branch_id, $month_start]);
-    $monthly_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
 } catch (Exception $e) {
     error_log("Cashier dashboard error: " . $e->getMessage());
     $pending_bills = 0;
-    $pending_bills_total = 0;
     $today_payments_count = 0;
-    $today_payments_total = 0;
     $total_bills = 0;
-    $total_bills_amount = 0;
     $paid_bills = 0;
-    $paid_bills_total = 0;
     $partial_bills = 0;
-    $partial_bills_paid = 0;
-    $partial_bills_balance = 0;
     $expenses_count = 0;
-    $expenses_total = 0;
-    $today_expenses = 0;
+    $today_expenses_count = 0;
     $payment_history = [];
     $payment_methods = [];
     $today_items = [];
-    $monthly_data = [];
 }
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-// ================================================================
-// TIME AGO FUNCTION
-// ================================================================
 function time_ago($timestamp) {
     if (empty($timestamp)) return 'N/A';
     $now = new DateTime();
@@ -304,21 +213,13 @@ function time_ago($timestamp) {
     return 'Just now';
 }
 
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
 include_once '../../components/cashier_header.php';
 include_once '../../components/cashier_sidebar.php';
 ?>
 
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER - GREEN BACKGROUND -->
-    <!-- ================================================================ -->
+    <!-- PAGE HEADER -->
     <div class="page-header-green" style="background:linear-gradient(135deg, #059669, #047857);border-radius:16px;padding:24px 32px;margin-bottom:28px;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:16px;box-shadow:0 4px 25px rgba(5,150,105,0.3);">
         <div>
             <h1 class="page-title" style="font-size:1.8rem;font-weight:700;color:white;display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0;">
@@ -363,9 +264,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- ✅ FIXED: 6 STATS CARDS (3 TOP + 3 BOTTOM) - NO CANCELLED BILLS -->
-    <!-- ================================================================ -->
+    <!-- ✅ 6 STATS CARDS - COUNTS ONLY (NO AMOUNTS) -->
     
     <!-- ROW 1: TOP 3 CARDS -->
     <div class="stats-grid" style="display:grid;grid-template-columns:repeat(3, 1fr);gap:14px;margin-bottom:14px;">
@@ -377,7 +276,6 @@ include_once '../../components/cashier_sidebar.php';
                 <div>
                     <div class="stat-number" id="statTodayPayments" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($today_payments_count) ?></div>
                     <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Today Payments</div>
-                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">TSh <?= number_format($today_payments_total) ?></div>
                 </div>
                 <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
                     <i class="fas fa-credit-card"></i>
@@ -396,7 +294,6 @@ include_once '../../components/cashier_sidebar.php';
                 <div>
                     <div class="stat-number" id="statPending" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($pending_bills) ?></div>
                     <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Pending Bills</div>
-                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">TSh <?= number_format($pending_bills_total) ?></div>
                 </div>
                 <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
                     <i class="fas fa-clock"></i>
@@ -415,7 +312,6 @@ include_once '../../components/cashier_sidebar.php';
                 <div>
                     <div class="stat-number" id="statTotal" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($total_bills) ?></div>
                     <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Total Bills</div>
-                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">TSh <?= number_format($total_bills_amount) ?></div>
                 </div>
                 <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
                     <i class="fas fa-file-invoice"></i>
@@ -439,7 +335,6 @@ include_once '../../components/cashier_sidebar.php';
                 <div>
                     <div class="stat-number" id="statPaid" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($paid_bills) ?></div>
                     <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Paid Bills</div>
-                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">TSh <?= number_format($paid_bills_total) ?></div>
                 </div>
                 <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
                     <i class="fas fa-check-circle"></i>
@@ -458,7 +353,6 @@ include_once '../../components/cashier_sidebar.php';
                 <div>
                     <div class="stat-number" id="statPartial" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($partial_bills) ?></div>
                     <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Partial Payments</div>
-                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">Paid: TSh <?= number_format($partial_bills_paid) ?> | Bal: TSh <?= number_format($partial_bills_balance) ?></div>
                 </div>
                 <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
                     <i class="fas fa-hand-holding-usd"></i>
@@ -477,7 +371,7 @@ include_once '../../components/cashier_sidebar.php';
                 <div>
                     <div class="stat-number" id="statExpenses" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($expenses_count) ?></div>
                     <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Total Expenses</div>
-                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">TSh <?= number_format($expenses_total) ?> | Today: TSh <?= number_format($today_expenses) ?></div>
+                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">Today: <?= number_format($today_expenses_count) ?></div>
                 </div>
                 <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
                     <i class="fas fa-money-bill-wave"></i>
@@ -491,9 +385,7 @@ include_once '../../components/cashier_sidebar.php';
         
     </div>
 
-    <!-- ================================================================ -->
-    <!-- PAYMENT HISTORY TABLE -->
-    <!-- ================================================================ -->
+    <!-- PAYMENT HISTORY TABLE - NO AMOUNTS -->
     <div class="card-modern" style="background:var(--bg-card);border-radius:16px;padding:22px 24px;border:2px solid var(--border-color);margin-bottom:24px;transition:all 0.3s;box-shadow:0 2px 10px rgba(0,0,0,0.04);">
         <div class="card-header-modern" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
             <h3 class="card-title" style="font-size:0.95rem;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:10px;">
@@ -513,9 +405,6 @@ include_once '../../components/cashier_sidebar.php';
                         <tr>
                             <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Bill #</th>
                             <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Patient</th>
-                            <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Amount</th>
-                            <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Paid</th>
-                            <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Balance</th>
                             <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Status</th>
                             <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Method</th>
                             <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Date</th>
@@ -535,11 +424,6 @@ include_once '../../components/cashier_sidebar.php';
                                 <td style="padding:8px 12px;color:var(--text-primary);">
                                     <div style="font-weight:500;"><?= htmlspecialchars($payment['patient_name'] ?? 'N/A') ?></div>
                                     <div style="font-size:0.6rem;color:var(--text-secondary);"><?= htmlspecialchars($payment['patient_code'] ?? 'N/A') ?></div>
-                                </td>
-                                <td style="padding:8px 12px;text-align:right;font-weight:500;color:var(--text-secondary);">TSh <?= number_format($payment['total_amount'] ?? 0) ?></td>
-                                <td style="padding:8px 12px;text-align:right;font-weight:600;color:var(--success);">TSh <?= number_format($payment['paid_amount'] ?? 0) ?></td>
-                                <td style="padding:8px 12px;text-align:right;font-weight:500;color:<?= ($payment['balance'] ?? 0) > 0 ? '#DC2626' : 'var(--text-secondary)' ?>;">
-                                    TSh <?= number_format($payment['balance'] ?? 0) ?>
                                 </td>
                                 <td style="padding:8px 12px;text-align:center;">
                                     <span style="display:inline-block;padding:2px 12px;border-radius:12px;font-size:0.6rem;font-weight:600;background:<?= $status_bg ?>;color:<?= $status_color ?>;border:1px solid <?= $status_color ?>20;">
@@ -562,12 +446,10 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- TWO COLUMN GRID: Payment Methods + Today's Items -->
-    <!-- ================================================================ -->
+    <!-- TWO COLUMN GRID -->
     <div class="two-col-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px;">
         
-        <!-- Payment Methods Today -->
+        <!-- Payment Methods Today - NO AMOUNTS -->
         <div class="card-modern" style="background:var(--bg-card);border-radius:16px;padding:20px 22px;border:2px solid var(--border-color);box-shadow:0 2px 10px rgba(0,0,0,0.04);">
             <div class="card-header-modern" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
                 <h3 class="card-title" style="font-size:0.9rem;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:8px;">
@@ -611,8 +493,7 @@ include_once '../../components/cashier_sidebar.php';
                                 <span style="font-size:0.8rem;font-weight:500;color:var(--text-primary);text-transform:uppercase;"><?= htmlspecialchars($method['payment_method'] ?? 'CASH') ?></span>
                             </div>
                             <div style="display:flex;align-items:center;gap:8px;">
-                                <span style="font-size:0.65rem;color:var(--text-secondary);"><?= $method['count'] ?> payments</span>
-                                <span style="font-weight:600;font-size:0.85rem;color:var(--success);">TSh <?= number_format($method['total'] ?? 0) ?></span>
+                                <span style="font-weight:600;font-size:0.85rem;color:var(--success);"><?= $method['count'] ?> payments</span>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -625,7 +506,7 @@ include_once '../../components/cashier_sidebar.php';
             </div>
         </div>
         
-        <!-- Today's Items Summary -->
+        <!-- Today's Items Summary - NO AMOUNTS -->
         <div class="card-modern" style="background:var(--bg-card);border-radius:16px;padding:20px 22px;border:2px solid var(--border-color);box-shadow:0 2px 10px rgba(0,0,0,0.04);">
             <div class="card-header-modern" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
                 <h3 class="card-title" style="font-size:0.9rem;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:8px;">
@@ -657,7 +538,6 @@ include_once '../../components/cashier_sidebar.php';
                                     <span style="font-size:0.6rem;color:var(--text-secondary);display:block;margin-top:1px;"><?= $item['item_count'] ?> items | <?= $item['bill_count'] ?> bills</span>
                                 </div>
                             </div>
-                            <span style="font-weight:600;font-size:0.85rem;color:var(--text-primary);">TSh <?= number_format($item['total_amount'] ?? 0) ?></span>
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
@@ -671,9 +551,7 @@ include_once '../../components/cashier_sidebar.php';
         
     </div>
 
-    <!-- ================================================================ -->
     <!-- QUICK ACTIONS -->
-    <!-- ================================================================ -->
     <div class="quick-actions-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:12px;margin-top:4px;">
         <a href="pending_bills.php" class="quick-action-btn" style="padding:14px 12px;border-radius:14px;text-align:center;transition:all 0.3s;cursor:pointer;text-decoration:none;display:block;border:2px solid var(--border-color);background:var(--bg-card);">
             <span style="font-size:1.6rem;display:block;margin-bottom:4px;">⏳</span>
@@ -712,9 +590,7 @@ include_once '../../components/cashier_sidebar.php';
         </a>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer" style="padding:14px 0;border-top:2px solid var(--border-color);margin-top:24px;text-align:center;font-size:0.65rem;color:var(--text-secondary);">
         <p>
             <span class="footer-brand" style="color:var(--success);font-weight:600;">Braick Dispensary</span> Management System
@@ -734,9 +610,7 @@ include_once '../../components/cashier_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;position:fixed;bottom:24px;right:24px;padding:12px 18px;border-radius:12px;z-index:999;max-width:360px;transform:translateY(100px);opacity:0;transition:all 0.4s cubic-bezier(0.4,0,0.2,1);display:flex;align-items:center;gap:10px;color:white;box-shadow:0 10px 40px rgba(0,0,0,0.15);">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -745,13 +619,7 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT - AUTO UPDATE EVERY 3 SECONDS -->
-<!-- ================================================================ -->
 <script>
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -775,9 +643,6 @@ include_once '../../components/cashier_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // MANUAL REFRESH
-    // ================================================================
     function manualRefresh() {
         var btn = document.getElementById('refreshBtn');
         btn.innerHTML = '<span class="spinner" style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top-color:white;border-radius:50%;animation:spin 0.6s linear infinite;"></span> Loading...';
@@ -792,9 +657,6 @@ include_once '../../components/cashier_sidebar.php';
         }, 1500);
     }
 
-    // ================================================================
-    // FETCH DASHBOARD DATA (AJAX)
-    // ================================================================
     function fetchDashboardData() {
         var url = 'get_dashboard_data.php?t=' + Date.now();
         
@@ -803,8 +665,6 @@ include_once '../../components/cashier_sidebar.php';
             .then(function(data) {
                 if (data.success) {
                     updateDashboard(data);
-                } else {
-                    console.error('Failed to fetch dashboard data:', data.message);
                 }
             })
             .catch(function(error) {
@@ -812,11 +672,7 @@ include_once '../../components/cashier_sidebar.php';
             });
     }
 
-    // ================================================================
-    // UPDATE DASHBOARD UI
-    // ================================================================
     function updateDashboard(data) {
-        // Update stats
         var elements = {
             statTodayPayments: data.today_payments_count || 0,
             statPending: data.pending_bills || 0,
@@ -830,15 +686,11 @@ include_once '../../components/cashier_sidebar.php';
         for (var key in elements) {
             var el = document.getElementById(key);
             if (el) {
-                if (key === 'statTotal' || key === 'statPaid' || key === 'statExpenses') {
-                    el.textContent = Number(elements[key]).toLocaleString();
-                } else {
-                    el.textContent = elements[key];
-                }
+                el.textContent = Number(elements[key]).toLocaleString();
             }
         }
         
-        // Update payment history table
+        // Update payment history
         var historyList = document.getElementById('paymentHistoryList');
         if (historyList && data.payment_history) {
             var html = '';
@@ -847,14 +699,11 @@ include_once '../../components/cashier_sidebar.php';
                     <table style="width:100%;border-collapse:collapse;font-size:0.8rem;">
                         <thead style="background:var(--gray-50);border-radius:8px;border-bottom:2px solid var(--border-color);">
                             <tr>
-                                <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Bill #</th>
-                                <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Patient</th>
-                                <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Amount</th>
-                                <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Paid</th>
-                                <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Balance</th>
-                                <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Status</th>
-                                <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Method</th>
-                                <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Date</th>
+                                <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;">Bill #</th>
+                                <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;">Patient</th>
+                                <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;">Status</th>
+                                <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;">Method</th>
+                                <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;">Date</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -865,7 +714,7 @@ include_once '../../components/cashier_sidebar.php';
                     var statusBg = status === 'paid' ? '#D1FAE5' : (status === 'partial' ? '#FEF3C7' : '#FEE2E2');
                     var methodIcon = (payment.payment_method || 'cash') === 'cash' ? '💵' : '📱';
                     html += `
-                        <tr style="border-bottom:1px solid var(--border-color);transition:all 0.2s;">
+                        <tr style="border-bottom:1px solid var(--border-color);">
                             <td style="padding:8px 12px;font-weight:500;color:var(--text-primary);">
                                 <a href="view_bill.php?id=${payment.bill_id}" style="color:var(--success);text-decoration:none;">${payment.bill_number}</a>
                             </td>
@@ -873,11 +722,8 @@ include_once '../../components/cashier_sidebar.php';
                                 <div style="font-weight:500;">${payment.patient_name || 'N/A'}</div>
                                 <div style="font-size:0.6rem;color:var(--text-secondary);">${payment.patient_code || 'N/A'}</div>
                             </td>
-                            <td style="padding:8px 12px;text-align:right;font-weight:500;color:var(--text-secondary);">TSh ${Number(payment.total_amount || 0).toLocaleString()}</td>
-                            <td style="padding:8px 12px;text-align:right;font-weight:600;color:var(--success);">TSh ${Number(payment.paid_amount || 0).toLocaleString()}</td>
-                            <td style="padding:8px 12px;text-align:right;font-weight:500;color:${Number(payment.balance || 0) > 0 ? '#DC2626' : 'var(--text-secondary)'};">TSh ${Number(payment.balance || 0).toLocaleString()}</td>
                             <td style="padding:8px 12px;text-align:center;">
-                                <span style="display:inline-block;padding:2px 12px;border-radius:12px;font-size:0.6rem;font-weight:600;background:${statusBg};color:${statusColor};border:1px solid ${statusColor}20;">
+                                <span style="display:inline-block;padding:2px 12px;border-radius:12px;font-size:0.6rem;font-weight:600;background:${statusBg};color:${statusColor};">
                                     ${status.toUpperCase()}
                                 </span>
                             </td>
@@ -888,18 +734,15 @@ include_once '../../components/cashier_sidebar.php';
                 });
                 html += `</tbody></table>`;
             } else {
-                html = `
-                    <div style="text-align:center;padding:40px 20px;color:var(--text-secondary);">
-                        <i class="fas fa-receipt" style="font-size:2.5rem;display:block;margin-bottom:12px;opacity:0.2;"></i>
-                        <p style="font-size:0.95rem;font-weight:500;">No payment history found</p>
-                        <p style="font-size:0.8rem;opacity:0.6;margin-top:4px;">Payments will appear here</p>
-                    </div>
-                `;
+                html = `<div style="text-align:center;padding:40px 20px;color:var(--text-secondary);">
+                    <i class="fas fa-receipt" style="font-size:2.5rem;display:block;margin-bottom:12px;opacity:0.2;"></i>
+                    <p style="font-size:0.95rem;font-weight:500;">No payment history found</p>
+                </div>`;
             }
             historyList.innerHTML = html;
         }
         
-        // Update payment methods
+        // Update payment methods (count only)
         var methodsEl = document.getElementById('paymentMethods');
         if (methodsEl && data.payment_methods) {
             var methodIcons = {
@@ -926,25 +769,20 @@ include_once '../../components/cashier_sidebar.php';
                                 </div>
                                 <span style="font-size:0.8rem;font-weight:500;color:var(--text-primary);text-transform:uppercase;">${method.payment_method.toUpperCase()}</span>
                             </div>
-                            <div style="display:flex;align-items:center;gap:8px;">
-                                <span style="font-size:0.65rem;color:var(--text-secondary);">${method.count} payments</span>
-                                <span style="font-weight:600;font-size:0.85rem;color:var(--success);">TSh ${Number(method.total || 0).toLocaleString()}</span>
-                            </div>
+                            <span style="font-weight:600;font-size:0.85rem;color:var(--success);">${method.count} payments</span>
                         </div>
                     `;
                 });
             } else {
-                html = `
-                    <div style="text-align:center;padding:20px;color:var(--text-secondary);">
-                        <i class="fas fa-chart-pie" style="font-size:1.5rem;display:block;margin-bottom:8px;opacity:0.2;"></i>
-                        <p style="font-size:0.8rem;">No payments today</p>
-                    </div>
-                `;
+                html = `<div style="text-align:center;padding:20px;color:var(--text-secondary);">
+                    <i class="fas fa-chart-pie" style="font-size:1.5rem;display:block;margin-bottom:8px;opacity:0.2;"></i>
+                    <p style="font-size:0.8rem;">No payments today</p>
+                </div>`;
             }
             methodsEl.innerHTML = html;
         }
         
-        // Update today's items
+        // Update today's items (count only)
         var itemsEl = document.getElementById('todayItems');
         if (itemsEl && data.today_items) {
             var itemIcons = {
@@ -966,22 +804,18 @@ include_once '../../components/cashier_sidebar.php';
                                     <span style="font-size:0.6rem;color:var(--text-secondary);display:block;margin-top:1px;">${item.item_count} items | ${item.bill_count} bills</span>
                                 </div>
                             </div>
-                            <span style="font-weight:600;font-size:0.85rem;color:var(--text-primary);">TSh ${Number(item.total_amount || 0).toLocaleString()}</span>
                         </div>
                     `;
                 });
             } else {
-                html = `
-                    <div style="text-align:center;padding:20px;color:var(--text-secondary);">
-                        <i class="fas fa-boxes" style="font-size:1.5rem;display:block;margin-bottom:8px;opacity:0.2;"></i>
-                        <p style="font-size:0.8rem;">No items today</p>
-                    </div>
-                `;
+                html = `<div style="text-align:center;padding:20px;color:var(--text-secondary);">
+                    <i class="fas fa-boxes" style="font-size:1.5rem;display:block;margin-bottom:8px;opacity:0.2;"></i>
+                    <p style="font-size:0.8rem;">No items today</p>
+                </div>`;
             }
             itemsEl.innerHTML = html;
         }
         
-        // Update footer timestamp
         var footerEl = document.getElementById('footerTimestamp');
         if (footerEl) {
             var now = new Date();
@@ -992,9 +826,6 @@ include_once '../../components/cashier_sidebar.php';
         }
     }
 
-    // ================================================================
-    // AUTO UPDATE - EVERY 3 SECONDS
-    // ================================================================
     var updateInterval = null;
     var isUpdating = false;
     
@@ -1012,14 +843,12 @@ include_once '../../components/cashier_sidebar.php';
                 }, 1000);
             }
         }, 3000);
-        console.log('%c🔄 Auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
     }
     
     function stopAutoUpdate() {
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
-            console.log('%c⏹️ Auto-update stopped', 'font-size:12px; color:#DC2626;');
         }
     }
 
@@ -1031,9 +860,6 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     var sidebarToggle = document.getElementById('sidebarToggle');
     var sidebar = document.getElementById('sidebar');
     
@@ -1051,9 +877,6 @@ include_once '../../components/cashier_sidebar.php';
         });
     }
 
-    // ================================================================
-    // ADD CSS ANIMATIONS
-    // ================================================================
     var style = document.createElement('style');
     style.textContent = `
         @keyframes spin { to { transform: rotate(360deg); } }
@@ -1073,31 +896,22 @@ include_once '../../components/cashier_sidebar.php';
             .two-col-grid { grid-template-columns: 1fr !important; }
             .stats-grid { grid-template-columns: 1fr !important; }
         }
-        .stat-number.updated { transform: scale(1.1); color: #FCD34D; }
         .method-item:hover { background: var(--bg-body); border-radius: 8px; }
         .item-summary:hover { background: var(--bg-body); border-radius: 8px; }
     `;
     document.head.appendChild(style);
 
-    // ================================================================
-    // INIT
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         setTimeout(function() {
             startAutoUpdate();
         }, 1000);
     });
 
-    // ================================================================
-    // CONSOLE
-    // ================================================================
-    console.log('%c🟢 Braick - Cashier Dashboard (6 Cards Only)', 'font-size:20px; font-weight:bold; color:#059669;');
-    console.log('%c✅ Removed: Cancelled Bills Card', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Removed: Recent Bills Card', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ 6 Cards: Today Payments, Pending, Total, Paid, Partial, Expenses', 'font-size:13px; color:#34D399;');
+    console.log('%c🟢 Braick - Cashier Dashboard (COUNTS ONLY - NO AMOUNTS)', 'font-size:20px; font-weight:bold; color:#059669;');
+    console.log('%c✅ REMOVED: All TSh Amount displays', 'font-size:13px; color:#DC2626; font-weight:bold;');
+    console.log('%c✅ Cards show COUNTS only', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Table shows Status & Method (no amounts)', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($cashier_name) ?>', 'font-size:16px; font-weight:bold; color:#FFD700;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($cashier_branch_name) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🔄 Auto-update every 3 seconds (NO PAGE REFRESH)', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

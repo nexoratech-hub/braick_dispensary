@@ -2,29 +2,20 @@
 // ================================================================
 // FILE: frontend/pages/admin/laboratories.php
 // ADMIN - VIEW ALL LABORATORIES
-// BRAICK DISPENSARY - USING EXISTING DB TABLES
-// BLUE THEME - BRANCH FILTER
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
+// ✅ Uses SHARED header & sidebar
+// ✅ Full dark mode support
+// ✅ Blue page header card
 // ================================================================
 
-// ================================================================
-// SESSION START
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../../auth/login.php');
     exit;
 }
 
-// ================================================================
-// ROLE CHECK - ONLY ADMIN CAN ACCESS
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -33,14 +24,12 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../../auth/login.php'); break;
     }
     exit;
 }
 
-// ================================================================
-// GET ADMIN DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
@@ -48,20 +37,17 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// Include database
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// FIX: REMOVE error PARAMETER FROM URL
+// CLEAN URL - Remove error parameter
 // ================================================================
 if (isset($_GET['error'])) {
-    // Remove error parameter and redirect cleanly
     $clean_url = $_SERVER['PHP_SELF'];
     $params = [];
-    
     if (isset($_GET['branch']) && $_GET['branch'] !== 'all') {
         $params[] = 'branch=' . urlencode($_GET['branch']);
     }
@@ -71,46 +57,38 @@ if (isset($_GET['error'])) {
     if (isset($_GET['status']) && $_GET['status'] !== 'all') {
         $params[] = 'status=' . urlencode($_GET['status']);
     }
-    
     if (!empty($params)) {
         $clean_url .= '?' . implode('&', $params);
     }
-    
     header('Location: ' . $clean_url);
     exit;
 }
 
 // ================================================================
-// GET FILTER PARAMETERS
+// FILTER PARAMETERS
 // ================================================================
 $selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : 'all';
 
-// ================================================================
-// FIX: VALIDATE BRANCH ID - IF INVALID, RESET TO 'all'
-// ================================================================
+// Validate branch
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     $check_stmt = $db->prepare("SELECT id FROM branches WHERE id = ? AND status = 'active'");
     $check_stmt->execute([(int)$selected_branch_id]);
     if (!$check_stmt->fetch()) {
-        // Branch doesn't exist - silently reset to all (no error redirect)
         $selected_branch_id = 'all';
-        // Remove branch from URL by redirecting cleanly
         $clean_url = $_SERVER['PHP_SELF'];
         $params = [];
         if (!empty($search)) $params[] = 'search=' . urlencode($search);
         if ($status_filter !== 'all') $params[] = 'status=' . urlencode($status_filter);
-        if (!empty($params)) {
-            $clean_url .= '?' . implode('&', $params);
-        }
+        if (!empty($params)) $clean_url .= '?' . implode('&', $params);
         header('Location: ' . $clean_url);
         exit;
     }
 }
 
 // ================================================================
-// BUILD QUERY WITH FILTERS
+// BUILD QUERY
 // ================================================================
 $query = "
     SELECT 
@@ -128,13 +106,11 @@ $query = "
 
 $params = [];
 
-// Branch filter - only apply if NOT 'all'
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     $query .= " AND b.id = ?";
     $params[] = (int)$selected_branch_id;
 }
 
-// Status filter
 if ($status_filter !== 'all') {
     $query .= " AND b.status = ?";
     $params[] = $status_filter;
@@ -142,7 +118,6 @@ if ($status_filter !== 'all') {
     $query .= " AND b.status = 'active'";
 }
 
-// Search filter
 if (!empty($search)) {
     $query .= " AND (b.name LIKE ? OR b.location LIKE ? OR b.phone LIKE ? OR b.email LIKE ?)";
     $search_term = "%$search%";
@@ -154,9 +129,6 @@ if (!empty($search)) {
 
 $query .= " ORDER BY b.name ASC";
 
-// ================================================================
-// EXECUTE QUERY
-// ================================================================
 $laboratories = [];
 try {
     $stmt = $db->prepare($query);
@@ -168,7 +140,7 @@ try {
 }
 
 // ================================================================
-// GET SUMMARY STATISTICS
+// STATISTICS
 // ================================================================
 $total_labs = count($laboratories);
 $total_technicians = 0;
@@ -186,7 +158,7 @@ foreach ($laboratories as $lab) {
 }
 
 // ================================================================
-// GET BRANCHES FOR FILTER
+// BRANCHES FOR FILTER
 // ================================================================
 $branches = [];
 try {
@@ -196,9 +168,6 @@ try {
     $branches = [];
 }
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
@@ -212,1052 +181,731 @@ include_once '../../components/admin_header.php';
 include_once '../../components/admin_sidebar.php';
 ?>
 
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Laboratories - Braick Dispensary</title>
-    
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
-    <style>
-        /* ================================================================
-           ROOT VARIABLES - BOLDER BLUE THEME
-           ================================================================ */
-        :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #3B82F6;
-            --primary-bg: #EFF6FF;
-            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #073B8A);
-            
-            --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
-            --success-bg: #D1FAE5;
-            
-            --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
-            --danger-bg: #FEE2E2;
-            
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            
-            --teal: #0D9488;
-            --teal-bg: #ECFDF5;
-            
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            
-            --bg-body: #F0F4F8;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
-            --radius: 12px;
-            --radius-lg: 18px;
-            --table-hover: #F8FAFC;
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-light: #60A5FA;
-            --primary-bg: #1E3A5F;
-            --primary-gradient: linear-gradient(135deg, #2563EB, #1D4ED8);
-            --primary-gradient-strong: linear-gradient(135deg, #1D4ED8, #1E40AF);
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-hover: #1E293B;
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV - SHARED HEADER
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 var(--radius) var(--radius) 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .branch-selector {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            font-size: 0.78rem;
-            color: var(--text-primary);
-            outline: none;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .branch-selector:focus {
-            border-color: var(--primary);
-        }
-        
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-        }
-        
-        /* ================================================================
-           PAGE HEADER - BOLDER BLUE THEME
-           ================================================================ */
-        .page-header {
-            background: var(--primary-gradient-strong);
-            border-radius: var(--radius-lg);
-            padding: 28px 36px;
-            margin-bottom: 28px;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            box-shadow: 0 8px 32px rgba(10, 76, 168, 0.35);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 400px;
-            height: 400px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header .page-title {
-            color: white;
-            font-size: 1.8rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
-        .page-header .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
-        .page-header .header-badge {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
-            transition: all 0.3s ease;
-        }
-        
-        .page-header .header-badge:hover {
-            background: rgba(255,255,255,0.2);
-            transform: translateY(-1px);
-        }
-        
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: var(--radius);
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        
-        /* ================================================================
-           STATS ROW
-           ================================================================ */
-        .stats-row {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        
-        .stat-card {
-            background: var(--bg-card);
-            border-radius: var(--radius);
-            padding: 16px 20px;
-            border: 2px solid var(--border-color);
-            box-shadow: var(--shadow-sm);
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .stat-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 5px;
-            height: 100%;
-            background: var(--primary-gradient-strong);
-            border-radius: 0 3px 3px 0;
-            opacity: 0.8;
-        }
-        
-        .stat-card:hover {
-            border-color: var(--primary);
-            transform: translateY(-4px);
-            box-shadow: 0 8px 25px rgba(11, 94, 215, 0.15);
-        }
-        
-        .stat-card .stat-number {
-            font-size: 1.5rem;
-            font-weight: 800;
-            color: var(--text-primary);
-            line-height: 1.1;
-        }
-        
-        .stat-card .stat-number.blue { color: var(--primary); }
-        .stat-card .stat-number.green { color: #059669; }
-        .stat-card .stat-number.orange { color: #F59E0B; }
-        .stat-card .stat-number.purple { color: #7C3AED; }
-        .stat-card .stat-number.teal { color: #0D9488; }
-        .stat-card .stat-number.red { color: #DC2626; }
-        
-        .stat-card .stat-label {
-            font-size: 0.6rem;
-            color: var(--text-secondary);
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin: 0;
-        }
-        
-        .stat-card .stat-icon-small {
-            width: 36px;
-            height: 36px;
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.9rem;
-        }
-        
-        .stat-card .stat-icon-small.blue { background: var(--primary-bg); color: var(--primary); }
-        .stat-card .stat-icon-small.green { background: #ECFDF5; color: #059669; }
-        .stat-card .stat-icon-small.orange { background: #FFFBEB; color: #F59E0B; }
-        .stat-card .stat-icon-small.purple { background: #F5F3FF; color: #7C3AED; }
-        .stat-card .stat-icon-small.teal { background: #ECFDF5; color: #0D9488; }
-        .stat-card .stat-icon-small.red { background: #FEF2F2; color: #DC2626; }
-        
-        [data-theme="dark"] .stat-card .stat-icon-small.blue { background: #1E3A5F; color: #3B82F6; }
-        [data-theme="dark"] .stat-card .stat-icon-small.green { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .stat-card .stat-icon-small.orange { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .stat-card .stat-icon-small.purple { background: #2D1B4E; color: #A78BFA; }
-        [data-theme="dark"] .stat-card .stat-icon-small.teal { background: #0F3D3D; color: #5EEAD4; }
-        [data-theme="dark"] .stat-card .stat-icon-small.red { background: #3A1A1A; color: #F87171; }
-        
-        /* ================================================================
-           FILTER BAR
-           ================================================================ */
-        .filter-bar {
-            background: var(--bg-card);
-            border-radius: var(--radius);
-            padding: 14px 18px;
-            border: 2px solid var(--border-color);
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            align-items: center;
-            margin-bottom: 24px;
-            box-shadow: var(--shadow-sm);
-            position: relative;
-        }
-        
-        .filter-bar::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background: var(--primary-gradient);
-        }
-        
-        .filter-bar .filter-label {
-            font-size: 0.7rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-        }
-        
-        .filter-bar select,
-        .filter-bar input {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 8px;
-            padding: 5px 10px;
-            font-size: 0.75rem;
-            color: var(--text-primary);
-            outline: none;
-            transition: all 0.3s;
-        }
-        
-        .filter-bar select:focus,
-        .filter-bar input:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
-        }
-        
-        .filter-bar .btn-filter {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 5px 14px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.7rem;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .filter-bar .btn-filter:hover {
-            transform: scale(1.02);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .filter-bar .btn-reset {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-            padding: 5px 14px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.7rem;
-            cursor: pointer;
-            transition: all 0.3s;
-            text-decoration: none;
-        }
-        
-        .filter-bar .btn-reset:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        /* ================================================================
-           LABORATORY CARDS - BLUE HEADER
-           ================================================================ */
-        .lab-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-            gap: 20px;
-        }
-        
-        .lab-card {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 2px solid var(--border-color);
-            overflow: hidden;
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-            position: relative;
-        }
-        
-        .lab-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 5px;
-            background: var(--primary-gradient-strong);
-            opacity: 0.7;
-            transition: opacity 0.3s ease;
-        }
-        
-        .lab-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 12px 35px rgba(11, 94, 215, 0.15);
-            border-color: var(--primary);
-        }
-        
-        .lab-card:hover::before {
-            opacity: 1;
-        }
-        
-        /* CARD TOP - BLUE BACKGROUND */
-        .lab-card .card-top {
-            padding: 16px 20px 12px 20px;
-            border-bottom: 2px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: start;
-            background: var(--primary-gradient-strong);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .lab-card .card-top::after {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 200px;
-            height: 200px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .lab-card .card-top .name {
-            font-size: 1.05rem;
-            font-weight: 700;
-            color: white;
-            position: relative;
-            z-index: 1;
-            text-shadow: 0 1px 3px rgba(0,0,0,0.15);
-        }
-        
-        .lab-card .card-top .name i {
-            color: rgba(255,255,255,0.85);
-            margin-right: 8px;
-        }
-        
-        .lab-card .card-top .location-text {
-            font-size: 0.7rem;
-            color: rgba(255,255,255,0.75);
-            margin-top: 2px;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .lab-card .card-top .location-text i {
-            color: rgba(255,255,255,0.6);
-            font-size: 0.65rem;
-        }
-        
-        .lab-card .card-top .status-badge {
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            position: relative;
-            z-index: 1;
-            backdrop-filter: blur(4px);
-        }
-        
-        .lab-card .card-top .status-badge.active {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.3);
-        }
-        
-        .lab-card .card-top .status-badge.inactive {
-            background: rgba(220, 38, 38, 0.3);
-            color: #FCA5A5;
-            border: 1px solid rgba(220, 38, 38, 0.3);
-        }
-        
-        /* CARD BODY */
-        .lab-card .card-body {
-            padding: 14px 20px 16px 20px;
-        }
-        
-        .lab-card .card-body .info-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            padding: 4px 0;
-        }
-        
-        .lab-card .card-body .info-row i {
-            width: 18px;
-            color: var(--primary);
-            font-size: 0.75rem;
-        }
-        
-        /* CARD STATS */
-        .lab-card .card-stats {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 4px;
-            padding: 10px 18px;
-            background: var(--bg-body);
-            border-top: 2px solid var(--border-color);
-            border-bottom: 2px solid var(--border-color);
-        }
-        
-        [data-theme="dark"] .lab-card .card-stats {
-            background: #0F172A;
-        }
-        
-        .lab-card .card-stats .stat-item {
-            text-align: center;
-            padding: 4px 0;
-            border-radius: 6px;
-            transition: all 0.3s ease;
-        }
-        
-        .lab-card .card-stats .stat-item:hover {
-            background: var(--primary-bg);
-        }
-        
-        [data-theme="dark"] .lab-card .card-stats .stat-item:hover {
-            background: #1E3A5F;
-        }
-        
-        .lab-card .card-stats .stat-item .num {
-            font-size: 0.9rem;
-            font-weight: 700;
-            color: var(--text-primary);
-        }
-        
-        .lab-card .card-stats .stat-item .num.blue { color: var(--primary); }
-        .lab-card .card-stats .stat-item .num.green { color: #059669; }
-        .lab-card .card-stats .stat-item .num.orange { color: #F59E0B; }
-        .lab-card .card-stats .stat-item .num.purple { color: #7C3AED; }
-        .lab-card .card-stats .stat-item .num.teal { color: #0D9488; }
-        .lab-card .card-stats .stat-item .num.red { color: #DC2626; }
-        
-        .lab-card .card-stats .stat-item .label {
-            font-size: 0.5rem;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            font-weight: 700;
-        }
-        
-        /* CARD ACTIONS */
-        .lab-card .card-actions {
-            padding: 10px 18px;
-            display: flex;
-            gap: 8px;
-            justify-content: flex-end;
-        }
-        
-        .lab-card .card-actions .btn-action {
-            padding: 5px 14px;
-            border-radius: 8px;
-            font-size: 0.65rem;
-            font-weight: 700;
-            text-decoration: none;
-            transition: all 0.3s;
-            border: 2px solid var(--border-color);
-            color: var(--text-secondary);
-            background: transparent;
-            cursor: pointer;
-        }
-        
-        .lab-card .card-actions .btn-action:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-            transform: translateY(-2px);
-        }
-        
-        .lab-card .card-actions .btn-action.primary {
-            background: var(--primary-gradient-strong);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        .lab-card .card-actions .btn-action.primary:hover {
-            background: var(--primary-dark);
-            border-color: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(10, 76, 168, 0.35);
-        }
-        
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: var(--text-secondary);
-        }
-        
-        .empty-state i {
-            font-size: 4rem;
-            color: var(--border-color);
-            margin-bottom: 16px;
-        }
-        
-        .empty-state h3 {
-            font-size: 1.3rem;
-            color: var(--text-primary);
-            margin-bottom: 8px;
-        }
-        
-        .empty-state p {
-            font-size: 0.9rem;
-        }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand {
-            color: var(--primary);
-            font-weight: 700;
-        }
-        
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .lab-grid { grid-template-columns: 1fr; }
-            .stats-row { grid-template-columns: 1fr 1fr; }
-            .filter-bar { flex-direction: column; align-items: stretch; }
-            .lab-card .card-stats { grid-template-columns: repeat(4, 1fr); }
-        }
-        
-        @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .stats-row { grid-template-columns: 1fr; }
-            .page-header { flex-direction: column; align-items: flex-start !important; }
-            .lab-card .card-stats { grid-template-columns: repeat(2, 1fr); }
-        }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        /* ================================================================
-           PRINT STYLES
-           ================================================================ */
-        @media print {
-            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
-            .search-wrapper, .page-header .btn-outline-light,
-            .filter-bar, .footer, #sidebarToggle { display: none !important; }
-            .main-content { margin: 0; padding: 20px; }
-            .lab-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .page-header {
-                background: #0B5ED7 !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-            }
-            .page-title, .page-subtitle, .header-badge, .role-badge-display {
-                color: white !important;
-            }
-        }
-    </style>
-</head>
-<body>
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC CSS - FULL DARK MODE -->
+<!-- ================================================================ -->
+<style>
+    /* LIGHT MODE */
+    :root {
+        --page-bg-body: #F0F4F8;
+        --page-bg-card: #FFFFFF;
+        --page-text-primary: #1E293B;
+        --page-text-secondary: #64748B;
+        --page-text-muted: #94A3B8;
+        --page-border: #E2E8F0;
+        --page-hover: #F8FAFC;
+    }
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search laboratories..." value="<?= htmlspecialchars($search) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+    /* DARK MODE */
+    [data-theme="dark"] {
+        --page-bg-body: #0F172A;
+        --page-bg-card: #1E293B;
+        --page-text-primary: #F1F5F9;
+        --page-text-secondary: #94A3B8;
+        --page-text-muted: #64748B;
+        --page-border: #334155;
+        --page-hover: #1E3A5F;
+    }
+
+    /* BODY & MAIN CONTENT */
+    body { background: var(--page-bg-body, #F0F4F8); }
+    html[data-theme="dark"] body { background: #0F172A !important; }
+    .main-content { background: var(--page-bg-body, #F0F4F8); }
+    html[data-theme="dark"] .main-content { background: #0F172A !important; color: #F1F5F9; }
+
+    /* ================================================================
+       BLUE PAGE HEADER
+       ================================================================ */
+    .page-header-custom {
+        background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #083D8A 100%);
+        border-radius: 18px;
+        padding: 28px 36px;
+        margin-bottom: 24px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 8px 32px rgba(11, 94, 215, 0.35), 0 4px 12px rgba(11, 94, 215, 0.2);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .page-header-custom::before {
+        content: '';
+        position: absolute;
+        top: -60%;
+        right: -10%;
+        width: 400px;
+        height: 400px;
+        background: radial-gradient(circle, rgba(255,255,255,0.12) 0%, transparent 70%);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .page-header-custom::after {
+        content: '';
+        position: absolute;
+        bottom: -60%;
+        left: -5%;
+        width: 300px;
+        height: 300px;
+        background: radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .page-header-custom .page-title {
+        color: white;
+        font-size: 1.8rem;
+        font-weight: 800;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+        letter-spacing: -0.02em;
+    }
+
+    .page-header-custom .page-title i {
+        width: 48px;
+        height: 48px;
+        background: rgba(255,255,255,0.2);
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.4rem;
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255,255,255,0.2);
+    }
+
+    .page-header-custom .page-subtitle {
+        color: rgba(255,255,255,0.9);
+        font-size: 0.95rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 8px;
+    }
+
+    .page-header-custom .role-badge-display {
+        background: rgba(255,255,255,0.25);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        backdrop-filter: blur(4px);
+        border: 1px solid rgba(255,255,255,0.3);
+    }
+
+    .page-header-custom .header-badge {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 6px 14px;
+        border-radius: 20px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255,255,255,0.2);
+    }
+
+    .page-header-custom .header-badge.green-badge {
+        background: rgba(52,211,153,0.25);
+        border-color: rgba(52,211,153,0.4);
+        color: #A7F3D0;
+    }
+
+    .page-header-custom .header-badge.orange-badge {
+        background: rgba(251,191,36,0.25);
+        border-color: rgba(251,191,36,0.4);
+        color: #FDE68A;
+    }
+
+    .page-header-custom .header-badge.purple-badge {
+        background: rgba(167,139,250,0.25);
+        border-color: rgba(167,139,250,0.4);
+        color: #DDD6FE;
+    }
+
+    /* ================================================================
+       STATS ROW
+       ================================================================ */
+    .stats-row {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 16px;
+        margin-bottom: 24px;
+    }
+
+    .stat-card-custom {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 14px;
+        padding: 16px 20px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+
+    html[data-theme="dark"] .stat-card-custom {
+        background: #1E293B;
+        border-color: #334155;
+    }
+
+    .stat-card-custom::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 4px;
+        height: 100%;
+        background: linear-gradient(180deg, #0B5ED7, #0A4CA8);
+        opacity: 0.9;
+    }
+
+    .stat-card-custom:hover {
+        border-color: #0B5ED7;
+        transform: translateY(-4px);
+        box-shadow: 0 8px 25px rgba(11, 94, 215, 0.15);
+    }
+
+    .stat-card-custom .stat-icon-sm {
+        width: 40px;
+        height: 40px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1rem;
+        flex-shrink: 0;
+    }
+
+    .stat-card-custom .stat-icon-sm.blue { background: #E8F0FE; color: #0B5ED7; }
+    .stat-card-custom .stat-icon-sm.green { background: #ECFDF5; color: #059669; }
+    .stat-card-custom .stat-icon-sm.orange { background: #FFFBEB; color: #F59E0B; }
+    .stat-card-custom .stat-icon-sm.purple { background: #F5F3FF; color: #7C3AED; }
+    .stat-card-custom .stat-icon-sm.teal { background: #ECFDF5; color: #0D9488; }
+
+    html[data-theme="dark"] .stat-card-custom .stat-icon-sm.blue { background: #1E3A5F; color: #6EA8FE; }
+    html[data-theme="dark"] .stat-card-custom .stat-icon-sm.green { background: #1A3A2A; color: #34D399; }
+    html[data-theme="dark"] .stat-card-custom .stat-icon-sm.orange { background: #3A2A1A; color: #FBBF24; }
+    html[data-theme="dark"] .stat-card-custom .stat-icon-sm.purple { background: #2D1B4E; color: #A78BFA; }
+    html[data-theme="dark"] .stat-card-custom .stat-icon-sm.teal { background: #0F3D3D; color: #5EEAD4; }
+
+    .stat-card-custom .stat-number {
+        font-size: 1.5rem;
+        font-weight: 800;
+        line-height: 1.1;
+    }
+
+    .stat-card-custom .stat-number.blue { color: #0B5ED7; }
+    .stat-card-custom .stat-number.green { color: #059669; }
+    .stat-card-custom .stat-number.orange { color: #F59E0B; }
+    .stat-card-custom .stat-number.purple { color: #7C3AED; }
+    .stat-card-custom .stat-number.teal { color: #0D9488; }
+
+    html[data-theme="dark"] .stat-card-custom .stat-number.blue { color: #6EA8FE; }
+    html[data-theme="dark"] .stat-card-custom .stat-number.green { color: #34D399; }
+    html[data-theme="dark"] .stat-card-custom .stat-number.orange { color: #FBBF24; }
+    html[data-theme="dark"] .stat-card-custom .stat-number.purple { color: #A78BFA; }
+    html[data-theme="dark"] .stat-card-custom .stat-number.teal { color: #5EEAD4; }
+
+    .stat-card-custom .stat-label {
+        font-size: 0.65rem;
+        color: var(--page-text-secondary, #64748B);
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    /* ================================================================
+       FILTER BAR
+       ================================================================ */
+    .filter-bar-custom {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 14px;
+        padding: 16px 20px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 24px;
+        position: relative;
+    }
+
+    html[data-theme="dark"] .filter-bar-custom {
+        background: #1E293B;
+        border-color: #334155;
+    }
+
+    .filter-bar-custom::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        border-radius: 14px 14px 0 0;
+    }
+
+    .filter-bar-custom .filter-label {
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: var(--page-text-secondary, #64748B);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .filter-bar-custom select,
+    .filter-bar-custom input {
+        background: var(--page-bg-body, #F0F4F8);
+        border: 2px solid var(--page-border, #E2E8F0);
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 0.78rem;
+        color: var(--page-text-primary, #1E293B);
+        outline: none;
+        transition: all 0.3s;
+    }
+
+    html[data-theme="dark"] .filter-bar-custom select,
+    html[data-theme="dark"] .filter-bar-custom input {
+        background: #0F172A;
+        color: #F1F5F9;
+        border-color: #334155;
+    }
+
+    .filter-bar-custom select:focus,
+    .filter-bar-custom input:focus {
+        border-color: #0B5ED7;
+        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
+    }
+
+    .filter-bar-custom .btn-filter {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+        border: none;
+        padding: 8px 18px;
+        border-radius: 8px;
+        font-weight: 700;
+        font-size: 0.75rem;
+        cursor: pointer;
+        transition: all 0.3s;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .filter-bar-custom .btn-filter:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+
+    .filter-bar-custom .btn-reset {
+        background: transparent;
+        color: var(--page-text-secondary, #64748B);
+        border: 2px solid var(--page-border, #E2E8F0);
+        padding: 8px 18px;
+        border-radius: 8px;
+        font-weight: 700;
+        font-size: 0.75rem;
+        cursor: pointer;
+        transition: all 0.3s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .filter-bar-custom .btn-reset:hover {
+        border-color: #0B5ED7;
+        color: #0B5ED7;
+    }
+
+    /* ================================================================
+       LAB GRID
+       ================================================================ */
+    .lab-grid-custom {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+        gap: 20px;
+    }
+
+    .lab-card-custom {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        overflow: hidden;
+        transition: all 0.3s ease;
+        position: relative;
+    }
+
+    html[data-theme="dark"] .lab-card-custom {
+        background: #1E293B;
+        border-color: #334155;
+    }
+
+    .lab-card-custom:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 12px 35px rgba(11, 94, 215, 0.15);
+        border-color: #0B5ED7;
+    }
+
+    /* BLUE CARD TOP */
+    .lab-card-custom .card-top-custom {
+        padding: 16px 20px;
+        background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #083D8A 100%);
+        position: relative;
+        overflow: hidden;
+        display: flex;
+        justify-content: space-between;
+        align-items: start;
+        gap: 12px;
+    }
+
+    .lab-card-custom .card-top-custom::after {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -20%;
+        width: 200px;
+        height: 200px;
+        background: radial-gradient(circle, rgba(255,255,255,0.12) 0%, transparent 70%);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .lab-card-custom .card-top-custom .name {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: white;
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .lab-card-custom .card-top-custom .name i {
+        color: rgba(255,255,255,0.85);
+    }
+
+    .lab-card-custom .card-top-custom .location-text {
+        font-size: 0.72rem;
+        color: rgba(255,255,255,0.8);
+        margin-top: 4px;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        position: relative;
+        z-index: 1;
+    }
+
+    .lab-card-custom .card-top-custom .status-badge-custom {
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.62rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        position: relative;
+        z-index: 1;
+        backdrop-filter: blur(4px);
+        flex-shrink: 0;
+    }
+
+    .lab-card-custom .card-top-custom .status-badge-custom.active {
+        background: rgba(255,255,255,0.22);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.35);
+    }
+
+    .lab-card-custom .card-top-custom .status-badge-custom.inactive {
+        background: rgba(220, 38, 38, 0.35);
+        color: #FCA5A5;
+        border: 1px solid rgba(220, 38, 38, 0.4);
+    }
+
+    /* CARD BODY */
+    .lab-card-custom .card-body-custom {
+        padding: 16px 20px;
+    }
+
+    .lab-card-custom .card-body-custom .info-row-custom {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 0.78rem;
+        color: var(--page-text-secondary, #64748B);
+        padding: 5px 0;
+    }
+
+    .lab-card-custom .card-body-custom .info-row-custom i {
+        width: 18px;
+        color: #0B5ED7;
+        font-size: 0.8rem;
+        text-align: center;
+    }
+
+    html[data-theme="dark"] .lab-card-custom .card-body-custom .info-row-custom i {
+        color: #6EA8FE;
+    }
+
+    /* CARD STATS */
+    .lab-card-custom .card-stats-custom {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 4px;
+        padding: 12px 16px;
+        background: var(--page-hover, #F8FAFC);
+        border-top: 2px solid var(--page-border, #E2E8F0);
+        border-bottom: 2px solid var(--page-border, #E2E8F0);
+    }
+
+    html[data-theme="dark"] .lab-card-custom .card-stats-custom {
+        background: #0F172A;
+        border-color: #334155;
+    }
+
+    .lab-card-custom .card-stats-custom .stat-item {
+        text-align: center;
+        padding: 6px 0;
+        border-radius: 8px;
+        transition: all 0.3s ease;
+    }
+
+    .lab-card-custom .card-stats-custom .stat-item:hover {
+        background: var(--page-bg-card, #FFFFFF);
+    }
+
+    html[data-theme="dark"] .lab-card-custom .card-stats-custom .stat-item:hover {
+        background: #1E3A5F;
+    }
+
+    .lab-card-custom .card-stats-custom .stat-item .num {
+        font-size: 0.95rem;
+        font-weight: 800;
+        color: var(--page-text-primary, #1E293B);
+        line-height: 1.1;
+    }
+
+    html[data-theme="dark"] .lab-card-custom .card-stats-custom .stat-item .num {
+        color: #F1F5F9;
+    }
+
+    .lab-card-custom .card-stats-custom .stat-item .num.blue { color: #0B5ED7; }
+    .lab-card-custom .card-stats-custom .stat-item .num.green { color: #059669; }
+    .lab-card-custom .card-stats-custom .stat-item .num.orange { color: #F59E0B; }
+    .lab-card-custom .card-stats-custom .stat-item .num.purple { color: #7C3AED; }
+    .lab-card-custom .card-stats-custom .stat-item .num.teal { color: #0D9488; }
+
+    html[data-theme="dark"] .lab-card-custom .card-stats-custom .stat-item .num.blue { color: #6EA8FE; }
+    html[data-theme="dark"] .lab-card-custom .card-stats-custom .stat-item .num.green { color: #34D399; }
+    html[data-theme="dark"] .lab-card-custom .card-stats-custom .stat-item .num.orange { color: #FBBF24; }
+    html[data-theme="dark"] .lab-card-custom .card-stats-custom .stat-item .num.purple { color: #A78BFA; }
+    html[data-theme="dark"] .lab-card-custom .card-stats-custom .stat-item .num.teal { color: #5EEAD4; }
+
+    .lab-card-custom .card-stats-custom .stat-item .label {
+        font-size: 0.55rem;
+        color: var(--page-text-secondary, #64748B);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        font-weight: 700;
+        margin-top: 2px;
+    }
+
+    /* CARD ACTIONS */
+    .lab-card-custom .card-actions-custom {
+        padding: 12px 18px;
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+    }
+
+    .lab-card-custom .card-actions-custom .btn-action {
+        padding: 6px 14px;
+        border-radius: 8px;
+        font-size: 0.68rem;
+        font-weight: 700;
+        text-decoration: none;
+        transition: all 0.3s;
+        border: 2px solid var(--page-border, #E2E8F0);
+        color: var(--page-text-secondary, #64748B);
+        background: transparent;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        white-space: nowrap;
+    }
+
+    .lab-card-custom .card-actions-custom .btn-action:hover {
+        border-color: #0B5ED7;
+        color: #0B5ED7;
+        transform: translateY(-2px);
+    }
+
+    .lab-card-custom .card-actions-custom .btn-action.primary {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+        border-color: #0B5ED7;
+    }
+
+    .lab-card-custom .card-actions-custom .btn-action.primary:hover {
+        box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
+        color: white;
+    }
+
+    /* ================================================================
+       EMPTY STATE
+       ================================================================ */
+    .empty-state-custom {
+        text-align: center;
+        padding: 60px 20px;
+        color: var(--page-text-secondary, #64748B);
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        border: 2px dashed var(--page-border, #E2E8F0);
+    }
+
+    html[data-theme="dark"] .empty-state-custom {
+        background: #1E293B;
+        border-color: #334155;
+    }
+
+    .empty-state-custom i {
+        font-size: 4rem;
+        color: var(--page-text-muted, #94A3B8);
+        margin-bottom: 16px;
+        display: block;
+        opacity: 0.5;
+    }
+
+    .empty-state-custom h3 {
+        font-size: 1.2rem;
+        color: var(--page-text-primary, #1E293B);
+        margin-bottom: 8px;
+    }
+
+    html[data-theme="dark"] .empty-state-custom h3 { color: #F1F5F9; }
+
+    .empty-state-custom p {
+        font-size: 0.85rem;
+    }
+
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 1200px) {
+        .stats-row { grid-template-columns: repeat(3, 1fr); }
+    }
+
+    @media (max-width: 768px) {
+        .page-header-custom { padding: 20px; }
+        .page-header-custom .page-title { font-size: 1.25rem; }
+        .page-header-custom .page-title i { width: 38px; height: 38px; font-size: 1.1rem; }
+        .lab-grid-custom { grid-template-columns: 1fr; }
+        .stats-row { grid-template-columns: repeat(2, 1fr); }
+        .filter-bar-custom { flex-direction: column; align-items: stretch; }
+        .lab-card-custom .card-stats-custom { grid-template-columns: repeat(4, 1fr); }
+    }
+
+    @media (max-width: 480px) {
+        .stats-row { grid-template-columns: 1fr; }
+        .lab-card-custom .card-stats-custom { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    /* Print */
+    @media print {
+        .page-header-custom { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; }
+        .filter-bar-custom, .card-actions-custom { display: none !important; }
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
-    <div class="page-header">
-        <div>
+    <!-- BLUE PAGE HEADER -->
+    <div class="page-header-custom">
+        <div style="position:relative;z-index:1;">
             <h1 class="page-title">
                 <i class="fas fa-flask"></i>
                 Laboratories
                 <span class="role-badge-display">ADMIN</span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-microscope"></i>
-                <strong><?= $total_labs ?></strong> laboratories found
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                <span><i class="fas fa-microscope"></i> <strong><?= $total_labs ?></strong> laboratories found</span>
+                <span class="header-badge green-badge">
                     <i class="fas fa-vial"></i> <?= number_format($total_tests) ?> Tests
                 </span>
-                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
+                <span class="header-badge orange-badge">
                     <i class="fas fa-clock"></i> <?= number_format($pending_tests) ?> Pending
                 </span>
-                <span class="header-badge" style="background:rgba(124,58,237,0.2);border-color:rgba(124,58,237,0.3);color:#A78BFA;">
+                <span class="header-badge purple-badge">
                     <i class="fas fa-user-md"></i> <?= number_format($total_technicians) ?> Technicians
                 </span>
             </p>
         </div>
-        <!-- Add Laboratory button REMOVED -->
     </div>
 
-    <!-- ================================================================ -->
-    <!-- STATISTICS ROW -->
-    <!-- ================================================================ -->
-    <div class="stats-row animate-fade-in-up">
-        <div class="stat-card">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon-small blue"><i class="fas fa-flask"></i></div>
+    <!-- STATS ROW -->
+    <div class="stats-row">
+        <div class="stat-card-custom">
+            <div style="display:flex;align-items:center;gap:12px;">
+                <div class="stat-icon-sm blue"><i class="fas fa-flask"></i></div>
                 <div>
                     <p class="stat-label">Total Labs</p>
                     <p class="stat-number blue"><?= number_format($total_labs) ?></p>
                 </div>
             </div>
         </div>
-        <div class="stat-card">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon-small green"><i class="fas fa-vial"></i></div>
+        <div class="stat-card-custom">
+            <div style="display:flex;align-items:center;gap:12px;">
+                <div class="stat-icon-sm green"><i class="fas fa-vial"></i></div>
                 <div>
                     <p class="stat-label">Total Tests</p>
                     <p class="stat-number green"><?= number_format($total_tests) ?></p>
                 </div>
             </div>
         </div>
-        <div class="stat-card">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon-small orange"><i class="fas fa-clock"></i></div>
+        <div class="stat-card-custom">
+            <div style="display:flex;align-items:center;gap:12px;">
+                <div class="stat-icon-sm orange"><i class="fas fa-clock"></i></div>
                 <div>
                     <p class="stat-label">Pending Tests</p>
                     <p class="stat-number orange"><?= number_format($pending_tests) ?></p>
                 </div>
             </div>
         </div>
-        <div class="stat-card">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon-small purple"><i class="fas fa-check-circle"></i></div>
+        <div class="stat-card-custom">
+            <div style="display:flex;align-items:center;gap:12px;">
+                <div class="stat-icon-sm purple"><i class="fas fa-check-circle"></i></div>
                 <div>
-                    <p class="stat-label">Completed Tests</p>
+                    <p class="stat-label">Completed</p>
                     <p class="stat-number purple"><?= number_format($completed_tests) ?></p>
                 </div>
             </div>
         </div>
-        <div class="stat-card">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon-small teal"><i class="fas fa-user-md"></i></div>
+        <div class="stat-card-custom">
+            <div style="display:flex;align-items:center;gap:12px;">
+                <div class="stat-icon-sm teal"><i class="fas fa-user-md"></i></div>
                 <div>
                     <p class="stat-label">Technicians</p>
                     <p class="stat-number teal"><?= number_format($total_technicians) ?></p>
@@ -1266,23 +914,21 @@ include_once '../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FILTER BAR -->
-    <!-- ================================================================ -->
-    <div class="filter-bar animate-fade-in-up" style="animation-delay:0.05s;">
+    <div class="filter-bar-custom">
         <span class="filter-label"><i class="fas fa-filter"></i> Filter</span>
         
-        <form method="GET" action="" class="flex flex-wrap gap-2 items-center w-full">
+        <form method="GET" action="" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;flex:1;">
             <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
             
-            <select name="status" class="flex-1 min-w-[120px]">
+            <select name="status" style="flex:1;min-width:120px;">
                 <option value="all" <?= $status_filter === 'all' ? 'selected' : '' ?>>All Status</option>
                 <option value="active" <?= $status_filter === 'active' ? 'selected' : '' ?>>Active</option>
                 <option value="inactive" <?= $status_filter === 'inactive' ? 'selected' : '' ?>>Inactive</option>
             </select>
             
             <input type="text" name="search" placeholder="Search by name, location..." 
-                   value="<?= htmlspecialchars($search) ?>" class="flex-1 min-w-[180px]">
+                   value="<?= htmlspecialchars($search) ?>" style="flex:1;min-width:180px;">
             
             <button type="submit" class="btn-filter">
                 <i class="fas fa-search"></i> Apply
@@ -1294,16 +940,13 @@ include_once '../../components/admin_sidebar.php';
         </form>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- LABORATORY GRID - WITH BLUE HEADERS -->
-    <!-- ================================================================ -->
+    <!-- LAB GRID -->
     <?php if (count($laboratories) > 0): ?>
-        <div class="lab-grid animate-fade-in-up" style="animation-delay:0.1s;">
+        <div class="lab-grid-custom">
             <?php foreach ($laboratories as $lab): ?>
-                <div class="lab-card">
-                    <!-- CARD TOP - BLUE BACKGROUND -->
-                    <div class="card-top">
-                        <div>
+                <div class="lab-card-custom">
+                    <div class="card-top-custom">
+                        <div style="position:relative;z-index:1;">
                             <div class="name">
                                 <i class="fas fa-flask"></i>
                                 <?= htmlspecialchars($lab['name']) ?>
@@ -1313,31 +956,31 @@ include_once '../../components/admin_sidebar.php';
                                 <?= htmlspecialchars($lab['location'] ?? 'N/A') ?>
                             </div>
                         </div>
-                        <span class="status-badge <?= $lab['status'] === 'active' ? 'active' : 'inactive' ?>">
+                        <span class="status-badge-custom <?= $lab['status'] === 'active' ? 'active' : 'inactive' ?>">
                             <?= $lab['status'] === 'active' ? 'Active' : 'Inactive' ?>
                         </span>
                     </div>
                     
-                    <div class="card-body">
-                        <div class="info-row">
+                    <div class="card-body-custom">
+                        <div class="info-row-custom">
                             <i class="fas fa-phone"></i>
                             <?= htmlspecialchars($lab['phone'] ?? 'N/A') ?>
                         </div>
-                        <div class="info-row">
+                        <div class="info-row-custom">
                             <i class="fas fa-envelope"></i>
                             <?= htmlspecialchars($lab['email'] ?? 'N/A') ?>
                         </div>
-                        <div class="info-row">
+                        <div class="info-row-custom">
                             <i class="fas fa-user-md"></i>
                             <?= ($lab['active_technicians'] ?? 0) ?> Active / <?= ($lab['total_technicians'] ?? 0) ?> Technicians
                         </div>
-                        <div class="info-row">
+                        <div class="info-row-custom">
                             <i class="fas fa-calendar-plus"></i>
                             Created: <?= date('M d, Y', strtotime($lab['created_at'] ?? 'now')) ?>
                         </div>
                     </div>
                     
-                    <div class="card-stats">
+                    <div class="card-stats-custom">
                         <div class="stat-item">
                             <div class="num blue"><?= number_format($lab['total_tests'] ?? 0) ?></div>
                             <div class="label">Tests</div>
@@ -1358,7 +1001,7 @@ include_once '../../components/admin_sidebar.php';
                         </div>
                     </div>
                     
-                    <div class="card-actions">
+                    <div class="card-actions-custom">
                         <a href="view_laboratory.php?id=<?= $lab['id'] ?>&branch=<?= $selected_branch_id ?>" 
                            class="btn-action primary">
                             <i class="fas fa-eye"></i> View
@@ -1376,133 +1019,56 @@ include_once '../../components/admin_sidebar.php';
             <?php endforeach; ?>
         </div>
     <?php else: ?>
-        <div class="empty-state animate-fade-in-up" style="animation-delay:0.1s;">
+        <div class="empty-state-custom">
             <i class="fas fa-flask"></i>
             <h3>No Laboratories Found</h3>
             <p>Try adjusting your filters</p>
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
-    <footer class="footer">
-        <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
-            Laboratories
-            <span class="text-gray-300 mx-2">|</span>
-            <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
-        </p>
-    </footer>
-
 </main>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // DARK MODE BACKGROUND ENFORCEMENT
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
-        }
-    });
-
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    function performSearch() {
-        var query = searchInput.value.trim();
-        var branch = '<?= $selected_branch_id ?>';
-        var status = '<?= $status_filter ?>';
-        var url = 'laboratories.php?branch=' + encodeURIComponent(branch) + '&status=' + encodeURIComponent(status);
-        if (query.length > 0) {
-            url += '&search=' + encodeURIComponent(query);
-        }
-        window.location.href = url;
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        url.searchParams.delete('branch_id');
-        window.location.href = url.toString();
-    }
-
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
+    function enforceDarkModeBackground() {
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var body = document.body;
+        var mainContent = document.querySelector('.main-content');
         
-        var ftEl = document.getElementById('footerTime');
-        if (ftEl) ftEl.textContent = timeStr;
+        if (isDark) {
+            if (body) body.style.background = '#0F172A';
+            if (mainContent) mainContent.style.background = '#0F172A';
+        } else {
+            if (body) body.style.background = '#F0F4F8';
+            if (mainContent) mainContent.style.background = '#F0F4F8';
+        }
     }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
 
-    console.log('%c🧪 Braick Dispensary - Laboratories', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    enforceDarkModeBackground();
+
+    document.addEventListener('darkModeChanged', function(e) {
+        setTimeout(enforceDarkModeBackground, 50);
+    });
+
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.attributeName === 'data-theme') {
+                enforceDarkModeBackground();
+            }
+        });
+    });
+    observer.observe(document.documentElement, { attributes: true });
+
+    console.log('%c🧪 Braick - Laboratories', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#059669;');
+    console.log('%c🌙 FULL DARK MODE inafanya kazi', 'font-size:13px; color:#7C3AED;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🔬 Total Labs: <?= $total_labs ?>', 'font-size:13px; color:#059669;');
-    console.log('%c✅ error=invalid_id FIXED - Automatically removed', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Invalid branch resets to "all" without showing error', 'font-size:13px; color:#34D399;');
-    console.log('%c🔵 Default branch filter: "all"', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c🔬 Total Labs: <?= $total_labs ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

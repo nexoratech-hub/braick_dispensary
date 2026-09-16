@@ -2,16 +2,15 @@
 // ================================================================
 // FILE: frontend/pages/admin/export_lab_pdf.php
 // EXPORT LAB REPORT TO PDF - HTML FALLBACK VERSION
-// BRAICK DISPENSARY - PURPLE THEME
-// FIXED: GROUP BY lt.id to avoid duplicate tests
-// FIXED: Uses bills table (NOT patient_bills)
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
-// WITH OFFICIAL STAMP & ADMIN CONTACTS
+// BRAICK DISPENSARY - BLUE THEME
+// ✅ Blue theme (not purple)
+// ✅ GROUP BY lt.id to avoid duplicate tests
+// ✅ Uses bills table (NOT patient_bills)
+// ✅ WITH SESSION MANAGEMENT & LOGIN PROTECTION
+// ✅ WITH OFFICIAL STAMP & ADMIN CONTACTS
+// ✅ Logo ya Braick inaonekana
 // ================================================================
 
-// ================================================================
-// SESSION START
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -51,7 +50,6 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// Include database
 require_once '../../../backend/config/database.php';
 
 $db = Database::getInstance()->getConnection();
@@ -94,10 +92,22 @@ $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
 // ================================================================
-// LOGO PATH
+// LOGO PATH - MULTIPLE FALLBACKS
 // ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-$logo_fallback = 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60"><rect width="60" height="60" rx="12" fill="#7C3AED"/><text x="30" y="38" text-anchor="middle" fill="white" font-size="28" font-weight="bold" font-family="Arial">B</text></svg>');
+$logo_alternatives = [
+    '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.PNG',
+    '/dispensary_system/frontend/assets/uploads/profiles/logo.png',
+    '/dispensary_system/frontend/assets/uploads/profiles/logo.jpg',
+];
+foreach ($logo_alternatives as $alt) {
+    if (file_exists($_SERVER['DOCUMENT_ROOT'] . $alt)) {
+        $logo_url = $alt;
+        break;
+    }
+}
+
+$logo_fallback = 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60"><rect width="60" height="60" rx="12" fill="#0B5ED7"/><text x="30" y="38" text-anchor="middle" fill="white" font-size="28" font-weight="bold" font-family="Arial">B</text></svg>');
 
 // ================================================================
 // GET BRANCH NAME
@@ -133,11 +143,8 @@ if ($branch_id > 0) {
 }
 
 // ================================================================
-// FETCH LAB DATA - WITH GROUP BY TO AVOID DUPLICATES
-// FIXED: Uses bills table (NOT patient_bills)
+// FETCH LAB DATA
 // ================================================================
-
-// All lab tests with patient info - GROUP BY lt.id to avoid duplicates
 $stmt = $db->query("
     SELECT 
         lt.id,
@@ -197,8 +204,6 @@ $in_progress_tests = 0;
 $cancelled_tests = 0;
 $tests_with_results = 0;
 $tests_without_results = 0;
-
-// Group by test name for top tests
 $test_counts = [];
 
 foreach ($lab_tests_all as $test) {
@@ -209,14 +214,12 @@ foreach ($lab_tests_all as $test) {
     elseif ($test['status'] === 'in_progress') $in_progress_tests++;
     elseif ($test['status'] === 'cancelled') $cancelled_tests++;
     
-    // Check if test has results
     if (!empty($test['results']) && $test['results'] !== 'NULL' && $test['results'] !== '') {
         $tests_with_results++;
     } else {
         $tests_without_results++;
     }
     
-    // Count by test name
     $test_name = $test['test_name'] ?? 'Unknown';
     if (!isset($test_counts[$test_name])) {
         $test_counts[$test_name] = 0;
@@ -224,13 +227,9 @@ foreach ($lab_tests_all as $test) {
     $test_counts[$test_name]++;
 }
 
-// Sort test counts by frequency
 arsort($test_counts);
 $top_tests = array_slice($test_counts, 0, 10, true);
 
-// ================================================================
-// FUNCTION TO GET STATUS LABEL
-// ================================================================
 function getStatusLabel($status) {
     $labels = [
         'pending' => 'Pending',
@@ -247,10 +246,6 @@ function getStatusLabel($status) {
     return $labels[$status] ?? ucfirst($status);
 }
 
-// ================================================================
-// DISPLAY HTML REPORT (PRINTABLE)
-// ================================================================
-
 header('Content-Type: text/html; charset=utf-8');
 ?>
 <!DOCTYPE html>
@@ -263,17 +258,13 @@ header('Content-Type: text/html; charset=utf-8');
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
         /* ================================================================
-           PRINT STYLES - OPTIMIZED FOR PDF
+           BLUE THEME — PRINT OPTIMIZED
            ================================================================ */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
             font-family: 'Segoe UI', Arial, sans-serif;
-            background: #f0f4f8;
+            background: #F1F5F9;
             padding: 20px;
             color: #1E293B;
         }
@@ -288,10 +279,10 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         /* ================================================================
-           HEADER WITH LOGO - PURPLE THEME LIKE EXPENSES
+           HEADER WITH LOGO — BLUE THEME
            ================================================================ */
         .report-header {
-            background: linear-gradient(135deg, #7C3AED, #5B21B6);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             color: white;
             padding: 24px 28px;
             border-radius: 12px;
@@ -376,6 +367,7 @@ header('Content-Type: text/html; charset=utf-8');
             font-weight: 600;
             display: inline-block;
             color: white;
+            border: 1px solid rgba(255,255,255,0.2);
         }
         
         /* Admin Contact Line */
@@ -385,12 +377,12 @@ header('Content-Type: text/html; charset=utf-8');
             gap: 12px;
             flex-wrap: wrap;
             font-size: 10px;
-            color: rgba(255,255,255,0.7);
-            margin-top: 4px;
-            padding-top: 4px;
-            border-top: 1px solid rgba(255,255,255,0.1);
-            position: relative;
-            z-index: 1;
+            color: #64748B;
+            margin-bottom: 16px;
+            padding: 8px 14px;
+            background: #F8FAFC;
+            border-radius: 8px;
+            border: 1px solid #E2E8F0;
         }
         
         .admin-contact-line span {
@@ -400,11 +392,11 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .admin-contact-line i {
-            color: rgba(255,255,255,0.6);
+            color: #0B5ED7;
         }
         
         /* ================================================================
-           SUMMARY CARDS - PURPLE THEME
+           SUMMARY CARDS — BLUE THEME
            ================================================================ */
         .summary-grid {
             display: grid;
@@ -427,12 +419,11 @@ header('Content-Type: text/html; charset=utf-8');
             font-weight: 800;
         }
         
-        .summary-card .number.purple { color: #7C3AED; }
         .summary-card .number.blue { color: #0B5ED7; }
-        .summary-card .number.green { color: #059669; }
-        .summary-card .number.orange { color: #D97706; }
-        .summary-card .number.red { color: #DC2626; }
-        .summary-card .number.teal { color: #0D9488; }
+        .summary-card .number.darkblue { color: #0A4CA8; }
+        .summary-card .number.deepblue { color: #0B3D8A; }
+        .summary-card .number.lightblue { color: #1A73E8; }
+        .summary-card .number.navy { color: #1E40AF; }
         
         .summary-card .label {
             font-size: 8px;
@@ -452,11 +443,11 @@ header('Content-Type: text/html; charset=utf-8');
            SECTION TITLES
            ================================================================ */
         .section-title {
-            background: #F1F5F9;
+            background: #E8F0FE;
             padding: 8px 14px;
             font-weight: 700;
             font-size: 13px;
-            border-left: 4px solid #7C3AED;
+            border-left: 4px solid #0B5ED7;
             margin: 16px 0 10px 0;
             border-radius: 0 4px 4px 0;
             display: flex;
@@ -465,7 +456,7 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .section-title i {
-            color: #7C3AED;
+            color: #0B5ED7;
         }
         
         /* ================================================================
@@ -491,11 +482,11 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .filter-info i {
-            color: #7C3AED;
+            color: #0B5ED7;
         }
         
         /* ================================================================
-           BADGES
+           BADGES — ALL BLUE
            ================================================================ */
         .badge {
             display: inline-block;
@@ -506,15 +497,15 @@ header('Content-Type: text/html; charset=utf-8');
             color: white;
         }
         
-        .badge-success { background: #059669; }
-        .badge-warning { background: #D97706; color: #1E293B; }
-        .badge-danger { background: #DC2626; }
+        .badge-success { background: #0A4CA8; }
+        .badge-warning { background: #1A73E8; }
+        .badge-danger { background: #1E3A8A; }
         .badge-info { background: #0B5ED7; }
-        .badge-purple { background: #7C3AED; }
+        .badge-purple { background: #0B3D8A; }
         .badge-secondary { background: #64748B; }
         
         /* ================================================================
-           DATA TABLE
+           DATA TABLE — BLUE HEADERS
            ================================================================ */
         .data-table {
             width: 100%;
@@ -523,12 +514,12 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .data-table th {
-            background: #7C3AED;
+            background: #0B5ED7;
             color: white;
-            padding: 5px 8px;
+            padding: 6px 8px;
             text-align: left;
             font-weight: 700;
-            border-bottom: 2px solid #5B21B6;
+            border-bottom: 2px solid #0A4CA8;
             font-size: 7px;
             text-transform: uppercase;
             letter-spacing: 0.3px;
@@ -549,13 +540,13 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .text-right { text-align: right; }
-        .text-green { color: #059669; }
+        .text-green { color: #0A4CA8; }
         .text-red { color: #DC2626; }
         .font-mono { font-family: monospace; }
         .font-bold { font-weight: 700; }
         
         /* ================================================================
-           TOP TESTS TABLE
+           TOP TESTS TABLE — BLUE
            ================================================================ */
         .top-tests-grid {
             display: grid;
@@ -578,12 +569,12 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .top-test-item .count {
-            color: #7C3AED;
+            color: #0B5ED7;
             font-weight: 700;
         }
         
         /* ================================================================
-           OFFICIAL STAMP - LIKE EXPENSES PDF
+           OFFICIAL STAMP — BLUE THEME
            ================================================================ */
         .official-stamp {
             margin-top: 20px;
@@ -608,9 +599,9 @@ header('Content-Type: text/html; charset=utf-8');
         .official-stamp .stamp-box {
             text-align: center;
             padding: 8px 20px;
-            border: 3px solid #7C3AED;
+            border: 3px solid #0B5ED7;
             border-radius: 10px;
-            background: #EDE9FE;
+            background: #E8F0FE;
             min-width: 160px;
         }
         
@@ -625,7 +616,7 @@ header('Content-Type: text/html; charset=utf-8');
         .official-stamp .stamp-box .stamp-name {
             font-size: 14px;
             font-weight: 800;
-            color: #7C3AED;
+            color: #0B5ED7;
         }
         
         .official-stamp .stamp-box .stamp-line {
@@ -669,7 +660,7 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         /* ================================================================
-           PRINT BUTTON - HIDDEN IN PRINT
+           PRINT BUTTONS
            ================================================================ */
         .print-btn-container {
             text-align: center;
@@ -677,7 +668,7 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .print-btn {
-            background: #7C3AED;
+            background: #0B5ED7;
             color: white;
             border: none;
             padding: 10px 28px;
@@ -689,9 +680,9 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .print-btn:hover {
-            background: #5B21B6;
+            background: #0A4CA8;
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
         }
         
         .print-btn i {
@@ -706,7 +697,7 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .pdf-note i {
-            color: #DC2626;
+            color: #0B5ED7;
         }
         
         /* ================================================================
@@ -747,6 +738,7 @@ header('Content-Type: text/html; charset=utf-8');
             .report-header {
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
+                background: linear-gradient(135deg, #0B5ED7, #0A4CA8) !important;
             }
             .report-header .brand .logo-container {
                 background: rgba(255,255,255,0.15) !important;
@@ -758,7 +750,7 @@ header('Content-Type: text/html; charset=utf-8');
                 print-color-adjust: exact !important;
             }
             .data-table th {
-                background: #7C3AED !important;
+                background: #0B5ED7 !important;
                 color: white !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
@@ -770,10 +762,10 @@ header('Content-Type: text/html; charset=utf-8');
                 background: #f5f5f5 !important;
             }
             .official-stamp .stamp-box {
-                background: #EDE9FE !important;
+                background: #E8F0FE !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
-                border-color: #7C3AED !important;
+                border-color: #0B5ED7 !important;
             }
             .admin-contact-line {
                 -webkit-print-color-adjust: exact !important;
@@ -786,9 +778,7 @@ header('Content-Type: text/html; charset=utf-8');
 
 <div class="container">
 
-    <!-- ================================================================ -->
-    <!-- PRINT BUTTON -->
-    <!-- ================================================================ -->
+    <!-- PRINT BUTTONS -->
     <div class="print-btn-container no-print">
         <button onclick="window.print()" class="print-btn">
             <i class="fas fa-file-pdf"></i> Save as PDF / Print
@@ -803,9 +793,7 @@ header('Content-Type: text/html; charset=utf-8');
         Click <strong>"Save as PDF / Print"</strong> and select <strong>"Save as PDF"</strong> as the destination.
     </div>
 
-    <!-- ================================================================ -->
-    <!-- HEADER WITH LOGO - PURPLE THEME LIKE EXPENSES -->
-    <!-- ================================================================ -->
+    <!-- HEADER WITH LOGO — BLUE THEME -->
     <div class="report-header">
         <div class="brand">
             <div class="logo-container">
@@ -832,9 +820,7 @@ header('Content-Type: text/html; charset=utf-8');
         <span><i class="fas fa-user"></i> Generated by: <?= htmlspecialchars($user_full_name) ?></span>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FILTER INFO -->
-    <!-- ================================================================ -->
     <div class="filter-info">
         <span><i class="fas fa-store"></i> Branch: <strong><?= htmlspecialchars($branch_name) ?></strong></span>
         <?php if (!empty($date_from) || !empty($date_to)): ?>
@@ -851,40 +837,36 @@ header('Content-Type: text/html; charset=utf-8');
         <span><i class="fas fa-flask"></i> Total Tests: <strong><?= number_format($total_tests) ?></strong></span>
     </div>
 
-    <!-- ================================================================ -->
     <!-- SUMMARY CARDS -->
-    <!-- ================================================================ -->
     <div class="summary-grid">
         <div class="summary-card">
-            <div class="number purple">TSh <?= number_format($total_lab_revenue, 0) ?></div>
+            <div class="number blue">TSh <?= number_format($total_lab_revenue, 0) ?></div>
             <div class="label">Total Revenue</div>
             <div class="sub-label">Lab test fees</div>
         </div>
         <div class="summary-card">
-            <div class="number blue"><?= number_format($total_tests) ?></div>
+            <div class="number darkblue"><?= number_format($total_tests) ?></div>
             <div class="label">Total Tests</div>
             <div class="sub-label">All tests performed</div>
         </div>
         <div class="summary-card">
-            <div class="number green"><?= number_format($completed_tests) ?></div>
+            <div class="number lightblue"><?= number_format($completed_tests) ?></div>
             <div class="label">Completed</div>
             <div class="sub-label">Tests finalized</div>
         </div>
         <div class="summary-card">
-            <div class="number orange"><?= number_format($pending_tests + $in_progress_tests) ?></div>
+            <div class="number deepblue"><?= number_format($pending_tests + $in_progress_tests) ?></div>
             <div class="label">In Progress</div>
             <div class="sub-label"><?= number_format($pending_tests) ?> pending · <?= number_format($in_progress_tests) ?> in progress</div>
         </div>
         <div class="summary-card">
-            <div class="number teal"><?= number_format($tests_with_results) ?> / <?= number_format($tests_without_results) ?></div>
+            <div class="number navy"><?= number_format($tests_with_results) ?> / <?= number_format($tests_without_results) ?></div>
             <div class="label">Results</div>
             <div class="sub-label"><?= number_format($tests_with_results) ?> with results · <?= number_format($tests_without_results) ?> no results</div>
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- TOP TESTS -->
-    <!-- ================================================================ -->
     <?php if (!empty($top_tests)): ?>
     <div class="section-title">
         <i class="fas fa-chart-bar"></i> Most Frequent Tests
@@ -899,9 +881,7 @@ header('Content-Type: text/html; charset=utf-8');
     </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- ALL LAB TESTS -->
-    <!-- ================================================================ -->
     <div class="section-title" style="margin-top:16px;">
         <i class="fas fa-flask"></i> All Lab Tests (<?= count($lab_tests_all) ?>)
     </div>
@@ -937,7 +917,6 @@ header('Content-Type: text/html; charset=utf-8');
                         $lt_without_bill++;
                     }
                     
-                    // Determine status badge class
                     $status_class = 'warning';
                     if ($test['status'] === 'completed') $status_class = 'success';
                     elseif ($test['status'] === 'pending') $status_class = 'warning';
@@ -955,7 +934,6 @@ header('Content-Type: text/html; charset=utf-8');
                         <td style="font-size:8px;max-width:100px;word-wrap:break-word;">
                             <?php 
                                 if (!empty($test['results']) && $test['results'] !== 'NULL' && $test['results'] !== '') {
-                                    // Truncate long results
                                     $result = htmlspecialchars($test['results']);
                                     if (strlen($result) > 30) {
                                         echo substr($result, 0, 30) . '...';
@@ -987,9 +965,9 @@ header('Content-Type: text/html; charset=utf-8');
                 <?php endforeach; ?>
             </tbody>
             <tfoot>
-                <tr style="background:#F8FAFC;font-weight:700;border-top:2px solid #7C3AED;">
+                <tr style="background:#E8F0FE;font-weight:700;border-top:2px solid #0B5ED7;">
                     <td colspan="3" style="text-align:right;">GRAND TOTAL</td>
-                    <td style="text-align:right;">TSh <?= number_format($lt_total, 0) ?></td>
+                    <td style="text-align:right;color:#0B5ED7;">TSh <?= number_format($lt_total, 0) ?></td>
                     <td colspan="2" style="text-align:center;font-size:8px;">
                         <?= number_format($lt_with_bill) ?> with bill · <?= number_format($lt_without_bill) ?> no bill
                     </td>
@@ -1004,9 +982,7 @@ header('Content-Type: text/html; charset=utf-8');
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- OFFICIAL STAMP - LIKE EXPENSES PDF -->
-    <!-- ================================================================ -->
+    <!-- OFFICIAL STAMP -->
     <div class="official-stamp">
         <div class="stamp-left">
             <span>Generated by: <strong><?= htmlspecialchars($user_full_name) ?></strong></span>
@@ -1023,9 +999,7 @@ header('Content-Type: text/html; charset=utf-8');
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <div class="report-footer">
         <strong>Braick Dispensary</strong> Management System 
         <span style="margin:0 8px;color:#CBD5E1;">|</span>
@@ -1039,23 +1013,20 @@ header('Content-Type: text/html; charset=utf-8');
 </div>
 
 <script>
-    // Auto print if URL has ?print parameter
     if (window.location.search.includes('print=1')) {
         setTimeout(function() {
             window.print();
         }, 500);
     }
     
-    console.log('%c🧪 Braick Dispensary - Lab Report (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🧪 Braick Dispensary - Lab Report (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🧪 Total Tests: <?= number_format($total_tests) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🧪 Total Tests: <?= number_format($total_tests) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_lab_revenue, 0) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Using: lab_tests table with GROUP BY lt.id', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Using: bills table (NOT patient_bills)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Design like expenses with logo & official stamp', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Blue theme applied everywhere', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Logo ya Braick inaonekana', 'font-size:13px; color:#34D399;');
     console.log('%c📞 Admin Contacts: <?= htmlspecialchars($admin_phones_display) ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

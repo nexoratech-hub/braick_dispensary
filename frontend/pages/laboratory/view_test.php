@@ -3,6 +3,11 @@
 // FILE: frontend/pages/laboratory/view_test.php
 // LABORATORY - VIEW TEST(S) - WITH EQUIPMENT & 2-COLUMN LAYOUT
 // ================================================================
+// ✅ BLUE THEME - Same as pending_tests, in_progress, completed
+// ✅ Test cards 2-column layout
+// ✅ Equipment used section
+// ✅ Same header style as other lab pages
+// ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -41,7 +46,7 @@ try {
 }
 
 // ================================================================
-// GET PARAMETERS - Support test_ids
+// GET PARAMETERS
 // ================================================================
 $test_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
@@ -49,7 +54,6 @@ $visit_id = isset($_GET['visit_id']) ? (int)$_GET['visit_id'] : 0;
 $view_all = isset($_GET['view']) && $_GET['view'] === 'all';
 $test_ids_param = isset($_GET['test_ids']) ? trim($_GET['test_ids']) : '';
 
-// Parse test_ids
 $test_ids_array = [];
 if (!empty($test_ids_param)) {
     $test_ids_array = array_filter(array_map('intval', explode(',', $test_ids_param)));
@@ -65,9 +69,6 @@ $lab_bill_total = 0;
 
 try {
     if (!empty($test_ids_array)) {
-        // ================================================================
-        // VIEW BY TEST IDs (from grouped completed_tests)
-        // ================================================================
         $is_group_view = true;
         $placeholders = implode(',', array_fill(0, count($test_ids_array), '?'));
         
@@ -127,9 +128,6 @@ try {
         }
         
     } elseif ($view_all && $patient_id > 0 && $visit_id > 0) {
-        // ================================================================
-        // VIEW ALL TESTS (by patient + visit)
-        // ================================================================
         $is_group_view = true;
         
         $stmt = $db->prepare("
@@ -187,9 +185,6 @@ try {
         }
         
     } elseif ($test_id > 0) {
-        // ================================================================
-        // VIEW SINGLE TEST
-        // ================================================================
         $stmt = $db->prepare("
             SELECT 
                 lt.*,
@@ -245,18 +240,12 @@ try {
         exit;
     }
     
-    // ================================================================
-    // ✅ GET LINKED EQUIPMENT FOR EACH TEST (NEW)
-    // ================================================================
+    // GET LINKED EQUIPMENT
     foreach ($tests as $key => $test) {
         $linked_equipment = [];
         $linked_tests = [];
         
         try {
-            // Check kama lab_tests ina column ya equipment_id au linked_test_id
-            // Jaribu kutafuta equipment iliyotumika kwa test hii
-            
-            // Option 1: Kama kuna table ya lab_test_equipment (many-to-many)
             try {
                 $stmt = $db->prepare("
                     SELECT 
@@ -275,11 +264,8 @@ try {
                 ");
                 $stmt->execute([$test['id']]);
                 $linked_equipment = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            } catch (Exception $e) {
-                // Table haipo - tumia fallback
-            }
+            } catch (Exception $e) {}
             
-            // Option 2: Kama kuna equipment_id kwenye lab_tests
             if (empty($linked_equipment) && !empty($test['equipment_id'])) {
                 try {
                     $stmt = $db->prepare("
@@ -302,7 +288,6 @@ try {
                 } catch (Exception $e) {}
             }
             
-            // Option 3: Tafuta kwenye bill_items kama test ina linked equipment
             if (empty($linked_equipment) && !empty($test['visit_id'])) {
                 try {
                     $stmt = $db->prepare("
@@ -326,7 +311,6 @@ try {
                 } catch (Exception $e) {}
             }
             
-            // Get linked test (kama test ime-link na test nyingine)
             if (!empty($test['linked_test_id'])) {
                 try {
                     $stmt = $db->prepare("
@@ -350,9 +334,7 @@ try {
         $tests[$key]['linked_tests'] = $linked_tests;
     }
     
-    // ================================================================
     // GET LAB TEST BILL
-    // ================================================================
     if ($visit_id > 0) {
         try {
             $stmt = $db->prepare("
@@ -446,7 +428,7 @@ function calculateAge($dob) {
 }
 
 function getUserColor($name) {
-    $colors = ['#1E3A5F', '#2563EB', '#3B82F6', '#0D9488', '#7C3AED', '#DC2626', '#D97706'];
+    $colors = ['#1E3A5F', '#0B5ED7', '#0A4CA8', '#083C8A', '#4F46E5', '#3B82F6', '#2563EB'];
     $index = abs(crc32($name ?? 'Unknown')) % count($colors);
     return $colors[$index];
 }
@@ -466,17 +448,26 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= $is_group_view ? 'View All Tests' : 'View Test' ?> - Laboratory</title>
+    <title><?= $is_group_view ? 'View All Tests' : 'View Test' ?> - Braick Dispensary</title>
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
         :root {
-            --primary: #2563EB;
-            --primary-dark: #1D4ED8;
-            --primary-light: #60A5FA;
-            --primary-bg: #DBEAFE;
+            /* BLUE THEME - Same as other lab pages */
+            --primary: #0B5ED7;
+            --primary-dark: #0A4CA8;
+            --primary-darker: #083C8A;
+            --primary-light: #6EA8FE;
+            --primary-lighter: #93C5FD;
+            --primary-bg: #E8F0FE;
+            --primary-bg-dark: #1E3A5F;
+            --info: #3B82F6;
+            --info-dark: #2563EB;
+            --info-bg: #DBEAFE;
             --success: #059669;
+            --success-dark: #047857;
             --success-bg: #D1FAE5;
             --danger: #DC2626;
             --danger-bg: #FEE2E2;
@@ -499,8 +490,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             --radius-lg: 14px;
             --transition: all 0.3s ease;
             --shadow: 0 1px 3px rgba(0,0,0,0.06);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
+            --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+            --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --text-primary: #1E293B;
@@ -524,6 +515,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             color: var(--text-primary);
             font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
             line-height: 1.6;
+            transition: background 0.3s ease, color 0.3s ease;
         }
         
         .main-content {
@@ -533,8 +525,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
+        /* PAGE HEADER - BLUE (Same as other pages) */
         .page-header {
-            background: linear-gradient(135deg, #1E3A5F, #2563EB, #3B82F6);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8, #083C8A);
             border-radius: 16px;
             padding: 24px 32px;
             margin-bottom: 24px;
@@ -543,7 +536,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 8px 32px rgba(37, 99, 235, 0.25);
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.3);
             position: relative;
             overflow: hidden;
         }
@@ -566,7 +559,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             font-weight: 700;
             display: flex;
             align-items: center;
-            gap: 14px;
+            gap: 12px;
             flex-wrap: wrap;
             position: relative;
             z-index: 1;
@@ -576,7 +569,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         .page-header .page-subtitle {
             color: rgba(255,255,255,0.85);
-            font-size: 0.9rem;
+            font-size: 0.95rem;
             display: flex;
             align-items: center;
             gap: 10px;
@@ -589,7 +582,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .header-badge {
             background: rgba(255,255,255,0.15);
             color: white;
-            padding: 4px 16px;
+            padding: 4px 14px;
             border-radius: 20px;
             font-size: 0.7rem;
             font-weight: 500;
@@ -607,6 +600,13 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             font-weight: 600;
         }
         
+        .header-badge.blue-badge {
+            background: rgba(255,255,255,0.2);
+            border-color: rgba(255,255,255,0.3);
+            color: white;
+            font-weight: 600;
+        }
+        
         .btn-outline-light {
             background: rgba(255,255,255,0.12);
             color: white;
@@ -621,13 +621,18 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             align-items: center;
             gap: 8px;
             cursor: pointer;
+            backdrop-filter: blur(4px);
+            position: relative;
+            z-index: 1;
         }
         
         .btn-outline-light:hover {
             background: rgba(255,255,255,0.25);
             transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
+        /* CARD */
         .card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -658,13 +663,13 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         .card-title i { color: var(--primary); font-size: 1.1rem; }
         
-        /* Patient Info */
+        /* PATIENT INFO BLOCK */
         .patient-info-block {
             display: flex;
             align-items: center;
             gap: 20px;
             padding: 18px 22px;
-            background: linear-gradient(135deg, var(--primary-bg), rgba(37, 99, 235, 0.08));
+            background: linear-gradient(135deg, var(--primary-bg), rgba(11, 94, 215, 0.08));
             border-radius: var(--radius);
             border-left: 4px solid var(--primary);
             flex-wrap: wrap;
@@ -713,6 +718,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             gap: 5px;
         }
         
+        /* INFO GRID */
         .info-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -746,19 +752,17 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         .info-item.full-width { grid-column: 1 / -1; }
         
-        /* ================================================================ */
-        /* TEST RESULTS HEADER (NEW) */
-        /* ================================================================ */
+        /* TEST RESULTS HEADER */
         .test-results-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 20px;
             padding: 16px 24px;
-            background: linear-gradient(135deg, #1E3A5F, #2563EB);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             border-radius: var(--radius-lg);
             color: white;
-            box-shadow: 0 4px 16px rgba(37, 99, 235, 0.25);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.25);
             flex-wrap: wrap;
             gap: 12px;
         }
@@ -817,9 +821,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             gap: 6px;
         }
         
-        /* ================================================================ */
-        /* TEST CARDS - 2 COLUMNS (NEW) */
-        /* ================================================================ */
+        /* TEST CARDS GRID - 2 COLUMNS */
         .test-cards-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
@@ -846,7 +848,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         .test-result-header {
-            background: linear-gradient(135deg, #1E3A5F, #2563EB);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             color: white;
             padding: 14px 20px;
             display: flex;
@@ -905,7 +907,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             gap: 14px;
         }
         
-        /* Test Meta Row */
+        /* TEST META ROW */
         .test-meta-row {
             display: flex;
             gap: 8px;
@@ -934,7 +936,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             color: var(--warning);
         }
         
-        /* Result Box */
+        /* RESULT BOX */
         .result-box {
             background: linear-gradient(135deg, rgba(5, 150, 105, 0.08), rgba(5, 150, 105, 0.03));
             border: 2px solid var(--success);
@@ -1006,9 +1008,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             font-family: monospace;
         }
         
-        /* ================================================================ */
-        /* EQUIPMENT USED SECTION (NEW) */
-        /* ================================================================ */
+        /* EQUIPMENT USED */
         .equipment-used-box {
             background: linear-gradient(135deg, rgba(124, 58, 237, 0.08), rgba(124, 58, 237, 0.03));
             border: 2px solid var(--purple);
@@ -1073,9 +1073,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             font-weight: 700;
         }
         
-        /* Linked Test Box */
+        /* LINKED TEST BOX */
         .linked-test-box {
-            background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(37, 99, 235, 0.03));
+            background: linear-gradient(135deg, rgba(11, 94, 215, 0.08), rgba(11, 94, 215, 0.03));
             border: 2px solid var(--primary);
             border-radius: var(--radius);
             padding: 12px 16px;
@@ -1107,7 +1107,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             flex-wrap: wrap;
         }
         
-        /* Test Footer */
+        /* TEST FOOTER */
         .test-footer {
             display: flex;
             justify-content: space-between;
@@ -1145,7 +1145,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             border: 1px solid var(--success);
         }
         
-        /* Lab Bill Table */
+        /* LAB BILL TABLE */
         .lab-bill-table {
             width: 100%;
             border-collapse: collapse;
@@ -1153,7 +1153,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         .lab-bill-table thead th {
-            background: linear-gradient(135deg, #1E3A5F, #2563EB);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             color: white;
             padding: 12px 16px;
             text-align: left;
@@ -1190,9 +1190,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .badge-purple { background: var(--purple-bg); color: var(--purple); }
         .badge-danger { background: var(--danger-bg); color: var(--danger); }
         
-        /* Summary Box */
+        /* SUMMARY BOX */
         .summary-box {
-            background: linear-gradient(135deg, #1E3A5F, #2563EB);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             color: white;
             border-radius: var(--radius-lg);
             padding: 24px 28px;
@@ -1202,7 +1202,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             align-items: center;
             flex-wrap: wrap;
             gap: 20px;
-            box-shadow: 0 8px 32px rgba(37, 99, 235, 0.25);
+            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.25);
         }
         
         .summary-box .summary-item { display: flex; flex-direction: column; gap: 4px; }
@@ -1223,7 +1223,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         .summary-box .summary-item .summary-value.success { color: #6EE7B7; }
         
-        /* Buttons */
+        /* BUTTONS */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1240,14 +1240,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         .btn-primary {
-            background: linear-gradient(135deg, #2563EB, #1D4ED8);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             color: white;
-            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
         }
         
         .btn-primary:hover {
             transform: translateY(-3px);
-            box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
+            box-shadow: 0 6px 20px rgba(11, 94, 215, 0.4);
         }
         
         .btn-outline {
@@ -1288,18 +1288,19 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         .empty-state h3 { font-size: 1.3rem; color: var(--text-primary); margin-bottom: 8px; }
         
+        /* FOOTER */
         .footer {
-            padding: 16px 0;
+            padding: 14px 0;
             border-top: 1px solid var(--border-color);
             margin-top: 28px;
             text-align: center;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             color: var(--text-secondary);
         }
         
-        .footer .footer-brand { color: var(--primary); font-weight: 700; }
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* Print Styles */
+        /* PRINT STYLES */
         @media print {
             .laboratory-sidebar, .laboratory-header,
             .page-header .btn-outline-light, .action-bar, .footer, .no-print {
@@ -1322,12 +1323,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             
             .test-results-header, .test-result-header, .summary-box, .page-header,
             .lab-bill-table thead th {
-                background: #1E3A5F !important;
+                background: #0B5ED7 !important;
                 -webkit-print-color-adjust: exact;
                 print-color-adjust: exact;
             }
             
-            /* Print: 2 columns still */
             .test-cards-grid {
                 grid-template-columns: repeat(2, 1fr) !important;
                 gap: 12px;
@@ -1336,7 +1336,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             body { background: white !important; color: black !important; }
         }
         
-        /* Responsive */
+        /* RESPONSIVE */
         @media (max-width: 1200px) {
             .test-cards-grid { gap: 14px; }
         }
@@ -1363,6 +1363,13 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             .test-results-header { padding: 12px 16px; }
             .test-results-header .trh-title { font-size: 1rem; }
         }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
     </style>
 </head>
 <body>
@@ -1370,7 +1377,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 <main class="main-content">
 
     <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
+    <!-- PAGE HEADER - BLUE (Same as other lab pages) -->
     <!-- ================================================================ -->
     <div class="page-header">
         <div>
@@ -1381,7 +1388,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                     <i class="fas fa-check-circle"></i> Completed
                 </span>
                 <?php if ($is_group_view): ?>
-                    <span class="header-badge">
+                    <span class="header-badge blue-badge">
                         <i class="fas fa-flask"></i> <?= count($tests) ?> <?= count($tests) == 1 ? 'Test' : 'Tests' ?>
                     </span>
                 <?php endif; ?>
@@ -1402,7 +1409,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 <?php endif; ?>
             </p>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;" class="no-print">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;" class="no-print">
             <a href="completed_tests.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
@@ -1415,7 +1422,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <!-- ================================================================ -->
     <!-- PATIENT INFO CARD -->
     <!-- ================================================================ -->
-    <div class="card">
+    <div class="card animate-fade-in-up">
         <div class="patient-info-block">
             <div class="patient-avatar" style="background: <?= getUserColor($patient_info['patient_name'] ?? 'Unknown') ?>;">
                 <?= strtoupper(substr($patient_info['patient_name'] ?? 'U', 0, 1)) ?>
@@ -1456,10 +1463,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- SUMMARY BOX -->
+    <!-- SUMMARY BOX - BLUE -->
     <!-- ================================================================ -->
     <?php if ($is_group_view): ?>
-    <div class="summary-box">
+    <div class="summary-box animate-fade-in-up">
         <div class="summary-item">
             <span class="summary-label"><i class="fas fa-flask"></i> Total Tests</span>
             <span class="summary-value"><?= count($tests) ?></span>
@@ -1493,7 +1500,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     ?>
     
     <?php if ($has_clinical): ?>
-    <div class="card">
+    <div class="card animate-fade-in-up">
         <h3 class="card-title">
             <i class="fas fa-stethoscope"></i> Clinical Information
         </h3>
@@ -1533,10 +1540,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- LAB BILL -->
+    <!-- LAB BILL - BLUE -->
     <!-- ================================================================ -->
     <?php if ($lab_bill && count($lab_bill_items) > 0): ?>
-    <div class="card">
+    <div class="card animate-fade-in-up">
         <h3 class="card-title">
             <i class="fas fa-file-invoice-dollar"></i> 
             Lab Test Bill
@@ -1637,7 +1644,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                     </tr>
                     <?php endif; ?>
                     
-                    <tr style="background:linear-gradient(135deg, #1E3A5F, #2563EB);color:white;">
+                    <tr style="background:linear-gradient(135deg, #0B5ED7, #0A4CA8);color:white;">
                         <td colspan="4" style="text-align:right;font-weight:800;font-size:0.9rem;text-transform:uppercase;">
                             Lab Test Total:
                         </td>
@@ -1674,9 +1681,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- NEW: TEST RESULTS HEADER -->
+    <!-- TEST RESULTS HEADER - BLUE -->
     <!-- ================================================================ -->
-    <div class="test-results-header">
+    <div class="test-results-header animate-fade-in-up">
         <div class="trh-left">
             <div class="trh-icon">
                 <i class="fas fa-clipboard-check"></i>
@@ -1723,7 +1730,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 $has_equipment = !empty($test['linked_equipment']);
                 $has_linked = !empty($test['linked_tests']);
             ?>
-                <div class="test-result-card">
+                <div class="test-result-card animate-fade-in-up" style="animation-delay:<?= $index * 0.05 ?>s;">
                     <!-- TEST HEADER -->
                     <div class="test-result-header">
                         <div class="test-title">
@@ -1786,7 +1793,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                             </div>
                         <?php endif; ?>
                         
-                        <!-- NEW: EQUIPMENT USED -->
+                        <!-- EQUIPMENT USED -->
                         <?php if ($has_equipment): ?>
                             <div class="equipment-used-box">
                                 <div class="eq-label">
@@ -1815,7 +1822,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                             </div>
                         <?php endif; ?>
                         
-                        <!-- NEW: LINKED TESTS -->
+                        <!-- LINKED TESTS -->
                         <?php if ($has_linked): ?>
                             <div class="linked-test-box">
                                 <div class="lt-label">
@@ -1879,11 +1886,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span style="color:var(--gray-300);margin:0 8px;">|</span>
+            <span style="color:var(--text-secondary);margin:0 8px;">|</span>
             <?= $is_group_view ? 'All Test Results' : 'Test Result' ?>
-            <span style="color:var(--gray-300);margin:0 8px;">|</span>
+            <span style="color:var(--text-secondary);margin:0 8px;">|</span>
             Logged in as: <strong><?= htmlspecialchars($user_full_name) ?></strong>
-            <span style="color:var(--gray-300);margin:0 8px;">|</span>
+            <span style="color:var(--text-secondary);margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1931,10 +1938,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     });
 
-    console.log('%c🔵 View Test(s) - With Equipment & 2-Column Layout', 'font-size:20px; font-weight:bold; color:#2563EB;');
-    console.log('%c✅ Test cards ziko 2 kwa row (desktop)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Header ya Test Results imeongezwa', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Equipment Used inaonekana kama ipo', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🔵 Braick - View Test(s) - BLUE THEME', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Test cards 2-column layout (desktop)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Same style as pending_tests, in_progress, completed', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Equipment Used section', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Tests: <?= count($tests) ?>', 'font-size:13px; color:#64748B;');
 </script>
 

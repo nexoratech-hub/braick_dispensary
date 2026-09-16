@@ -3,26 +3,21 @@
 // FILE: frontend/pages/admin/doctors_list.php
 // DOCTORS LIST - VIEW ALL DOCTORS
 // BRAICK DISPENSARY - USING EXISTING DB TABLES
+// ✅ FIXED: SQL ambiguous column error
+// ✅ Search bar LEFT side, smaller size
+// ✅ Live auto-search with highlight
+// ✅ Action buttons: View + Edit only
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// CHECK IF USER HAS ADMIN ACCESS
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -31,14 +26,12 @@ if ($_SESSION['role'] !== 'admin') {
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
         case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
 }
 
-// ================================================================
-// GET USER DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
@@ -47,9 +40,6 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
@@ -59,9 +49,6 @@ try {
     die("Database connection error: " . $e->getMessage());
 }
 
-// ================================================================
-// VARIABLES
-// ================================================================
 $message = '';
 $message_type = '';
 $per_page = 15;
@@ -72,14 +59,80 @@ $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
 $selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 
 // ================================================================
-// GET BRANCHES FOR FILTER
+// AJAX HANDLER - LIVE SEARCH
+// ================================================================
+if (isset($_GET['ajax_search']) && $_GET['ajax_search'] === '1') {
+    header('Content-Type: application/json');
+    
+    $ajax_search = isset($_GET['q']) ? trim($_GET['q']) : '';
+    $ajax_branch = isset($_GET['branch']) ? $_GET['branch'] : 'all';
+    $ajax_status = isset($_GET['status']) ? trim($_GET['status']) : '';
+    
+    $where_clause = " WHERE u.role = 'doctor'";
+    $params = [];
+    
+    if (!empty($ajax_search)) {
+        $where_clause .= " AND (u.full_name LIKE ? OR u.specialty LIKE ? OR u.email LIKE ? OR u.phone LIKE ?)";
+        $search_param = "%$ajax_search%";
+        $params[] = $search_param;
+        $params[] = $search_param;
+        $params[] = $search_param;
+        $params[] = $search_param;
+    }
+    
+    if (!empty($ajax_status)) {
+        if ($ajax_status === 'online') {
+            $where_clause .= " AND u.is_online = 1";
+        } elseif ($ajax_status === 'offline') {
+            $where_clause .= " AND (u.is_online = 0 OR u.is_online IS NULL)";
+        }
+    }
+    
+    if ($ajax_branch !== 'all' && is_numeric($ajax_branch)) {
+        $where_clause .= " AND u.branch_id = ?";
+        $params[] = (int)$ajax_branch;
+    }
+    
+    $sql = "
+        SELECT u.id, u.full_name, u.email, u.specialty, u.phone, u.is_online, u.branch_id,
+               b.name as branch_name,
+               (SELECT COUNT(*) FROM patients WHERE assigned_doctor_id = u.id) as total_patients,
+               (SELECT COUNT(*) FROM visits WHERE doctor_id = u.id AND status != 'cancelled') as total_visits
+        FROM users u
+        LEFT JOIN branches b ON u.branch_id = b.id
+        $where_clause
+        ORDER BY u.full_name ASC
+        LIMIT 10
+    ";
+    
+    try {
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        echo json_encode([
+            'success' => true,
+            'count' => count($results),
+            'doctors' => $results
+        ]);
+    } catch (Exception $e) {
+        echo json_encode([
+            'success' => false,
+            'error' => $e->getMessage()
+        ]);
+    }
+    exit;
+}
+
+// ================================================================
+// GET BRANCHES
 // ================================================================
 $branches_list = [];
 $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
 $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// HANDLE TOGGLE DOCTOR STATUS (Online/Offline)
+// HANDLE TOGGLE DOCTOR STATUS
 // ================================================================
 if (isset($_GET['toggle']) && is_numeric($_GET['toggle'])) {
     $doctor_id = (int)$_GET['toggle'];
@@ -95,26 +148,19 @@ if (isset($_GET['toggle']) && is_numeric($_GET['toggle'])) {
         $stmt = $db->prepare("UPDATE users SET is_online = ?, last_online = NOW() WHERE id = ?");
         $stmt->execute([$new_status, $doctor_id]);
         
-        // Log activity
         try {
             $stmt = $db->prepare("
                 INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
                 VALUES (?, ?, 'doctor_status_changed', ?, NOW())
             ");
-            $stmt->execute([
-                $user_id,
-                $user_branch_id,
-                "Dr. {$doctor['full_name']} changed status to: $action_text"
-            ]);
+            $stmt->execute([$user_id, $user_branch_id, "Dr. {$doctor['full_name']} changed status to: $action_text"]);
         } catch (Exception $e) {}
         
-        // Create notification for receptionists
         try {
             $stmt = $db->prepare("SELECT id FROM users WHERE role = 'reception' AND status = 'active'");
             $stmt->execute();
             $receptionists = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
-            $icon = $new_status == 1 ? '🟢' : '🔴';
             $status_text = $new_status == 1 ? 'ONLINE' : 'OFFLINE';
             
             foreach ($receptionists as $rec) {
@@ -122,16 +168,9 @@ if (isset($_GET['toggle']) && is_numeric($_GET['toggle'])) {
                     INSERT INTO notifications (user_id, branch_id, title, message, type, link, is_read, created_at)
                     VALUES (?, ?, 'Doctor Status: $status_text', ?, 'info', 'assign_doctor.php', 0, NOW())
                 ");
-                $stmt->execute([
-                    $rec['id'],
-                    $user_branch_id,
-                    "Dr. {$doctor['full_name']} is now $status_text"
-                ]);
+                $stmt->execute([$rec['id'], $user_branch_id, "Dr. {$doctor['full_name']} is now $status_text"]);
             }
         } catch (Exception $e) {}
-        
-        $message = "Dr. {$doctor['full_name']} is now " . ($new_status == 1 ? '🟢 ONLINE' : '🔴 OFFLINE');
-        $message_type = 'success';
         
         header("Location: doctors_list.php?page=$page" . ($search ? "&search=" . urlencode($search) : "") . ($status_filter ? "&status=" . urlencode($status_filter) : "") . "&branch=" . $selected_branch_id);
         exit();
@@ -139,14 +178,13 @@ if (isset($_GET['toggle']) && is_numeric($_GET['toggle'])) {
 }
 
 // ================================================================
-// BUILD QUERY WITH FILTERS
+// BUILD QUERY - FIXED: use u. prefix to avoid ambiguity
 // ================================================================
-$where_clause = " WHERE role = 'doctor'";
+$where_clause = " WHERE u.role = 'doctor'";
 $params = [];
 
-// Search filter
 if (!empty($search)) {
-    $where_clause .= " AND (full_name LIKE ? OR specialty LIKE ? OR email LIKE ? OR phone LIKE ?)";
+    $where_clause .= " AND (u.full_name LIKE ? OR u.specialty LIKE ? OR u.email LIKE ? OR u.phone LIKE ?)";
     $search_param = "%$search%";
     $params[] = $search_param;
     $params[] = $search_param;
@@ -154,33 +192,28 @@ if (!empty($search)) {
     $params[] = $search_param;
 }
 
-// Status filter (online/offline)
 if (!empty($status_filter)) {
     if ($status_filter === 'online') {
-        $where_clause .= " AND is_online = 1";
+        $where_clause .= " AND u.is_online = 1";
     } elseif ($status_filter === 'offline') {
-        $where_clause .= " AND (is_online = 0 OR is_online IS NULL)";
+        $where_clause .= " AND (u.is_online = 0 OR u.is_online IS NULL)";
     }
 }
 
-// Branch filter
-if ($selected_branch_id !== 'all') {
-    $where_clause .= " AND branch_id = ?";
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    $where_clause .= " AND u.branch_id = ?";
     $params[] = (int)$selected_branch_id;
 }
 
 // ================================================================
-// GET DOCTORS WITH PAGINATION
+// GET DOCTORS
 // ================================================================
-
-// Get total count
-$count_sql = "SELECT COUNT(*) as total FROM users $where_clause";
+$count_sql = "SELECT COUNT(*) as total FROM users u $where_clause";
 $stmt = $db->prepare($count_sql);
 $stmt->execute($params);
 $total_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 $total_pages = ceil($total_doctors / $per_page);
 
-// Get doctors for current page
 $sql = "
     SELECT u.*, b.name as branch_name,
            (SELECT COUNT(*) FROM visits WHERE doctor_id = u.id AND status != 'cancelled') as total_visits,
@@ -199,31 +232,22 @@ $stmt->execute($params);
 $doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS
+// STATISTICS
 // ================================================================
-
-// Total doctors
 $stmt = $db->query("SELECT COUNT(*) as total FROM users WHERE role = 'doctor'");
 $total_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Online doctors
 $stmt = $db->query("SELECT COUNT(*) as total FROM users WHERE role = 'doctor' AND is_online = 1");
 $online_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Offline doctors
 $stmt = $db->query("SELECT COUNT(*) as total FROM users WHERE role = 'doctor' AND (is_online = 0 OR is_online IS NULL)");
 $offline_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Doctors with patients assigned
-$stmt = $db->query("
-    SELECT COUNT(DISTINCT assigned_doctor_id) as total 
-    FROM patients 
-    WHERE assigned_doctor_id IS NOT NULL
-");
+$stmt = $db->query("SELECT COUNT(DISTINCT assigned_doctor_id) as total FROM patients WHERE assigned_doctor_id IS NOT NULL");
 $with_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // ================================================================
-// GET UNREAD NOTIFICATIONS
+// NOTIFICATIONS
 // ================================================================
 $unread_notifications = 0;
 try {
@@ -234,9 +258,6 @@ try {
     $unread_notifications = 0;
 }
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
@@ -244,1031 +265,948 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// HELPER: HIGHLIGHT SEARCH TERMS
 // ================================================================
+if (!function_exists('highlightSearch')) {
+    function highlightSearch($text, $search) {
+        if (empty($search) || empty($text)) {
+            return htmlspecialchars($text ?? '');
+        }
+        $escaped = htmlspecialchars($text);
+        $search_escaped = preg_quote(htmlspecialchars($search), '/');
+        return preg_replace(
+            '/(' . $search_escaped . ')/i',
+            '<mark class="search-highlight">$1</mark>',
+            $escaped
+        );
+    }
+}
+
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Doctors List - Braick Dispensary</title>
-    
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
-    <style>
-        /* ================================================================
-           ROOT VARIABLES
-           ================================================================ */
-        :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #E8F0FE;
-            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            
-            --success: #059669;
-            --success-bg: #D1FAE5;
-            --danger: #DC2626;
-            --danger-bg: #FEE2E2;
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            --teal: #0D9488;
-            --teal-bg: #ECFDF5;
-            
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            
-            --bg-body: #F0F4F8;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
-            --radius: 12px;
-            --radius-lg: 18px;
-            --table-hover: #E8F0FE;
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC CSS -->
+<!-- ================================================================ -->
+<style>
+    /* ================================================================
+       PAGE VARIABLES
+       ================================================================ */
+    :root {
+        --page-primary: #0B5ED7;
+        --page-primary-dark: #0A4CA8;
+        --page-primary-light: #6EA8FE;
+        --page-primary-bg: #E8F0FE;
+        --page-bg-body: #F1F5F9;
+        --page-bg-card: #FFFFFF;
+        --page-text-primary: #1E293B;
+        --page-text-secondary: #64748B;
+        --page-text-muted: #94A3B8;
+        --page-border: #E2E8F0;
+        --page-hover: #F8FAFC;
+        --page-shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+        --page-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+    }
+
+    [data-theme="dark"] {
+        --page-bg-body: #0F172A;
+        --page-bg-card: #1E293B;
+        --page-text-primary: #F1F5F9;
+        --page-text-secondary: #94A3B8;
+        --page-text-muted: #64748B;
+        --page-border: #334155;
+        --page-hover: #0F172A;
+        --page-primary-bg: #1E3A5F;
+    }
+
+    /* ================================================================
+       DARK MODE - PAGE YOTE
+       ================================================================ */
+    html[data-theme="dark"] body {
+        background: #0F172A !important;
+    }
+
+    html[data-theme="dark"] .main-content {
+        background: #0F172A !important;
+        color: #F1F5F9;
+    }
+
+    /* ================================================================
+       SEARCH HIGHLIGHT
+       ================================================================ */
+    mark.search-highlight {
+        background: #FEF08A;
+        color: #78350F;
+        padding: 1px 4px;
+        border-radius: 4px;
+        font-weight: 700;
+        border: 1px solid #FDE047;
+        box-shadow: 0 1px 3px rgba(250, 204, 21, 0.3);
+    }
+
+    [data-theme="dark"] mark.search-highlight {
+        background: #FCD34D;
+        color: #422006;
+        border-color: #F59E0B;
+    }
+
+    /* ================================================================
+       PAGE HEADER
+       ================================================================ */
+    .page-header-custom {
+        background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
+        border-radius: 18px;
+        padding: 26px 34px;
+        margin-bottom: 26px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 8px 32px rgba(10, 76, 168, 0.35);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .page-header-custom .page-title {
+        color: white;
+        font-size: 1.7rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+    }
+
+    .page-header-custom .page-subtitle {
+        color: rgba(255,255,255,0.88);
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 6px;
+    }
+
+    .page-header-custom .role-badge-display {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        backdrop-filter: blur(4px);
+    }
+
+    .page-header-custom .header-badge {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .page-header-custom .btn-outline-light {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.2);
+        padding: 8px 18px;
+        border-radius: 12px;
+        font-weight: 500;
+        font-size: 0.82rem;
+        transition: all 0.3s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        backdrop-filter: blur(4px);
+    }
+
+    .page-header-custom .btn-outline-light:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        color: white;
+    }
+
+    /* ================================================================
+       STAT CARDS
+       ================================================================ */
+    .stat-card-mini {
+        background: var(--page-bg-card);
+        border-radius: 12px;
+        padding: 14px 18px;
+        border: 2px solid var(--page-border);
+        transition: all 0.3s ease;
+        text-align: center;
+    }
+
+    .stat-card-mini:hover {
+        transform: translateY(-3px);
+        box-shadow: var(--page-shadow-md);
+        border-color: var(--page-primary);
+    }
+
+    .stat-card-mini .stat-number {
+        font-size: 1.8rem;
+        font-weight: 700;
+        color: var(--page-primary);
+    }
+
+    .stat-card-mini .stat-number.green { color: #059669; }
+    .stat-card-mini .stat-number.orange { color: #D97706; }
+    .stat-card-mini .stat-number.red { color: #DC2626; }
+    .stat-card-mini .stat-number.purple { color: #7C3AED; }
+
+    .stat-card-mini .stat-label {
+        font-size: 0.7rem;
+        color: var(--page-text-secondary);
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+
+    .stat-card-mini .stat-icon {
+        font-size: 1.5rem;
+        margin-bottom: 4px;
+    }
+
+    /* ================================================================
+       FILTER SECTION
+       ================================================================ */
+    .filter-section {
+        background: var(--page-bg-card);
+        border-radius: 12px;
+        padding: 14px 18px;
+        border: 2px solid var(--page-border);
+        margin-bottom: 18px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        box-shadow: var(--page-shadow-sm);
+    }
+
+    .filter-section .filter-label {
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: var(--page-text-secondary);
+        margin-right: 4px;
+    }
+
+    .filter-btn {
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        border: 2px solid var(--page-border);
+        background: transparent;
+        color: var(--page-text-secondary);
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-block;
+    }
+
+    .filter-btn:hover {
+        border-color: var(--page-primary);
+        color: var(--page-primary);
+        background: var(--page-primary-bg);
+    }
+
+    .filter-btn.active {
+        background: var(--page-primary);
+        color: white;
+        border-color: var(--page-primary);
+    }
+
+    /* ================================================================
+       CARD
+       ================================================================ */
+    .card-custom {
+        background: var(--page-bg-card);
+        border-radius: 18px;
+        padding: 18px 20px;
+        border: 2px solid var(--page-border);
+        transition: all 0.3s;
+        box-shadow: var(--page-shadow-sm);
+    }
+
+    /* ================================================================
+       TABLE HEADER - SEARCH LEFT, SMALLER SIZE
+       ================================================================ */
+    .table-header-controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 16px;
+        background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
+        border-radius: 12px 12px 0 0;
+        margin: -18px -20px 0 -20px;
+    }
+
+    /* ✅ LEFT SIDE: Title + Search */
+    .table-header-left {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+        flex: 1;
+    }
+
+    .table-header-controls .table-title {
+        color: white;
+        font-size: 0.9rem;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0;
+        white-space: nowrap;
+    }
+
+    .table-header-controls .table-title i {
+        color: rgba(255,255,255,0.85);
+    }
+
+    .table-header-controls .table-title .count-badge {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 2px 10px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        margin-left: 6px;
+    }
+
+    /* ✅ SEARCH BAR - SMALLER, LEFT SIDE */
+    .table-header-search-wrapper {
+        position: relative;
+    }
+
+    .table-header-search {
+        display: flex;
+        align-items: center;
+        background: rgba(255,255,255,0.15);
+        border: 1.5px solid rgba(255,255,255,0.25);
+        border-radius: 10px;
+        height: 36px;
+        width: 260px;
+        transition: all 0.3s ease;
+        backdrop-filter: blur(8px);
+    }
+
+    .table-header-search:focus-within {
+        background: rgba(255,255,255,0.25);
+        border-color: rgba(255,255,255,0.5);
+        box-shadow: 0 0 0 4px rgba(255,255,255,0.1);
+        width: 300px;
+    }
+
+    .table-header-search .search-icon {
+        color: rgba(255,255,255,0.7);
+        margin-left: 10px;
+        font-size: 0.75rem;
+    }
+
+    .table-header-search input {
+        border: none;
+        background: transparent;
+        padding: 6px 8px;
+        width: 100%;
+        font-size: 0.78rem;
+        outline: none;
+        color: white;
+        font-weight: 500;
+    }
+
+    .table-header-search input::placeholder {
+        color: rgba(255,255,255,0.55);
+        font-weight: 400;
+        font-size: 0.72rem;
+    }
+
+    .table-header-search .clear-search {
+        background: transparent;
+        border: none;
+        color: rgba(255,255,255,0.7);
+        cursor: pointer;
+        padding: 6px 10px;
+        font-size: 0.75rem;
+        transition: all 0.2s;
+        display: none;
+    }
+
+    .table-header-search .clear-search:hover {
+        color: white;
+    }
+
+    .table-header-search .clear-search.visible {
+        display: block;
+    }
+
+    /* ✅ LIVE SEARCH DROPDOWN */
+    .live-search-dropdown {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        right: 0;
+        background: var(--page-bg-card);
+        border: 2px solid var(--page-border);
+        border-radius: 12px;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+        max-height: 320px;
+        overflow-y: auto;
+        z-index: 100;
+        display: none;
+    }
+
+    .live-search-dropdown.show {
+        display: block;
+        animation: slideDown 0.25s ease;
+    }
+
+    @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-8px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .live-search-item {
+        padding: 10px 14px;
+        cursor: pointer;
+        border-bottom: 1px solid var(--page-border);
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .live-search-item:last-child {
+        border-bottom: none;
+    }
+
+    .live-search-item:hover {
+        background: var(--page-primary-bg);
+    }
+
+    [data-theme="dark"] .live-search-item:hover {
+        background: #1E3A5F;
+    }
+
+    .live-search-item .item-avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 0.7rem;
+        color: white;
+        flex-shrink: 0;
+        background: linear-gradient(135deg, #0B5ED7, #1A73E8);
+    }
+
+    .live-search-item .item-info {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .live-search-item .item-name {
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--page-text-primary);
+        margin: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .live-search-item .item-detail {
+        font-size: 0.68rem;
+        color: var(--page-text-secondary);
+        margin: 2px 0 0 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .live-search-item .item-status {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+
+    .live-search-item .item-status.online { background: #059669; }
+    .live-search-item .item-status.offline { background: #DC2626; }
+
+    .live-search-empty {
+        padding: 20px;
+        text-align: center;
+        color: var(--page-text-secondary);
+        font-size: 0.8rem;
+    }
+
+    .live-search-empty i {
+        font-size: 1.5rem;
+        display: block;
+        margin-bottom: 8px;
+        color: var(--page-primary);
+    }
+
+    /* ✅ SCROLL BUTTONS */
+    .table-header-scroll-btns {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+    }
+
+    .table-header-scroll-btn {
+        width: 34px;
+        height: 34px;
+        border-radius: 9px;
+        background: rgba(255,255,255,0.15);
+        border: 1.5px solid rgba(255,255,255,0.25);
+        color: white;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.8rem;
+        transition: all 0.3s ease;
+        backdrop-filter: blur(8px);
+    }
+
+    .table-header-scroll-btn:hover:not(:disabled) {
+        background: rgba(255,255,255,0.3);
+        border-color: rgba(255,255,255,0.5);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+
+    .table-header-scroll-btn:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+    }
+
+    /* ================================================================
+       TABLE SCROLL CONTAINER
+       ================================================================ */
+    .table-scroll-container {
+        overflow-x: auto;
+        overflow-y: hidden;
+        scroll-behavior: smooth;
+        scrollbar-width: thin;
+        scrollbar-color: var(--page-primary) var(--page-border);
+    }
+
+    .table-scroll-container::-webkit-scrollbar {
+        height: 8px;
+    }
+
+    .table-scroll-container::-webkit-scrollbar-track {
+        background: var(--page-border);
+        border-radius: 10px;
+    }
+
+    .table-scroll-container::-webkit-scrollbar-thumb {
+        background: var(--page-primary);
+        border-radius: 10px;
+        border: 2px solid var(--page-border);
+    }
+
+    /* ================================================================
+       DATA TABLE
+       ================================================================ */
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.85rem;
+        min-width: 1000px;
+    }
+
+    .data-table thead th {
+        text-align: left;
+        padding: 10px 14px;
+        font-weight: 700;
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: white;
+        background: var(--page-primary);
+        border-bottom: 3px solid var(--page-primary-dark);
+        white-space: nowrap;
+    }
+
+    .data-table tbody tr:nth-child(even) {
+        background: var(--page-primary-bg);
+    }
+
+    .data-table tbody tr:nth-child(odd) {
+        background: var(--page-bg-card);
+    }
+
+    .data-table tbody tr:hover {
+        background: #DBEAFE;
+    }
+
+    [data-theme="dark"] .data-table tbody tr:hover {
+        background: #1E40AF;
+    }
+
+    .data-table td {
+        padding: 8px 14px;
+        border-bottom: 1px solid var(--page-border);
+        color: var(--page-text-primary);
+        vertical-align: middle;
+    }
+
+    /* ================================================================
+       BADGES
+       ================================================================ */
+    .badge {
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: white;
+        border: none;
+    }
+
+    .badge-info, .badge-blue { background: #0B5ED7; }
+    .badge-green { background: #059669; }
+    .badge-danger { background: #DC2626; }
+    .badge-purple { background: #7C3AED; }
+
+    .status-badge {
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.6rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .status-badge.online {
+        background: #D1FAE5;
+        color: #059669;
+    }
+
+    .status-badge.offline {
+        background: #FEE2E2;
+        color: #DC2626;
+    }
+
+    [data-theme="dark"] .status-badge.online {
+        background: #1A3A2A;
+        color: #34D399;
+    }
+
+    [data-theme="dark"] .status-badge.offline {
+        background: #3A1A1A;
+        color: #F87171;
+    }
+
+    /* ================================================================
+       DOCTOR AVATAR
+       ================================================================ */
+    .doctor-avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 0.85rem;
+        color: white;
+        flex-shrink: 0;
+        position: relative;
+    }
+
+    .doctor-avatar.blue { background: linear-gradient(135deg, #0B5ED7, #1A73E8); }
+    .doctor-avatar.green { background: linear-gradient(135deg, #059669, #0AA84F); }
+    .doctor-avatar.purple { background: linear-gradient(135deg, #7B2FBE, #9B4DCA); }
+    .doctor-avatar.orange { background: linear-gradient(135deg, #F59E0B, #FBBF24); }
+    .doctor-avatar.red { background: linear-gradient(135deg, #EF4444, #F87171); }
+    .doctor-avatar.pink { background: linear-gradient(135deg, #EC4899, #F472B6); }
+    .doctor-avatar.teal { background: linear-gradient(135deg, #0D9488, #14B8A6); }
+
+    .doctor-avatar-wrapper {
+        position: relative;
+        display: inline-block;
+    }
+
+    .doctor-avatar-wrapper .online-indicator {
+        position: absolute;
+        bottom: -2px;
+        right: -2px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        border: 2px solid var(--page-bg-card);
+    }
+
+    .doctor-avatar-wrapper .online-indicator.online { background: #059669; }
+    .doctor-avatar-wrapper .online-indicator.offline { background: #DC2626; }
+
+    /* ================================================================
+       ACTION BUTTONS - VIEW + EDIT ONLY
+       ================================================================ */
+    .action-buttons {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+    .btn-action {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 14px;
+        border-radius: 8px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        border: none;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+    .btn-action i { font-size: 0.7rem; }
+
+    .btn-view {
+        background: #E8F0FE;
+        color: #0B5ED7;
+        border: 2px solid rgba(11, 94, 215, 0.2);
+    }
+
+    .btn-view:hover {
+        background: #0B5ED7;
+        color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
+    }
+
+    [data-theme="dark"] .btn-view {
+        background: #1E3A5F;
+        color: #6EA8FE;
+        border-color: rgba(59, 130, 246, 0.2);
+    }
+    [data-theme="dark"] .btn-view:hover {
+        background: #0B5ED7;
+        color: white;
+    }
+
+    .btn-edit {
+        background: #FEF3C7;
+        color: #D97706;
+        border: 2px solid rgba(217, 119, 6, 0.2);
+    }
+
+    .btn-edit:hover {
+        background: #D97706;
+        color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(217, 119, 6, 0.3);
+    }
+
+    [data-theme="dark"] .btn-edit {
+        background: #3D2E0A;
+        color: #FCD34D;
+        border-color: rgba(252, 211, 77, 0.2);
+    }
+    [data-theme="dark"] .btn-edit:hover {
+        background: #D97706;
+        color: white;
+    }
+
+    .btn-toggle-online {
+        background: #D1FAE5;
+        color: #059669;
+        border: 2px solid rgba(5, 150, 105, 0.2);
+    }
+
+    .btn-toggle-online:hover {
+        background: #059669;
+        color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
+    }
+
+    [data-theme="dark"] .btn-toggle-online {
+        background: #1A3A2A;
+        color: #34D399;
+        border-color: rgba(52, 211, 153, 0.2);
+    }
+    [data-theme="dark"] .btn-toggle-online:hover {
+        background: #059669;
+        color: white;
+    }
+
+    .btn-toggle-offline {
+        background: #FEE2E2;
+        color: #DC2626;
+        border: 2px solid rgba(220, 38, 38, 0.2);
+    }
+
+    .btn-toggle-offline:hover {
+        background: #DC2626;
+        color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(220, 38, 38, 0.3);
+    }
+
+    [data-theme="dark"] .btn-toggle-offline {
+        background: #3A1A1A;
+        color: #F87171;
+        border-color: rgba(248, 113, 113, 0.2);
+    }
+    [data-theme="dark"] .btn-toggle-offline:hover {
+        background: #DC2626;
+        color: white;
+    }
+
+    /* ================================================================
+       PAGINATION
+       ================================================================ */
+    .pagination {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+    }
+
+    .pagination .page-link {
+        padding: 6px 12px;
+        border-radius: 6px;
+        border: 1px solid var(--page-border);
+        color: var(--page-text-primary);
+        text-decoration: none;
+        font-size: 0.8rem;
+        transition: all 0.3s;
+        background: var(--page-bg-card);
+    }
+
+    .pagination .page-link:hover {
+        background: var(--page-primary);
+        color: white;
+        border-color: var(--page-primary);
+    }
+
+    .pagination .page-link.active {
+        background: var(--page-primary);
+        color: white;
+        border-color: var(--page-primary);
+    }
+
+    .pagination .page-link.disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--page-border);
+        margin-top: 24px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--page-text-secondary);
+    }
+
+    .footer .footer-brand {
+        color: var(--page-primary);
+        font-weight: 700;
+    }
+
+    /* ================================================================
+       ANIMATIONS
+       ================================================================ */
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .animate-fade-in-up {
+        animation: fadeInUp 0.5s ease forwards;
+        opacity: 0;
+    }
+
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 992px) {
+        .table-header-controls {
+            flex-direction: column;
+            align-items: stretch;
         }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-light: #60A5FA;
-            --primary-bg: #1E3A5F;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-hover: #1E3A5F;
+        .table-header-left {
+            flex-direction: column;
+            align-items: stretch;
         }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
+        .table-header-search {
             width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
         }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
+        .table-header-search:focus-within {
+            width: 100%;
         }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 var(--radius) var(--radius) 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
+        .table-header-scroll-btns {
+            justify-content: flex-end;
         }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .branch-selector {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            font-size: 0.78rem;
-            color: var(--text-primary);
-            outline: none;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .branch-selector:focus {
-            border-color: var(--primary);
-        }
-        
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-        }
-        
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
-        .page-header {
-            background: var(--primary-gradient);
-            border-radius: var(--radius-lg);
-            padding: 28px 36px;
-            margin-bottom: 28px;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            box-shadow: 0 8px 32px rgba(10, 76, 168, 0.35);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 400px;
-            height: 400px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header .page-title {
-            color: white;
-            font-size: 1.8rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
-        .page-header .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
-        .page-header .header-badge {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
-            transition: all 0.3s ease;
-        }
-        
-        .page-header .header-badge:hover {
-            background: rgba(255,255,255,0.2);
-            transform: translateY(-1px);
-        }
-        
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: var(--radius);
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        
-        /* ================================================================
-           STAT CARDS
-           ================================================================ */
-        .stat-card-mini {
-            background: var(--bg-card);
-            border-radius: var(--radius);
-            padding: 14px 18px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            text-align: center;
-        }
-        
-        .stat-card-mini:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.08);
-            border-color: var(--primary);
-        }
-        
-        .stat-card-mini .stat-number {
-            font-size: 1.8rem;
-            font-weight: 700;
-            color: var(--primary);
-        }
-        
-        .stat-card-mini .stat-number.green { color: var(--success); }
-        .stat-card-mini .stat-number.orange { color: var(--warning); }
-        .stat-card-mini .stat-number.red { color: var(--danger); }
-        .stat-card-mini .stat-number.purple { color: var(--purple); }
-        
-        .stat-card-mini .stat-label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.03em;
-        }
-        
-        .stat-card-mini .stat-icon {
-            font-size: 1.5rem;
-            margin-bottom: 4px;
-        }
-        
-        /* ================================================================
-           FILTER SECTION
-           ================================================================ */
-        .filter-section {
-            background: var(--bg-card);
-            border-radius: var(--radius);
-            padding: 14px 18px;
-            border: 2px solid var(--border-color);
-            margin-bottom: 18px;
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 8px;
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .filter-section .filter-label {
-            font-size: 0.7rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            margin-right: 4px;
-        }
-        
-        .filter-btn {
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            border: 2px solid var(--border-color);
-            background: transparent;
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: all 0.3s ease;
-            text-decoration: none;
-            display: inline-block;
-        }
-        
-        .filter-btn:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-            background: var(--primary-bg);
-        }
-        
-        .filter-btn.active {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        .filter-btn.active:hover {
-            background: var(--primary-dark);
-            border-color: var(--primary-dark);
-        }
-        
-        [data-theme="dark"] .filter-btn:hover {
-            background: #1E3A5F;
-            border-color: var(--primary);
-            color: #6EA8FE;
-        }
-        
-        .filter-btn i { margin-right: 4px; }
-        
-        /* ================================================================
-           CARD
-           ================================================================ */
-        .card {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
+    }
+
+    @media (max-width: 768px) {
+        .page-header-custom {
             padding: 18px 20px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            box-shadow: var(--shadow-sm);
         }
-        
-        .card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
+        .page-header-custom .page-title {
+            font-size: 1.3rem;
         }
-        
-        .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-            flex-wrap: wrap;
-            gap: 8px;
+        .stat-card-mini .stat-number {
+            font-size: 1.4rem;
         }
-        
-        .card-title {
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-        
-        .title-blue { color: var(--primary); }
-        
-        /* ================================================================
-           TABLE
-           ================================================================ */
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.85rem;
-        }
-        
-        .data-table thead th {
-            text-align: left;
-            padding: 10px 14px;
-            font-weight: 700;
-            font-size: 0.65rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: white;
-            background: var(--primary);
-            border-bottom: 3px solid var(--primary-dark);
-            white-space: nowrap;
-        }
-        
-        .data-table thead th:first-child {
-            border-radius: 8px 0 0 0;
-        }
-        
-        .data-table thead th:last-child {
-            border-radius: 0 8px 0 0;
-        }
-        
-        .data-table tbody tr:nth-child(even) {
-            background: var(--primary-bg);
-        }
-        
-        .data-table tbody tr:nth-child(odd) {
-            background: var(--bg-card);
-        }
-        
-        .data-table tbody tr:hover {
-            background: var(--table-hover);
-        }
-        
-        [data-theme="dark"] .data-table tbody tr:hover {
-            background: #1E3A5F;
-        }
-        
-        .data-table td {
-            padding: 8px 14px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-            vertical-align: middle;
-        }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
-        .badge {
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            color: white;
-            border: none;
-        }
-        
-        .badge-info { background: var(--primary); }
-        .badge-blue { background: var(--primary); }
-        .badge-green { background: var(--success); }
-        .badge-danger { background: var(--danger); }
-        .badge-purple { background: var(--purple); }
-        
-        /* ================================================================
-           STATUS BADGE
-           ================================================================ */
-        .status-badge {
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
-        
-        .status-badge.online {
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        .status-badge.offline {
-            background: var(--danger-bg);
-            color: var(--danger);
-        }
-        
-        [data-theme="dark"] .status-badge.online {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
-        [data-theme="dark"] .status-badge.offline {
-            background: #3A1A1A;
-            color: #F87171;
-        }
-        
-        /* ================================================================
-           DOCTOR AVATAR
-           ================================================================ */
-        .doctor-avatar {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-            font-size: 0.85rem;
-            color: white;
-            flex-shrink: 0;
-        }
-        
-        .doctor-avatar.blue { background: linear-gradient(135deg, #0B5ED7, #1A73E8); }
-        .doctor-avatar.green { background: linear-gradient(135deg, #059669, #0AA84F); }
-        .doctor-avatar.purple { background: linear-gradient(135deg, #7B2FBE, #9B4DCA); }
-        .doctor-avatar.orange { background: linear-gradient(135deg, #F59E0B, #FBBF24); }
-        .doctor-avatar.red { background: linear-gradient(135deg, #EF4444, #F87171); }
-        .doctor-avatar.pink { background: linear-gradient(135deg, #EC4899, #F472B6); }
-        .doctor-avatar.teal { background: linear-gradient(135deg, #0D9488, #14B8A6); }
-        
-        .doctor-avatar-wrapper {
-            position: relative;
-            display: inline-block;
-        }
-        
-        .doctor-avatar-wrapper .online-indicator {
-            position: absolute;
-            bottom: -2px;
-            right: -2px;
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-card);
-        }
-        
-        .doctor-avatar-wrapper .online-indicator.online { background: var(--success); }
-        .doctor-avatar-wrapper .online-indicator.offline { background: var(--danger); }
-        
-        /* ================================================================
-           ACTION BUTTONS - WITH BACKGROUND COLORS
-           ================================================================ */
-        .action-buttons {
-            display: flex;
-            gap: 6px;
-            flex-wrap: wrap;
-            align-items: center;
-        }
-        
-        .btn-action {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 14px;
-            border-radius: 8px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            transition: all 0.3s ease;
-            text-decoration: none;
-            border: none;
-            cursor: pointer;
-            letter-spacing: 0.02em;
-        }
-        
-        .btn-action i { font-size: 0.7rem; }
-        
-        /* VIEW Button - Blue */
-        .btn-view {
-            background: #E8F0FE;
-            color: #0B5ED7;
-            border: 2px solid rgba(11, 94, 215, 0.2);
-        }
-        
-        .btn-view:hover {
-            background: #0B5ED7;
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
-        }
-        
-        [data-theme="dark"] .btn-view {
-            background: #1E3A5F;
-            color: #6EA8FE;
-            border-color: rgba(59, 130, 246, 0.2);
-        }
-        [data-theme="dark"] .btn-view:hover {
-            background: #0B5ED7;
-            color: white;
-        }
-        
-        /* DASHBOARD Button - Purple */
-        .btn-dashboard {
-            background: #EDE9FE;
-            color: #7C3AED;
-            border: 2px solid rgba(124, 58, 237, 0.2);
-        }
-        
-        .btn-dashboard:hover {
-            background: #7C3AED;
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(124, 58, 237, 0.3);
-        }
-        
-        [data-theme="dark"] .btn-dashboard {
-            background: #2D1B4E;
-            color: #A78BFA;
-            border-color: rgba(167, 139, 250, 0.2);
-        }
-        [data-theme="dark"] .btn-dashboard:hover {
-            background: #7C3AED;
-            color: white;
-        }
-        
-        /* TOGGLE ONLINE Button - Green */
-        .btn-toggle-online {
-            background: #D1FAE5;
-            color: #059669;
-            border: 2px solid rgba(5, 150, 105, 0.2);
-        }
-        
-        .btn-toggle-online:hover {
-            background: #059669;
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
-        }
-        
-        [data-theme="dark"] .btn-toggle-online {
-            background: #1A3A2A;
-            color: #34D399;
-            border-color: rgba(52, 211, 153, 0.2);
-        }
-        [data-theme="dark"] .btn-toggle-online:hover {
-            background: #059669;
-            color: white;
-        }
-        
-        /* TOGGLE OFFLINE Button - Red */
-        .btn-toggle-offline {
-            background: #FEE2E2;
-            color: #DC2626;
-            border: 2px solid rgba(220, 38, 38, 0.2);
-        }
-        
-        .btn-toggle-offline:hover {
-            background: #DC2626;
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(220, 38, 38, 0.3);
-        }
-        
-        [data-theme="dark"] .btn-toggle-offline {
-            background: #3A1A1A;
-            color: #F87171;
-            border-color: rgba(248, 113, 113, 0.2);
-        }
-        [data-theme="dark"] .btn-toggle-offline:hover {
-            background: #DC2626;
-            color: white;
-        }
-        
-        /* ================================================================
-           PAGINATION
-           ================================================================ */
-        .pagination {
-            display: flex;
-            gap: 4px;
-            flex-wrap: wrap;
-        }
-        
-        .pagination .page-link {
-            padding: 6px 12px;
-            border-radius: 6px;
-            border: 1px solid var(--border-color);
-            color: var(--text-primary);
-            text-decoration: none;
-            font-size: 0.8rem;
-            transition: all 0.3s;
-            background: var(--bg-card);
-        }
-        
-        .pagination .page-link:hover {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        .pagination .page-link.active {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        .pagination .page-link.disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        
-        /* ================================================================
-           TOAST
-           ================================================================ */
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 14px 20px;
-            border-radius: var(--radius);
-            z-index: 999;
-            max-width: 400px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: white;
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        
-        .toast-custom.success { background: var(--success); }
-        .toast-custom.error { background: var(--danger); }
-        .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand {
-            color: var(--primary);
-            font-weight: 700;
-        }
-        
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .stat-card-mini .stat-number { font-size: 1.4rem; }
-            .filter-section {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            .filter-section .filter-label {
-                margin-bottom: 4px;
-            }
-            .data-table tbody td {
-                font-size: 0.7rem;
-                padding: 6px 10px !important;
-            }
-            .doctor-avatar {
-                width: 28px;
-                height: 28px;
-                font-size: 0.7rem;
-            }
-            .action-buttons { flex-direction: column; }
-            .action-buttons .btn-action { width: 100%; justify-content: center; }
-        }
-        
-        @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .page-header { flex-direction: column; align-items: flex-start !important; }
-            .stat-card-mini { padding: 10px 12px; }
-            .stat-card-mini .stat-number { font-size: 1.2rem; }
-        }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        .spinner {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
-        
-        @keyframes spin { to { transform: rotate(360deg); } }
-    </style>
-</head>
-<body>
+    }
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <form method="GET" action="" class="flex-1 flex">
-                <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
-                <input type="hidden" name="status" value="<?= htmlspecialchars($status_filter) ?>">
-                <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" 
-                       placeholder="Search doctors..." 
-                       class="flex-1 px-3 py-2 bg-transparent border-none outline-none text-sm" 
-                       style="color: var(--text-primary);">
-                <button type="submit" class="search-btn">
-                    <i class="fas fa-search mr-1"></i> Search
-                </button>
-            </form>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches_list as $branch): ?>
-                <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($branch['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+    @media (max-width: 480px) {
+        .page-header-custom {
+            flex-direction: column;
+            align-items: flex-start !important;
+        }
+        .table-header-scroll-btn {
+            width: 30px;
+            height: 30px;
+        }
+    }
+</style>
 
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header">
+    <div class="page-header-custom">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-user-md"></i>
@@ -1289,46 +1227,40 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <a href="add_employee.php" class="btn-outline-light">
+                <i class="fas fa-plus"></i> Add Doctor
+            </a>
             <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- STATISTICS CARDS -->
-    <!-- ================================================================ -->
+    <!-- Statistics Cards -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5 animate-fade-in-up">
-        
         <div class="stat-card-mini">
             <div class="stat-icon">👨‍⚕️</div>
             <p class="stat-number"><?= $total_all ?></p>
             <p class="stat-label">Total Doctors</p>
         </div>
-        
         <div class="stat-card-mini">
             <div class="stat-icon">🟢</div>
             <p class="stat-number green"><?= $online_count ?></p>
             <p class="stat-label">Online</p>
         </div>
-        
         <div class="stat-card-mini">
             <div class="stat-icon">🔴</div>
             <p class="stat-number red"><?= $offline_count ?></p>
             <p class="stat-label">Offline</p>
         </div>
-        
         <div class="stat-card-mini">
             <div class="stat-icon">👤</div>
             <p class="stat-number purple"><?= $with_patients ?></p>
             <p class="stat-label">With Patients</p>
         </div>
-        
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FILTERS -->
-    <!-- ================================================================ -->
+    <!-- Filters -->
     <div class="filter-section animate-fade-in-up" style="animation-delay:0.05s;">
         <span class="filter-label"><i class="fas fa-filter"></i> Status:</span>
         
@@ -1338,47 +1270,89 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </a>
         <a href="?<?= http_build_query(array_merge($_GET, ['status' => 'online', 'page' => 1])) ?>" 
            class="filter-btn <?= $status_filter === 'online' ? 'active' : '' ?>">
-            <i class="fas fa-circle" style="color: var(--success);"></i> Online
+            <i class="fas fa-circle" style="color: #059669;"></i> Online
         </a>
         <a href="?<?= http_build_query(array_merge($_GET, ['status' => 'offline', 'page' => 1])) ?>" 
            class="filter-btn <?= $status_filter === 'offline' ? 'active' : '' ?>">
-            <i class="fas fa-circle" style="color: var(--danger);"></i> Offline
+            <i class="fas fa-circle" style="color: #DC2626;"></i> Offline
         </a>
         
         <?php if (!empty($search) || !empty($status_filter)): ?>
-            <a href="doctors_list.php?branch=<?= $selected_branch_id ?>" class="filter-btn" style="border-color: var(--danger); color: var(--danger);">
+            <a href="doctors_list.php?branch=<?= $selected_branch_id ?>" class="filter-btn" style="border-color: #DC2626; color: #DC2626;">
                 <i class="fas fa-times"></i> Clear Filters
             </a>
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- DOCTORS LIST -->
-    <!-- ================================================================ -->
-    <div class="card animate-fade-in-up" style="animation-delay:0.1s;">
-        <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-list title-blue mr-2"></i>
-                Doctors List
-                <span class="text-sm font-normal text-gray-400">(<?= $total_doctors ?> doctors)</span>
-            </h3>
+    <!-- Doctors List Card -->
+    <div class="card-custom animate-fade-in-up" style="animation-delay:0.1s;">
+        
+        <!-- ================================================================ -->
+        <!-- TABLE HEADER - SEARCH LEFT, SMALLER -->
+        <!-- ================================================================ -->
+        <div class="table-header-controls">
+            <!-- LEFT: Title + Search -->
+            <div class="table-header-left">
+                <h3 class="table-title">
+                    <i class="fas fa-list"></i>
+                    Doctors List
+                    <span class="count-badge"><?= $total_doctors ?></span>
+                </h3>
+                
+                <!-- Search Bar - LEFT SIDE, SMALLER -->
+                <div class="table-header-search-wrapper">
+                    <div class="table-header-search">
+                        <i class="fas fa-search search-icon"></i>
+                        <input type="text" 
+                               id="liveSearchInput"
+                               placeholder="Search doctors..." 
+                               value="<?= htmlspecialchars($search) ?>"
+                               autocomplete="off">
+                        <button type="button" class="clear-search <?= !empty($search) ? 'visible' : '' ?>" id="clearSearchBtn" title="Clear">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <!-- Live Search Dropdown -->
+                    <div class="live-search-dropdown" id="liveSearchDropdown"></div>
+                </div>
+            </div>
+            
+            <!-- RIGHT: Scroll Buttons -->
+            <div class="table-header-scroll-btns">
+                <button type="button" 
+                        class="table-header-scroll-btn" 
+                        id="headerScrollLeftBtn" 
+                        onclick="scrollTable('left')" 
+                        title="Scroll Left"
+                        disabled>
+                    <i class="fas fa-chevron-left"></i>
+                </button>
+                <button type="button" 
+                        class="table-header-scroll-btn" 
+                        id="headerScrollRightBtn" 
+                        onclick="scrollTable('right')" 
+                        title="Scroll Right">
+                    <i class="fas fa-chevron-right"></i>
+                </button>
+            </div>
         </div>
         
-        <div class="overflow-x-auto">
-            <table class="data-table w-full">
+        <!-- Scrollable Table Container -->
+        <div class="table-scroll-container" id="tableScrollContainer">
+            <table class="data-table">
                 <thead>
                     <tr>
                         <th style="width: 50px;">#</th>
-                        <th style="min-width: 180px;">Doctor</th>
-                        <th style="min-width: 120px;">Specialty</th>
-                        <th style="min-width: 120px;">Branch</th>
-                        <th style="min-width: 80px;">Patients</th>
-                        <th style="min-width: 80px;">Visits</th>
-                        <th style="min-width: 100px;">Status</th>
-                        <th style="min-width: 250px;">Actions</th>
+                        <th style="min-width: 200px;">Doctor</th>
+                        <th style="min-width: 130px;">Specialty</th>
+                        <th style="min-width: 130px;">Branch</th>
+                        <th style="min-width: 90px;">Patients</th>
+                        <th style="min-width: 90px;">Visits</th>
+                        <th style="min-width: 110px;">Status</th>
+                        <th style="min-width: 220px;">Actions</th>
                     </tr>
                 </thead>
-                <tbody>
+                <tbody id="doctorsTableBody">
                     <?php if (count($doctors) > 0): ?>
                         <?php $i = $offset + 1; foreach ($doctors as $doctor): ?>
                             <?php 
@@ -1392,9 +1366,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 $is_online = $doctor['is_online'] == 1;
                             ?>
                             <tr>
-                                <td class="font-bold text-blue-600 dark:text-blue-400"><?= $i++ ?></td>
+                                <td style="font-weight:700;color:#0B5ED7;"><?= $i++ ?></td>
                                 <td>
-                                    <div class="flex items-center gap-3">
+                                    <div style="display:flex;align-items:center;gap:12px;">
                                         <div class="doctor-avatar-wrapper">
                                             <div class="doctor-avatar <?= $avatar_color ?>">
                                                 <?= substr($initials, 0, 2) ?>
@@ -1402,53 +1376,59 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                             </div>
                                         </div>
                                         <div>
-                                            <p class="font-semibold text-sm"><?= htmlspecialchars($doctor['full_name']) ?></p>
-                                            <p class="text-xs text-gray-400"><?= htmlspecialchars($doctor['email']) ?></p>
+                                            <p style="font-weight:600;font-size:0.85rem;margin:0;">
+                                                <?= highlightSearch($doctor['full_name'], $search) ?>
+                                            </p>
+                                            <p style="font-size:0.72rem;color:var(--page-text-secondary);margin:0;">
+                                                <?= highlightSearch($doctor['email'] ?? '', $search) ?>
+                                            </p>
                                         </div>
                                     </div>
                                 </td>
                                 <td>
-                                    <span class="badge badge-info"><?= htmlspecialchars($doctor['specialty'] ?? 'General') ?></span>
+                                    <span class="badge badge-info">
+                                        <?= highlightSearch($doctor['specialty'] ?? 'General', $search) ?>
+                                    </span>
                                 </td>
-                                <td><?= htmlspecialchars($doctor['branch_name'] ?? 'N/A') ?></td>
-                                <td class="text-center">
+                                <td><?= highlightSearch($doctor['branch_name'] ?? 'N/A', $search) ?></td>
+                                <td style="text-align:center;">
                                     <span class="badge badge-blue"><?= $doctor['total_patients'] ?? 0 ?></span>
                                 </td>
-                                <td class="text-center">
+                                <td style="text-align:center;">
                                     <span class="badge badge-green"><?= $doctor['total_visits'] ?? 0 ?></span>
                                 </td>
                                 <td>
                                     <span class="status-badge <?= $is_online ? 'online' : 'offline' ?>">
-                                        <i class="fas fa-circle text-[8px]"></i>
+                                        <i class="fas fa-circle" style="font-size:8px;"></i>
                                         <?= $is_online ? 'Online' : 'Offline' ?>
                                     </span>
                                 </td>
                                 <td>
                                     <div class="action-buttons">
-                                        <!-- View Doctor Details Button - BLUE -->
+                                        <!-- ✅ VIEW ONLY -->
                                         <a href="doctor_details.php?id=<?= $doctor['id'] ?>&branch=<?= $selected_branch_id ?>" 
                                            class="btn-action btn-view" title="View Doctor Details">
                                             <i class="fas fa-eye"></i> View
                                         </a>
                                         
-                                        <!-- View Doctor Dashboard Button - PURPLE -->
-                                        <a href="view_doctor_dashboard.php?id=<?= $doctor['id'] ?>&branch=<?= $selected_branch_id ?>" 
-                                           class="btn-action btn-dashboard" title="View Doctor Dashboard">
-                                            <i class="fas fa-chart-bar"></i> Dashboard
+                                        <!-- ✅ EDIT ONLY -->
+                                        <a href="edit_employee.php?id=<?= $doctor['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                           class="btn-action btn-edit" title="Edit Doctor">
+                                            <i class="fas fa-edit"></i> Edit
                                         </a>
                                         
-                                        <!-- Toggle Online/Offline Button -->
+                                        <!-- Toggle Online/Offline -->
                                         <?php if ($is_online): ?>
                                             <a href="?toggle=<?= $doctor['id'] ?>&page=<?= $page ?>&branch=<?= $selected_branch_id ?><?= $search ? '&search='.urlencode($search) : '' ?><?= $status_filter ? '&status='.urlencode($status_filter) : '' ?>" 
                                                class="btn-action btn-toggle-offline" 
-                                               onclick="return confirm('Are you sure you want to set Dr. <?= htmlspecialchars($doctor['full_name']) ?> to OFFLINE?')" 
+                                               onclick="return confirm('Set Dr. <?= htmlspecialchars($doctor['full_name']) ?> to OFFLINE?')" 
                                                title="Set Offline">
                                                 <i class="fas fa-power-off"></i> Offline
                                             </a>
                                         <?php else: ?>
                                             <a href="?toggle=<?= $doctor['id'] ?>&page=<?= $page ?>&branch=<?= $selected_branch_id ?><?= $search ? '&search='.urlencode($search) : '' ?><?= $status_filter ? '&status='.urlencode($status_filter) : '' ?>" 
                                                class="btn-action btn-toggle-online" 
-                                               onclick="return confirm('Are you sure you want to set Dr. <?= htmlspecialchars($doctor['full_name']) ?> to ONLINE?')" 
+                                               onclick="return confirm('Set Dr. <?= htmlspecialchars($doctor['full_name']) ?> to ONLINE?')" 
                                                title="Set Online">
                                                 <i class="fas fa-power-off"></i> Online
                                             </a>
@@ -1459,12 +1439,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="8" class="text-center py-8 text-gray-400">
-                                <i class="fas fa-user-md text-4xl block mb-3" style="color: var(--primary);"></i>
-                                <p class="text-lg font-medium text-gray-700 dark:text-gray-300">
+                            <td colspan="8" style="text-align:center;padding:32px;color:var(--page-text-secondary);">
+                                <i class="fas fa-user-md" style="font-size:2.5rem;display:block;margin-bottom:12px;color:#0B5ED7;"></i>
+                                <p style="font-size:1rem;font-weight:500;margin:0 0 4px 0;">
                                     <?= !empty($search) || !empty($status_filter) ? 'No doctors found matching your filters' : 'No doctors found' ?>
                                 </p>
-                                <p class="text-sm">
+                                <p style="font-size:0.8rem;margin:0;">
                                     <?= !empty($search) || !empty($status_filter) ? 'Try changing your search or filter criteria' : 'Contact administrator to add a doctor' ?>
                                 </p>
                             </td>
@@ -1473,13 +1453,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 </tbody>
             </table>
         </div>
-        
-        <!-- ================================================================ -->
-        <!-- PAGINATION -->
-        <!-- ================================================================ -->
+
+        <!-- Pagination -->
         <?php if ($total_pages > 1): ?>
-            <div class="flex flex-wrap justify-between items-center gap-3 mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
-                <div class="text-sm text-gray-500 dark:text-gray-400">
+            <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-top:16px;padding-top:12px;border-top:1px solid var(--page-border);">
+                <div style="font-size:0.8rem;color:var(--page-text-secondary);">
                     Showing <?= $offset + 1 ?> - <?= min($offset + $per_page, $total_doctors) ?> of <?= $total_doctors ?> doctors
                 </div>
                 
@@ -1515,155 +1493,322 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
+    <!-- Footer -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             Doctors Management
-            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
 
 </main>
 
-<!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
-    </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
+// ================================================================
+// ✅ TABLE SCROLL FUNCTIONS
+// ================================================================
+function scrollTable(direction) {
+    var container = document.getElementById('tableScrollContainer');
+    if (!container) return;
     
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
+    var scrollAmount = 400;
+    
+    if (direction === 'left') {
+        container.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
+    } else {
+        container.scrollBy({ left: scrollAmount, behavior: 'smooth' });
     }
     
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
-        }
-    });
+    setTimeout(updateScrollButtons, 350);
+}
 
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
+function updateScrollButtons() {
+    var container = document.getElementById('tableScrollContainer');
+    var leftBtn = document.getElementById('headerScrollLeftBtn');
+    var rightBtn = document.getElementById('headerScrollRightBtn');
+    
+    if (!container || !leftBtn || !rightBtn) return;
+    
+    var scrollLeft = container.scrollLeft;
+    var scrollWidth = container.scrollWidth;
+    var clientWidth = container.clientWidth;
+    var maxScroll = scrollWidth - clientWidth;
+    
+    if (maxScroll <= 5) {
+        leftBtn.disabled = true;
+        rightBtn.disabled = true;
+        return;
+    }
+    
+    leftBtn.disabled = (scrollLeft <= 5);
+    rightBtn.disabled = (scrollLeft >= maxScroll - 5);
+}
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
+(function() {
+    var container = document.getElementById('tableScrollContainer');
+    if (!container) return;
+    
+    container.addEventListener('scroll', updateScrollButtons);
+    window.addEventListener('resize', function() {
+        setTimeout(updateScrollButtons, 100);
     });
     
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
+    setTimeout(updateScrollButtons, 200);
+    setTimeout(updateScrollButtons, 600);
+    
+    // Drag to scroll
+    var isDown = false;
+    var startX = 0;
+    var scrollLeftStart = 0;
+    
+    container.addEventListener('mousedown', function(e) {
+        if (e.target.closest('a, button, input')) return;
+        isDown = true;
+        container.style.cursor = 'grabbing';
+        startX = e.pageX - container.offsetLeft;
+        scrollLeftStart = container.scrollLeft;
+    });
+    
+    container.addEventListener('mouseleave', function() {
+        isDown = false;
+        container.style.cursor = '';
+    });
+    
+    container.addEventListener('mouseup', function() {
+        isDown = false;
+        container.style.cursor = '';
+    });
+    
+    container.addEventListener('mousemove', function(e) {
+        if (!isDown) return;
+        e.preventDefault();
+        var x = e.pageX - container.offsetLeft;
+        var walk = (x - startX) * 1.5;
+        container.scrollLeft = scrollLeftStart - walk;
+    });
+})();
+
+// ================================================================
+// ✅ LIVE AUTO-SEARCH WITH HIGHLIGHT
+// ================================================================
+(function() {
+    var searchInput = document.getElementById('liveSearchInput');
+    var dropdown = document.getElementById('liveSearchDropdown');
+    var clearBtn = document.getElementById('clearSearchBtn');
+    var tableBody = document.getElementById('doctorsTableBody');
+    
+    if (!searchInput || !dropdown) return;
+    
+    var searchTimeout = null;
+    var currentSearch = '<?= addslashes($search) ?>';
+    
+    // Function to escape HTML
+    function escapeHtml(text) {
+        if (!text) return '';
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    // Function to highlight text
+    function highlightText(text, search) {
+        if (!search || !text) return escapeHtml(text);
+        var escaped = escapeHtml(text);
+        var regex = new RegExp('(' + search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+        return escaped.replace(regex, '<mark class="search-highlight">$1</mark>');
+    }
+    
+    // Function to show dropdown
+    function showDropdown(doctors, searchTerm) {
+        if (doctors.length === 0) {
+            dropdown.innerHTML = `
+                <div class="live-search-empty">
+                    <i class="fas fa-search"></i>
+                    <p>No doctors found for "${escapeHtml(searchTerm)}"</p>
+                </div>
+            `;
+            dropdown.classList.add('show');
+            return;
+        }
+        
+        var html = '';
+        doctors.forEach(function(doc) {
+            var initials = doc.full_name.split(' ').map(function(n) { return n[0]; }).join('').substring(0, 2).toUpperCase();
+            var isOnline = doc.is_online == 1;
+            
+            html += `
+                <div class="live-search-item" data-id="${doc.id}">
+                    <div class="item-avatar">${initials}</div>
+                    <div class="item-info">
+                        <p class="item-name">${highlightText(doc.full_name, searchTerm)}</p>
+                        <p class="item-detail">${highlightText(doc.specialty || 'General', searchTerm)} • ${highlightText(doc.email || '', searchTerm)}</p>
+                    </div>
+                    <span class="item-status ${isOnline ? 'online' : 'offline'}"></span>
+                </div>
+            `;
+        });
+        
+        dropdown.innerHTML = html;
+        dropdown.classList.add('show');
+        
+        // Add click handlers
+        dropdown.querySelectorAll('.live-search-item').forEach(function(item) {
+            item.addEventListener('click', function() {
+                var docId = this.dataset.id;
+                window.location.href = 'doctor_details.php?id=' + docId + '&branch=<?= $selected_branch_id ?>';
+            });
+        });
+    }
+    
+    // Function to hide dropdown
+    function hideDropdown() {
+        dropdown.classList.remove('show');
+    }
+    
+    // Function to perform AJAX search
+    function performAjaxSearch(query) {
+        var url = 'doctors_list.php?ajax_search=1&q=' + encodeURIComponent(query) + '&branch=<?= $selected_branch_id ?>';
+        <?php if (!empty($status_filter)): ?>
+        url += '&status=<?= urlencode($status_filter) ?>';
+        <?php endif; ?>
+        
+        fetch(url)
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    showDropdown(data.doctors, query);
+                }
+            })
+            .catch(function(error) {
+                console.error('Search error:', error);
+            });
+    }
+    
+    // Input event - live search
+    searchInput.addEventListener('input', function() {
+        var query = this.value.trim();
+        
+        // Show/hide clear button
+        if (query.length > 0) {
+            clearBtn.classList.add('visible');
+        } else {
+            clearBtn.classList.remove('visible');
+            hideDropdown();
+            // Reload page without search
+            if (currentSearch !== '') {
+                var url = new URL(window.location.href);
+                url.searchParams.delete('search');
+                window.location.href = url.toString();
+            }
+            return;
+        }
+        
+        // Clear previous timeout
+        if (searchTimeout) {
+            clearTimeout(searchTimeout);
+        }
+        
+        // Debounce - wait 250ms before searching
+        searchTimeout = setTimeout(function() {
+            performAjaxSearch(query);
+        }, 250);
+    });
+    
+    // Clear button
+    clearBtn.addEventListener('click', function() {
+        searchInput.value = '';
+        clearBtn.classList.remove('visible');
+        hideDropdown();
+        
+        var url = new URL(window.location.href);
+        url.searchParams.delete('search');
+        window.location.href = url.toString();
+    });
+    
+    // Enter key - submit search
+    searchInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            var query = this.value.trim();
+            if (query.length > 0) {
+                var url = new URL(window.location.href);
+                url.searchParams.set('search', query);
+                url.searchParams.set('page', '1');
+                window.location.href = url.toString();
             }
         }
     });
+    
+    // Click outside to close
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.table-header-search-wrapper')) {
+            hideDropdown();
+        }
+    });
+    
+    // Focus - show results if there's text
+    searchInput.addEventListener('focus', function() {
+        if (this.value.trim().length > 0) {
+            performAjaxSearch(this.value.trim());
+        }
+    });
+})();
 
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        url.searchParams.delete('page');
-        window.location.href = url.toString();
+// ================================================================
+// ✅ DARK MODE - PAGE YOTE INAKUWA DARK
+// ================================================================
+function enforceDarkModePage() {
+    var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    var body = document.body;
+    var mainContent = document.querySelector('.main-content');
+    
+    if (isDark) {
+        if (body) body.style.background = '#0F172A';
+        if (mainContent) mainContent.style.background = '#0F172A';
+    } else {
+        if (body) body.style.background = '';
+        if (mainContent) mainContent.style.background = '';
     }
+}
 
-    // ================================================================
-    // TOAST
-    // ================================================================
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
-    }
+enforceDarkModePage();
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
-        var ftEl = document.getElementById('footerTime');
-        if (ftEl) ftEl.textContent = timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+document.addEventListener('darkModeChanged', function() {
+    setTimeout(enforceDarkModePage, 50);
+});
 
-    console.log('%c🏥 Braick Dispensary - Doctors Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c👨‍⚕️ Total Doctors: <?= $total_all ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🟢 Online: <?= $online_count ?> | 🔴 Offline: <?= $offline_count ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📋 Showing: <?= count($doctors) ?> doctors', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#34D399;');
-    console.log('%c🔵 View Button: Blue', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🟣 Dashboard Button: Purple', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🟢 Online Button: Green', 'font-size:13px; color:#059669;');
-    console.log('%c🔴 Offline Button: Red', 'font-size:13px; color:#DC2626;');
-    console.log('%c🚫 Edit & Add Doctor buttons REMOVED', 'font-size:13px; color:#DC2626;');
+var observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(mutation) {
+        if (mutation.attributeName === 'data-theme') {
+            enforceDarkModePage();
+        }
+    });
+});
+observer.observe(document.documentElement, { attributes: true });
+
+// ================================================================
+// ✅ FOOTER TIME
+// ================================================================
+setInterval(function() {
+    var now = new Date();
+    var timeStr = now.toLocaleTimeString('en-US', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+    });
+    var ftEl = document.getElementById('footerTime');
+    if (ftEl) ftEl.textContent = timeStr;
+}, 1000);
+
+console.log('%c🏥 Braick Dispensary - Doctors Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ SQL ambiguous column FIXED', 'font-size:12px; color:#059669;');
+console.log('%c✅ Search bar LEFT side + smaller: YES', 'font-size:12px; color:#059669;');
+console.log('%c✅ Live auto-search + highlight: YES', 'font-size:12px; color:#059669;');
+console.log('%c✅ Action buttons: View + Edit only', 'font-size:12px; color:#059669;');
+console.log('%c✅ Dark mode kamili: YES', 'font-size:12px; color:#059669;');
 </script>
 
 </body>

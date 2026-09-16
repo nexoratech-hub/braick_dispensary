@@ -1,9 +1,14 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/laboratory/pending_tests.php
-// LABORATORY - PENDING TESTS
-// WITH START ALL BUTTON + LIVE SEARCH IN BLUE HEADER
-// BUTTONS: View (top) + Start (bottom) - Vertical
+// LABORATORY - PENDING TESTS (GROUPED BY PATIENT) - BLUE THEME
+// ================================================================
+// ✅ GROUPED BY PATIENT - Kila patient ana card yake
+// ✅ GLOBAL START ALL - Start all pending tests (patients wote)
+// ✅ PER-PATIENT START ALL - Start all tests za patient mmoja
+// ✅ LIVE SEARCH - Filter patients kwa jina, ID, test, doctor
+// ✅ Start single test - Kwenye kila test
+// ✅ BLUE THEME - Rangi zote ni blue
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -48,50 +53,116 @@ $date_filter = isset($_GET['date']) ? $_GET['date'] : '';
 $message = '';
 $message_type = '';
 
-// HANDLE START SINGLE
+// ================================================================
+// HANDLE ACTIONS
+// ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    $test_id = isset($_POST['test_id']) ? (int)$_POST['test_id'] : 0;
     
-    if ($_POST['action'] === 'start_test' && $test_id > 0) {
-        try {
-            $stmt = $db->prepare("SELECT id, test_name, status FROM lab_tests WHERE id = ?");
-            $stmt->execute([$test_id]);
-            $test = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if (!$test) {
-                $message = "❌ Test not found (ID: $test_id)";
-                $message_type = 'error';
-            } else {
-                $stmt = $db->prepare("
-                    UPDATE lab_tests 
-                    SET status = 'in_progress', lab_technician_id = ?, started_at = NOW(), updated_at = NOW()
-                    WHERE id = ? AND (status IS NULL OR status = 'pending' OR status = '')
-                ");
-                $stmt->execute([$user_id, $test_id]);
+    // START SINGLE TEST
+    if ($_POST['action'] === 'start_test') {
+        $test_id = isset($_POST['test_id']) ? (int)$_POST['test_id'] : 0;
+        
+        if ($test_id > 0) {
+            try {
+                $stmt = $db->prepare("SELECT id, test_name, status FROM lab_tests WHERE id = ?");
+                $stmt->execute([$test_id]);
+                $test = $stmt->fetch(PDO::FETCH_ASSOC);
                 
-                if ($stmt->rowCount() > 0) {
-                    $message = "✅ Test started: " . htmlspecialchars($test['test_name']);
-                    $message_type = 'success';
-                    
-                    try {
-                        $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'lab_test_started', ?, NOW())");
-                        $stmt->execute([$user_id, $user_branch_id, "Started lab test ID: {$test_id} - " . $test['test_name']]);
-                    } catch (Exception $e) {}
+                if (!$test) {
+                    $message = "❌ Test not found (ID: $test_id)";
+                    $message_type = 'error';
                 } else {
-                    $message = "⚠️ Test already in progress.";
-                    $message_type = 'warning';
+                    $stmt = $db->prepare("
+                        UPDATE lab_tests 
+                        SET status = 'in_progress', lab_technician_id = ?, started_at = NOW(), updated_at = NOW()
+                        WHERE id = ? AND (status IS NULL OR status = 'pending' OR status = '')
+                    ");
+                    $stmt->execute([$user_id, $test_id]);
+                    
+                    if ($stmt->rowCount() > 0) {
+                        $message = "✅ Test started: " . htmlspecialchars($test['test_name']);
+                        $message_type = 'success';
+                        
+                        try {
+                            $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'lab_test_started', ?, NOW())");
+                            $stmt->execute([$user_id, $user_branch_id, "Started lab test ID: {$test_id} - " . $test['test_name']]);
+                        } catch (Exception $e) {}
+                    } else {
+                        $message = "⚠️ Test already in progress.";
+                        $message_type = 'warning';
+                    }
                 }
+            } catch (Exception $e) {
+                $message = "❌ Error: " . $e->getMessage();
+                $message_type = 'error';
             }
-        } catch (Exception $e) {
-            $message = "❌ Error: " . $e->getMessage();
-            $message_type = 'error';
         }
     }
     
-    // HANDLE START ALL
+    // START ALL - PATIENT SPECIFIC
+    if ($_POST['action'] === 'start_patient_tests') {
+        $patient_id = isset($_POST['patient_id']) ? (int)$_POST['patient_id'] : 0;
+        
+        if ($patient_id > 0) {
+            try {
+                $stmt = $db->prepare("SELECT full_name FROM patients WHERE id = ?");
+                $stmt->execute([$patient_id]);
+                $patient = $stmt->fetch(PDO::FETCH_ASSOC);
+                $patient_name = $patient['full_name'] ?? 'Patient';
+                
+                $stmt = $db->prepare("
+                    SELECT id FROM lab_tests 
+                    WHERE patient_id = ? 
+                    AND (status IS NULL OR status = 'pending' OR status = '')
+                    ORDER BY created_at ASC
+                ");
+                $stmt->execute([$patient_id]);
+                $pending_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                if (empty($pending_tests)) {
+                    $message = "⚠️ No pending tests for this patient.";
+                    $message_type = 'warning';
+                } else {
+                    $test_ids = array_column($pending_tests, 'id');
+                    $placeholders = implode(',', array_fill(0, count($test_ids), '?'));
+                    
+                    $stmt = $db->prepare("
+                        UPDATE lab_tests 
+                        SET status = 'in_progress', lab_technician_id = ?, started_at = NOW(), updated_at = NOW()
+                        WHERE id IN ($placeholders) AND (status IS NULL OR status = 'pending' OR status = '')
+                    ");
+                    $params = array_merge([$user_id], $test_ids);
+                    $stmt->execute($params);
+                    $started_count = $stmt->rowCount();
+                    
+                    if ($started_count > 0) {
+                        $message = "✅ Started $started_count test(s) for <strong>" . htmlspecialchars($patient_name) . "</strong>";
+                        $message_type = 'success';
+                        
+                        try {
+                            $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'lab_tests_bulk_started', ?, NOW())");
+                            $stmt->execute([$user_id, $user_branch_id, "Started $started_count test(s) for patient: $patient_name"]);
+                        } catch (Exception $e) {}
+                    } else {
+                        $message = "⚠️ No tests were started.";
+                        $message_type = 'warning';
+                    }
+                }
+            } catch (Exception $e) {
+                $message = "❌ Error: " . $e->getMessage();
+                $message_type = 'error';
+            }
+        }
+    }
+    
+    // GLOBAL START ALL
     if ($_POST['action'] === 'start_all') {
         try {
-            $stmt = $db->prepare("SELECT id FROM lab_tests WHERE status IS NULL OR status = 'pending' OR status = '' ORDER BY created_at ASC");
+            $stmt = $db->prepare("
+                SELECT id FROM lab_tests 
+                WHERE (status IS NULL OR status = 'pending' OR status = '')
+                ORDER BY created_at ASC
+            ");
             $stmt->execute();
             $pending_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
@@ -112,12 +183,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $started_count = $stmt->rowCount();
                 
                 if ($started_count > 0) {
-                    $message = "✅ Started $started_count test(s) successfully!";
+                    $message = "✅ Started $started_count test(s) for ALL patients!";
                     $message_type = 'success';
                     
                     try {
                         $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'lab_tests_bulk_started', ?, NOW())");
-                        $stmt->execute([$user_id, $user_branch_id, "Started $started_count lab test(s) in bulk"]);
+                        $stmt->execute([$user_id, $user_branch_id, "Started $started_count lab test(s) in bulk (global)"]);
                     } catch (Exception $e) {}
                 } else {
                     $message = "⚠️ No tests were started.";
@@ -131,13 +202,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 }
 
+// ================================================================
 // GET PENDING TESTS
+// ================================================================
 $query = "
     SELECT 
         lt.*,
+        pat.id as patient_id,
         pat.full_name as patient_name,
         pat.patient_id as patient_code,
-        pat.phone, pat.gender, pat.date_of_birth,
+        pat.phone, 
+        pat.gender, 
+        pat.date_of_birth,
         u.full_name as doctor_name,
         u.specialty,
         v.visit_number,
@@ -164,13 +240,54 @@ if (!empty($date_filter)) {
     $params[] = $date_filter;
 }
 
-$query .= " ORDER BY lt.created_at ASC";
+$query .= " ORDER BY pat.full_name ASC, lt.created_at ASC";
 
 $stmt = $db->prepare($query);
 $stmt->execute($params);
-$tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$all_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// GET COUNTS
+// ================================================================
+// GROUP TESTS BY PATIENT
+// ================================================================
+$patients = [];
+foreach ($all_tests as $test) {
+    $patient_id = $test['patient_id'] ?? 0;
+    
+    if (!isset($patients[$patient_id])) {
+        $patients[$patient_id] = [
+            'patient_id' => $patient_id,
+            'patient_name' => $test['patient_name'] ?? 'Unknown Patient',
+            'patient_code' => $test['patient_code'] ?? 'N/A',
+            'phone' => $test['phone'] ?? '',
+            'gender' => $test['gender'] ?? '',
+            'date_of_birth' => $test['date_of_birth'] ?? '',
+            'visit_number' => $test['visit_number'] ?? '',
+            'visit_type' => $test['visit_type'] ?? '',
+            'doctor_name' => $test['doctor_name'] ?? 'N/A',
+            'specialty' => $test['specialty'] ?? 'GP',
+            'tests' => [],
+            'total_waiting' => 0,
+            'longest_waiting' => 0
+        ];
+    }
+    
+    $patients[$patient_id]['tests'][] = $test;
+    $patients[$patient_id]['total_waiting'] += $test['waiting_time'] ?? 0;
+    if (($test['waiting_time'] ?? 0) > $patients[$patient_id]['longest_waiting']) {
+        $patients[$patient_id]['longest_waiting'] = $test['waiting_time'] ?? 0;
+    }
+}
+
+$patients_array = array_values($patients);
+foreach ($patients_array as &$p) {
+    $p['test_count'] = count($p['tests']);
+    $p['avg_waiting'] = $p['test_count'] > 0 ? round($p['total_waiting'] / $p['test_count']) : 0;
+}
+unset($p);
+
+// ================================================================
+// COUNTS
+// ================================================================
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE (status IS NULL OR status = 'pending' OR status = '')");
 $stmt->execute();
 $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -185,6 +302,7 @@ $stmt->execute([$today]);
 $completed_today_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 $total_count = $pending_count + $in_progress_count;
+$total_patients = count($patients_array);
 
 $unread_notifications = 0;
 try {
@@ -211,14 +329,22 @@ function calculateAge($dob) {
     return $birthDate->diff($today)->y;
 }
 
-function getStatusBadgeClass($status) {
-    $map = ['pending' => 'badge-pending', 'in_progress' => 'badge-in-progress', 'completed' => 'badge-completed', 'cancelled' => 'badge-cancelled'];
-    return $map[$status] ?? 'badge-pending';
+function getWaitingClass($waiting) {
+    if ($waiting < 15) return 'short';
+    if ($waiting < 45) return 'medium';
+    return 'long';
 }
 
-function getStatusLabel($status) {
-    $map = ['pending' => '⏳ Pending', 'in_progress' => '🔄 In Progress', 'completed' => '✅ Completed', 'cancelled' => '❌ Cancelled'];
-    return $map[$status] ?? ucfirst($status);
+function getWaitingText($waiting) {
+    if ($waiting < 1) return 'Just now';
+    if ($waiting < 60) return $waiting . ' min';
+    return floor($waiting / 60) . 'h ' . ($waiting % 60) . 'm';
+}
+
+function getWaitingIcon($waiting) {
+    if ($waiting < 15) return 'fa-check-circle';
+    if ($waiting < 45) return 'fa-clock';
+    return 'fa-exclamation-circle';
 }
 
 include_once __DIR__ . '/../../components/laboratory_header.php';
@@ -240,10 +366,17 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     
     <style>
         :root {
+            /* ✅ BLUE THEME - Rangi zote ni BLUE */
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
+            --primary-darker: #083C8A;
             --primary-light: #6EA8FE;
+            --primary-lighter: #93C5FD;
             --primary-bg: #E8F0FE;
+            --primary-bg-dark: #1E3A5F;
+            --info: #3B82F6;
+            --info-dark: #2563EB;
+            --info-bg: #DBEAFE;
             --success: #059669;
             --success-dark: #047857;
             --success-bg: #D1FAE5;
@@ -303,9 +436,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* PAGE HEADER */
+        /* ================================================================ */
+        /* ✅ PAGE HEADER - BLUE GRADIENT */
+        /* ================================================================ */
         .page-header {
-            background: linear-gradient(135deg, #D97706, #B45309);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8, #083C8A);
             border-radius: 16px;
             padding: 24px 32px;
             margin-bottom: 28px;
@@ -314,7 +449,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 4px 20px rgba(217, 119, 6, 0.25);
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.3);
             position: relative;
             overflow: hidden;
         }
@@ -417,7 +552,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             backdrop-filter: blur(4px);
         }
         
-        /* STATS */
+        /* ================================================================ */
+        /* ✅ STATS - BLUE VARIANTS */
+        /* ================================================================ */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -448,12 +585,15 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .stat-card .stat-arrow { position: absolute; bottom: 10px; right: 14px; font-size: 0.6rem; color: rgba(255,255,255,0.3); transition: all 0.3s ease; }
         .stat-card:hover .stat-arrow { transform: translateX(4px); color: rgba(255,255,255,0.7); }
         
-        .stat-card.orange { background: linear-gradient(135deg, #F59E0B, #D97706, #B45309); }
-        .stat-card.blue { background: linear-gradient(135deg, #3B82F6, #0B5ED7, #0A4CA8); }
-        .stat-card.green { background: linear-gradient(135deg, #34D399, #059669, #047857); }
-        .stat-card.purple { background: linear-gradient(135deg, #A78BFA, #7C3AED, #6D28D9); }
+        /* ✅ ALL BLUE VARIANTS */
+        .stat-card.blue-1 { background: linear-gradient(135deg, #3B82F6, #0B5ED7, #0A4CA8); }
+        .stat-card.blue-2 { background: linear-gradient(135deg, #0EA5E9, #0284C7, #075985); }
+        .stat-card.blue-3 { background: linear-gradient(135deg, #0B5ED7, #083C8A, #062E6B); }
+        .stat-card.blue-4 { background: linear-gradient(135deg, #4F46E5, #4338CA, #3730A3); }
         
-        /* ACTION BAR - START ALL BUTTON */
+        /* ================================================================ */
+        /* ACTION BAR */
+        /* ================================================================ */
         .action-bar {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -475,7 +615,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             flex-wrap: wrap;
         }
         
-        .action-bar .action-info .info-badge {
+        .action-bar .info-badge {
             display: inline-flex;
             align-items: center;
             gap: 6px;
@@ -485,16 +625,22 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             font-weight: 600;
         }
         
-        .action-bar .action-info .info-badge.orange {
-            background: var(--warning-bg);
-            color: var(--warning);
-            border: 1px solid var(--warning);
-        }
-        
-        .action-bar .action-info .info-badge.blue {
+        .action-bar .info-badge.blue {
             background: var(--primary-bg);
             color: var(--primary);
             border: 1px solid var(--primary);
+        }
+        
+        .action-bar .info-badge.info {
+            background: var(--info-bg);
+            color: var(--info);
+            border: 1px solid var(--info);
+        }
+        
+        .action-bar .info-badge.purple {
+            background: var(--purple-bg);
+            color: var(--purple);
+            border: 1px solid var(--purple);
         }
         
         .btn-start-all {
@@ -505,133 +651,288 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             border-radius: 10px;
             font-weight: 700;
             font-size: 0.82rem;
-            background: linear-gradient(135deg, #059669, #047857);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             color: white;
             border: none;
             cursor: pointer;
             transition: all 0.3s ease;
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
             text-decoration: none;
         }
         
         .btn-start-all:hover {
             transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(5, 150, 105, 0.4);
+            box-shadow: 0 6px 20px rgba(11, 94, 215, 0.5);
         }
         
-        .btn-start-all:active { transform: scale(0.98); }
-        .btn-start-all:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; box-shadow: none; }
-        .btn-start-all i { font-size: 1rem; }
-        
-        /* TABLE CONTAINER */
-        .table-container {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 1px solid var(--border-color);
-            overflow: hidden;
-            box-shadow: var(--shadow);
-        }
+        .btn-start-all:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
         
         /* ================================================================ */
-        /* TABLE HEADER WITH SEARCH - BLUE COLOR, REDUCED HEIGHT */
+        /* SEARCH TOOLBAR */
         /* ================================================================ */
-        .table-header-toolbar {
-            padding: 8px 16px;
+        .search-toolbar {
             background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            border-radius: var(--radius-lg);
+            padding: 12px 20px;
+            margin-bottom: 16px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-wrap: wrap;
-            gap: 10px;
-            min-height: 48px;
+            gap: 12px;
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.2);
         }
         
-        .table-header-toolbar .toolbar-title {
+        .search-toolbar .toolbar-title {
             color: white;
-            font-size: 0.85rem;
+            font-size: 0.9rem;
             font-weight: 700;
             display: flex;
             align-items: center;
             gap: 8px;
         }
         
-        .table-header-toolbar .toolbar-title i { font-size: 0.9rem; }
-        
-        /* LIVE SEARCH - BLUE, SHORTER */
-        .table-search-wrapper {
+        .search-toolbar .search-wrapper {
             position: relative;
             display: flex;
             align-items: center;
             background: rgba(255,255,255,0.15);
             border: 2px solid rgba(255,255,255,0.25);
-            border-radius: 8px;
-            padding: 0 12px;
+            border-radius: 10px;
+            padding: 0 14px;
             transition: all 0.3s ease;
-            min-width: 280px;
-            height: 34px;
+            min-width: 320px;
+            height: 40px;
         }
         
-        .table-search-wrapper:focus-within {
+        .search-toolbar .search-wrapper:focus-within {
             background: rgba(255,255,255,0.25);
             border-color: rgba(255,255,255,0.5);
             box-shadow: 0 0 0 3px rgba(255,255,255,0.1);
         }
         
-        .table-search-wrapper .search-icon {
+        .search-toolbar .search-wrapper .search-icon {
             color: rgba(255,255,255,0.8);
-            font-size: 0.8rem;
-            margin-right: 6px;
+            font-size: 0.9rem;
+            margin-right: 8px;
         }
         
-        .table-search-wrapper input {
+        .search-toolbar .search-wrapper input {
             flex: 1;
             background: transparent;
             border: none;
             outline: none;
             color: white;
-            font-size: 0.8rem;
+            font-size: 0.85rem;
             padding: 0;
             font-weight: 500;
-            height: 100%;
         }
         
-        .table-search-wrapper input::placeholder {
-            color: rgba(255,255,255,0.65);
-            font-size: 0.75rem;
+        .search-toolbar .search-wrapper input::placeholder {
+            color: rgba(255,255,255,0.6);
         }
         
-        .table-search-wrapper .search-clear {
+        .search-toolbar .search-wrapper .search-clear {
             background: rgba(255,255,255,0.2);
             border: none;
             color: white;
-            width: 20px;
-            height: 20px;
+            width: 22px;
+            height: 22px;
             border-radius: 50%;
             cursor: pointer;
             display: none;
             align-items: center;
             justify-content: center;
-            font-size: 0.65rem;
+            font-size: 0.7rem;
             transition: all 0.2s ease;
-            margin-left: 6px;
-            flex-shrink: 0;
+            margin-left: 8px;
         }
         
-        .table-search-wrapper .search-clear:hover { background: rgba(255,255,255,0.35); }
-        .table-search-wrapper .search-clear.visible { display: flex; }
+        .search-toolbar .search-wrapper .search-clear.visible { display: flex; }
+        .search-toolbar .search-wrapper .search-clear:hover { background: rgba(255,255,255,0.35); }
         
-        .table-search-wrapper .search-results-count {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.65rem;
+        .search-results-count {
+            color: rgba(255,255,255,0.9);
+            font-size: 0.7rem;
             font-weight: 600;
-            background: rgba(255,255,255,0.15);
-            padding: 2px 8px;
-            border-radius: 10px;
-            margin-left: 6px;
+            background: rgba(255,255,255,0.2);
+            padding: 3px 12px;
+            border-radius: 12px;
+            margin-left: 8px;
             white-space: nowrap;
+            display: none;
         }
         
-        .table-scroll { overflow-x: auto; }
+        /* ================================================================ */
+        /* ✅ PATIENT CARD - BLUE THEME */
+        /* ================================================================ */
+        .patient-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            border: 2px solid var(--border-color);
+            margin-bottom: 20px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+            transition: all 0.3s ease;
+        }
+        
+        .patient-card:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-md);
+        }
+        
+        /* ✅ PATIENT HEADER - BLUE GRADIENT */
+        .patient-header {
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            color: white;
+            padding: 14px 22px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .patient-header:hover {
+            background: linear-gradient(135deg, #0A4CA8, #083C8A);
+        }
+        
+        .patient-header .patient-info {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex: 1;
+            min-width: 250px;
+        }
+        
+        .patient-header .patient-avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.25);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1.3rem;
+            color: white;
+            flex-shrink: 0;
+            border: 2px solid rgba(255,255,255,0.4);
+            backdrop-filter: blur(4px);
+        }
+        
+        .patient-header .patient-name {
+            font-weight: 700;
+            font-size: 1.05rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .patient-header .patient-meta {
+            display: flex;
+            gap: 14px;
+            font-size: 0.75rem;
+            opacity: 0.9;
+            flex-wrap: wrap;
+            margin-top: 3px;
+        }
+        
+        .patient-header .patient-meta span {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .patient-header .patient-stats {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .patient-header .patient-stats .stat-pill {
+            background: rgba(255,255,255,0.2);
+            padding: 5px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+        
+        .patient-header .chevron {
+            font-size: 0.9rem;
+            transition: transform 0.3s ease;
+        }
+        
+        .patient-header .chevron.rotated {
+            transform: rotate(180deg);
+        }
+        
+        .patient-body {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.4s ease, padding 0.3s ease;
+            background: var(--bg-card);
+        }
+        
+        .patient-body.open {
+            max-height: 5000px;
+            padding: 16px 22px 20px;
+        }
+        
+        /* PATIENT START ALL BUTTON */
+        .patient-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding-bottom: 14px;
+            border-bottom: 2px dashed var(--border-color);
+            margin-bottom: 14px;
+            flex-wrap: wrap;
+        }
+        
+        .patient-actions .patient-actions-info {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        /* ✅ PATIENT START ALL BUTTON - BLUE */
+        .btn-start-patient {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 20px;
+            border-radius: 10px;
+            font-weight: 700;
+            font-size: 0.78rem;
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .btn-start-patient:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(11, 94, 215, 0.5);
+        }
+        
+        /* TABLE */
+        .table-scroll { overflow-x: auto; border-radius: 10px; }
         
         .data-table {
             width: 100%;
@@ -650,14 +951,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             background: var(--primary);
             border-bottom: 3px solid var(--primary-dark);
             white-space: nowrap;
-            position: sticky;
-            top: 0;
-            z-index: 5;
         }
         
         .data-table thead th i { margin-right: 5px; opacity: 0.7; }
-        .data-table thead th:first-child { border-radius: 0; }
-        .data-table thead th:last-child { border-radius: 0; }
         
         .data-table tbody td {
             padding: 10px 14px;
@@ -673,7 +969,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         [data-theme="dark"] .data-table tbody tr:nth-child(even) td { background: #1A1A2E; }
         [data-theme="dark"] .data-table tbody tr:hover td { background: #1E3A5F; }
         
-        /* BADGES */
+        /* ✅ BADGES - BLUE THEME */
         .badge-status {
             display: inline-block;
             padding: 3px 14px;
@@ -682,14 +978,19 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             font-weight: 600;
         }
         
-        .badge-pending { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
-        .badge-in-progress { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); }
-        .badge-completed { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
-        .badge-cancelled { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
+        .badge-pending { 
+            background: var(--primary-bg); 
+            color: var(--primary); 
+            border: 1px solid var(--primary); 
+        }
         
-        [data-theme="dark"] .badge-pending { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .badge-in-progress { background: #1E3A5F; color: #6EA8FE; }
+        [data-theme="dark"] .badge-pending { 
+            background: #1E3A5F; 
+            color: #6EA8FE; 
+            border-color: #0B5ED7;
+        }
         
+        /* ✅ WAITING TIME - BLUE TONES */
         .waiting-time {
             font-size: 0.7rem;
             font-weight: 600;
@@ -700,17 +1001,26 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             gap: 3px;
         }
         
-        .waiting-time.long { background: var(--danger-bg); color: var(--danger); }
-        .waiting-time.medium { background: var(--warning-bg); color: var(--warning); }
-        .waiting-time.short { background: var(--success-bg); color: var(--success); }
+        .waiting-time.long { 
+            background: #FEE2E2; 
+            color: #DC2626; 
+        }
+        
+        .waiting-time.medium { 
+            background: #FEF3C7; 
+            color: #D97706; 
+        }
+        
+        .waiting-time.short { 
+            background: var(--info-bg); 
+            color: var(--info); 
+        }
         
         [data-theme="dark"] .waiting-time.long { background: #3A1A1A; color: #F87171; }
         [data-theme="dark"] .waiting-time.medium { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .waiting-time.short { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .waiting-time.short { background: #1E3A5F; color: #93C5FD; }
         
-        /* ================================================================ */
-        /* ACTION BUTTONS - VERTICAL (View top, Start bottom) */
-        /* ================================================================ */
+        /* ACTION BUTTONS */
         .action-buttons-vertical {
             display: flex;
             flex-direction: column;
@@ -736,42 +1046,41 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             white-space: nowrap;
             width: 100%;
             height: 30px;
-            letter-spacing: 0.02em;
         }
         
         .btn-action i { font-size: 0.75rem; }
         
         .btn-action.btn-view-action {
+            background: linear-gradient(135deg, #64748B, #475569);
+            color: white;
+            box-shadow: 0 2px 6px rgba(100, 116, 139, 0.3);
+        }
+        
+        .btn-action.btn-view-action:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(100, 116, 139, 0.5);
+        }
+        
+        /* ✅ START BUTTON - BLUE */
+        .btn-action.btn-start-action {
             background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             color: white;
             box-shadow: 0 2px 6px rgba(11, 94, 215, 0.3);
         }
         
-        .btn-action.btn-view-action:hover {
-            background: linear-gradient(135deg, #0A4CA8, #083C8A);
+        .btn-action.btn-start-action:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(11, 94, 215, 0.5);
         }
         
-        .btn-action.btn-start-action {
-            background: linear-gradient(135deg, #059669, #047857);
-            color: white;
-            box-shadow: 0 2px 6px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-action.btn-start-action:hover {
-            background: linear-gradient(135deg, #047857, #065F46);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.5);
-        }
-        
-        .btn-action:active { transform: scale(0.96); }
-        
         /* EMPTY STATE */
         .empty-state {
             text-align: center;
-            padding: 50px 20px;
+            padding: 60px 20px;
             color: var(--text-secondary);
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            border: 2px dashed var(--border-color);
         }
         
         .empty-state i {
@@ -783,33 +1092,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         .empty-state p { font-size: 1rem; font-weight: 600; color: var(--text-primary); }
         .empty-state .sub { font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; font-weight: 400; }
-        .empty-state.no-results i { color: var(--warning); }
-        
-        /* TABLE FOOTER */
-        .table-footer {
-            padding: 10px 18px;
-            border-top: 1px solid var(--border-color);
-            font-size: 0.72rem;
-            color: var(--text-secondary);
-            display: flex;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 8px;
-            background: var(--gray-50);
-        }
-        
-        [data-theme="dark"] .table-footer { border-color: var(--gray-700); color: var(--gray-400); background: var(--gray-800); }
-        
-        .count-badge {
-            background: var(--primary);
-            color: white;
-            padding: 3px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 600;
-        }
-        
-        .count-badge.orange { background: var(--warning); }
+        .empty-state.no-results i { color: var(--primary); }
         
         /* TOAST */
         .toast-custom {
@@ -861,9 +1144,13 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             .stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
             .stat-card { padding: 12px 14px; min-height: 90px; }
             .stat-card .stat-number { font-size: 1.4rem; }
-            .table-search-wrapper { min-width: 100%; }
+            .search-toolbar { flex-direction: column; align-items: stretch; }
+            .search-toolbar .search-wrapper { min-width: 100%; }
             .action-bar { flex-direction: column; align-items: stretch; }
             .btn-start-all { width: 100%; justify-content: center; }
+            .patient-header { flex-direction: column; align-items: stretch; }
+            .patient-actions { flex-direction: column; align-items: stretch; }
+            .btn-start-patient { width: 100%; justify-content: center; }
         }
         
         @media (max-width: 480px) {
@@ -888,7 +1175,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 
 <main class="main-content">
 
-    <!-- PAGE HEADER -->
+    <!-- PAGE HEADER - BLUE -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -900,18 +1187,21 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 </span>
             </h1>
             <p class="page-subtitle">
-                Manage all pending laboratory tests
+                Manage all pending laboratory tests (Grouped by Patient)
                 <span class="branch-tag">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
-                <span class="branch-tag" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.2);color:#FBBF24;">
+                <span class="branch-tag" style="background:rgba(255,255,255,0.15);">
                     <i class="fas fa-clock"></i> <?= $pending_count ?> Pending
                 </span>
-                <span class="branch-tag" style="background:rgba(96,165,250,0.2);border-color:rgba(96,165,250,0.2);color:#93C5FD;">
+                <span class="branch-tag" style="background:rgba(255,255,255,0.15);">
                     <i class="fas fa-spinner"></i> <?= $in_progress_count ?> In Progress
                 </span>
-                <span class="branch-tag" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.2);color:#34D399;">
+                <span class="branch-tag" style="background:rgba(52,211,153,0.25);color:#A7F3D0;">
                     <i class="fas fa-check-circle"></i> <?= $completed_today_count ?> Completed Today
+                </span>
+                <span class="branch-tag" style="background:rgba(255,255,255,0.15);">
+                    <i class="fas fa-users"></i> <?= $total_patients ?> Patients
                 </span>
             </p>
         </div>
@@ -933,9 +1223,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- STATS CARDS -->
+    <!-- STATS CARDS - BLUE VARIANTS -->
     <div class="stats-grid animate-fade-in-up">
-        <a href="pending_tests.php" class="stat-card orange">
+        <a href="pending_tests.php" class="stat-card blue-1">
             <span class="stat-icon">⏳</span>
             <div class="stat-number" id="statPending"><?= $pending_count ?></div>
             <div class="stat-label">Pending Tests</div>
@@ -943,7 +1233,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <span class="stat-arrow"><i class="fas fa-chevron-right"></i></span>
         </a>
         
-        <a href="in_progress_tests.php" class="stat-card blue">
+        <a href="in_progress_tests.php" class="stat-card blue-2">
             <span class="stat-icon">🔄</span>
             <div class="stat-number" id="statInProgress"><?= $in_progress_count ?></div>
             <div class="stat-label">In Progress</div>
@@ -951,7 +1241,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <span class="stat-arrow"><i class="fas fa-chevron-right"></i></span>
         </a>
         
-        <a href="completed_tests.php" class="stat-card green">
+        <a href="completed_tests.php" class="stat-card blue-3">
             <span class="stat-icon">✅</span>
             <div class="stat-number" id="statCompletedToday"><?= $completed_today_count ?></div>
             <div class="stat-label">Completed Today</div>
@@ -959,7 +1249,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <span class="stat-arrow"><i class="fas fa-chevron-right"></i></span>
         </a>
         
-        <a href="pending_tests.php" class="stat-card purple">
+        <a href="pending_tests.php" class="stat-card blue-4">
             <span class="stat-icon">📋</span>
             <div class="stat-number" id="statTotal"><?= $total_count ?></div>
             <div class="stat-label">Total Active</div>
@@ -968,179 +1258,215 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         </a>
     </div>
 
-    <!-- START ALL BUTTON ACTION BAR -->
+    <!-- GLOBAL START ALL BUTTON -->
     <div class="action-bar animate-fade-in-up">
         <div class="action-info">
-            <span class="info-badge orange">
-                <i class="fas fa-clock"></i> <?= count($tests) ?> Pending Test(s)
-            </span>
             <span class="info-badge blue">
+                <i class="fas fa-clock"></i> <?= $pending_count ?> Pending Test(s)
+            </span>
+            <span class="info-badge info">
                 <i class="fas fa-flask"></i> <?= $total_count ?> Total Active
+            </span>
+            <span class="info-badge purple">
+                <i class="fas fa-users"></i> <?= $total_patients ?> Patients
             </span>
         </div>
         <div>
             <form method="POST" action="" id="startAllForm" style="display:inline;"
-                  onsubmit="return confirm('⚠️ START ALL PENDING TESTS?\n\nThis will start ALL <?= count($tests) ?> pending test(s).\n\nAre you sure you want to continue?');">
+                  onsubmit="return confirm('⚠️ START ALL PENDING TESTS (ALL PATIENTS)?\n\nThis will start ALL <?= $pending_count ?> pending test(s).\n\nAre you sure?');">
                 <input type="hidden" name="action" value="start_all">
-                <button type="submit" class="btn-start-all" id="startAllBtn" <?= count($tests) == 0 ? 'disabled' : '' ?>>
+                <button type="submit" class="btn-start-all" id="globalStartAllBtn" <?= $pending_count == 0 ? 'disabled' : '' ?>>
                     <i class="fas fa-play-circle"></i>
-                    START ALL (<?= count($tests) ?>)
+                    START ALL PATIENTS (<?= $pending_count ?>)
                 </button>
             </form>
         </div>
     </div>
 
-    <!-- TESTS TABLE -->
-    <div class="table-container animate-fade-in-up">
-        
-        <!-- TABLE HEADER WITH LIVE SEARCH - BLUE -->
-        <div class="table-header-toolbar">
-            <div class="toolbar-title">
-                <i class="fas fa-list"></i>
-                Pending Tests List
-                <span style="background:rgba(255,255,255,0.2);padding:2px 10px;border-radius:12px;font-size:0.65rem;font-weight:600;" id="headerCount">
-                    <?= count($tests) ?>
-                </span>
-            </div>
-            <div class="table-search-wrapper">
+    <!-- SEARCH TOOLBAR - BLUE -->
+    <div class="search-toolbar animate-fade-in-up">
+        <div class="toolbar-title">
+            <i class="fas fa-list"></i>
+            Patient List
+            <span style="background:rgba(255,255,255,0.2);padding:2px 10px;border-radius:12px;font-size:0.65rem;font-weight:600;" id="headerCount">
+                <?= $total_patients ?>
+            </span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <div class="search-wrapper">
                 <i class="fas fa-search search-icon"></i>
                 <input type="text" 
                        id="tableSearch" 
-                       placeholder="Search patient, test, ID..." 
+                       placeholder="Search patient name, ID, test, doctor..." 
                        autocomplete="off"
                        value="<?= htmlspecialchars($search) ?>">
-                <span class="search-results-count" id="searchResultsCount" style="display:none;"></span>
                 <button type="button" class="search-clear" id="searchClear" title="Clear search">
                     <i class="fas fa-times"></i>
                 </button>
             </div>
+            <span class="search-results-count" id="searchResultsCount"></span>
         </div>
-        
-        <div class="table-scroll">
-            <table class="data-table" id="testTable">
-                <thead>
-                    <tr>
-                        <th style="width:50px;">#</th>
-                        <th><i class="fas fa-flask"></i> Test</th>
-                        <th><i class="fas fa-user"></i> Patient</th>
-                        <th><i class="fas fa-user-md"></i> Doctor</th>
-                        <th><i class="fas fa-info-circle"></i> Status</th>
-                        <th><i class="fas fa-clock"></i> Waiting</th>
-                        <th><i class="fas fa-calendar"></i> Requested</th>
-                        <th style="text-align:center;"><i class="fas fa-cog"></i> Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="testTableBody">
-                    <?php if (count($tests) > 0): ?>
-                        <?php $i = 1; foreach ($tests as $test): 
-                            $waiting = $test['waiting_time'] ?? 0;
-                            if ($waiting < 15) {
-                                $waiting_class = 'short';
-                                $waiting_text = $waiting < 1 ? 'Just now' : $waiting . ' min';
-                            } elseif ($waiting < 45) {
-                                $waiting_class = 'medium';
-                                $waiting_text = $waiting . ' min';
-                            } else {
-                                $waiting_class = 'long';
-                                $waiting_text = $waiting < 60 ? $waiting . ' min' : floor($waiting / 60) . 'h ' . ($waiting % 60) . 'm';
-                            }
-                            $status = $test['status'] ?? 'pending';
-                            $age = calculateAge($test['date_of_birth'] ?? '');
-                        ?>
-                            <tr class="test-row" 
-                                data-id="<?= $test['id'] ?>"
-                                data-search="<?= htmlspecialchars(strtolower($test['test_name'] . ' ' . $test['patient_name'] . ' ' . $test['patient_code'] . ' ' . ($test['doctor_name'] ?? '') . ' ' . $test['phone'])) ?>">
-                                <td class="row-number"><?= $i++ ?></td>
-                                <td>
-                                    <div class="font-medium text-sm"><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></div>
-                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($test['test_type'] ?? 'N/A') ?></div>
-                                    <?php if (!empty($test['test_price']) && $test['test_price'] > 0): ?>
-                                        <div class="text-xs text-gray-400">TSh <?= number_format($test['test_price']) ?></div>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <div class="font-medium text-sm"><?= htmlspecialchars($test['patient_name'] ?? 'Unknown') ?></div>
-                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($test['patient_code'] ?? 'N/A') ?></div>
-                                    <div class="text-xs text-gray-400">
-                                        <?= htmlspecialchars($test['gender'] ?? 'N/A') ?> • <?= $age ?> yrs
-                                    </div>
-                                    <?php if (!empty($test['phone'])): ?>
-                                        <div class="text-xs text-gray-400">📱 <?= htmlspecialchars($test['phone']) ?></div>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <div class="text-sm">Dr. <?= htmlspecialchars($test['doctor_name'] ?? 'N/A') ?></div>
-                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($test['specialty'] ?? 'GP') ?></div>
-                                    <?php if (!empty($test['visit_number'])): ?>
-                                        <div class="text-xs text-gray-400">Visit: <?= htmlspecialchars($test['visit_number']) ?></div>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <span class="badge-status <?= getStatusBadgeClass($status) ?>">
-                                        <?= getStatusLabel($status) ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <span class="waiting-time <?= $waiting_class ?>">
-                                        <i class="fas <?= $waiting_class === 'long' ? 'fa-exclamation-circle' : ($waiting_class === 'medium' ? 'fa-clock' : 'fa-check-circle') ?>"></i>
-                                        <?= $waiting_text ?>
-                                    </span>
-                                </td>
-                                <td class="text-xs"><?= formatDate($test['created_at'] ?? '') ?></td>
-                                <td>
-                                    <!-- VERTICAL BUTTONS: View (top), Start (bottom) -->
-                                    <div class="action-buttons-vertical">
-                                        <a href="view_test.php?id=<?= $test['id'] ?>" class="btn-action btn-view-action" title="View Details">
-                                            <i class="fas fa-eye"></i> View
-                                        </a>
-                                        <form method="POST" action="" style="display:block;margin:0;" 
-                                              onsubmit="return confirm('Start this test?\n\nTest: <?= addslashes($test['test_name'] ?? 'N/A') ?>\nPatient: <?= addslashes($test['patient_name'] ?? 'Unknown') ?>');">
-                                            <input type="hidden" name="action" value="start_test">
-                                            <input type="hidden" name="test_id" value="<?= $test['id'] ?>">
-                                            <button type="submit" class="btn-action btn-start-action" title="Start Test">
-                                                <i class="fas fa-play"></i> Start
-                                            </button>
-                                        </form>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <tr>
-                            <td colspan="8">
-                                <div class="empty-state">
-                                    <i class="fas fa-check-circle"></i>
-                                    <p>No pending tests found</p>
-                                    <p class="sub">All tests have been processed ✅</p>
-                                </div>
-                            </td>
-                        </tr>
-                    <?php endif; ?>
-                    
-                    <tr id="noSearchResults" style="display:none;">
-                        <td colspan="8">
-                            <div class="empty-state no-results">
-                                <i class="fas fa-search"></i>
-                                <p>No tests match your search</p>
-                                <p class="sub">Try a different keyword</p>
+    </div>
+
+    <!-- PATIENTS LIST -->
+    <div id="patientsContainer">
+        <?php if (count($patients_array) > 0): ?>
+            <?php foreach ($patients_array as $patient): 
+                $patient_id = $patient['patient_id'];
+                $test_count = $patient['test_count'];
+                $avg_waiting = $patient['avg_waiting'];
+                $longest_waiting = $patient['longest_waiting'];
+                $age = calculateAge($patient['date_of_birth']);
+            ?>
+                <div class="patient-card animate-fade-in-up" data-patient-id="<?= $patient_id ?>">
+                    <!-- ✅ PATIENT HEADER - BLUE -->
+                    <div class="patient-header" onclick="togglePatient(<?= $patient_id ?>)">
+                        <div class="patient-info">
+                            <div class="patient-avatar" style="background: <?= '#' . substr(md5($patient['patient_name']), 0, 6) ?>;">
+                                <?= strtoupper(substr($patient['patient_name'], 0, 1)) ?>
                             </div>
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-        
-        <!-- TABLE FOOTER -->
-        <div class="table-footer">
-            <span>
-                <i class="fas fa-list"></i> Showing <strong id="visibleCount"><?= count($tests) ?></strong> of <strong id="totalRecords"><?= count($tests) ?></strong> pending test(s)
-                <span class="text-xs text-gray-400 ml-2">🏥 <?= htmlspecialchars($user_branch_name) ?></span>
-            </span>
-            <span>
-                <span class="count-badge orange" id="totalCountBadge"><?= $total_count ?></span> Total active
-                <span class="text-xs text-gray-400 ml-2" id="updateTimeDisplay">Last update: <?= date('H:i:s') ?></span>
-            </span>
-        </div>
+                            <div>
+                                <div class="patient-name">
+                                    <?= htmlspecialchars($patient['patient_name']) ?>
+                                    <?php if ($test_count > 1): ?>
+                                        <span style="background:rgba(255,255,255,0.25);padding:2px 10px;border-radius:12px;font-size:0.6rem;font-weight:600;">
+                                            <i class="fas fa-flask"></i> <?= $test_count ?> Tests
+                                        </span>
+                                    <?php endif; ?>
+                                </div>
+                                <div class="patient-meta">
+                                    <span><i class="fas fa-id-card"></i> <?= htmlspecialchars($patient['patient_code']) ?></span>
+                                    <?php if (!empty($patient['phone'])): ?>
+                                        <span><i class="fas fa-phone"></i> <?= htmlspecialchars($patient['phone']) ?></span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($patient['gender'])): ?>
+                                        <span><i class="fas fa-<?= $patient['gender'] === 'Female' ? 'venus' : 'mars' ?>"></i> <?= htmlspecialchars($patient['gender']) ?> • <?= $age ?> yrs</span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($patient['visit_number'])): ?>
+                                        <span><i class="fas fa-stethoscope"></i> <?= htmlspecialchars($patient['visit_number']) ?></span>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="patient-stats">
+                            <span class="stat-pill">
+                                <i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($patient['doctor_name']) ?>
+                            </span>
+                            <span class="stat-pill" style="background:rgba(255,255,255,0.3);">
+                                <i class="fas fa-clock"></i> Wait: <?= getWaitingText($avg_waiting) ?> avg
+                            </span>
+                            <i class="fas fa-chevron-down chevron" id="chevron-<?= $patient_id ?>"></i>
+                        </div>
+                    </div>
+                    
+                    <!-- PATIENT BODY -->
+                    <div class="patient-body" id="body-<?= $patient_id ?>">
+                        
+                        <!-- PATIENT ACTIONS -->
+                        <div class="patient-actions">
+                            <div class="patient-actions-info">
+                                <i class="fas fa-info-circle" style="color:var(--primary);"></i>
+                                <strong><?= $test_count ?></strong> pending test(s) for this patient.
+                                <?php if ($test_count > 1): ?>
+                                    Click <strong>"Start All"</strong> to start all tests for <strong><?= htmlspecialchars($patient['patient_name']) ?></strong>.
+                                <?php endif; ?>
+                            </div>
+                            <?php if ($test_count > 1): ?>
+                            <form method="POST" action="" style="display:inline;"
+                                  onsubmit="return confirm('⚠️ START ALL <?= $test_count ?> TESTS?\n\nPatient: <?= addslashes($patient['patient_name']) ?>\n\nAre you sure?');">
+                                <input type="hidden" name="action" value="start_patient_tests">
+                                <input type="hidden" name="patient_id" value="<?= $patient_id ?>">
+                                <button type="submit" class="btn-start-patient">
+                                    <i class="fas fa-play-circle"></i>
+                                    START ALL (<?= $test_count ?>)
+                                </button>
+                            </form>
+                            <?php endif; ?>
+                        </div>
+                        
+                        <!-- PATIENT TESTS TABLE -->
+                        <div class="table-scroll">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:50px;">#</th>
+                                        <th><i class="fas fa-flask"></i> Test</th>
+                                        <th><i class="fas fa-info-circle"></i> Status</th>
+                                        <th><i class="fas fa-clock"></i> Waiting</th>
+                                        <th><i class="fas fa-calendar"></i> Requested</th>
+                                        <th style="text-align:center;width:120px;"><i class="fas fa-cog"></i> Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php $i = 1; foreach ($patient['tests'] as $test): 
+                                        $waiting = $test['waiting_time'] ?? 0;
+                                        $waiting_class = getWaitingClass($waiting);
+                                        $waiting_text = getWaitingText($waiting);
+                                        $waiting_icon = getWaitingIcon($waiting);
+                                        $status = $test['status'] ?? 'pending';
+                                    ?>
+                                        <tr class="test-row"
+                                            data-search="<?= htmlspecialchars(strtolower($test['test_name'] . ' ' . $patient['patient_name'] . ' ' . $patient['patient_code'] . ' ' . ($test['doctor_name'] ?? '') . ' ' . $patient['phone'])) ?>">
+                                            <td class="row-number"><?= $i++ ?></td>
+                                            <td>
+                                                <div style="font-weight:600;font-size:0.85rem;"><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></div>
+                                                <div style="font-size:0.65rem;color:var(--text-secondary);"><?= htmlspecialchars($test['test_type'] ?? 'N/A') ?></div>
+                                                <?php if (!empty($test['test_price']) && $test['test_price'] > 0): ?>
+                                                    <div style="font-size:0.65rem;color:var(--text-secondary);">TSh <?= number_format($test['test_price']) ?></div>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <span class="badge-status badge-pending">
+                                                    ⏳ Pending
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <span class="waiting-time <?= $waiting_class ?>">
+                                                    <i class="fas <?= $waiting_icon ?>"></i>
+                                                    <?= $waiting_text ?>
+                                                </span>
+                                            </td>
+                                            <td style="font-size:0.7rem;"><?= formatDate($test['created_at'] ?? '') ?></td>
+                                            <td>
+                                                <div class="action-buttons-vertical">
+                                                    <a href="view_test.php?id=<?= $test['id'] ?>" class="btn-action btn-view-action" title="View Details">
+                                                        <i class="fas fa-eye"></i> View
+                                                    </a>
+                                                    <form method="POST" action="" style="display:block;margin:0;" 
+                                                          onsubmit="return confirm('Start this test?\n\nTest: <?= addslashes($test['test_name'] ?? 'N/A') ?>');">
+                                                        <input type="hidden" name="action" value="start_test">
+                                                        <input type="hidden" name="test_id" value="<?= $test['id'] ?>">
+                                                        <button type="submit" class="btn-action btn-start-action" title="Start Test">
+                                                            <i class="fas fa-play"></i> Start
+                                                        </button>
+                                                    </form>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+            
+            <!-- NO SEARCH RESULTS -->
+            <div id="noSearchResults" style="display:none;">
+                <div class="empty-state no-results">
+                    <i class="fas fa-search"></i>
+                    <p>No patients match your search</p>
+                    <p class="sub">Try a different keyword</p>
+                </div>
+            </div>
+            
+        <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-check-circle"></i>
+                <p>No pending tests found</p>
+                <p class="sub">All tests have been processed ✅</p>
+            </div>
+        <?php endif; ?>
     </div>
 
     <!-- FOOTER -->
@@ -1148,7 +1474,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Pending Tests
+            Pending Tests (Grouped by Patient)
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1214,18 +1540,41 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     });
 
+    // TOGGLE PATIENT CARD
+    function togglePatient(patientId) {
+        var body = document.getElementById('body-' + patientId);
+        var chevron = document.getElementById('chevron-' + patientId);
+        
+        if (body) {
+            body.classList.toggle('open');
+        }
+        if (chevron) {
+            chevron.classList.toggle('rotated');
+        }
+    }
+    
+    // Auto-open first patient card
+    document.addEventListener('DOMContentLoaded', function() {
+        var firstBody = document.querySelector('.patient-body');
+        var firstChevron = document.querySelector('.chevron');
+        if (firstBody) {
+            setTimeout(function() {
+                firstBody.classList.add('open');
+                if (firstChevron) firstChevron.classList.add('rotated');
+            }, 300);
+        }
+    });
+
     // LIVE SEARCH
     var tableSearch = document.getElementById('tableSearch');
     var searchClear = document.getElementById('searchClear');
     var searchResultsCount = document.getElementById('searchResultsCount');
-    var testRows = document.querySelectorAll('.test-row');
+    var patientCards = document.querySelectorAll('.patient-card');
     var noSearchResults = document.getElementById('noSearchResults');
-    var visibleCount = document.getElementById('visibleCount');
-    var totalRecords = document.getElementById('totalRecords');
     var headerCount = document.getElementById('headerCount');
     
-    var totalTestCount = testRows.length;
-    if (totalRecords) totalRecords.textContent = totalTestCount;
+    var totalPatients = patientCards.length;
+    if (headerCount) headerCount.textContent = totalPatients;
     
     function performLiveSearch() {
         var query = tableSearch.value.toLowerCase().trim();
@@ -1236,39 +1585,62 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             searchClear.classList.remove('visible');
         }
         
-        var visibleRows = 0;
+        var visiblePatients = 0;
         
-        testRows.forEach(function(row) {
-            var searchData = row.getAttribute('data-search') || '';
-            if (query === '' || searchData.includes(query)) {
-                row.style.display = '';
-                visibleRows++;
-                var rowNum = row.querySelector('.row-number');
-                if (rowNum) rowNum.textContent = visibleRows;
+        patientCards.forEach(function(card) {
+            var testRows = card.querySelectorAll('.test-row');
+            var hasMatch = false;
+            
+            testRows.forEach(function(row) {
+                var searchData = row.getAttribute('data-search') || '';
+                if (query === '' || searchData.includes(query)) {
+                    hasMatch = true;
+                }
+            });
+            
+            if (hasMatch) {
+                card.style.display = '';
+                visiblePatients++;
+                
+                if (query !== '') {
+                    var body = card.querySelector('.patient-body');
+                    var chevron = card.querySelector('.chevron');
+                    if (body && !body.classList.contains('open')) {
+                        body.classList.add('open');
+                        if (chevron) chevron.classList.add('rotated');
+                    }
+                }
+                
+                var visibleRows = 0;
+                testRows.forEach(function(row) {
+                    var searchData = row.getAttribute('data-search') || '';
+                    if (query === '' || searchData.includes(query)) {
+                        row.style.display = '';
+                        visibleRows++;
+                        var rowNum = row.querySelector('.row-number');
+                        if (rowNum) rowNum.textContent = visibleRows;
+                    } else {
+                        row.style.display = 'none';
+                    }
+                });
             } else {
-                row.style.display = 'none';
+                card.style.display = 'none';
             }
         });
         
-        if (visibleRows === 0 && query !== '') {
+        if (visiblePatients === 0 && query !== '') {
             noSearchResults.style.display = '';
         } else {
             noSearchResults.style.display = 'none';
         }
         
-        if (visibleCount) visibleCount.textContent = visibleRows;
-        if (headerCount) headerCount.textContent = visibleRows;
+        if (headerCount) headerCount.textContent = visiblePatients;
         
         if (query !== '') {
-            searchResultsCount.textContent = visibleRows + ' found';
+            searchResultsCount.textContent = visiblePatients + ' patients found';
             searchResultsCount.style.display = 'inline-block';
         } else {
             searchResultsCount.style.display = 'none';
-        }
-        
-        var startAllBtn = document.getElementById('startAllBtn');
-        if (startAllBtn) {
-            startAllBtn.disabled = (visibleRows === 0);
         }
     }
     
@@ -1314,9 +1686,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         var footerTimestamp = document.getElementById('footerTimestamp');
         if (footerTimestamp) footerTimestamp.textContent = 'Last updated: ' + timeStr;
-        
-        var updateTimeDisplay = document.getElementById('updateTimeDisplay');
-        if (updateTimeDisplay) updateTimeDisplay.textContent = 'Last update: ' + timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
@@ -1344,12 +1713,13 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c🧪 Braick - Pending Tests', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Blue header with search', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Vertical buttons: View (top) + Start (bottom)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Start All button at top', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Live search - type to filter', 'font-size:13px; color:#34D399;');
-    console.log('%c📊 Pending: <?= $pending_count ?> | In Progress: <?= $in_progress_count ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🧪 Braick - Pending Tests (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Tests grouped by patient', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Global START ALL button', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Per-patient START ALL button', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Live search filter', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ ALL BLUE THEME', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
+    console.log('%c📊 Pending: <?= $pending_count ?> | Patients: <?= $total_patients ?>', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>

@@ -2,32 +2,25 @@
 // ================================================================
 // FILE: frontend/pages/admin/expenses.php
 // ADMIN - EXPENSES MANAGEMENT WITH PDF EXPORT
-// FIXED: Uses expenses table correctly
-// 4 CARDS DESIGN: All, Pending, Paid, Cancelled
-// WITH VIEW, EDIT, DELETE BUTTONS
-// WITH PDF EXPORT
-// WITH SHARED HEADER (SAA, TAREHE, DARK MODE)
-// BRAICK DISPENSARY - GREEN THEME
+// ✅ Uses SHARED header & sidebar (NO DUPLICATES)
+// ✅ Blue theme + full dark mode support via --page-* variables
+// ✅ 4 Cards: All, Pending, Paid, Cancelled
+// ✅ View, Edit, Delete, Pay buttons
+// ✅ PDF Export
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// CHECK IF USER IS ADMIN
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -36,13 +29,14 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
 }
 
 // ================================================================
-// GET ADMIN DATA FROM SESSION
+// GET ADMIN DATA
 // ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
@@ -51,10 +45,8 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 try {
     $db = Database::getInstance()->getConnection();
@@ -80,18 +72,13 @@ try {
     $currency = 'TSh';
 }
 
-// ================================================================
-// MONEY FORMAT FUNCTION
-// ================================================================
 function formatMoney($amount) {
-    if ($amount === null || $amount === '') {
-        return '0';
-    }
+    if ($amount === null || $amount === '') return '0';
     return number_format((float)$amount, 0, '.', ',');
 }
 
 // ================================================================
-// CHECK IF EXPENSES TABLE EXISTS
+// ENSURE EXPENSES TABLE EXISTS
 // ================================================================
 try {
     $stmt = $db->query("SHOW TABLES LIKE 'expenses'");
@@ -112,17 +99,11 @@ try {
                 `branch_id` int(11) NOT NULL,
                 `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
                 `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
-                PRIMARY KEY (`id`),
-                KEY `idx_branch` (`branch_id`),
-                KEY `idx_status` (`status`),
-                KEY `idx_category` (`category`),
-                KEY `idx_payment_date` (`payment_date`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                PRIMARY KEY (`id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         ");
     }
-} catch (Exception $e) {
-    // Table creation failed
-}
+} catch (Exception $e) {}
 
 // ================================================================
 // GET BRANCHES FOR FILTER
@@ -150,41 +131,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $branch_id = (int)($_POST['branch_id'] ?? $user_branch_id);
     
     $errors = [];
-    if (empty($category)) { $errors[] = 'Category is required'; }
-    if (empty($description)) { $errors[] = 'Description is required'; }
-    if ($amount <= 0) { $errors[] = 'Amount must be greater than 0'; }
-    if (empty($payment_date)) { $errors[] = 'Payment date is required'; }
-    if ($branch_id <= 0) { $errors[] = 'Branch is required'; }
+    if (empty($category)) $errors[] = 'Category is required';
+    if (empty($description)) $errors[] = 'Description is required';
+    if ($amount <= 0) $errors[] = 'Amount must be greater than 0';
+    if ($branch_id <= 0) $errors[] = 'Branch is required';
     
     if (empty($errors)) {
         try {
             $expense_number = 'EXP-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-            
             $stmt = $db->prepare("
-                INSERT INTO expenses (
-                    expense_number, category, description, amount,
+                INSERT INTO expenses (expense_number, category, description, amount,
                     payment_method, payment_date, status, receipt_number,
-                    notes, created_by, branch_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                    notes, created_by, branch_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ");
-            $stmt->execute([
-                $expense_number,
-                $category,
-                $description,
-                $amount,
-                $payment_method,
-                $payment_date,
-                $status,
-                $receipt_number,
-                $notes,
-                $user_id,
-                $branch_id
-            ]);
-            
-            $expense_id = $db->lastInsertId();
-            header('Location: expenses.php?branch=' . $branch_id . '&msg=add_success&id=' . $expense_id);
+            $stmt->execute([$expense_number, $category, $description, $amount,
+                $payment_method, $payment_date, $status, $receipt_number,
+                $notes, $user_id, $branch_id]);
+            header('Location: expenses.php?branch=' . $branch_id . '&msg=add_success');
             exit;
-            
         } catch (Exception $e) {
             header('Location: expenses.php?branch=' . $branch_id . '&msg=add_error');
             exit;
@@ -210,81 +175,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $notes = trim($_POST['notes'] ?? '');
     $branch_id = (int)($_POST['branch_id'] ?? $user_branch_id);
     
-    $errors = [];
-    if (empty($category)) { $errors[] = 'Category is required'; }
-    if (empty($description)) { $errors[] = 'Description is required'; }
-    if ($amount <= 0) { $errors[] = 'Amount must be greater than 0'; }
-    if (empty($payment_date)) { $errors[] = 'Payment date is required'; }
-    
-    if (empty($errors) && $expense_id > 0) {
+    if ($expense_id > 0) {
         try {
             $stmt = $db->prepare("
-                UPDATE expenses 
-                SET category = ?,
-                    description = ?,
-                    amount = ?,
-                    payment_method = ?,
-                    payment_date = ?,
-                    status = ?,
-                    receipt_number = ?,
-                    notes = ?,
-                    updated_at = NOW()
+                UPDATE expenses SET category = ?, description = ?, amount = ?,
+                    payment_method = ?, payment_date = ?, status = ?,
+                    receipt_number = ?, notes = ?, updated_at = NOW()
                 WHERE id = ? AND branch_id = ?
             ");
-            $stmt->execute([
-                $category,
-                $description,
-                $amount,
-                $payment_method,
-                $payment_date,
-                $status,
-                $receipt_number,
-                $notes,
-                $expense_id,
-                $branch_id
-            ]);
-            
+            $stmt->execute([$category, $description, $amount, $payment_method,
+                $payment_date, $status, $receipt_number, $notes, $expense_id, $branch_id]);
             header('Location: expenses.php?branch=' . $branch_id . '&msg=update_success');
             exit;
-            
         } catch (Exception $e) {
             header('Location: expenses.php?branch=' . $branch_id . '&msg=update_error');
             exit;
         }
-    } else {
-        header('Location: expenses.php?branch=' . $branch_id . '&msg=update_validation_error');
-        exit;
     }
 }
 
 // ================================================================
-// HANDLE DELETE EXPENSE
+// HANDLE DELETE
 // ================================================================
 if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $expense_id = (int)$_GET['delete'];
     $branch_id = isset($_GET['branch']) ? (int)$_GET['branch'] : 0;
     
     try {
-        $check = $db->prepare("SELECT id, status FROM expenses WHERE id = ? AND branch_id = ?");
-        $check->execute([$expense_id, $branch_id]);
-        $expense = $check->fetch(PDO::FETCH_ASSOC);
-        
-        if ($expense) {
-            $stmt = $db->prepare("DELETE FROM expenses WHERE id = ? AND branch_id = ?");
-            $stmt->execute([$expense_id, $branch_id]);
-            
-            if ($stmt->rowCount() > 0) {
-                header('Location: expenses.php?branch=' . $branch_id . '&msg=delete_success');
-                exit;
-            } else {
-                header('Location: expenses.php?branch=' . $branch_id . '&msg=delete_error');
-                exit;
-            }
-        } else {
-            header('Location: expenses.php?branch=' . $branch_id . '&msg=delete_not_found');
+        $stmt = $db->prepare("DELETE FROM expenses WHERE id = ? AND branch_id = ?");
+        $stmt->execute([$expense_id, $branch_id]);
+        if ($stmt->rowCount() > 0) {
+            header('Location: expenses.php?branch=' . $branch_id . '&msg=delete_success');
             exit;
         }
-        
+        header('Location: expenses.php?branch=' . $branch_id . '&msg=delete_error');
+        exit;
     } catch (Exception $e) {
         header('Location: expenses.php?branch=' . $branch_id . '&msg=delete_error');
         exit;
@@ -292,33 +217,17 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
 }
 
 // ================================================================
-// HANDLE PAY EXPENSE (Mark as paid)
+// HANDLE PAY
 // ================================================================
 if (isset($_GET['pay']) && is_numeric($_GET['pay'])) {
     $expense_id = (int)$_GET['pay'];
     $branch_id = isset($_GET['branch']) ? (int)$_GET['branch'] : 0;
     
     try {
-        $check = $db->prepare("SELECT id, status FROM expenses WHERE id = ? AND branch_id = ?");
-        $check->execute([$expense_id, $branch_id]);
-        $expense = $check->fetch(PDO::FETCH_ASSOC);
-        
-        if ($expense && $expense['status'] === 'pending') {
-            $stmt = $db->prepare("
-                UPDATE expenses 
-                SET status = 'paid', updated_at = NOW() 
-                WHERE id = ? AND branch_id = ?
-            ");
-            $stmt->execute([$expense_id, $branch_id]);
-            
-            if ($stmt->rowCount() > 0) {
-                header('Location: expenses.php?branch=' . $branch_id . '&msg=pay_success');
-                exit;
-            }
-        }
-        header('Location: expenses.php?branch=' . $branch_id . '&msg=pay_error');
+        $stmt = $db->prepare("UPDATE expenses SET status = 'paid', updated_at = NOW() WHERE id = ? AND branch_id = ? AND status = 'pending'");
+        $stmt->execute([$expense_id, $branch_id]);
+        header('Location: expenses.php?branch=' . $branch_id . '&msg=pay_success');
         exit;
-        
     } catch (Exception $e) {
         header('Location: expenses.php?branch=' . $branch_id . '&msg=pay_error');
         exit;
@@ -326,84 +235,51 @@ if (isset($_GET['pay']) && is_numeric($_GET['pay'])) {
 }
 
 // ================================================================
-// HANDLE REDIRECT MESSAGES
+// REDIRECT MESSAGES
 // ================================================================
 $redirect_msg = isset($_GET['msg']) ? $_GET['msg'] : '';
 $selected_branch_id = isset($_GET['branch']) ? (int)$_GET['branch'] : 0;
+if ($selected_branch_id == 0) $selected_branch_id = $user_branch_id;
 
-if ($selected_branch_id == 0) {
-    $selected_branch_id = $user_branch_id;
-}
-
-if ($redirect_msg === 'add_success') {
-    $message = "✅ Expense added successfully!";
-    $message_type = 'success';
-} elseif ($redirect_msg === 'add_error') {
-    $message = "❌ Error adding expense!";
-    $message_type = 'error';
-} elseif ($redirect_msg === 'add_validation_error') {
-    $message = "❌ Please fill in all required fields correctly!";
-    $message_type = 'error';
-} elseif ($redirect_msg === 'update_success') {
-    $message = "✅ Expense updated successfully!";
-    $message_type = 'success';
-} elseif ($redirect_msg === 'update_error') {
-    $message = "❌ Error updating expense!";
-    $message_type = 'error';
-} elseif ($redirect_msg === 'update_validation_error') {
-    $message = "❌ Please fill in all required fields correctly!";
-    $message_type = 'error';
-} elseif ($redirect_msg === 'delete_success') {
-    $message = "✅ Expense deleted successfully!";
-    $message_type = 'success';
-} elseif ($redirect_msg === 'delete_not_found') {
-    $message = "❌ Expense not found!";
-    $message_type = 'error';
-} elseif ($redirect_msg === 'delete_error') {
-    $message = "❌ Error deleting expense!";
-    $message_type = 'error';
-} elseif ($redirect_msg === 'pay_success') {
-    $message = "✅ Expense marked as paid successfully!";
-    $message_type = 'success';
-} elseif ($redirect_msg === 'pay_error') {
-    $message = "❌ Error marking expense as paid!";
-    $message_type = 'error';
+$msg_map = [
+    'add_success' => ['✅ Expense added successfully!', 'success'],
+    'add_error' => ['❌ Error adding expense!', 'error'],
+    'add_validation_error' => ['❌ Please fill in all required fields!', 'error'],
+    'update_success' => ['✅ Expense updated successfully!', 'success'],
+    'update_error' => ['❌ Error updating expense!', 'error'],
+    'update_validation_error' => ['❌ Please fill in all required fields!', 'error'],
+    'delete_success' => ['✅ Expense deleted successfully!', 'success'],
+    'delete_error' => ['❌ Error deleting expense!', 'error'],
+    'delete_not_found' => ['❌ Expense not found!', 'error'],
+    'pay_success' => ['✅ Expense marked as paid!', 'success'],
+    'pay_error' => ['❌ Error marking as paid!', 'error']
+];
+if (isset($msg_map[$redirect_msg])) {
+    $message = $msg_map[$redirect_msg][0];
+    $message_type = $msg_map[$redirect_msg][1];
 }
 
 // ================================================================
-// GET FILTER PARAMETERS
+// FILTERS
 // ================================================================
 $filter_status = isset($_GET['status']) ? $_GET['status'] : 'all';
 $filter_category = isset($_GET['category']) ? $_GET['category'] : '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $view_id = isset($_GET['view']) ? (int)$_GET['view'] : 0;
 
-// ================================================================
-// DATE FILTER PARAMETERS
-// ================================================================
 $date_filter = isset($_GET['date_filter']) ? $_GET['date_filter'] : 'all';
 $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
-// ================================================================
-// BUILD DATE FILTER CONDITIONS
-// ================================================================
 $date_condition = "";
 $date_params = [];
-
-if ($date_filter === 'daily') {
-    $date_condition = " AND e.payment_date = CURDATE()";
-} elseif ($date_filter === 'week') {
-    $date_condition = " AND YEARWEEK(e.payment_date, 1) = YEARWEEK(CURDATE(), 1)";
-} elseif ($date_filter === 'monthly') {
-    $date_condition = " AND MONTH(e.payment_date) = MONTH(CURDATE()) AND YEAR(e.payment_date) = YEAR(CURDATE())";
-} elseif ($date_filter === '3months') {
-    $date_condition = " AND e.payment_date >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)";
-} elseif ($date_filter === '6months') {
-    $date_condition = " AND e.payment_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)";
-} elseif ($date_filter === '1year') {
-    $date_condition = " AND e.payment_date >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)";
-} elseif ($date_filter === 'custom' && !empty($date_from) && !empty($date_to)) {
+if ($date_filter === 'daily') $date_condition = " AND e.payment_date = CURDATE()";
+elseif ($date_filter === 'week') $date_condition = " AND YEARWEEK(e.payment_date, 1) = YEARWEEK(CURDATE(), 1)";
+elseif ($date_filter === 'monthly') $date_condition = " AND MONTH(e.payment_date) = MONTH(CURDATE()) AND YEAR(e.payment_date) = YEAR(CURDATE())";
+elseif ($date_filter === '3months') $date_condition = " AND e.payment_date >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)";
+elseif ($date_filter === '6months') $date_condition = " AND e.payment_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)";
+elseif ($date_filter === '1year') $date_condition = " AND e.payment_date >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)";
+elseif ($date_filter === 'custom' && !empty($date_from) && !empty($date_to)) {
     $date_condition = " AND e.payment_date BETWEEN ? AND ?";
     $date_params = [$date_from, $date_to];
 }
@@ -414,1569 +290,1097 @@ if ($date_filter === 'daily') {
 $conditions = ["e.branch_id = ?"];
 $params = [$selected_branch_id];
 
-if ($filter_status !== 'all') {
-    $conditions[] = "e.status = ?";
-    $params[] = $filter_status;
-}
-
-if (!empty($filter_category)) {
-    $conditions[] = "e.category = ?";
-    $params[] = $filter_category;
-}
-
+if ($filter_status !== 'all') { $conditions[] = "e.status = ?"; $params[] = $filter_status; }
+if (!empty($filter_category)) { $conditions[] = "e.category = ?"; $params[] = $filter_category; }
 if (!empty($search)) {
     $conditions[] = "(e.description LIKE ? OR e.category LIKE ? OR e.expense_number LIKE ?)";
-    $params[] = "%$search%";
-    $params[] = "%$search%";
-    $params[] = "%$search%";
+    $params[] = "%$search%"; $params[] = "%$search%"; $params[] = "%$search%";
 }
-
-// Add date filter conditions
 if (!empty($date_condition)) {
     $conditions[] = $date_condition;
     $params = array_merge($params, $date_params);
 }
-
 $where_clause = implode(" AND ", $conditions);
 
-$sql = "
-    SELECT e.*, u.full_name as created_by_name, b.name as branch_name
+$sql = "SELECT e.*, u.full_name as created_by_name, b.name as branch_name
     FROM expenses e
     LEFT JOIN users u ON e.created_by = u.id
     LEFT JOIN branches b ON e.branch_id = b.id
     WHERE $where_clause
-    ORDER BY e.payment_date DESC, e.created_at DESC
-";
+    ORDER BY e.payment_date DESC, e.created_at DESC";
 
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $expenses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATS FOR 4 CARDS
+// GET STATS
 // ================================================================
 try {
-    // All Expenses
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(amount), 0) as total_amount, COUNT(*) as total_count
-        FROM expenses 
-        WHERE branch_id = ?
-    ");
+    $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total_amount, COUNT(*) as total_count FROM expenses WHERE branch_id = ?");
     $stmt->execute([$selected_branch_id]);
-    $all_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $all_expenses = $all_data['total_count'] ?? 0;
-    $all_amount = $all_data['total_amount'] ?? 0;
-    
-    // Pending Expenses
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(amount), 0) as total_amount, COUNT(*) as total_count
-        FROM expenses 
-        WHERE branch_id = ? AND status = 'pending'
-    ");
+    $d = $stmt->fetch(PDO::FETCH_ASSOC); $all_expenses = $d['total_count']; $all_amount = $d['total_amount'];
+
+    $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total_amount, COUNT(*) as total_count FROM expenses WHERE branch_id = ? AND status = 'pending'");
     $stmt->execute([$selected_branch_id]);
-    $pending_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $pending_expenses = $pending_data['total_count'] ?? 0;
-    $pending_amount = $pending_data['total_amount'] ?? 0;
-    
-    // Paid Expenses
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(amount), 0) as total_amount, COUNT(*) as total_count
-        FROM expenses 
-        WHERE branch_id = ? AND status = 'paid'
-    ");
+    $d = $stmt->fetch(PDO::FETCH_ASSOC); $pending_expenses = $d['total_count']; $pending_amount = $d['total_amount'];
+
+    $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total_amount, COUNT(*) as total_count FROM expenses WHERE branch_id = ? AND status = 'paid'");
     $stmt->execute([$selected_branch_id]);
-    $paid_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $paid_expenses = $paid_data['total_count'] ?? 0;
-    $paid_amount = $paid_data['total_amount'] ?? 0;
-    
-    // Cancelled Expenses
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(amount), 0) as total_amount, COUNT(*) as total_count
-        FROM expenses 
-        WHERE branch_id = ? AND status = 'cancelled'
-    ");
+    $d = $stmt->fetch(PDO::FETCH_ASSOC); $paid_expenses = $d['total_count']; $paid_amount = $d['total_amount'];
+
+    $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total_amount, COUNT(*) as total_count FROM expenses WHERE branch_id = ? AND status = 'cancelled'");
     $stmt->execute([$selected_branch_id]);
-    $cancelled_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $cancelled_expenses = $cancelled_data['total_count'] ?? 0;
-    $cancelled_amount = $cancelled_data['total_amount'] ?? 0;
-    
+    $d = $stmt->fetch(PDO::FETCH_ASSOC); $cancelled_expenses = $d['total_count']; $cancelled_amount = $d['total_amount'];
 } catch (Exception $e) {
-    $all_expenses = 0;
-    $all_amount = 0;
-    $pending_expenses = 0;
-    $pending_amount = 0;
-    $paid_expenses = 0;
-    $paid_amount = 0;
-    $cancelled_expenses = 0;
-    $cancelled_amount = 0;
+    $all_expenses = $all_amount = $pending_expenses = $pending_amount = 0;
+    $paid_expenses = $paid_amount = $cancelled_expenses = $cancelled_amount = 0;
 }
 
 // ================================================================
-// GET CATEGORIES FOR DROPDOWN
+// GET CATEGORIES
 // ================================================================
 $categories = [];
 try {
     $stmt = $db->prepare("SELECT DISTINCT category FROM expenses WHERE branch_id = ? ORDER BY category");
     $stmt->execute([$selected_branch_id]);
     $categories = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $categories = [];
-}
+} catch (Exception $e) { $categories = []; }
 
 // ================================================================
 // GET VIEW DATA
 // ================================================================
 $view_data = null;
 if ($view_id > 0) {
-    $stmt = $db->prepare("
-        SELECT e.*, u.full_name as created_by_name, b.name as branch_name
-        FROM expenses e
-        LEFT JOIN users u ON e.created_by = u.id
-        LEFT JOIN branches b ON e.branch_id = b.id
-        WHERE e.id = ? AND e.branch_id = ?
-    ");
+    $stmt = $db->prepare("SELECT e.*, u.full_name as created_by_name, b.name as branch_name
+        FROM expenses e LEFT JOIN users u ON e.created_by = u.id LEFT JOIN branches b ON e.branch_id = b.id
+        WHERE e.id = ? AND e.branch_id = ?");
     $stmt->execute([$view_id, $selected_branch_id]);
     $view_data = $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
 // ================================================================
-// STATUS BADGE CLASS
+// HELPER FUNCTIONS
 // ================================================================
 function getStatusBadgeClass($status) {
-    $map = [
-        'pending' => 'badge-warning',
-        'paid' => 'badge-success',
-        'cancelled' => 'badge-danger'
-    ];
-    return $map[$status] ?? 'badge-warning';
+    $map = ['pending' => 'warning', 'paid' => 'success', 'cancelled' => 'danger'];
+    return $map[$status] ?? 'warning';
 }
-
 function getStatusLabel($status) {
-    $map = [
-        'pending' => '⏳ Pending',
-        'paid' => '✅ Paid',
-        'cancelled' => '❌ Cancelled'
-    ];
+    $map = ['pending' => '⏳ Pending', 'paid' => '✅ Paid', 'cancelled' => '❌ Cancelled'];
     return $map[$status] ?? ucfirst($status);
 }
-
 function formatDate($datetime) {
     if (empty($datetime)) return 'N/A';
     return date('M d, Y h:i A', strtotime($datetime));
 }
-
 function formatDateOnly($date) {
     if (empty($date)) return 'N/A';
     return date('M d, Y', strtotime($date));
 }
 
-// ================================================================
-// GET BRANCH NAME
-// ================================================================
 $branch_name = 'All Branches';
 foreach ($branches as $b) {
-    if ($b['id'] == $selected_branch_id) {
-        $branch_name = $b['name'];
-        break;
-    }
+    if ($b['id'] == $selected_branch_id) { $branch_name = $b['name']; break; }
 }
 
-// ================================================================
-// LOGO PATH
-// ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
-$unread_notifications = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
-
-// ================================================================
-// INCLUDE HEADER & SIDEBAR
+// ✅ SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// Sidebar stats
-$total_employees_sidebar = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
-$total_employees_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-$total_doctors_sidebar = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
-$total_doctors_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-$total_branches_sidebar = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
-$total_branches_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 include_once '../../components/admin_sidebar.php';
 ?>
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Expenses - Braick Dispensary</title>
-    
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
-    
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-    
-    <style>
-        /* ================================================================
-           ROOT VARIABLES - DARK MODE SUPPORT
-           ================================================================ */
-        :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #E8F0FE;
-            --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
-            --success-bg: #D1FAE5;
-            --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
-            --danger-bg: #FEE2E2;
-            --warning: #D97706;
-            --warning-dark: #B45309;
-            --warning-bg: #FEF3C7;
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 25px rgba(0,0,0,0.15);
-            --bg-body: #F1F5F9;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
-            --radius: 12px;
-            --radius-lg: 18px;
-            --table-hover: #E8F0FE;
-            --transition: all 0.3s ease;
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --shadow-xl: 0 20px 25px rgba(0,0,0,0.4);
-            --primary-bg: #1E3A5F;
-            --success-bg: #1A3A2A;
-            --danger-bg: #3A1A1A;
-            --warning-bg: #3D2E0A;
-            --gray-100: #1E293B;
-            --gray-200: #334155;
-            --table-hover: #1E3A5F;
-        }
 
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
+<!-- ================================================================
+     PAGE-SPECIFIC CSS - TUMIA VARIABLES ZA HEADER (--page-*)
+     ================================================================ -->
+<style>
+    /* ================================================================
+       PAGE HEADER - GREEN GRADIENT
+       ================================================================ */
+    .page-header-exp {
+        background: linear-gradient(135deg, #059669, #047857);
+        border-radius: 16px;
+        padding: 24px 32px;
+        margin-bottom: 24px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 4px 20px rgba(5, 150, 105, 0.25);
+        position: relative;
+        overflow: hidden;
+    }
 
-        /* ================================================================
-           TOP NAV - SHARED HEADER STYLES
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: #0B5ED7;
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .branch-selector {
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            background: var(--bg-card);
-            font-size: 0.82rem;
-            font-weight: 500;
-            cursor: pointer;
-            outline: none;
-            min-width: 160px;
-            color: var(--text-primary);
-            transition: all 0.3s;
-        }
-        
-        .top-nav .branch-selector:focus {
-            border-color: #0B5ED7;
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: #0B5ED7;
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: #0B5ED7;
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif {
-            background: #EF4444;
-        }
-        
-        .notif-dot.no-notif {
-            background: #94A3B8;
-            animation: none;
-        }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: #0B5ED7;
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i {
-            font-size: 0.9rem;
-        }
+    .page-header-exp::before {
+        content: '';
+        position: absolute;
+        top: -60%;
+        right: -10%;
+        width: 400px;
+        height: 400px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
+    }
 
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 24px 28px;
-            min-height: calc(100vh - 68px);
-            transition: var(--transition);
-        }
-        
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-        }
+    .page-header-exp .page-title-exp {
+        color: white;
+        font-size: 1.8rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+    }
 
-        /* ================================================================
-           4 STATS CARDS
-           ================================================================ */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 14px;
-            max-width: 1200px;
-            margin: 0 auto 16px;
-        }
-        
-        .stat-card {
-            background: var(--bg-card);
-            border-radius: 14px;
-            padding: 16px 18px;
-            border: 2px solid var(--border-color);
-            text-align: center;
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-            cursor: pointer;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .stat-card::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 4px;
-            border-radius: 14px 14px 0 0;
-        }
-        
-        .stat-card:hover {
-            border-color: var(--success);
-            transform: translateY(-4px);
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .stat-card .stat-icon {
-            font-size: 1.6rem;
-            margin-bottom: 4px;
-            display: block;
-        }
-        
-        .stat-card .stat-number {
-            font-size: 1.8rem;
-            font-weight: 700;
-            line-height: 1.2;
-            letter-spacing: -0.02em;
-        }
-        
-        .stat-card .stat-number.blue { color: var(--primary); }
-        .stat-card .stat-number.yellow { color: var(--warning); }
-        .stat-card .stat-number.green { color: var(--success); }
-        .stat-card .stat-number.red { color: #DC2626; }
-        
-        .stat-card .stat-label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            margin-top: 2px;
-        }
-        
-        .stat-card .stat-sub {
-            font-size: 0.6rem;
-            color: var(--text-secondary);
-            margin-top: 2px;
-            opacity: 0.7;
-        }
-        
-        .stat-card.accent-blue::after { background: var(--primary); }
-        .stat-card.accent-yellow::after { background: var(--warning); }
-        .stat-card.accent-green::after { background: var(--success); }
-        .stat-card.accent-red::after { background: #DC2626; }
-        
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
-        .page-header {
-            background: linear-gradient(135deg, #059669, #047857);
-            border-radius: 16px;
-            padding: 24px 32px;
-            margin-bottom: 24px;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            box-shadow: 0 4px 20px rgba(5, 150, 105, 0.25);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .page-header .page-title {
-            color: white;
-            font-size: 1.8rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
-        .page-header .header-badge {
-            background: rgba(255,255,255,0.15);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.15);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: 10px;
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: var(--transition);
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        
-        /* ================================================================
-           FILTER SECTION
-           ================================================================ */
-        .filter-section {
-            background: var(--bg-card);
-            border-radius: var(--radius);
-            padding: 16px 20px;
-            border: 1px solid var(--border-color);
-            margin-bottom: 20px;
-            box-shadow: var(--shadow);
-            transition: var(--transition);
-        }
-        
-        .filter-section:hover {
-            border-color: var(--success);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .filter-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            align-items: center;
-        }
-        
-        .filter-btn {
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            border: 2px solid var(--border-color);
-            background: transparent;
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: var(--transition);
-            text-decoration: none;
-            display: inline-block;
-        }
-        
-        .filter-btn:hover {
-            border-color: var(--success);
-            color: var(--success);
-            background: var(--success-bg);
-            transform: translateY(-1px);
-        }
-        
-        .filter-btn.active {
-            background: var(--success);
-            color: white;
-            border-color: var(--success);
-        }
-        
-        .filter-btn.active:hover {
-            background: var(--success-dark);
-            border-color: var(--success-dark);
-        }
-        
-        .filter-input {
-            padding: 5px 10px;
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            font-size: 0.75rem;
-            background: var(--bg-card);
-            color: var(--text-primary);
-            outline: none;
-            transition: var(--transition);
-            flex: 1;
-            min-width: 120px;
-        }
-        
-        .filter-input:focus {
-            border-color: var(--success);
-            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
-        }
-        
-        .btn-search {
-            padding: 5px 14px;
-            background: var(--success);
-            color: white;
-            border: none;
-            border-radius: var(--radius);
-            font-weight: 600;
-            font-size: 0.7rem;
-            cursor: pointer;
-            transition: var(--transition);
-        }
-        
-        .btn-search:hover {
-            background: var(--success-dark);
-            transform: translateY(-1px);
-        }
-        
-        .btn-add {
-            background: var(--success);
-            color: white;
-            padding: 8px 18px;
-            border-radius: var(--radius);
-            font-weight: 600;
-            font-size: 0.75rem;
-            border: none;
-            cursor: pointer;
-            transition: var(--transition);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .btn-add:hover {
-            background: var(--success-dark);
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-pdf {
-            background: #DC2626;
-            color: white;
-            padding: 6px 14px;
-            border-radius: var(--radius);
-            font-weight: 600;
-            font-size: 0.7rem;
-            border: none;
-            cursor: pointer;
-            transition: var(--transition);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .btn-pdf:hover {
-            background: #B91C1C;
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-        }
-        
-        /* ================================================================
-           TABLE
-           ================================================================ */
-        .table-container {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 1px solid var(--border-color);
-            overflow: hidden;
-            box-shadow: var(--shadow);
-        }
-        
-        .table-scroll {
-            overflow-x: auto;
-        }
-        
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.75rem;
-        }
-        
-        .data-table thead th {
-            text-align: left;
-            padding: 8px 12px;
-            font-weight: 700;
-            font-size: 0.6rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: white;
-            background: linear-gradient(135deg, var(--success), var(--success-dark));
-            border-bottom: 3px solid var(--success-dark);
-            white-space: nowrap;
-            position: sticky;
-            top: 0;
-            z-index: 5;
-        }
-        
-        .data-table thead th i { margin-right: 4px; opacity: 0.7; }
-        .data-table tbody td {
-            padding: 6px 12px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-            vertical-align: middle;
-        }
-        
-        .data-table tbody tr:hover td { background: var(--table-hover); }
-        .data-table tbody tr:last-child td { border-bottom: none; }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
-        .badge-status {
-            display: inline-block;
-            padding: 2px 10px;
-            border-radius: 16px;
-            font-size: 0.55rem;
-            font-weight: 600;
-            text-transform: capitalize;
-        }
-        
-        .badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
-        .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
-        .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
-        
-        /* ================================================================
-           BUTTONS - View, Edit, Delete, Pay
-           ================================================================ */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 4px 10px;
-            border-radius: 5px;
-            font-weight: 600;
-            font-size: 0.6rem;
-            transition: var(--transition);
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-        }
-        
-        .btn-view {
-            background: var(--primary);
-            color: white;
-        }
-        .btn-view:hover { background: var(--primary-dark); transform: translateY(-1px); }
-        
-        .btn-edit {
-            background: var(--warning);
-            color: white;
-        }
-        .btn-edit:hover { background: var(--warning-dark); transform: translateY(-1px); }
-        
-        .btn-delete {
-            background: var(--danger);
-            color: white;
-        }
-        .btn-delete:hover { background: var(--danger-dark); transform: translateY(-1px); }
-        
-        .btn-pay {
-            background: var(--success);
-            color: white;
-        }
-        .btn-pay:hover { background: var(--success-dark); transform: translateY(-1px); }
-        
-        .action-buttons {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 3px;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .table-footer {
-            padding: 8px 14px;
-            border-top: 1px solid var(--border-color);
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-            display: flex;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 6px;
-            background: var(--gray-50);
-        }
-        
-        [data-theme="dark"] .table-footer {
-            border-color: var(--gray-700);
-            color: var(--gray-400);
-            background: var(--gray-800);
-        }
-        
-        .count-badge {
-            background: var(--success);
-            color: white;
-            padding: 1px 10px;
-            border-radius: 16px;
-            font-size: 0.6rem;
-            font-weight: 600;
-        }
-        
-        /* ================================================================
-           MODAL
-           ================================================================ */
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 1000;
-            justify-content: center;
-            align-items: center;
-            animation: fadeIn 0.3s ease;
-        }
-        
-        .modal-overlay.show { display: flex; }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-        
-        @keyframes slideUp {
-            from { transform: translateY(30px); opacity: 0; }
-            to { transform: translateY(0); opacity: 1; }
-        }
-        
-        .modal-content {
-            background: var(--bg-card);
-            border-radius: 16px;
-            padding: 24px 28px;
-            max-width: 600px;
-            width: 95%;
-            max-height: 90vh;
-            overflow-y: auto;
-            border: 2px solid var(--border-color);
-            box-shadow: var(--shadow-xl);
-            animation: slideUp 0.3s ease;
-        }
-        
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding-bottom: 12px;
-            border-bottom: 2px solid var(--border-color);
-            margin-bottom: 16px;
-        }
-        
-        .modal-header .modal-title {
-            font-size: 1rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .modal-header .modal-title i { color: var(--success); }
-        
-        .modal-close {
-            background: none;
-            border: none;
-            font-size: 1.5rem;
-            cursor: pointer;
-            color: var(--text-secondary);
-            transition: all 0.3s ease;
-        }
-        
-        .modal-close:hover {
-            color: var(--danger);
-            transform: rotate(90deg);
-        }
-        
-        .form-group {
-            margin-bottom: 14px;
-        }
-        
-        .form-group label {
-            display: block;
-            font-weight: 600;
-            font-size: 0.8rem;
-            color: var(--text-primary);
-            margin-bottom: 4px;
-        }
-        
-        .form-group label .required { color: var(--danger); margin-left: 2px; }
-        
-        .form-group .form-control {
-            width: 100%;
-            padding: 8px 14px;
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            font-size: 0.85rem;
-            transition: all 0.3s ease;
-            outline: none;
-            background: var(--bg-card);
-            color: var(--text-primary);
-        }
-        
-        .form-group .form-control:focus {
-            border-color: var(--success);
-            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
-        }
-        
-        .form-group textarea.form-control {
-            resize: vertical;
-            min-height: 60px;
-        }
-        
-        .form-actions {
-            display: flex;
-            gap: 12px;
-            margin-top: 16px;
-            padding-top: 16px;
-            border-top: 2px solid var(--border-color);
-            flex-wrap: wrap;
-        }
-        
-        .btn-save {
-            background: var(--success);
-            color: white;
-            padding: 8px 24px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 0.85rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .btn-save:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-cancel-modal {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-            padding: 8px 20px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 0.85rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        
-        .btn-cancel-modal:hover {
-            border-color: var(--danger);
-            color: var(--danger);
-        }
-        
-        .help-text {
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-            margin-top: 2px;
-        }
-        
-        /* ================================================================
-           PDF MODAL
-           ================================================================ */
-        .pdf-modal-overlay {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.6);
-            z-index: 9999;
-            backdrop-filter: blur(4px);
-            justify-content: center;
-            align-items: center;
-        }
-        .pdf-modal-overlay.active { display: flex; }
-        
-        .pdf-modal {
-            background: var(--bg-card);
-            border-radius: 16px;
-            width: 95%;
-            max-width: 1100px;
-            max-height: 95vh;
-            display: flex;
-            flex-direction: column;
-            box-shadow: var(--shadow-lg);
-            animation: slideUp 0.3s ease;
-        }
-        
-        .pdf-modal-header {
-            padding: 14px 22px;
-            border-bottom: 2px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-shrink: 0;
-            background: linear-gradient(135deg, #059669, #047857);
-            border-radius: 16px 16px 0 0;
-        }
-        
-        .pdf-modal-header .modal-title {
-            font-size: 1rem;
-            font-weight: 700;
-            color: white;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .pdf-modal-header .modal-actions {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        
-        .pdf-modal-header .modal-actions .btn {
-            background: rgba(255,255,255,0.15);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 6px 14px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.75rem;
-            transition: all 0.3s;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .pdf-modal-header .modal-actions .btn:hover {
-            background: rgba(255,255,255,0.3);
-            transform: translateY(-2px);
-        }
-        
-        .pdf-modal-header .modal-actions .btn-danger-modal {
-            background: rgba(220,38,38,0.3);
-            border-color: rgba(220,38,38,0.2);
-        }
-        
-        .pdf-modal-body {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px 28px;
-            background: var(--bg-body);
-        }
-        
-        .pdf-modal-body .pdf-content {
-            max-width: 100%;
-            font-size: 14px;
-            background: var(--bg-card);
-            padding: 24px 28px;
-            border-radius: 12px;
-            box-shadow: var(--shadow);
-            border: 1px solid var(--border-color);
-            line-height: 1.5;
-            margin-top: 0;
-            padding-top: 28px;
-        }
-        
-        /* PDF Styles */
-        .pdf-content .pdf-header {
-            text-align: center;
-            padding-bottom: 12px;
-            border-bottom: 3px solid #059669;
-            margin-bottom: 16px;
-            page-break-after: avoid;
-            break-after: avoid;
-            margin-top: 0;
-            padding-top: 0;
-        }
-        
-        .pdf-content .pdf-header .pdf-logo {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            margin-bottom: 4px;
-        }
-        
-        .pdf-content .pdf-header .pdf-logo img {
-            height: 55px;
-            width: auto;
-            object-fit: contain;
-            display: block;
-            margin: 0 auto;
-        }
-        
-        .pdf-content .pdf-header .clinic-name {
-            font-size: 1.4rem;
-            font-weight: 800;
-            color: #059669;
-            letter-spacing: -0.5px;
-            margin-top: 4px;
-        }
-        
-        .pdf-content .pdf-header .clinic-sub {
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            letter-spacing: 0.5px;
-        }
-        
-        .pdf-content .pdf-header .doc-title {
-            font-size: 0.85rem;
-            font-weight: 700;
-            color: #059669;
-            margin-top: 4px;
-            background: #D1FAE5;
-            padding: 4px 16px;
-            border-radius: 20px;
-            display: inline-block;
-        }
-        
-        .pdf-content .pdf-section-title {
-            font-weight: 700;
-            font-size: 0.95rem;
-            color: #059669;
-            border-bottom: 2px solid #34D399;
-            padding-bottom: 4px;
-            margin: 6px 0 4px 0;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .pdf-content .pdf-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 13px;
-            margin: 4px 0;
-        }
-        
-        .pdf-content .pdf-table th {
-            background: #059669;
-            color: white;
-            padding: 4px 10px;
-            text-align: left;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            font-weight: 700;
-            border: 1px solid #047857;
-        }
-        
-        .pdf-content .pdf-table td {
-            padding: 4px 10px;
-            border-bottom: 1px solid #E2E8F0;
-            font-size: 13px;
-            word-wrap: break-word;
-        }
-        
-        .pdf-content .pdf-table tr:nth-child(even) td {
-            background: #F8FAFC;
-        }
-        
-        .pdf-content .pdf-empty {
-            padding: 6px 0;
-            color: var(--text-secondary);
-            font-style: italic;
-            font-size: 14px;
-            text-align: center;
-            background: #F8FAFC;
-            border-radius: 4px;
-            margin: 2px 0;
-        }
-        
-        .pdf-content .pdf-footer {
-            margin-top: 12px;
-            padding-top: 10px;
-            border-top: 2px solid #E2E8F0;
-            page-break-inside: avoid;
-            break-inside: avoid;
-        }
-        
-        .pdf-content .pdf-footer .footer-stamp {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
-        
-        .pdf-content .pdf-footer .footer-left {
-            font-size: 14px;
-            color: var(--text-secondary);
-        }
-        
-        .pdf-content .pdf-footer .stamp-box {
-            text-align: center;
-            padding: 6px 14px;
-            border: 3px solid #059669;
-            border-radius: 10px;
-            background: #D1FAE5;
-            min-width: 150px;
-        }
-        
-        .pdf-content .pdf-footer .stamp-box .stamp-title {
-            font-size: 10px;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            font-weight: 700;
-        }
-        
-        .pdf-content .pdf-footer .stamp-box .stamp-name {
-            font-size: 14px;
-            font-weight: 800;
-            color: #059669;
-        }
-        
-        .pdf-content .pdf-footer .stamp-box .stamp-line {
-            font-size: 12px;
-            color: var(--text-secondary);
-            margin-top: 2px;
-        }
-        
-        .pdf-content .pdf-footer .stamp-box .stamp-date {
-            font-size: 10px;
-            color: #94A3B8;
-            margin-top: 2px;
-        }
-        
-        .pdf-content .pdf-footer .footer-bottom {
-            text-align: center;
-            margin-top: 6px;
-            font-size: 12px;
-            color: #94A3B8;
-        }
-        
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
-        .empty-state {
-            text-align: center;
-            padding: 40px 20px;
-            color: var(--text-secondary);
-        }
-        
-        .empty-state i { font-size: 3rem; color: var(--border-color); display: block; margin-bottom: 12px; }
-        .empty-state p { font-size: 0.9rem; }
-        .empty-state .sub { font-size: 0.8rem; color: var(--text-muted); margin-top: 4px; }
-        
-        /* ================================================================
-           TOAST
-           ================================================================ */
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 12px 18px;
-            border-radius: 10px;
-            z-index: 999;
-            max-width: 380px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            color: white;
-            box-shadow: var(--shadow-xl);
-            font-size: 0.8rem;
-        }
-        
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        
-        .toast-custom.success { background: var(--success); }
-        .toast-custom.error { background: var(--danger); }
-        .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand { color: var(--success); font-weight: 600; }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(12px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .animate-fade-in-up { animation: fadeInUp 0.4s ease forwards; opacity: 0; }
-        
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .main-content { margin-left: 0; padding: 16px; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 20px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .filter-section { padding: 12px 16px; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
-            .stat-card { padding: 12px 14px; }
-            .stat-card .stat-number { font-size: 1.4rem; }
-        }
-        
-        @media (max-width: 640px) {
-            .main-content { padding: 10px; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 6px; }
-            .stat-card { padding: 8px 10px; }
-            .stat-card .stat-number { font-size: 1.1rem; }
-            .stat-card .stat-label { font-size: 0.55rem; }
-            .stat-card .stat-icon { font-size: 1.2rem; }
-            .filter-row { flex-direction: column; align-items: stretch; }
-        }
-        
-        @media (max-width: 400px) {
-            .stats-grid { grid-template-columns: 1fr; gap: 6px; }
-            .stat-card { padding: 8px 10px; }
-            .stat-card .stat-number { font-size: 1.1rem; }
-            .stat-card .stat-label { font-size: 0.55rem; }
-            .stat-card .stat-icon { font-size: 1.2rem; }
-        }
-        
-        @media print {
-            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
-            .search-wrapper, .filter-section, .btn-outline-light,
-            .footer, #sidebarToggle { display: none !important; }
-            .main-content { margin: 0; padding: 20px; }
-            .stat-card { border: 1px solid #ddd !important; }
-        }
-    </style>
-</head>
-<body>
+    .page-header-exp .page-title-exp i { font-size: 2rem; opacity: 0.9; }
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search expenses...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 0 ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime">
-            <i class="fas fa-clock" style="color:var(--primary-light);"></i>
-            <span id="clockDisplay" style="font-weight:500;"><?= date('d M Y • h:i:s A') ?></span>
-        </span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+    .page-header-exp .page-subtitle-exp {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.95rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 6px;
+    }
+
+    .page-header-exp .role-badge-display {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        backdrop-filter: blur(4px);
+    }
+
+    .page-header-exp .header-badge-exp {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .page-header-exp .btn-outline-light-exp {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.2);
+        padding: 8px 18px;
+        border-radius: 10px;
+        font-weight: 500;
+        font-size: 0.82rem;
+        transition: all 0.3s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        backdrop-filter: blur(4px);
+        position: relative;
+        z-index: 1;
+        cursor: pointer;
+    }
+
+    .page-header-exp .btn-outline-light-exp:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        color: white;
+    }
+
+    /* ================================================================
+       STATS CARDS - 4 CARDS
+       ================================================================ */
+    .stats-grid-exp {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 14px;
+        max-width: 1200px;
+        margin: 0 auto 16px;
+    }
+
+    .stat-card-exp {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 14px;
+        padding: 16px 18px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        text-align: center;
+        transition: all 0.3s ease;
+        box-shadow: var(--page-shadow-sm, 0 1px 3px rgba(0,0,0,0.06));
+        cursor: pointer;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .stat-card-exp::after {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 4px;
+        border-radius: 14px 14px 0 0;
+    }
+
+    .stat-card-exp:hover {
+        transform: translateY(-4px);
+        box-shadow: var(--page-shadow-lg, 0 10px 25px rgba(0,0,0,0.1));
+        border-color: #059669;
+    }
+
+    .stat-card-exp .stat-icon-exp {
+        font-size: 1.6rem;
+        margin-bottom: 4px;
+        display: block;
+    }
+
+    .stat-card-exp .stat-number-exp {
+        font-size: 1.8rem;
+        font-weight: 700;
+        line-height: 1.2;
+        letter-spacing: -0.02em;
+    }
+
+    .stat-card-exp .stat-number-exp.blue { color: #0B5ED7; }
+    .stat-card-exp .stat-number-exp.yellow { color: #D97706; }
+    .stat-card-exp .stat-number-exp.green { color: #059669; }
+    .stat-card-exp .stat-number-exp.red { color: #DC2626; }
+
+    .stat-card-exp .stat-label-exp {
+        font-size: 0.7rem;
+        color: var(--page-text-secondary, #64748B);
+        font-weight: 500;
+        margin-top: 2px;
+    }
+
+    .stat-card-exp .stat-sub-exp {
+        font-size: 0.6rem;
+        color: var(--page-text-secondary, #64748B);
+        margin-top: 2px;
+        opacity: 0.7;
+    }
+
+    .stat-card-exp.accent-blue::after { background: #0B5ED7; }
+    .stat-card-exp.accent-yellow::after { background: #D97706; }
+    .stat-card-exp.accent-green::after { background: #059669; }
+    .stat-card-exp.accent-red::after { background: #DC2626; }
+
+    /* ================================================================
+       FILTER SECTIONS
+       ================================================================ */
+    .filter-section-exp {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 12px;
+        padding: 16px 20px;
+        border: 1px solid var(--page-border, #E2E8F0);
+        margin-bottom: 20px;
+        box-shadow: var(--page-shadow-sm);
+        transition: all 0.3s;
+    }
+
+    .filter-section-exp:hover {
+        border-color: #059669;
+        box-shadow: var(--page-shadow-md);
+    }
+
+    .filter-row-exp {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+    }
+
+    .filter-label-exp {
+        font-size: 0.65rem;
+        font-weight: 700;
+        color: #059669;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .filter-btn-exp {
+        padding: 5px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        border: 2px solid var(--page-border, #E2E8F0);
+        background: transparent;
+        color: var(--page-text-secondary, #64748B);
+        cursor: pointer;
+        transition: all 0.3s;
+        text-decoration: none;
+        display: inline-block;
+    }
+
+    .filter-btn-exp:hover {
+        border-color: #059669;
+        color: #059669;
+        background: #D1FAE5;
+        transform: translateY(-1px);
+    }
+
+    [data-theme="dark"] .filter-btn-exp:hover {
+        background: #1A3A2A;
+    }
+
+    .filter-btn-exp.active {
+        background: #059669;
+        color: white;
+        border-color: #059669;
+    }
+
+    .filter-btn-exp.active:hover {
+        background: #047857;
+        border-color: #047857;
+    }
+
+    .filter-input-exp {
+        padding: 6px 12px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        border-radius: 12px;
+        font-size: 0.78rem;
+        background: var(--page-input-bg, #FFFFFF);
+        color: var(--page-text-primary, #1E293B);
+        outline: none;
+        transition: all 0.3s;
+        flex: 1;
+        min-width: 120px;
+        font-family: inherit;
+    }
+
+    .filter-input-exp:focus {
+        border-color: #059669;
+        box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
+    }
+
+    .btn-search-exp {
+        padding: 6px 14px;
+        background: #059669;
+        color: white;
+        border: none;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 0.72rem;
+        cursor: pointer;
+        transition: all 0.3s;
+        font-family: inherit;
+    }
+
+    .btn-search-exp:hover {
+        background: #047857;
+        transform: translateY(-1px);
+    }
+
+    .btn-add-exp {
+        background: #059669;
+        color: white;
+        padding: 8px 18px;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 0.78rem;
+        border: none;
+        cursor: pointer;
+        transition: all 0.3s;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: inherit;
+    }
+
+    .btn-add-exp:hover {
+        background: #047857;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+    }
+
+    .btn-reset-exp {
+        padding: 5px 10px;
+        font-size: 0.65rem;
+        border: 2px solid var(--page-border, #E2E8F0);
+        border-radius: 8px;
+        background: transparent;
+        color: var(--page-text-secondary, #64748B);
+        cursor: pointer;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .btn-reset-exp:hover {
+        border-color: #DC2626;
+        color: #DC2626;
+    }
+
+    /* ================================================================
+       TABLE
+       ================================================================ */
+    .table-container-exp {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 18px;
+        border: 1px solid var(--page-border, #E2E8F0);
+        overflow: hidden;
+        box-shadow: var(--page-shadow-sm);
+    }
+
+    .table-scroll-exp {
+        overflow-x: auto;
+    }
+
+    .data-table-exp {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.75rem;
+    }
+
+    .data-table-exp thead th {
+        text-align: left;
+        padding: 10px 14px;
+        font-weight: 700;
+        font-size: 0.62rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: white;
+        background: linear-gradient(135deg, #059669, #047857);
+        border-bottom: 3px solid #047857;
+        white-space: nowrap;
+        position: sticky;
+        top: 0;
+        z-index: 5;
+    }
+
+    .data-table-exp thead th i { margin-right: 4px; opacity: 0.75; }
+
+    .data-table-exp tbody td {
+        padding: 8px 14px;
+        border-bottom: 1px solid var(--page-border, #E2E8F0);
+        color: var(--page-text-primary, #1E293B);
+        vertical-align: middle;
+    }
+
+    .data-table-exp tbody tr:hover td {
+        background: #E8F0FE;
+    }
+
+    [data-theme="dark"] .data-table-exp tbody tr:hover td {
+        background: #1E3A5F;
+    }
+
+    .data-table-exp tbody tr:last-child td { border-bottom: none; }
+
+    /* ================================================================
+       BADGES
+       ================================================================ */
+    .badge-status-exp {
+        display: inline-block;
+        padding: 3px 12px;
+        border-radius: 16px;
+        font-size: 0.6rem;
+        font-weight: 600;
+        text-transform: capitalize;
+    }
+
+    .badge-warning-exp { background: #FEF3C7; color: #D97706; border: 1px solid #D97706; }
+    .badge-success-exp { background: #D1FAE5; color: #059669; border: 1px solid #059669; }
+    .badge-danger-exp { background: #FEE2E2; color: #DC2626; border: 1px solid #DC2626; }
+
+    [data-theme="dark"] .badge-warning-exp { background: #3D2E0A; color: #FBBF24; }
+    [data-theme="dark"] .badge-success-exp { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .badge-danger-exp { background: #3A1A1A; color: #F87171; }
+
+    /* ================================================================
+       ACTION BUTTONS
+       ================================================================ */
+    .btn-exp {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 10px;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 0.62rem;
+        transition: all 0.3s;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+    }
+
+    .btn-view-exp { background: #0B5ED7; color: white; }
+    .btn-view-exp:hover { background: #0A4CA8; transform: translateY(-1px); color: white; }
+
+    .btn-edit-exp { background: #D97706; color: white; }
+    .btn-edit-exp:hover { background: #B45309; transform: translateY(-1px); color: white; }
+
+    .btn-delete-exp { background: #DC2626; color: white; }
+    .btn-delete-exp:hover { background: #B91C1C; transform: translateY(-1px); color: white; }
+
+    .btn-pay-exp { background: #059669; color: white; }
+    .btn-pay-exp:hover { background: #047857; transform: translateY(-1px); color: white; }
+
+    .action-buttons-exp {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .table-footer-exp {
+        padding: 10px 16px;
+        border-top: 1px solid var(--page-border, #E2E8F0);
+        font-size: 0.68rem;
+        color: var(--page-text-secondary, #64748B);
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 6px;
+        background: var(--page-hover, #F8FAFC);
+    }
+
+    [data-theme="dark"] .table-footer-exp {
+        background: #0F172A;
+    }
+
+    /* ================================================================
+       EMPTY STATE
+       ================================================================ */
+    .empty-state-exp {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .empty-state-exp i {
+        font-size: 3rem;
+        color: var(--page-text-muted, #94A3B8);
+        display: block;
+        margin-bottom: 12px;
+    }
+
+    /* ================================================================
+       MODAL
+       ================================================================ */
+    .modal-overlay-exp {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.5);
+        z-index: 9999;
+        justify-content: center;
+        align-items: center;
+        backdrop-filter: blur(4px);
+    }
+
+    .modal-overlay-exp.show { display: flex; }
+
+    .modal-content-exp {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        padding: 24px 28px;
+        max-width: 600px;
+        width: 95%;
+        max-height: 90vh;
+        overflow-y: auto;
+        border: 2px solid var(--page-border, #E2E8F0);
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        animation: slideUpExp 0.3s ease;
+    }
+
+    @keyframes slideUpExp {
+        from { transform: translateY(30px); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+    }
+
+    .modal-header-exp {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding-bottom: 12px;
+        border-bottom: 2px solid var(--page-border, #E2E8F0);
+        margin-bottom: 16px;
+    }
+
+    .modal-title-exp {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--page-text-primary, #1E293B);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .modal-title-exp i { color: #059669; }
+
+    .modal-close-exp {
+        background: none;
+        border: none;
+        font-size: 1.5rem;
+        cursor: pointer;
+        color: var(--page-text-secondary, #64748B);
+        transition: all 0.3s ease;
+    }
+
+    .modal-close-exp:hover {
+        color: #DC2626;
+        transform: rotate(90deg);
+    }
+
+    .form-group-exp { margin-bottom: 14px; }
+
+    .form-group-exp label {
+        display: block;
+        font-weight: 600;
+        font-size: 0.8rem;
+        color: var(--page-text-primary, #1E293B);
+        margin-bottom: 4px;
+    }
+
+    .form-group-exp label .required { color: #DC2626; margin-left: 2px; }
+
+    .form-control-exp {
+        width: 100%;
+        padding: 8px 14px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        border-radius: 10px;
+        font-size: 0.85rem;
+        transition: all 0.3s ease;
+        outline: none;
+        background: var(--page-input-bg, #FFFFFF);
+        color: var(--page-text-primary, #1E293B);
+        font-family: inherit;
+    }
+
+    .form-control-exp:focus {
+        border-color: #059669;
+        box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
+    }
+
+    textarea.form-control-exp { resize: vertical; min-height: 60px; }
+
+    .form-actions-exp {
+        display: flex;
+        gap: 12px;
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 2px solid var(--page-border, #E2E8F0);
+        flex-wrap: wrap;
+    }
+
+    .btn-save-exp {
+        background: #059669;
+        color: white;
+        padding: 8px 24px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.85rem;
+        border: none;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-family: inherit;
+    }
+
+    .btn-save-exp:hover {
+        background: #047857;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+    }
+
+    .btn-cancel-modal-exp {
+        background: transparent;
+        color: var(--page-text-secondary, #64748B);
+        border: 2px solid var(--page-border, #E2E8F0);
+        padding: 8px 20px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        font-family: inherit;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .btn-cancel-modal-exp:hover {
+        border-color: #DC2626;
+        color: #DC2626;
+    }
+
+    /* ================================================================
+       MODAL VIEW GRID
+       ================================================================ */
+    .view-grid-exp {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+    }
+
+    .view-item-exp {
+        padding: 8px 12px;
+        background: var(--page-hover, #F8FAFC);
+        border-radius: 8px;
+    }
+
+    [data-theme="dark"] .view-item-exp {
+        background: #0F172A;
+    }
+
+    .view-item-exp .view-label-exp {
+        font-size: 0.6rem;
+        text-transform: uppercase;
+        color: var(--page-text-secondary, #64748B);
+        font-weight: 600;
+        margin-bottom: 2px;
+    }
+
+    .view-item-exp .view-value-exp {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--page-text-primary, #1E293B);
+    }
+
+    .view-item-exp.full-width { grid-column: 1 / -1; }
+
+    /* ================================================================
+       PDF MODAL
+       ================================================================ */
+    .pdf-modal-overlay-exp {
+        display: none;
+        position: fixed;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        background: rgba(0,0,0,0.6);
+        z-index: 9999;
+        backdrop-filter: blur(4px);
+        justify-content: center;
+        align-items: center;
+    }
+    .pdf-modal-overlay-exp.active { display: flex; }
+
+    .pdf-modal-exp {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        width: 95%;
+        max-width: 1100px;
+        max-height: 95vh;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+    }
+
+    .pdf-modal-header-exp {
+        padding: 14px 22px;
+        border-bottom: 2px solid var(--page-border, #E2E8F0);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-shrink: 0;
+        background: linear-gradient(135deg, #059669, #047857);
+        border-radius: 16px 16px 0 0;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .pdf-modal-header-exp .modal-title-exp {
+        color: white;
+        font-size: 1rem;
+    }
+
+    .pdf-modal-header-exp .modal-actions-exp {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .pdf-modal-header-exp .modal-actions-exp button {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.2);
+        padding: 6px 14px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.75rem;
+        transition: all 0.3s;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: inherit;
+    }
+
+    .pdf-modal-header-exp .modal-actions-exp button:hover {
+        background: rgba(255,255,255,0.3);
+        transform: translateY(-2px);
+    }
+
+    .pdf-modal-body-exp {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px 28px;
+        background: var(--page-bg-body, #F1F5F9);
+    }
+
+    .pdf-content-exp {
+        max-width: 100%;
+        font-size: 14px;
+        background: var(--page-bg-card, #FFFFFF);
+        padding: 24px 28px;
+        border-radius: 12px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        border: 1px solid var(--page-border, #E2E8F0);
+        line-height: 1.5;
+    }
+
+    .pdf-content-exp .pdf-header-exp {
+        text-align: center;
+        padding-bottom: 12px;
+        border-bottom: 3px solid #059669;
+        margin-bottom: 16px;
+    }
+
+    .pdf-content-exp .pdf-header-exp img {
+        height: 55px;
+        width: auto;
+        object-fit: contain;
+        display: block;
+        margin: 0 auto;
+    }
+
+    .pdf-content-exp .clinic-name-exp {
+        font-size: 1.4rem;
+        font-weight: 800;
+        color: #059669;
+        letter-spacing: -0.5px;
+        margin-top: 4px;
+    }
+
+    .pdf-content-exp .clinic-sub-exp {
+        font-size: 0.75rem;
+        color: var(--page-text-secondary, #64748B);
+        letter-spacing: 0.5px;
+    }
+
+    .pdf-content-exp .doc-title-exp {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: #059669;
+        margin-top: 4px;
+        background: #D1FAE5;
+        padding: 4px 16px;
+        border-radius: 20px;
+        display: inline-block;
+    }
+
+    .pdf-content-exp .pdf-section-title-exp {
+        font-weight: 700;
+        font-size: 0.95rem;
+        color: #059669;
+        border-bottom: 2px solid #34D399;
+        padding-bottom: 4px;
+        margin: 6px 0 4px 0;
+    }
+
+    .pdf-content-exp .pdf-table-exp {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        margin: 4px 0;
+    }
+
+    .pdf-content-exp .pdf-table-exp th {
+        background: #059669;
+        color: white;
+        padding: 4px 8px;
+        text-align: left;
+        font-size: 10px;
+        text-transform: uppercase;
+        border: 1px solid #047857;
+    }
+
+    .pdf-content-exp .pdf-table-exp td {
+        padding: 4px 8px;
+        border-bottom: 1px solid #E2E8F0;
+        font-size: 11px;
+    }
+
+    .pdf-content-exp .pdf-table-exp tr:nth-child(even) td {
+        background: #F8FAFC;
+    }
+
+    .pdf-content-exp .pdf-footer-exp {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 2px solid #E2E8F0;
+    }
+
+    .pdf-content-exp .footer-stamp-exp {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+
+    .pdf-content-exp .stamp-box-exp {
+        text-align: center;
+        padding: 6px 14px;
+        border: 3px solid #059669;
+        border-radius: 10px;
+        background: #D1FAE5;
+        min-width: 150px;
+    }
+
+    .pdf-content-exp .stamp-title-exp {
+        font-size: 10px;
+        color: var(--page-text-secondary, #64748B);
+        text-transform: uppercase;
+        font-weight: 700;
+    }
+
+    .pdf-content-exp .stamp-name-exp {
+        font-size: 14px;
+        font-weight: 800;
+        color: #059669;
+    }
+
+    .pdf-content-exp .stamp-line-exp {
+        font-size: 12px;
+        color: var(--page-text-secondary, #64748B);
+        margin-top: 2px;
+    }
+
+    .pdf-content-exp .footer-bottom-exp {
+        text-align: center;
+        margin-top: 6px;
+        font-size: 12px;
+        color: #94A3B8;
+    }
+
+    /* ================================================================
+       MESSAGE BOX
+       ================================================================ */
+    .message-box-exp {
+        padding: 12px 18px;
+        border-radius: 10px;
+        margin-bottom: 16px;
+        font-size: 0.8rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        animation: slideDownExp 0.4s ease;
+    }
+
+    @keyframes slideDownExp {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .message-box-exp.success {
+        background: #D1FAE5;
+        color: #065F46;
+        border: 1px solid #6EE7B7;
+    }
+
+    .message-box-exp.error {
+        background: #FEE2E2;
+        color: #991B1B;
+        border: 1px solid #FCA5A5;
+    }
+
+    [data-theme="dark"] .message-box-exp.success {
+        background: #1A3A2A;
+        color: #34D399;
+        border-color: #34D399;
+    }
+
+    [data-theme="dark"] .message-box-exp.error {
+        background: #3A1A1A;
+        color: #F87171;
+        border-color: #F87171;
+    }
+
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer-exp {
+        padding: 14px 0;
+        border-top: 1px solid var(--page-border, #E2E8F0);
+        margin-top: 24px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--page-text-secondary, #64748B);
+    }
+
+    .footer-exp .footer-brand-exp {
+        color: #059669;
+        font-weight: 600;
+    }
+
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 1024px) {
+        .stats-grid-exp { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 768px) {
+        .page-header-exp { padding: 20px; }
+        .page-header-exp .page-title-exp { font-size: 1.3rem; }
+        .filter-section-exp { padding: 12px 16px; }
+        .stats-grid-exp { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .stat-card-exp { padding: 12px 14px; }
+        .stat-card-exp .stat-number-exp { font-size: 1.4rem; }
+        .view-grid-exp { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 640px) {
+        .stats-grid-exp { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+        .stat-card-exp { padding: 8px 10px; }
+        .stat-card-exp .stat-number-exp { font-size: 1.1rem; }
+        .filter-row-exp { flex-direction: column; align-items: stretch; }
+    }
+
+    @media (max-width: 400px) {
+        .stats-grid-exp { grid-template-columns: 1fr; }
+    }
+
+    @media print {
+        .btn-exp, .filter-section-exp, .page-header-exp .btn-outline-light-exp { display: none !important; }
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
-    <div class="page-header">
+    <div class="page-header-exp">
         <div>
-            <h1 class="page-title">
+            <h1 class="page-title-exp">
                 <i class="fas fa-coins"></i>
                 Expenses
                 <span class="role-badge-display">ADMIN</span>
@@ -1985,139 +1389,109 @@ include_once '../../components/admin_sidebar.php';
                         <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name) ?>
                     </span>
                 <?php endif; ?>
-                <span class="header-badge">
+                <span class="header-badge-exp">
                     <i class="fas fa-list"></i> <?= $all_expenses ?> Total
                 </span>
             </h1>
-            <p class="page-subtitle">
+            <p class="page-subtitle-exp">
                 <i class="fas fa-arrow-right"></i>
                 Manage all branch expenses
                 <?php if ($date_filter !== 'all'): ?>
-                    <span class="header-badge" style="background:rgba(251,191,36,0.15);border-color:rgba(251,191,36,0.1);font-size:0.5rem;">
-                        <i class="fas fa-calendar"></i> <?= ucfirst($date_filter) ?> Filter
-                    </span>
-                <?php endif; ?>
-                <?php if (!empty($date_from) && !empty($date_to)): ?>
-                    <span class="header-badge" style="background:rgba(251,191,36,0.15);border-color:rgba(251,191,36,0.1);font-size:0.5rem;">
-                        <i class="fas fa-calendar-range"></i> <?= date('M d, Y', strtotime($date_from)) ?> - <?= date('M d, Y', strtotime($date_to)) ?>
+                    <span class="header-badge-exp" style="background:rgba(251,191,36,0.15);">
+                        <i class="fas fa-calendar"></i> <?= ucfirst($date_filter) ?>
                     </span>
                 <?php endif; ?>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
-            <button onclick="openAddModal()" class="btn-outline-light" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.2);color:#34D399;">
+            <button onclick="openAddModal()" class="btn-outline-light-exp" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.2);color:#34D399;">
                 <i class="fas fa-plus-circle"></i> Add Expense
             </button>
-            <button onclick="generatePDF()" class="btn-outline-light" style="background:rgba(220,38,38,0.2);border-color:rgba(220,38,38,0.3);">
+            <button onclick="generatePDF()" class="btn-outline-light-exp" style="background:rgba(220,38,38,0.2);border-color:rgba(220,38,38,0.3);">
                 <i class="fas fa-file-pdf"></i> Export PDF
             </button>
-            <button onclick="manualRefresh()" class="btn-outline-light" id="refreshBtn">
-                <i class="fas fa-sync-alt"></i> Refresh
-            </button>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- 4 STATS CARDS: All, Pending, Paid, Cancelled -->
-    <!-- ================================================================ -->
-    <div class="stats-grid" id="globalStats">
-        <div class="stat-card accent-blue" onclick="window.location.href='expenses.php?branch=<?= $selected_branch_id ?>&status=all'">
-            <span class="stat-icon">📋</span>
-            <p class="stat-number blue" id="statAll"><?= number_format($all_expenses) ?></p>
-            <p class="stat-label">All Expenses</p>
-            <p class="stat-sub"><?= $currency ?> <?= number_format($all_amount) ?></p>
+    <!-- STATS CARDS - 4 -->
+    <div class="stats-grid-exp">
+        <div class="stat-card-exp accent-blue" onclick="window.location.href='expenses.php?branch=<?= $selected_branch_id ?>&status=all'">
+            <span class="stat-icon-exp">📋</span>
+            <p class="stat-number-exp blue"><?= number_format($all_expenses) ?></p>
+            <p class="stat-label-exp">All Expenses</p>
+            <p class="stat-sub-exp"><?= $currency ?> <?= number_format($all_amount) ?></p>
         </div>
-        <div class="stat-card accent-yellow" onclick="window.location.href='expenses.php?branch=<?= $selected_branch_id ?>&status=pending'">
-            <span class="stat-icon">⏳</span>
-            <p class="stat-number yellow" id="statPending"><?= number_format($pending_expenses) ?></p>
-            <p class="stat-label">Pending</p>
-            <p class="stat-sub"><?= $currency ?> <?= number_format($pending_amount) ?></p>
+        <div class="stat-card-exp accent-yellow" onclick="window.location.href='expenses.php?branch=<?= $selected_branch_id ?>&status=pending'">
+            <span class="stat-icon-exp">⏳</span>
+            <p class="stat-number-exp yellow"><?= number_format($pending_expenses) ?></p>
+            <p class="stat-label-exp">Pending</p>
+            <p class="stat-sub-exp"><?= $currency ?> <?= number_format($pending_amount) ?></p>
         </div>
-        <div class="stat-card accent-green" onclick="window.location.href='expenses.php?branch=<?= $selected_branch_id ?>&status=paid'">
-            <span class="stat-icon">✅</span>
-            <p class="stat-number green" id="statPaid"><?= number_format($paid_expenses) ?></p>
-            <p class="stat-label">Paid</p>
-            <p class="stat-sub"><?= $currency ?> <?= number_format($paid_amount) ?></p>
+        <div class="stat-card-exp accent-green" onclick="window.location.href='expenses.php?branch=<?= $selected_branch_id ?>&status=paid'">
+            <span class="stat-icon-exp">✅</span>
+            <p class="stat-number-exp green"><?= number_format($paid_expenses) ?></p>
+            <p class="stat-label-exp">Paid</p>
+            <p class="stat-sub-exp"><?= $currency ?> <?= number_format($paid_amount) ?></p>
         </div>
-        <div class="stat-card accent-red" onclick="window.location.href='expenses.php?branch=<?= $selected_branch_id ?>&status=cancelled'">
-            <span class="stat-icon">❌</span>
-            <p class="stat-number red" id="statCancelled"><?= number_format($cancelled_expenses) ?></p>
-            <p class="stat-label">Cancelled</p>
-            <p class="stat-sub"><?= $currency ?> <?= number_format($cancelled_amount) ?></p>
+        <div class="stat-card-exp accent-red" onclick="window.location.href='expenses.php?branch=<?= $selected_branch_id ?>&status=cancelled'">
+            <span class="stat-icon-exp">❌</span>
+            <p class="stat-number-exp red"><?= number_format($cancelled_expenses) ?></p>
+            <p class="stat-label-exp">Cancelled</p>
+            <p class="stat-sub-exp"><?= $currency ?> <?= number_format($cancelled_amount) ?></p>
         </div>
     </div>
 
-    <!-- Message -->
+    <!-- MESSAGE -->
     <?php if ($message): ?>
-        <div class="p-3 rounded-lg mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : ($message_type === 'info' ? 'bg-blue-100 text-blue-700 border border-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800') ?>" style="max-width:1200px;margin:0 auto 12px;font-size:0.8rem;">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'info' ? 'fa-info-circle' : 'fa-exclamation-circle') ?> mr-2"></i>
-            <?= $message ?>
+        <div class="message-box-exp <?= $message_type === 'success' ? 'success' : 'error' ?>" style="max-width:1200px;margin:0 auto 12px;">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+            <span><?= $message ?></span>
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- DATE FILTERS -->
-    <!-- ================================================================ -->
-    <div class="filter-section animate-fade-in-up" style="animation-delay:0.05s;">
-        <div class="filter-row" style="margin-bottom:6px;">
-            <span style="font-size:0.6rem;font-weight:700;color:var(--success);text-transform:uppercase;letter-spacing:0.04em;">
-                <i class="fas fa-calendar"></i> Date:
-            </span>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=daily<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn date-btn <?= $date_filter === 'daily' ? 'active' : '' ?>">📅 Daily</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=week<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn date-btn <?= $date_filter === 'week' ? 'active' : '' ?>">📅 Week</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=monthly<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn date-btn <?= $date_filter === 'monthly' ? 'active' : '' ?>">📅 Monthly</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=3months<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn date-btn <?= $date_filter === '3months' ? 'active' : '' ?>">📅 3 Months</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=6months<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn date-btn <?= $date_filter === '6months' ? 'active' : '' ?>">📅 6 Months</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=1year<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn date-btn <?= $date_filter === '1year' ? 'active' : '' ?>">📅 1 Year</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=all<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn date-btn <?= $date_filter === 'all' ? 'active' : '' ?>">📅 All</a>
+    <div class="filter-section-exp">
+        <div class="filter-row-exp" style="margin-bottom:6px;">
+            <span class="filter-label-exp"><i class="fas fa-calendar"></i> Date:</span>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=daily<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === 'daily' ? 'active' : '' ?>">📅 Daily</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=week<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === 'week' ? 'active' : '' ?>">📅 Week</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=monthly<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === 'monthly' ? 'active' : '' ?>">📅 Monthly</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=3months<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === '3months' ? 'active' : '' ?>">📅 3 Months</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=6months<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === '6months' ? 'active' : '' ?>">📅 6 Months</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=1year<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === '1year' ? 'active' : '' ?>">📅 1 Year</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=all<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === 'all' ? 'active' : '' ?>">📅 All</a>
         </div>
         
-        <div class="filter-row" style="border-top:1px solid var(--border-color);padding-top:8px;margin-top:4px;">
-            <span style="font-size:0.6rem;font-weight:700;color:var(--success);text-transform:uppercase;letter-spacing:0.04em;">
-                <i class="fas fa-calendar-range"></i> Range:
-            </span>
-            <form method="GET" class="filter-row" style="flex:1;gap:6px;" id="dateRangeForm">
+        <div class="filter-row-exp" style="border-top:1px solid var(--page-border);padding-top:8px;margin-top:4px;">
+            <span class="filter-label-exp"><i class="fas fa-calendar-range"></i> Range:</span>
+            <form method="GET" class="filter-row-exp" style="flex:1;gap:6px;">
                 <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
                 <input type="hidden" name="date_filter" value="custom">
-                <?php if ($filter_status !== 'all'): ?>
-                    <input type="hidden" name="status" value="<?= htmlspecialchars($filter_status) ?>">
-                <?php endif; ?>
-                <?php if (!empty($filter_category)): ?>
-                    <input type="hidden" name="category" value="<?= htmlspecialchars($filter_category) ?>">
-                <?php endif; ?>
-                <?php if (!empty($search)): ?>
-                    <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
-                <?php endif; ?>
-                <input type="date" name="date_from" class="filter-input date-input" value="<?= htmlspecialchars($date_from) ?>" placeholder="From">
-                <span style="color:var(--text-secondary);font-size:0.7rem;">to</span>
-                <input type="date" name="date_to" class="filter-input date-input" value="<?= htmlspecialchars($date_to) ?>" placeholder="To">
-                <button type="submit" class="btn-search" style="padding:5px 12px;font-size:0.65rem;">
-                    <i class="fas fa-search"></i> Apply
-                </button>
+                <?php if ($filter_status !== 'all'): ?><input type="hidden" name="status" value="<?= htmlspecialchars($filter_status) ?>"><?php endif; ?>
+                <?php if (!empty($filter_category)): ?><input type="hidden" name="category" value="<?= htmlspecialchars($filter_category) ?>"><?php endif; ?>
+                <?php if (!empty($search)): ?><input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>"><?php endif; ?>
+                <input type="date" name="date_from" class="filter-input-exp" value="<?= htmlspecialchars($date_from) ?>" placeholder="From">
+                <span style="color:var(--page-text-secondary);font-size:0.7rem;">to</span>
+                <input type="date" name="date_to" class="filter-input-exp" value="<?= htmlspecialchars($date_to) ?>" placeholder="To">
+                <button type="submit" class="btn-search-exp"><i class="fas fa-search"></i> Apply</button>
                 <?php if (!empty($date_from) && !empty($date_to)): ?>
-                    <a href="?branch=<?= $selected_branch_id ?>&date_filter=all<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="btn btn-outline" style="padding:4px 10px;font-size:0.6rem;border:2px solid var(--border-color);border-radius:5px;background:transparent;color:var(--text-secondary);cursor:pointer;text-decoration:none;">
-                        <i class="fas fa-times"></i> Clear
-                    </a>
+                    <a href="?branch=<?= $selected_branch_id ?>&date_filter=all" class="btn-reset-exp"><i class="fas fa-times"></i> Clear</a>
                 <?php endif; ?>
             </form>
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- STATUS & CATEGORY FILTERS -->
-    <!-- ================================================================ -->
-    <div class="filter-section animate-fade-in-up" style="animation-delay:0.1s;">
-        <div class="filter-row">
-            <span style="font-size:0.6rem;font-weight:700;color:var(--success);text-transform:uppercase;letter-spacing:0.04em;">
-                <i class="fas fa-filter"></i> Status:
-            </span>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=all<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= !empty($date_from) ? '&date_from=' . urlencode($date_from) . '&date_to=' . urlencode($date_to) : '' ?>" class="filter-btn <?= $filter_status === 'all' ? 'active' : '' ?>">📋 All</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=pending<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= !empty($date_from) ? '&date_from=' . urlencode($date_from) . '&date_to=' . urlencode($date_to) : '' ?>" class="filter-btn <?= $filter_status === 'pending' ? 'active' : '' ?>">⏳ Pending</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=paid<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= !empty($date_from) ? '&date_from=' . urlencode($date_from) . '&date_to=' . urlencode($date_to) : '' ?>" class="filter-btn <?= $filter_status === 'paid' ? 'active' : '' ?>">✅ Paid</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=cancelled<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= !empty($date_from) ? '&date_from=' . urlencode($date_from) . '&date_to=' . urlencode($date_to) : '' ?>" class="filter-btn <?= $filter_status === 'cancelled' ? 'active' : '' ?>">❌ Cancelled</a>
+    <div class="filter-section-exp">
+        <div class="filter-row-exp">
+            <span class="filter-label-exp"><i class="fas fa-filter"></i> Status:</span>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=all<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $filter_status === 'all' ? 'active' : '' ?>">📋 All</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=pending<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $filter_status === 'pending' ? 'active' : '' ?>">⏳ Pending</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=paid<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $filter_status === 'paid' ? 'active' : '' ?>">✅ Paid</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=cancelled<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $filter_status === 'cancelled' ? 'active' : '' ?>">❌ Cancelled</a>
             
             <?php if (!empty($categories)): ?>
-            <select name="category" class="filter-input" style="flex:0 1 auto;min-width:100px;max-width:180px;" onchange="window.location.href='?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=<?= $filter_status ?>&category='+this.value+'<?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= !empty($date_from) ? '&date_from=' . urlencode($date_from) . '&date_to=' . urlencode($date_to) : '' ?>'">
+            <select class="filter-input-exp" style="flex:0 1 auto;min-width:120px;max-width:180px;" onchange="window.location.href='?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=<?= $filter_status ?>&category='+this.value<?= !empty($search) ? "+'&search=" . urlencode($search) . "'" : '' ?>">
                 <option value="">All Categories</option>
                 <?php foreach ($categories as $cat): ?>
                     <option value="<?= htmlspecialchars($cat['category']) ?>" <?= $filter_category === $cat['category'] ? 'selected' : '' ?>>
@@ -2129,45 +1503,31 @@ include_once '../../components/admin_sidebar.php';
             
             <div style="flex:1;"></div>
             
-            <form method="GET" class="filter-row" style="flex:1;gap:6px;max-width:350px;" id="searchForm">
+            <form method="GET" class="filter-row-exp" style="flex:1;gap:6px;max-width:350px;">
                 <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
                 <input type="hidden" name="date_filter" value="<?= htmlspecialchars($date_filter) ?>">
-                <?php if ($filter_status !== 'all'): ?>
-                    <input type="hidden" name="status" value="<?= htmlspecialchars($filter_status) ?>">
-                <?php endif; ?>
-                <?php if (!empty($filter_category)): ?>
-                    <input type="hidden" name="category" value="<?= htmlspecialchars($filter_category) ?>">
-                <?php endif; ?>
-                <?php if (!empty($date_from)): ?>
-                    <input type="hidden" name="date_from" value="<?= htmlspecialchars($date_from) ?>">
-                    <input type="hidden" name="date_to" value="<?= htmlspecialchars($date_to) ?>">
-                <?php endif; ?>
-                <input type="text" name="search" id="searchInput" class="filter-input" placeholder="Search description..." value="<?= htmlspecialchars($search) ?>" style="flex:1;min-width:100px;">
-                <button type="submit" class="btn-search">
-                    <i class="fas fa-search"></i>
-                </button>
-                <?php if (!empty($search) || $filter_status !== 'all' || !empty($filter_category) || !empty($date_from) || !empty($date_to)): ?>
-                    <a href="expenses.php?branch=<?= $selected_branch_id ?>&date_filter=all" class="btn btn-outline" style="padding:5px 10px;font-size:0.6rem;border:2px solid var(--border-color);border-radius:5px;background:transparent;color:var(--text-secondary);cursor:pointer;text-decoration:none;">
-                        <i class="fas fa-times"></i> Reset
-                    </a>
+                <?php if ($filter_status !== 'all'): ?><input type="hidden" name="status" value="<?= htmlspecialchars($filter_status) ?>"><?php endif; ?>
+                <?php if (!empty($filter_category)): ?><input type="hidden" name="category" value="<?= htmlspecialchars($filter_category) ?>"><?php endif; ?>
+                <input type="text" name="search" id="searchInput" class="filter-input-exp" placeholder="Search..." value="<?= htmlspecialchars($search) ?>" style="flex:1;min-width:100px;">
+                <button type="submit" class="btn-search-exp"><i class="fas fa-search"></i></button>
+                <?php if (!empty($search) || $filter_status !== 'all' || !empty($filter_category)): ?>
+                    <a href="expenses.php?branch=<?= $selected_branch_id ?>&date_filter=all" class="btn-reset-exp"><i class="fas fa-times"></i></a>
                 <?php endif; ?>
             </form>
             
-            <button onclick="openAddModal()" class="btn-add">
+            <button onclick="openAddModal()" class="btn-add-exp">
                 <i class="fas fa-plus"></i> Add
             </button>
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- TABLE -->
-    <!-- ================================================================ -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.15s;">
-        <div class="table-scroll">
-            <table class="data-table">
+    <div class="table-container-exp">
+        <div class="table-scroll-exp">
+            <table class="data-table-exp">
                 <thead>
                     <tr>
-                        <th style="width:30px;"><i class="fas fa-hashtag"></i></th>
+                        <th style="width:30px;">#</th>
                         <th><i class="fas fa-receipt"></i> Expense #</th>
                         <th><i class="fas fa-store-alt"></i> Branch</th>
                         <th><i class="fas fa-tag"></i> Category</th>
@@ -2176,7 +1536,7 @@ include_once '../../components/admin_sidebar.php';
                         <th style="text-align:center;"><i class="fas fa-credit-card"></i> Method</th>
                         <th style="text-align:center;"><i class="fas fa-calendar"></i> Date</th>
                         <th style="text-align:center;"><i class="fas fa-info-circle"></i> Status</th>
-                        <th style="text-align:center;min-width:120px;"><i class="fas fa-cog"></i> Actions</th>
+                        <th style="text-align:center;min-width:140px;"><i class="fas fa-cog"></i> Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -2185,63 +1545,54 @@ include_once '../../components/admin_sidebar.php';
                             <tr>
                                 <td style="text-align:center;"><?= $i++ ?></td>
                                 <td>
-                                    <span class="font-mono font-semibold" style="color:var(--success);font-size:0.7rem;">
+                                    <span style="font-family:monospace;font-weight:600;color:#059669;font-size:0.7rem;">
                                         <?= htmlspecialchars($exp['expense_number']) ?>
                                     </span>
                                 </td>
                                 <td>
-                                    <span class="badge-status" style="background:var(--primary-bg);color:var(--primary);border-color:var(--primary);">
+                                    <span class="badge-status-exp" style="background:#E8F0FE;color:#0B5ED7;border-color:#0B5ED7;">
                                         <?= htmlspecialchars($exp['branch_name'] ?? 'N/A') ?>
                                     </span>
                                 </td>
                                 <td>
-                                    <span class="badge-status" style="background:var(--purple-bg);color:var(--purple);border-color:var(--purple);">
+                                    <span class="badge-status-exp" style="background:#EDE9FE;color:#7C3AED;border-color:#7C3AED;">
                                         <?= htmlspecialchars($exp['category']) ?>
                                     </span>
                                 </td>
                                 <td>
                                     <span style="font-size:0.75rem;"><?= htmlspecialchars($exp['description']) ?></span>
                                     <?php if (!empty($exp['notes'])): ?>
-                                        <div class="text-xs text-gray-400">📝 <?= htmlspecialchars($exp['notes']) ?></div>
+                                        <div style="font-size:0.65rem;color:var(--page-text-secondary);">📝 <?= htmlspecialchars($exp['notes']) ?></div>
                                     <?php endif; ?>
                                 </td>
-                                <td style="text-align:center;font-weight:700;color:var(--success);">
+                                <td style="text-align:center;font-weight:700;color:#059669;">
                                     <?= $currency ?> <?= formatMoney($exp['amount']) ?>
                                 </td>
                                 <td style="text-align:center;">
-                                    <span class="badge-status" style="background:var(--gray-100);color:var(--gray-600);border-color:var(--gray-300);font-size:0.5rem;">
+                                    <span class="badge-status-exp" style="background:var(--page-hover);color:var(--page-text-secondary);border-color:var(--page-border);font-size:0.55rem;">
                                         <?= ucfirst(str_replace('_', ' ', $exp['payment_method'] ?? 'cash')) ?>
                                     </span>
                                 </td>
+                                <td style="text-align:center;font-size:0.7rem;"><?= formatDateOnly($exp['payment_date']) ?></td>
                                 <td style="text-align:center;">
-                                    <span class="text-xs"><?= formatDateOnly($exp['payment_date']) ?></span>
-                                </td>
-                                <td style="text-align:center;">
-                                    <span class="badge-status <?= getStatusBadgeClass($exp['status']) ?>">
+                                    <span class="badge-status-exp badge-<?= getStatusBadgeClass($exp['status']) ?>-exp">
                                         <?= getStatusLabel($exp['status']) ?>
                                     </span>
                                 </td>
                                 <td style="text-align:center;">
-                                    <div class="action-buttons">
-                                        <!-- VIEW button -->
-                                        <a href="expenses.php?branch=<?= $selected_branch_id ?>&view=<?= $exp['id'] ?><?= !empty($date_from) ? '&date_from=' . urlencode($date_from) . '&date_to=' . urlencode($date_to) : '' ?><?= $date_filter !== 'all' ? '&date_filter=' . urlencode($date_filter) : '' ?><?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="btn btn-view" title="View Details">
-                                            <i class="fas fa-eye"></i> View
+                                    <div class="action-buttons-exp">
+                                        <a href="expenses.php?branch=<?= $selected_branch_id ?>&view=<?= $exp['id'] ?>" class="btn-exp btn-view-exp" title="View">
+                                            <i class="fas fa-eye"></i>
                                         </a>
-                                        
-                                        <!-- EDIT button -->
-                                        <a href="#" class="btn btn-edit" title="Edit" onclick="openEditModal(<?= $exp['id'] ?>, <?= $exp['branch_id'] ?>, '<?= htmlspecialchars($exp['expense_number']) ?>', '<?= htmlspecialchars(addslashes($exp['category'])) ?>', '<?= htmlspecialchars(addslashes($exp['description'])) ?>', '<?= formatMoney($exp['amount']) ?>', '<?= $exp['payment_method'] ?? 'cash' ?>', '<?= $exp['payment_date'] ?>', '<?= $exp['status'] ?>', '<?= htmlspecialchars(addslashes($exp['receipt_number'] ?? '')) ?>', '<?= htmlspecialchars(addslashes($exp['notes'] ?? '')) ?>')">
-                                            <i class="fas fa-edit"></i> Edit
+                                        <a href="#" class="btn-exp btn-edit-exp" title="Edit" onclick="openEditModal(<?= $exp['id'] ?>, <?= $exp['branch_id'] ?>, '<?= htmlspecialchars($exp['expense_number']) ?>', '<?= htmlspecialchars(addslashes($exp['category'])) ?>', '<?= htmlspecialchars(addslashes($exp['description'])) ?>', '<?= formatMoney($exp['amount']) ?>', '<?= $exp['payment_method'] ?? 'cash' ?>', '<?= $exp['payment_date'] ?>', '<?= $exp['status'] ?>', '<?= htmlspecialchars(addslashes($exp['receipt_number'] ?? '')) ?>', '<?= htmlspecialchars(addslashes($exp['notes'] ?? '')) ?>')">
+                                            <i class="fas fa-edit"></i>
                                         </a>
-                                        
-                                        <!-- DELETE button -->
-                                        <a href="expenses.php?branch=<?= $selected_branch_id ?>&delete=<?= $exp['id'] ?>" class="btn btn-delete" onclick="return confirm('Delete this expense? This action cannot be undone!')" title="Delete">
-                                            <i class="fas fa-trash"></i> Delete
+                                        <a href="expenses.php?branch=<?= $selected_branch_id ?>&delete=<?= $exp['id'] ?>" class="btn-exp btn-delete-exp" onclick="return confirm('Delete this expense?')" title="Delete">
+                                            <i class="fas fa-trash"></i>
                                         </a>
-                                        
-                                        <!-- PAY button - ONLY for PENDING status -->
                                         <?php if ($exp['status'] === 'pending'): ?>
-                                            <a href="expenses.php?branch=<?= $selected_branch_id ?>&pay=<?= $exp['id'] ?>" class="btn btn-pay" onclick="return confirm('Mark this expense as paid?')" title="Mark as Paid">
-                                                <i class="fas fa-check"></i> Pay
+                                            <a href="expenses.php?branch=<?= $selected_branch_id ?>&pay=<?= $exp['id'] ?>" class="btn-exp btn-pay-exp" onclick="return confirm('Mark this expense as paid?')" title="Mark as Paid">
+                                                <i class="fas fa-check"></i>
                                             </a>
                                         <?php endif; ?>
                                     </div>
@@ -2251,14 +1602,10 @@ include_once '../../components/admin_sidebar.php';
                     <?php else: ?>
                         <tr>
                             <td colspan="10">
-                                <div class="empty-state">
+                                <div class="empty-state-exp">
                                     <i class="fas fa-coins"></i>
                                     <p>No expenses found</p>
-                                    <?php if (!empty($search) || !empty($filter_category) || $filter_status !== 'all' || !empty($date_from) || !empty($date_to) || $date_filter !== 'all'): ?>
-                                        <p class="sub">Try adjusting your filters</p>
-                                    <?php else: ?>
-                                        <p class="sub">Click "Add Expense" to get started</p>
-                                    <?php endif; ?>
+                                    <p style="font-size:0.8rem;color:var(--page-text-muted);margin-top:4px;">Try adjusting your filters</p>
                                 </div>
                             </td>
                         </tr>
@@ -2267,33 +1614,26 @@ include_once '../../components/admin_sidebar.php';
             </table>
         </div>
         
-        <div class="table-footer">
+        <div class="table-footer-exp">
             <span>
                 <i class="fas fa-list"></i> Showing <strong><?= count($expenses) ?></strong> expenses
-                <span class="text-xs" style="color:var(--text-secondary);">
-                    Total: <?= $currency ?> <?= formatMoney($all_amount) ?>
-                </span>
+                <span style="font-size:0.65rem;">| Total: <?= $currency ?> <?= formatMoney($all_amount) ?></span>
             </span>
             <span>
-                <span class="count-badge"><?= $all_expenses ?></span> Total expenses
-                <span class="text-xs" style="color:var(--text-secondary);" id="updateTimeDisplay">Last update: <?= date('H:i:s') ?></span>
+                <span style="background:#059669;color:white;padding:1px 10px;border-radius:16px;font-size:0.65rem;font-weight:600;"><?= $all_expenses ?></span> Total
             </span>
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
-    <footer class="footer">
+    <footer class="footer-exp">
         <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="footer-brand-exp">Braick Dispensary</span> Management System
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             Expenses
-            <span class="text-gray-300 mx-2">|</span>
-            <span class="text-gray-400">👤 <?= htmlspecialchars($user_full_name) ?></span>
-            <span class="text-gray-300 mx-2">|</span>
-            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
+            <span id="footerTime"><?= date('H:i:s') ?></span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -2304,76 +1644,74 @@ include_once '../../components/admin_sidebar.php';
 <!-- VIEW EXPENSE MODAL -->
 <!-- ================================================================ -->
 <?php if ($view_data): ?>
-<div class="modal-overlay show" id="viewModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <div class="modal-title">
-                <i class="fas fa-eye"></i> Expense Details
-            </div>
-            <a href="expenses.php?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=<?= $filter_status ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= !empty($date_from) ? '&date_from=' . urlencode($date_from) . '&date_to=' . urlencode($date_to) : '' ?>" class="modal-close">&times;</a>
+<div class="modal-overlay-exp show" id="viewModal">
+    <div class="modal-content-exp">
+        <div class="modal-header-exp">
+            <div class="modal-title-exp"><i class="fas fa-eye"></i> Expense Details</div>
+            <a href="expenses.php?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=<?= $filter_status ?>" class="modal-close-exp" style="text-decoration:none;">&times;</a>
         </div>
         
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Expense Number</div>
-                <div style="font-size:0.9rem;font-weight:600;color:var(--text-primary);"><?= htmlspecialchars($view_data['expense_number']) ?></div>
+        <div class="view-grid-exp">
+            <div class="view-item-exp">
+                <div class="view-label-exp">Expense #</div>
+                <div class="view-value-exp"><?= htmlspecialchars($view_data['expense_number']) ?></div>
             </div>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Branch</div>
-                <div style="font-size:0.9rem;font-weight:600;color:var(--text-primary);"><?= htmlspecialchars($view_data['branch_name'] ?? 'N/A') ?></div>
+            <div class="view-item-exp">
+                <div class="view-label-exp">Branch</div>
+                <div class="view-value-exp"><?= htmlspecialchars($view_data['branch_name'] ?? 'N/A') ?></div>
             </div>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Category</div>
-                <div style="font-size:0.9rem;font-weight:600;color:var(--text-primary);"><?= htmlspecialchars($view_data['category']) ?></div>
+            <div class="view-item-exp">
+                <div class="view-label-exp">Category</div>
+                <div class="view-value-exp"><?= htmlspecialchars($view_data['category']) ?></div>
             </div>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;grid-column:1/-1;">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Description</div>
-                <div style="font-size:0.9rem;font-weight:600;color:var(--text-primary);"><?= htmlspecialchars($view_data['description']) ?></div>
+            <div class="view-item-exp">
+                <div class="view-label-exp">Amount</div>
+                <div class="view-value-exp" style="color:#059669;font-weight:700;"><?= $currency ?> <?= formatMoney($view_data['amount']) ?></div>
             </div>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Amount</div>
-                <div style="font-size:0.9rem;font-weight:700;color:var(--success);"><?= $currency ?> <?= formatMoney($view_data['amount']) ?></div>
+            <div class="view-item-exp full-width">
+                <div class="view-label-exp">Description</div>
+                <div class="view-value-exp"><?= htmlspecialchars($view_data['description']) ?></div>
             </div>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Payment Method</div>
-                <div style="font-size:0.9rem;font-weight:600;color:var(--text-primary);"><?= ucfirst(str_replace('_', ' ', $view_data['payment_method'] ?? 'cash')) ?></div>
+            <div class="view-item-exp">
+                <div class="view-label-exp">Payment Method</div>
+                <div class="view-value-exp"><?= ucfirst(str_replace('_', ' ', $view_data['payment_method'] ?? 'cash')) ?></div>
             </div>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Payment Date</div>
-                <div style="font-size:0.9rem;font-weight:600;color:var(--text-primary);"><?= formatDateOnly($view_data['payment_date']) ?></div>
+            <div class="view-item-exp">
+                <div class="view-label-exp">Payment Date</div>
+                <div class="view-value-exp"><?= formatDateOnly($view_data['payment_date']) ?></div>
             </div>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Status</div>
-                <div style="font-size:0.9rem;font-weight:600;">
-                    <span class="badge-status <?= getStatusBadgeClass($view_data['status']) ?>">
+            <div class="view-item-exp">
+                <div class="view-label-exp">Status</div>
+                <div class="view-value-exp">
+                    <span class="badge-status-exp badge-<?= getStatusBadgeClass($view_data['status']) ?>-exp">
                         <?= getStatusLabel($view_data['status']) ?>
                     </span>
                 </div>
             </div>
             <?php if (!empty($view_data['receipt_number'])): ?>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Receipt Number</div>
-                <div style="font-size:0.9rem;font-weight:600;color:var(--text-primary);"><?= htmlspecialchars($view_data['receipt_number']) ?></div>
+            <div class="view-item-exp">
+                <div class="view-label-exp">Receipt #</div>
+                <div class="view-value-exp"><?= htmlspecialchars($view_data['receipt_number']) ?></div>
             </div>
             <?php endif; ?>
             <?php if (!empty($view_data['notes'])): ?>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;grid-column:1/-1;">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Notes</div>
-                <div style="font-size:0.9rem;font-weight:600;color:var(--text-primary);"><?= htmlspecialchars($view_data['notes']) ?></div>
+            <div class="view-item-exp full-width">
+                <div class="view-label-exp">Notes</div>
+                <div class="view-value-exp"><?= htmlspecialchars($view_data['notes']) ?></div>
             </div>
             <?php endif; ?>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;grid-column:1/-1;">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Created By</div>
-                <div style="font-size:0.9rem;font-weight:600;color:var(--text-primary);"><?= htmlspecialchars($view_data['created_by_name'] ?? 'Unknown') ?></div>
+            <div class="view-item-exp full-width">
+                <div class="view-label-exp">Created By</div>
+                <div class="view-value-exp"><?= htmlspecialchars($view_data['created_by_name'] ?? 'Unknown') ?></div>
             </div>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;grid-column:1/-1;">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Created At</div>
-                <div style="font-size:0.9rem;font-weight:600;color:var(--text-primary);"><?= formatDate($view_data['created_at']) ?></div>
+            <div class="view-item-exp full-width">
+                <div class="view-label-exp">Created At</div>
+                <div class="view-value-exp"><?= formatDate($view_data['created_at']) ?></div>
             </div>
         </div>
         
-        <div class="form-actions">
-            <a href="expenses.php?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=<?= $filter_status ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= !empty($date_from) ? '&date_from=' . urlencode($date_from) . '&date_to=' . urlencode($date_to) : '' ?>" class="btn-cancel-modal">
+        <div class="form-actions-exp">
+            <a href="expenses.php?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=<?= $filter_status ?>" class="btn-cancel-modal-exp">
                 <i class="fas fa-times"></i> Close
             </a>
         </div>
@@ -2382,36 +1720,22 @@ include_once '../../components/admin_sidebar.php';
 <?php endif; ?>
 
 <!-- ================================================================ -->
-<!-- ADD EXPENSE MODAL -->
+<!-- ADD MODAL -->
 <!-- ================================================================ -->
-<div class="modal-overlay" id="addModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <div class="modal-title">
-                <i class="fas fa-plus-circle"></i> Add New Expense
-            </div>
-            <button class="modal-close" onclick="closeModal('addModal')">&times;</button>
+<div class="modal-overlay-exp" id="addModal">
+    <div class="modal-content-exp">
+        <div class="modal-header-exp">
+            <div class="modal-title-exp"><i class="fas fa-plus-circle"></i> Add New Expense</div>
+            <button class="modal-close-exp" onclick="closeModal('addModal')">&times;</button>
         </div>
         
-        <form method="POST" action="" id="expenseForm">
+        <form method="POST" action="">
             <input type="hidden" name="action" value="add_expense">
             <input type="hidden" name="branch_id" value="<?= $selected_branch_id ?>">
             
-            <?php if ($selected_branch_id == 0): ?>
-            <div class="form-group">
-                <label>Branch <span class="required">*</span></label>
-                <select name="branch_id" class="form-control" required>
-                    <option value="">Select Branch</option>
-                    <?php foreach ($branches as $b): ?>
-                        <option value="<?= $b['id'] ?>"><?= htmlspecialchars($b['name']) ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <?php endif; ?>
-            
-            <div class="form-group">
+            <div class="form-group-exp">
                 <label>Category <span class="required">*</span></label>
-                <select name="category" class="form-control" required>
+                <select name="category" class="form-control-exp" required>
                     <option value="">Select Category</option>
                     <option value="Utilities">🔌 Utilities</option>
                     <option value="Rent">🏠 Rent</option>
@@ -2424,37 +1748,24 @@ include_once '../../components/admin_sidebar.php';
                     <option value="Cleaning">🧹 Cleaning</option>
                     <option value="Security">🔒 Security</option>
                     <option value="Marketing">📢 Marketing</option>
-                    <option value="Training">📚 Training</option>
-                    <option value="Insurance">🛡️ Insurance</option>
-                    <option value="Tax">📊 Tax</option>
                     <option value="Other">📌 Other</option>
                 </select>
             </div>
             
-            <div class="form-group">
+            <div class="form-group-exp">
                 <label>Description <span class="required">*</span></label>
-                <input type="text" name="description" class="form-control" placeholder="Enter expense description" required>
+                <input type="text" name="description" class="form-control-exp" placeholder="Enter description" required>
             </div>
             
-            <div class="form-group">
+            <div class="form-group-exp">
                 <label>Amount (<?= $currency ?>) <span class="required">*</span></label>
-                <input type="text" 
-                       name="amount" 
-                       id="amountInput" 
-                       class="form-control" 
-                       placeholder="0" 
-                       required
-                       oninput="formatAmount(this)"
-                       onfocus="this.select()">
-                <div class="help-text">
-                    <i class="fas fa-info-circle"></i> Type numbers - commas added automatically
-                </div>
+                <input type="text" name="amount" class="form-control-exp" placeholder="0" required oninput="formatAmount(this)" onfocus="this.select()">
             </div>
             
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-                <div class="form-group">
+                <div class="form-group-exp">
                     <label>Payment Method</label>
-                    <select name="payment_method" class="form-control">
+                    <select name="payment_method" class="form-control-exp">
                         <option value="cash">💵 Cash</option>
                         <option value="m-pesa">📱 M-Pesa</option>
                         <option value="airtel_money">📱 Airtel Money</option>
@@ -2464,72 +1775,64 @@ include_once '../../components/admin_sidebar.php';
                         <option value="other">Other</option>
                     </select>
                 </div>
-                
-                <div class="form-group">
+                <div class="form-group-exp">
                     <label>Payment Date <span class="required">*</span></label>
-                    <input type="date" name="payment_date" class="form-control" value="<?= date('Y-m-d') ?>" required>
+                    <input type="date" name="payment_date" class="form-control-exp" value="<?= date('Y-m-d') ?>" required>
                 </div>
             </div>
             
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-                <div class="form-group">
+                <div class="form-group-exp">
                     <label>Status</label>
-                    <select name="status" class="form-control">
+                    <select name="status" class="form-control-exp">
                         <option value="pending">⏳ Pending</option>
                         <option value="paid" selected>✅ Paid</option>
                         <option value="cancelled">❌ Cancelled</option>
                     </select>
                 </div>
-                
-                <div class="form-group">
-                    <label>Receipt Number</label>
-                    <input type="text" name="receipt_number" class="form-control" placeholder="Optional receipt #">
+                <div class="form-group-exp">
+                    <label>Receipt #</label>
+                    <input type="text" name="receipt_number" class="form-control-exp" placeholder="Optional">
                 </div>
             </div>
             
-            <div class="form-group">
+            <div class="form-group-exp">
                 <label>Notes</label>
-                <textarea name="notes" class="form-control" rows="2" placeholder="Additional notes..."></textarea>
+                <textarea name="notes" class="form-control-exp" rows="2" placeholder="Additional notes..."></textarea>
             </div>
             
-            <div class="form-actions">
-                <button type="submit" class="btn-save">
-                    <i class="fas fa-save"></i> Save Expense
-                </button>
-                <button type="button" class="btn-cancel-modal" onclick="closeModal('addModal')">
-                    <i class="fas fa-times"></i> Cancel
-                </button>
+            <div class="form-actions-exp">
+                <button type="submit" class="btn-save-exp"><i class="fas fa-save"></i> Save Expense</button>
+                <button type="button" class="btn-cancel-modal-exp" onclick="closeModal('addModal')"><i class="fas fa-times"></i> Cancel</button>
             </div>
         </form>
     </div>
 </div>
 
 <!-- ================================================================ -->
-<!-- EDIT EXPENSE MODAL -->
+<!-- EDIT MODAL -->
 <!-- ================================================================ -->
-<div class="modal-overlay" id="editModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <div class="modal-title">
-                <i class="fas fa-edit"></i> Edit Expense
-            </div>
-            <button class="modal-close" onclick="closeModal('editModal')">&times;</button>
+<div class="modal-overlay-exp" id="editModal">
+    <div class="modal-content-exp">
+        <div class="modal-header-exp">
+            <div class="modal-title-exp"><i class="fas fa-edit"></i> Edit Expense</div>
+            <button class="modal-close-exp" onclick="closeModal('editModal')">&times;</button>
         </div>
         
-        <form method="POST" action="" id="editForm">
+        <form method="POST" action="">
             <input type="hidden" name="action" value="update_expense">
             <input type="hidden" name="expense_id" id="editExpenseId">
             <input type="hidden" name="branch_id" id="editBranchId" value="<?= $selected_branch_id ?>">
             
-            <div class="form-group">
+            <div class="form-group-exp">
                 <label>Expense Number</label>
-                <input type="text" id="editExpenseNumber" class="form-control" disabled style="background:var(--gray-100);">
+                <input type="text" id="editExpenseNumber" class="form-control-exp" disabled>
             </div>
             
-            <div class="form-group">
+            <div class="form-group-exp">
                 <label>Category <span class="required">*</span></label>
-                <select name="category" id="editCategory" class="form-control" required>
-                    <option value="">Select Category</option>
+                <select name="category" id="editCategory" class="form-control-exp" required>
+                    <option value="">Select</option>
                     <option value="Utilities">🔌 Utilities</option>
                     <option value="Rent">🏠 Rent</option>
                     <option value="Salary">💼 Salary</option>
@@ -2541,34 +1844,24 @@ include_once '../../components/admin_sidebar.php';
                     <option value="Cleaning">🧹 Cleaning</option>
                     <option value="Security">🔒 Security</option>
                     <option value="Marketing">📢 Marketing</option>
-                    <option value="Training">📚 Training</option>
-                    <option value="Insurance">🛡️ Insurance</option>
-                    <option value="Tax">📊 Tax</option>
                     <option value="Other">📌 Other</option>
                 </select>
             </div>
             
-            <div class="form-group">
+            <div class="form-group-exp">
                 <label>Description <span class="required">*</span></label>
-                <input type="text" name="description" id="editDescription" class="form-control" placeholder="Enter expense description" required>
+                <input type="text" name="description" id="editDescription" class="form-control-exp" required>
             </div>
             
-            <div class="form-group">
+            <div class="form-group-exp">
                 <label>Amount (<?= $currency ?>) <span class="required">*</span></label>
-                <input type="text" 
-                       name="amount" 
-                       id="editAmount" 
-                       class="form-control" 
-                       placeholder="0" 
-                       required
-                       oninput="formatAmount(this)"
-                       onfocus="this.select()">
+                <input type="text" name="amount" id="editAmount" class="form-control-exp" required oninput="formatAmount(this)" onfocus="this.select()">
             </div>
             
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-                <div class="form-group">
+                <div class="form-group-exp">
                     <label>Payment Method</label>
-                    <select name="payment_method" id="editPaymentMethod" class="form-control">
+                    <select name="payment_method" id="editPaymentMethod" class="form-control-exp">
                         <option value="cash">💵 Cash</option>
                         <option value="m-pesa">📱 M-Pesa</option>
                         <option value="airtel_money">📱 Airtel Money</option>
@@ -2578,41 +1871,35 @@ include_once '../../components/admin_sidebar.php';
                         <option value="other">Other</option>
                     </select>
                 </div>
-                
-                <div class="form-group">
+                <div class="form-group-exp">
                     <label>Payment Date <span class="required">*</span></label>
-                    <input type="date" name="payment_date" id="editPaymentDate" class="form-control" required>
+                    <input type="date" name="payment_date" id="editPaymentDate" class="form-control-exp" required>
                 </div>
             </div>
             
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-                <div class="form-group">
+                <div class="form-group-exp">
                     <label>Status</label>
-                    <select name="status" id="editStatus" class="form-control">
+                    <select name="status" id="editStatus" class="form-control-exp">
                         <option value="pending">⏳ Pending</option>
                         <option value="paid">✅ Paid</option>
                         <option value="cancelled">❌ Cancelled</option>
                     </select>
                 </div>
-                
-                <div class="form-group">
-                    <label>Receipt Number</label>
-                    <input type="text" name="receipt_number" id="editReceiptNumber" class="form-control" placeholder="Optional receipt #">
+                <div class="form-group-exp">
+                    <label>Receipt #</label>
+                    <input type="text" name="receipt_number" id="editReceiptNumber" class="form-control-exp" placeholder="Optional">
                 </div>
             </div>
             
-            <div class="form-group">
+            <div class="form-group-exp">
                 <label>Notes</label>
-                <textarea name="notes" id="editNotes" class="form-control" rows="2" placeholder="Additional notes..."></textarea>
+                <textarea name="notes" id="editNotes" class="form-control-exp" rows="2"></textarea>
             </div>
             
-            <div class="form-actions">
-                <button type="submit" class="btn-save">
-                    <i class="fas fa-save"></i> Update Expense
-                </button>
-                <button type="button" class="btn-cancel-modal" onclick="closeModal('editModal')">
-                    <i class="fas fa-times"></i> Cancel
-                </button>
+            <div class="form-actions-exp">
+                <button type="submit" class="btn-save-exp"><i class="fas fa-save"></i> Update</button>
+                <button type="button" class="btn-cancel-modal-exp" onclick="closeModal('editModal')"><i class="fas fa-times"></i> Cancel</button>
             </div>
         </form>
     </div>
@@ -2621,170 +1908,50 @@ include_once '../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <!-- PDF MODAL -->
 <!-- ================================================================ -->
-<div class="pdf-modal-overlay" id="pdfModal">
-    <div class="pdf-modal">
-        <div class="pdf-modal-header">
-            <div class="modal-title">
-                <i class="fas fa-file-pdf" style="color:rgba(255,255,255,0.8);"></i>
-                Expenses Report
+<div class="pdf-modal-overlay-exp" id="pdfModal">
+    <div class="pdf-modal-exp">
+        <div class="pdf-modal-header-exp">
+            <div class="modal-title-exp">
+                <i class="fas fa-file-pdf" style="color:rgba(255,255,255,0.8);"></i> Expenses Report
             </div>
-            <div class="modal-actions">
-                <button onclick="downloadPDF()" class="btn">
-                    <i class="fas fa-download"></i> Download
-                </button>
-                <button onclick="window.print()" class="btn">
-                    <i class="fas fa-print"></i> Print
-                </button>
-                <button onclick="closePDFModal()" class="btn btn-danger-modal">
-                    <i class="fas fa-times"></i> Cancel
-                </button>
+            <div class="modal-actions-exp">
+                <button onclick="downloadPDF()"><i class="fas fa-download"></i> Download</button>
+                <button onclick="window.print()"><i class="fas fa-print"></i> Print</button>
+                <button onclick="closePDFModal()" style="background:rgba(220,38,38,0.3);border-color:rgba(220,38,38,0.2);"><i class="fas fa-times"></i> Close</button>
             </div>
         </div>
-        <div class="pdf-modal-body" id="pdfModalBody">
-            <div class="pdf-content" id="pdfContent">
-                <!-- PDF content generated by JavaScript -->
-            </div>
+        <div class="pdf-modal-body-exp">
+            <div class="pdf-content-exp" id="pdfContent"></div>
         </div>
     </div>
 </div>
 
 <!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:0.9rem;"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.8rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.7rem;opacity:0.9;margin:0;" id="toastMessage"></p>
-    </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- PAGE-SPECIFIC JAVASCRIPT (NO dark mode, NO sidebar, NO date-time) -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // AUTO-FORMAT AMOUNT WITH COMMAS WHILE TYPING
+    // FOOTER TIME ONLY
     // ================================================================
-    function formatAmount(input) {
-        var raw = input.value.replace(/[^0-9]/g, '');
-        if (raw === '') {
-            input.value = '';
-            return;
-        }
-        var num = parseInt(raw, 10);
-        if (isNaN(num)) {
-            input.value = '';
-            return;
-        }
-        input.value = num.toLocaleString('en-US');
-    }
-
-    // ================================================================
-    // DARK MODE TOGGLE - FIXED
-    // ================================================================
-    (function() {
-        var darkModeToggle = document.getElementById('darkModeToggle');
-        var darkIcon = document.getElementById('darkIcon');
-        var darkText = document.getElementById('darkText');
-        var htmlElement = document.documentElement;
-        
-        // Check saved dark mode
-        var savedDarkMode = localStorage.getItem('darkMode');
-        var cookieDarkMode = document.cookie.split('; ').find(function(row) {
-            return row.startsWith('dark_mode=');
-        });
-        
-        // Determine initial dark mode
-        var isDark = false;
-        if (savedDarkMode === 'true') {
-            isDark = true;
-        } else if (cookieDarkMode) {
-            isDark = cookieDarkMode.split('=')[1] === 'true';
-        }
-        
-        // Apply dark mode
-        if (isDark) {
-            htmlElement.setAttribute('data-theme', 'dark');
-            if (darkIcon) darkIcon.className = 'fas fa-sun';
-            if (darkText) darkText.textContent = 'Light';
-        } else {
-            htmlElement.removeAttribute('data-theme');
-            if (darkIcon) darkIcon.className = 'fas fa-moon';
-            if (darkText) darkText.textContent = 'Dark';
-        }
-        
-        // Toggle dark mode
-        if (darkModeToggle) {
-            darkModeToggle.addEventListener('click', function(e) {
-                e.preventDefault();
-                var isDarkNow = htmlElement.getAttribute('data-theme') === 'dark';
-                
-                if (isDarkNow) {
-                    htmlElement.removeAttribute('data-theme');
-                    if (darkIcon) darkIcon.className = 'fas fa-moon';
-                    if (darkText) darkText.textContent = 'Dark';
-                    localStorage.setItem('darkMode', 'false');
-                    document.cookie = "dark_mode=false; path=/";
-                } else {
-                    htmlElement.setAttribute('data-theme', 'dark');
-                    if (darkIcon) darkIcon.className = 'fas fa-sun';
-                    if (darkText) darkText.textContent = 'Light';
-                    localStorage.setItem('darkMode', 'true');
-                    document.cookie = "dark_mode=true; path=/";
-                }
-            });
-        }
-    })();
-
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        if (url.searchParams.has('view')) {
-            url.searchParams.delete('view');
-        }
-        window.location.href = url.toString();
-    }
-
-    // ================================================================
-    // CLOCK - UPDATE EVERY SECOND
-    // ================================================================
-    function updateClock() {
+    setInterval(function() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var el = document.getElementById('clockDisplay');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
-    }
-    setInterval(updateClock, 1000);
-    updateClock();
+        var ftEl = document.getElementById('footerTime');
+        if (ftEl) ftEl.textContent = timeStr;
+    }, 1000);
 
     // ================================================================
-    // SIDEBAR TOGGLE
+    // FORMAT AMOUNT
     // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    if (sidebarToggle && sidebar) {
-        sidebarToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('open');
-        });
+    function formatAmount(input) {
+        var raw = input.value.replace(/[^0-9]/g, '');
+        if (raw === '') { input.value = ''; return; }
+        var num = parseInt(raw, 10);
+        if (isNaN(num)) { input.value = ''; return; }
+        input.value = num.toLocaleString('en-US');
     }
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
 
     // ================================================================
     // MODAL
@@ -2792,13 +1959,6 @@ include_once '../../components/admin_sidebar.php';
     function openAddModal() {
         document.getElementById('addModal').classList.add('show');
         document.body.style.overflow = 'hidden';
-        setTimeout(function() {
-            var amountInput = document.getElementById('amountInput');
-            if (amountInput) {
-                amountInput.focus();
-                amountInput.select();
-            }
-        }, 300);
     }
     
     function closeModal(id) {
@@ -2806,7 +1966,7 @@ include_once '../../components/admin_sidebar.php';
         document.body.style.overflow = 'auto';
     }
     
-    document.querySelectorAll('.modal-overlay').forEach(function(modal) {
+    document.querySelectorAll('.modal-overlay-exp').forEach(function(modal) {
         modal.addEventListener('click', function(e) {
             if (e.target === this) {
                 this.classList.remove('show');
@@ -2817,15 +1977,16 @@ include_once '../../components/admin_sidebar.php';
     
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
-            document.querySelectorAll('.modal-overlay.show').forEach(function(modal) {
+            document.querySelectorAll('.modal-overlay-exp.show').forEach(function(modal) {
                 modal.classList.remove('show');
                 document.body.style.overflow = 'auto';
             });
+            closePDFModal();
         }
     });
 
     // ================================================================
-    // OPEN EDIT MODAL
+    // EDIT MODAL
     // ================================================================
     function openEditModal(id, branchId, number, category, description, amount, method, date, status, receipt, notes) {
         document.getElementById('editExpenseId').value = id;
@@ -2842,158 +2003,6 @@ include_once '../../components/admin_sidebar.php';
         document.getElementById('editModal').classList.add('show');
         document.body.style.overflow = 'hidden';
     }
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchInput = document.getElementById('searchInput');
-    if (searchInput) {
-        searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                document.getElementById('searchForm').submit();
-            }
-        });
-    }
-
-    // ================================================================
-    // TOAST
-    // ================================================================
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
-    }
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var updateTimeDisplay = document.getElementById('updateTimeDisplay');
-        if (updateTimeDisplay) {
-            updateTimeDisplay.textContent = 'Last update: ' + timeStr;
-        }
-        var footerTimestamp = document.getElementById('footerTimestamp');
-        if (footerTimestamp) {
-            footerTimestamp.textContent = 'Last updated: ' + timeStr;
-        }
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
-    // ================================================================
-    // MANUAL REFRESH
-    // ================================================================
-    function manualRefresh() {
-        var btn = document.getElementById('refreshBtn');
-        if (btn) {
-            btn.innerHTML = '<span class="spinner" style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top-color:white;border-radius:50%;animation:spin 0.6s linear infinite;"></span> Loading...';
-            btn.disabled = true;
-        }
-        
-        fetchDashboardData();
-        
-        setTimeout(function() {
-            if (btn) {
-                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
-                btn.disabled = false;
-            }
-            showToast('✅ Refreshed', 'Page data updated manually', 'success');
-        }, 1500);
-    }
-
-    // ================================================================
-    // FETCH DASHBOARD DATA (AJAX)
-    // ================================================================
-    function fetchDashboardData() {
-        var url = 'get_expenses_data.php?branch=<?= $selected_branch_id ?>&t=' + Date.now();
-        
-        fetch(url)
-            .then(function(response) { return response.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    updateStats(data);
-                } else {
-                    console.error('Failed to fetch dashboard data:', data.message);
-                }
-            })
-            .catch(function(error) {
-                console.error('Fetch error:', error);
-            });
-    }
-
-    // ================================================================
-    // UPDATE STATS UI
-    // ================================================================
-    function updateStats(data) {
-        var statMap = {
-            'statAll': data.all_expenses || 0,
-            'statPending': data.pending_expenses || 0,
-            'statPaid': data.paid_expenses || 0,
-            'statCancelled': data.cancelled_expenses || 0
-        };
-        
-        for (var key in statMap) {
-            var el = document.getElementById(key);
-            if (el) {
-                el.textContent = Number(statMap[key]).toLocaleString();
-            }
-        }
-    }
-
-    // ================================================================
-    // AUTO UPDATE - EVERY 3 SECONDS
-    // ================================================================
-    var updateInterval = null;
-    var isUpdating = false;
-    
-    function startAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-        }
-        fetchDashboardData();
-        updateInterval = setInterval(function() {
-            if (!isUpdating) {
-                isUpdating = true;
-                fetchDashboardData();
-                setTimeout(function() {
-                    isUpdating = false;
-                }, 1000);
-            }
-        }, 3000);
-        console.log('%c🔄 Auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
-    }
-    
-    function stopAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = null;
-            console.log('%c⏹️ Auto-update stopped', 'font-size:12px; color:#DC2626;');
-        }
-    }
-
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopAutoUpdate();
-        } else {
-            startAutoUpdate();
-        }
-    });
 
     // ================================================================
     // PDF GENERATION
@@ -3035,96 +2044,78 @@ include_once '../../components/admin_sidebar.php';
         }
         
         var html = `
-            <div class="pdf-header">
-                <div class="pdf-logo">
-                    <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" style="height:55px;width:auto;object-fit:contain;display:block;margin:0 auto;" onerror="this.style.display='none'">
-                    <div class="clinic-name">BRAICK DISPENSARY</div>
-                    <div class="clinic-sub">Tunajali Afya Yako</div>
-                </div>
-                <div style="display:flex;justify-content:center;gap:14px;flex-wrap:wrap;margin-top:4px;padding-top:4px;border-top:1px solid #E2E8F0;font-size:0.6rem;color:#64748B;">
-                    <span>🏢 Branch: ${branchName}</span>
-                    <span>📅 ${new Date().toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' })}</span>
-                </div>
-                <div class="doc-title">
-                    💰 Expenses Report - ${filterDisplay}
-                </div>
+            <div class="pdf-header-exp">
+                <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" onerror="this.style.display='none'">
+                <div class="clinic-name-exp">BRAICK DISPENSARY</div>
+                <div class="clinic-sub-exp">Tunajali Afya Yako</div>
+                <div class="doc-title-exp">💰 Expenses Report - ${filterDisplay}</div>
             </div>
             
             <div style="margin-bottom:8px;">
-                <div class="pdf-section-title"><i class="fas fa-chart-bar"></i> Summary</div>
+                <div class="pdf-section-title-exp">📊 Summary</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin:4px 0;">
                     <div style="background:#D1FAE5;padding:6px 10px;border-radius:8px;text-align:center;border:1px solid #059669;">
                         <div style="font-size:18px;font-weight:700;color:#059669;">${totalBills}</div>
-                        <div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:600;">📋 Total Expenses</div>
+                        <div style="font-size:9px;color:#64748B;text-transform:uppercase;">📋 Total</div>
                     </div>
                     <div style="background:#FEF3C7;padding:6px 10px;border-radius:8px;text-align:center;border:1px solid #D97706;">
                         <div style="font-size:18px;font-weight:700;color:#D97706;">${pendingCount}</div>
-                        <div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:600;">⏳ Pending</div>
+                        <div style="font-size:9px;color:#64748B;text-transform:uppercase;">⏳ Pending</div>
                     </div>
                     <div style="background:#D1FAE5;padding:6px 10px;border-radius:8px;text-align:center;border:1px solid #059669;">
                         <div style="font-size:18px;font-weight:700;color:#059669;">${paidCount}</div>
-                        <div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:600;">✅ Paid</div>
+                        <div style="font-size:9px;color:#64748B;text-transform:uppercase;">✅ Paid</div>
                     </div>
                     <div style="background:#FEE2E2;padding:6px 10px;border-radius:8px;text-align:center;border:1px solid #DC2626;">
                         <div style="font-size:18px;font-weight:700;color:#DC2626;">${cancelledCount}</div>
-                        <div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:600;">❌ Cancelled</div>
+                        <div style="font-size:9px;color:#64748B;text-transform:uppercase;">❌ Cancelled</div>
                     </div>
                 </div>
                 <div style="background:#E8F0FE;padding:6px 10px;border-radius:6px;text-align:center;border:1px solid #0B5ED7;margin-top:4px;">
-                    <div style="font-size:16px;font-weight:700;color:#0B5ED7;">💰 Total Amount: ${currency} ${Number(totalAmount).toLocaleString()}</div>
+                    <div style="font-size:16px;font-weight:700;color:#0B5ED7;">💰 Total: ${currency} ${Number(totalAmount).toLocaleString()}</div>
                 </div>
             </div>
             
             <div style="margin-bottom:8px;">
-                <div class="pdf-section-title"><i class="fas fa-list"></i> Expenses List (${totalBills})</div>
-                <div class="pdf-table-wrap">
-                    <table class="pdf-table" style="font-size:11px;width:100%;border-collapse:collapse;">
-                        <thead>
-                            <tr>
-                                <th style="background:#059669;color:white;padding:2px 6px;text-align:center;font-size:9px;">#</th>
-                                <th style="background:#059669;color:white;padding:2px 6px;text-align:left;font-size:9px;">Expense #</th>
-                                <th style="background:#059669;color:white;padding:2px 6px;text-align:left;font-size:9px;">Branch</th>
-                                <th style="background:#059669;color:white;padding:2px 6px;text-align:left;font-size:9px;">Category</th>
-                                <th style="background:#059669;color:white;padding:2px 6px;text-align:left;font-size:9px;">Description</th>
-                                <th style="background:#059669;color:white;padding:2px 6px;text-align:right;font-size:9px;">Amount</th>
-                                <th style="background:#059669;color:white;padding:2px 6px;text-align:center;font-size:9px;">Method</th>
-                                <th style="background:#059669;color:white;padding:2px 6px;text-align:center;font-size:9px;">Date</th>
-                                <th style="background:#059669;color:white;padding:2px 6px;text-align:center;font-size:9px;">Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${expensesHtml}
-                        </tbody>
-                    </table>
-                </div>
+                <div class="pdf-section-title-exp">📋 Expenses List (${totalBills})</div>
+                <table class="pdf-table-exp">
+                    <thead>
+                        <tr>
+                            <th style="text-align:center;">#</th>
+                            <th>Expense #</th>
+                            <th>Branch</th>
+                            <th>Category</th>
+                            <th>Description</th>
+                            <th style="text-align:right;">Amount</th>
+                            <th style="text-align:center;">Method</th>
+                            <th style="text-align:center;">Date</th>
+                            <th style="text-align:center;">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>${expensesHtml}</tbody>
+                </table>
             </div>
             
-            <div class="pdf-footer">
-                <div class="footer-stamp">
-                    <div class="footer-left">
+            <div class="pdf-footer-exp">
+                <div class="footer-stamp-exp">
+                    <div style="font-size:14px;color:#64748B;">
                         <span>Generated by: <?= htmlspecialchars($user_full_name) ?></span>
                         <span style="margin-left:14px;">Date: <?= date('F d, Y') ?></span>
                     </div>
-                    <div class="stamp-box">
-                        <div class="stamp-title">Official Stamp</div>
-                        <div class="stamp-name">BRAICK DISPENSARY</div>
-                        <div class="stamp-line">Approved By: _________________</div>
-                        <div class="stamp-date">Date: <?= date('F d, Y') ?></div>
+                    <div class="stamp-box-exp">
+                        <div class="stamp-title-exp">Official Stamp</div>
+                        <div class="stamp-name-exp">BRAICK DISPENSARY</div>
+                        <div class="stamp-line-exp">Approved By: _____________</div>
                     </div>
                 </div>
-                <div class="footer-bottom">
-                    Braick Dispensary • Generated on <?= date('F d, Y h:i:s A') ?> • All rights reserved
+                <div class="footer-bottom-exp">
+                    Braick Dispensary • Generated on <?= date('F d, Y h:i:s A') ?>
                 </div>
             </div>
         `;
         
         content.innerHTML = html;
         modal.classList.add('active');
-        
-        var modalBody = document.getElementById('pdfModalBody');
-        if (modalBody) {
-            modalBody.scrollTop = 0;
-        }
     }
     
     function closePDFModal() {
@@ -3133,101 +2124,37 @@ include_once '../../components/admin_sidebar.php';
     
     function downloadPDF() {
         var element = document.getElementById('pdfContent');
+        if (typeof html2pdf === 'undefined') {
+            alert('PDF library loading... Please try again.');
+            return;
+        }
         var opt = {
             margin: [8, 8, 8, 8],
             filename: 'Expenses_Report_<?= date('Y-m-d') ?>.pdf',
             image: { type: 'jpeg', quality: 0.98 },
-            html2canvas: { 
-                scale: 2, 
-                useCORS: true,
-                backgroundColor: '#ffffff',
-                logging: false,
-                allowTaint: true
-            },
-            jsPDF: { 
-                unit: 'mm', 
-                format: 'a4', 
-                orientation: 'portrait' 
-            },
-            pagebreak: { 
-                mode: ['css', 'legacy']
-            }
+            html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+            pagebreak: { mode: ['css', 'legacy'] }
         };
-        
         html2pdf().set(opt).from(element).save();
     }
 
     // ================================================================
-    // KEYBOARD SHORTCUTS
+    // SEARCH ENTER KEY
     // ================================================================
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-            e.preventDefault();
-            var searchInput = document.getElementById('searchInput');
-            if (searchInput) {
-                searchInput.focus();
-                searchInput.select();
-            }
-        }
-        if (e.key === 'Escape') {
-            closePDFModal();
-            document.querySelectorAll('.modal-overlay.show').forEach(function(modal) {
-                modal.classList.remove('show');
-                document.body.style.overflow = 'auto';
-            });
-        }
-    });
-
-    document.getElementById('pdfModal').addEventListener('click', function(e) {
-        if (e.target === this) {
-            closePDFModal();
-        }
-    });
-
-    // ================================================================
-    // ADD CSS ANIMATIONS
-    // ================================================================
-    var style = document.createElement('style');
-    style.textContent = `
-        @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes pulse-dot { 
-            0%, 100% { opacity: 1; transform: scale(1); } 
-            50% { opacity: 0.5; transform: scale(0.8); } 
-        }
-        .stat-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
-        .stat-card:hover { transform: translateY(-4px); }
-        .filter-btn { transition: all 0.3s ease; }
-        .btn { transition: all 0.3s ease; }
-    `;
-    document.head.appendChild(style);
-
-    // ================================================================
-    // INIT
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(function() {
-            startAutoUpdate();
-        }, 1000);
+    document.getElementById('searchInput')?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') this.form.submit();
     });
 
     <?php if ($message && $message_type): ?>
-        setTimeout(function() {
-            showToast('<?= $message_type === 'success' ? '✅ Success' : ($message_type === 'info' ? 'ℹ️ Info' : '❌ Error') ?>', 
-                '<?= addslashes($message) ?>', 
-                '<?= $message_type ?>'
-            );
-        }, 500);
+        console.log('%c<?= $message_type === 'success' ? '✅' : '❌' ?> <?= addslashes($message) ?>', 'font-size:13px; color:<?= $message_type === 'success' ? '#059669' : '#DC2626' ?>;');
     <?php endif; ?>
 
-    console.log('%c💰 Braick - Admin Expenses (with PDF)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c🏢 Branch: <?= $branch_name ?> (ID: <?= $selected_branch_id ?>)', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Braick - Expenses', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#059669;');
+    console.log('%c✅ NO duplicate dark mode JavaScript', 'font-size:13px; color:#059669;');
+    console.log('%c🌙 Dark mode: Handled by header', 'font-size:13px; color:#7C3AED;');
     console.log('%c📊 All: <?= $all_expenses ?> | Pending: <?= $pending_expenses ?> | Paid: <?= $paid_expenses ?> | Cancelled: <?= $cancelled_expenses ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ 4 CARDS: All, Pending, Paid, Cancelled', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ View, Edit, Delete, Pay buttons', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ PDF Export available', 'font-size:13px; color:#DC2626;');
-    console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#34D399;');
-    console.log('%c🌙 Dark Mode Toggle: WORKING', 'font-size:13px; color:#3B82F6;');
-    console.log('%c🕐 Clock: WORKING', 'font-size:13px; color:#3B82F6;');
 </script>
 
 </body>
