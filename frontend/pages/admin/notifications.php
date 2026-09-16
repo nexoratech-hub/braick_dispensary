@@ -1,10 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/notifications.php
-// SUPER ADMIN - NOTIFICATIONS
+// SUPER ADMIN - NOTIFICATIONS (V2 - WITH DELETE ALL)
 // ✅ BLUE THEME ONLY
 // ✅ Dark mode inafanya kazi kikamilifu
 // ✅ Inatumia shared header
+// ✅ NEW: Delete All button (with filter options)
+// ✅ NEW: Delete All Read button
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -44,6 +46,9 @@ try {
     die("Database connection error: " . $e->getMessage());
 }
 
+$alert_message = '';
+$alert_type = '';
+
 // ================================================================
 // MARK ALL AS READ
 // ================================================================
@@ -69,7 +74,7 @@ if (isset($_GET['read']) && is_numeric($_GET['read'])) {
 }
 
 // ================================================================
-// DELETE NOTIFICATION
+// DELETE SINGLE NOTIFICATION
 // ================================================================
 if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     try {
@@ -78,6 +83,58 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
         header('Location: notifications.php');
         exit;
     } catch (Exception $e) {}
+}
+
+// ================================================================
+// DELETE ALL NOTIFICATIONS
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    
+    // DELETE ALL (with filter)
+    if ($_POST['action'] === 'delete_all') {
+        try {
+            $del_filter = $_POST['del_filter'] ?? 'all';
+            
+            if ($del_filter === 'read') {
+                $stmt = $db->prepare("DELETE FROM notifications WHERE user_id = ? AND is_read = 1");
+                $stmt->execute([$user_id]);
+                $deleted = $stmt->rowCount();
+                $alert_message = "Successfully deleted $deleted read notification(s)!";
+            } elseif ($del_filter === 'unread') {
+                $stmt = $db->prepare("DELETE FROM notifications WHERE user_id = ? AND is_read = 0");
+                $stmt->execute([$user_id]);
+                $deleted = $stmt->rowCount();
+                $alert_message = "Successfully deleted $deleted unread notification(s)!";
+            } elseif ($del_filter === 'old') {
+                // Delete older than 30 days
+                $stmt = $db->prepare("DELETE FROM notifications WHERE user_id = ? AND created_at < DATE_SUB(NOW(), INTERVAL 30 DAY)");
+                $stmt->execute([$user_id]);
+                $deleted = $stmt->rowCount();
+                $alert_message = "Successfully deleted $deleted old notification(s) (30+ days)!";
+            } else {
+                // Delete ALL
+                $stmt = $db->prepare("DELETE FROM notifications WHERE user_id = ?");
+                $stmt->execute([$user_id]);
+                $deleted = $stmt->rowCount();
+                $alert_message = "Successfully deleted ALL $deleted notification(s)!";
+            }
+            
+            $alert_type = 'success';
+            
+            // Refresh page after delete
+            header('Location: notifications.php?deleted=1&count=' . $deleted);
+            exit;
+        } catch (Exception $e) {
+            $alert_message = "Error deleting notifications: " . $e->getMessage();
+            $alert_type = 'error';
+        }
+    }
+}
+
+// Handle delete success message from redirect
+if (isset($_GET['deleted']) && isset($_GET['count'])) {
+    $alert_message = "Successfully deleted " . (int)$_GET['count'] . " notification(s)!";
+    $alert_type = 'success';
 }
 
 // ================================================================
@@ -147,6 +204,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     --text-secondary: #64748B;
     --text-muted: #94A3B8;
     --border-color: #E2E8F0;
+    --danger: #DC2626;
+    --danger-bg: #FEE2E2;
+    --danger-dark: #B91C1C;
+    --success: #059669;
+    --success-bg: #D1FAE5;
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+    --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
+    --shadow-xl: 0 20px 50px rgba(0,0,0,0.15);
 }
 
 [data-theme="dark"] {
@@ -157,9 +222,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     --text-secondary: #94A3B8;
     --text-muted: #64748B;
     --border-color: #334155;
+    --danger-bg: #3A1A1A;
+    --success-bg: #1A3A2A;
 }
 
-/* ✅ FORCE DARK MODE BACKGROUND */
 [data-theme="dark"] body {
     background: #0F172A !important;
     color: #F1F5F9 !important;
@@ -169,9 +235,27 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     background: #0F172A !important;
 }
 
-/* ================================================================
-   PAGE HEADER
-   ================================================================ */
+/* ALERT */
+.alert {
+    padding: 12px 18px;
+    border-radius: 12px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    animation: slideDown 0.4s ease;
+}
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.alert.success { background: var(--success-bg); color: var(--success); border-left: 4px solid var(--success); }
+.alert.error { background: var(--danger-bg); color: var(--danger); border-left: 4px solid var(--danger); }
+.alert i { font-size: 1.1rem; }
+
+/* PAGE HEADER */
 .page-header-custom {
     background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
     border-radius: 16px;
@@ -197,9 +281,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     margin: 0;
 }
 
-.page-header-custom .page-title i {
-    color: rgba(255,255,255,0.85);
-}
+.page-header-custom .page-title i { color: rgba(255,255,255,0.85); }
 
 .page-header-custom .badge-new {
     background: rgba(255,255,255,0.25);
@@ -223,14 +305,22 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     gap: 6px;
 }
 
-.page-header-custom .btn-mark-all {
+.header-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    position: relative;
+    z-index: 1;
+}
+
+.btn-header-action {
     background: rgba(255,255,255,0.15);
     color: white;
     border: 1px solid rgba(255,255,255,0.2);
-    padding: 10px 20px;
+    padding: 10px 18px;
     border-radius: 10px;
     font-weight: 600;
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     cursor: pointer;
     transition: all 0.3s;
     text-decoration: none;
@@ -240,14 +330,24 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     backdrop-filter: blur(4px);
 }
 
-.page-header-custom .btn-mark-all:hover {
+.btn-header-action:hover {
     background: rgba(255,255,255,0.25);
     transform: translateY(-2px);
+    color: white;
 }
 
-/* ================================================================
-   STAT CARDS
-   ================================================================ */
+.btn-header-danger {
+    background: linear-gradient(135deg, #991B1B, #7F1D1D) !important;
+    border: 1px solid rgba(255,255,255,0.3) !important;
+}
+
+.btn-header-danger:hover {
+    background: linear-gradient(135deg, #DC2626, #991B1B) !important;
+    box-shadow: 0 8px 24px rgba(220, 38, 38, 0.5);
+    transform: translateY(-2px) scale(1.02) !important;
+}
+
+/* STATS GRID */
 .stats-grid-3 {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -299,14 +399,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     flex-shrink: 0;
 }
 
-/* ALL BLUE VARIANTS */
 .stat-card-custom.blue-1 { background: #0B5ED7; }
 .stat-card-custom.blue-2 { background: #0A4CA8; }
 .stat-card-custom.blue-3 { background: #1A73E8; }
 
-/* ================================================================
-   FILTER TABS
-   ================================================================ */
+/* FILTER TABS */
 .filter-tabs {
     display: flex;
     gap: 8px;
@@ -343,9 +440,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
 }
 
-/* ================================================================
-   NOTIFICATION CARD
-   ================================================================ */
+/* NOTIFICATION CARD */
 .notif-card {
     background: var(--bg-card);
     border-radius: 14px;
@@ -369,9 +464,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     border-left: 4px solid var(--primary);
 }
 
-/* ================================================================
-   NOTIF ICON - ALL BLUE
-   ================================================================ */
 .notif-icon {
     width: 44px;
     height: 44px;
@@ -392,13 +484,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     border-color: #3B82F6;
 }
 
-/* ================================================================
-   NOTIF CONTENT
-   ================================================================ */
-.notif-content {
-    flex: 1;
-    min-width: 0;
-}
+.notif-content { flex: 1; min-width: 0; }
 
 .notif-title {
     font-size: 0.9rem;
@@ -426,9 +512,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     font-weight: 500;
 }
 
-/* ================================================================
-   NOTIF ACTIONS
-   ================================================================ */
+/* NOTIF ACTIONS */
 .notif-actions {
     display: flex;
     gap: 6px;
@@ -450,29 +534,21 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     color: white;
 }
 
-.notif-btn.read {
-    background: #0B5ED7;
-}
-
+.notif-btn.read { background: #0B5ED7; }
 .notif-btn.read:hover {
     background: #0A4CA8;
     transform: scale(1.1);
     box-shadow: 0 4px 12px rgba(11, 94, 215, 0.35);
 }
 
-.notif-btn.delete {
-    background: #0A4CA8;
-}
-
+.notif-btn.delete { background: #DC2626; }
 .notif-btn.delete:hover {
-    background: #083D8A;
+    background: #B91C1C;
     transform: scale(1.1);
-    box-shadow: 0 4px 12px rgba(10, 76, 168, 0.35);
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.35);
 }
 
-/* ================================================================
-   EMPTY STATE
-   ================================================================ */
+/* EMPTY STATE */
 .empty-state {
     text-align: center;
     padding: 80px 20px;
@@ -503,9 +579,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     margin: 0;
 }
 
-/* ================================================================
-   FOOTER
-   ================================================================ */
+/* FOOTER */
 .footer {
     padding: 16px 0;
     border-top: 2px solid var(--border-color);
@@ -518,60 +592,226 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 .footer .footer-brand { color: var(--primary); font-weight: 600; }
 
 /* ================================================================
-   RESPONSIVE
+   DELETE ALL MODAL
    ================================================================ */
+.modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(6px);
+    z-index: 99999;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.modal-overlay.active { display: flex; }
+
+.modal-box {
+    background: var(--bg-card);
+    border-radius: 20px;
+    max-width: 480px;
+    width: 100%;
+    padding: 30px;
+    box-shadow: var(--shadow-xl);
+    animation: modalPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    text-align: center;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+@keyframes modalPop {
+    0% { opacity: 0; transform: scale(0.8) translateY(20px); }
+    100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.modal-icon {
+    width: 68px;
+    height: 68px;
+    border-radius: 50%;
+    background: var(--danger-bg);
+    color: var(--danger);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.8rem;
+    margin: 0 auto 16px;
+    animation: iconPulse 1.5s infinite;
+}
+
+@keyframes iconPulse {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4); }
+    50% { transform: scale(1.05); box-shadow: 0 0 0 12px rgba(220, 38, 38, 0); }
+}
+
+.modal-title {
+    font-size: 1.2rem;
+    font-weight: 800;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+}
+
+.modal-text {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 22px;
+    line-height: 1.7;
+}
+
+.modal-warning {
+    color: var(--danger);
+    font-weight: 700;
+    display: block;
+    margin-top: 6px;
+    font-size: 0.78rem;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+.modal-btn {
+    padding: 10px 24px;
+    border-radius: 11px;
+    font-weight: 700;
+    font-size: 0.82rem;
+    border: none;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.modal-btn.cancel {
+    background: var(--border-color);
+    color: var(--text-primary);
+}
+
+.modal-btn.cancel:hover {
+    background: #CBD5E1;
+    transform: translateY(-2px);
+}
+
+.modal-btn.danger {
+    background: linear-gradient(135deg, #DC2626, #B91C1C);
+    color: white;
+}
+
+.modal-btn.danger:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(220, 38, 38, 0.5);
+}
+
+/* Delete options */
+.delete-options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 20px;
+    text-align: left;
+}
+
+.delete-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-radius: 10px;
+    border: 2px solid var(--border-color);
+    background: var(--bg-card);
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.delete-option:hover {
+    border-color: var(--danger);
+    background: var(--danger-bg);
+    transform: translateX(3px);
+}
+
+.delete-option input[type="radio"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--danger);
+    cursor: pointer;
+}
+
+.delete-option .option-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.delete-option .option-title {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.delete-option .option-desc {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+}
+
+.delete-option.danger-option {
+    border-color: rgba(220, 38, 38, 0.4);
+}
+
+.delete-option.danger-option:hover {
+    background: var(--danger-bg);
+    border-color: var(--danger);
+}
+
+.delete-option .option-badge {
+    font-size: 0.65rem;
+    font-weight: 800;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--danger-bg);
+    color: var(--danger);
+    font-family: 'JetBrains Mono', monospace;
+}
+
+/* RESPONSIVE */
 @media (max-width: 768px) {
-    .stats-grid-3 {
-        grid-template-columns: 1fr;
-    }
-    
-    .page-header-custom {
-        padding: 18px 20px;
-    }
-    
-    .page-header-custom .page-title {
-        font-size: 1.2rem;
-    }
-    
-    .notif-card {
-        padding: 12px 14px;
-        gap: 10px;
-    }
-    
-    .notif-icon {
-        width: 38px;
-        height: 38px;
-        font-size: 0.95rem;
-    }
-    
-    .notif-title {
-        font-size: 0.82rem;
-    }
-    
-    .notif-message {
-        font-size: 0.72rem;
-    }
-    
-    .notif-actions {
-        flex-direction: column;
-    }
+    .stats-grid-3 { grid-template-columns: 1fr; }
+    .page-header-custom { padding: 18px 20px; }
+    .page-header-custom .page-title { font-size: 1.2rem; }
+    .notif-card { padding: 12px 14px; gap: 10px; }
+    .notif-icon { width: 38px; height: 38px; font-size: 0.95rem; }
+    .notif-title { font-size: 0.82rem; }
+    .notif-message { font-size: 0.72rem; }
+    .notif-actions { flex-direction: column; }
+    .header-actions { width: 100%; }
+    .btn-header-action { width: 100%; justify-content: center; }
 }
 
 @media (max-width: 480px) {
-    .notif-card {
-        flex-wrap: wrap;
-    }
-    
-    .notif-actions {
-        width: 100%;
-        flex-direction: row;
-        justify-content: flex-end;
-        margin-top: 8px;
-    }
+    .notif-card { flex-wrap: wrap; }
+    .notif-actions { width: 100%; flex-direction: row; justify-content: flex-end; margin-top: 8px; }
 }
 </style>
 
 <main class="main-content">
+
+    <!-- ALERT -->
+    <?php if (!empty($alert_message)): ?>
+        <div class="alert <?= $alert_type ?>" id="alertBox">
+            <i class="fas fa-<?= $alert_type === 'success' ? 'check-circle' : 'exclamation-triangle' ?>"></i>
+            <span><?= htmlspecialchars($alert_message) ?></span>
+        </div>
+        <script>
+            setTimeout(function() {
+                var el = document.getElementById('alertBox');
+                if (el) { el.style.transition = 'all 0.5s ease'; el.style.opacity = '0'; setTimeout(function() { el.remove(); }, 500); }
+            }, 4000);
+        </script>
+    <?php endif; ?>
 
     <!-- PAGE HEADER -->
     <div class="page-header-custom">
@@ -593,11 +833,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <i class="fas fa-user"></i> Welcome back, <?= htmlspecialchars($user_full_name) ?>
             </p>
         </div>
-        <?php if ($unread_count > 0): ?>
-            <a href="notifications.php?mark_all_read=1" class="btn-mark-all" onclick="return confirm('Mark all notifications as read?');">
-                <i class="fas fa-check-double"></i> Mark All as Read
-            </a>
-        <?php endif; ?>
+        <div class="header-actions">
+            <?php if ($unread_count > 0): ?>
+                <a href="notifications.php?mark_all_read=1" class="btn-header-action" 
+                   onclick="return confirm('Mark all notifications as read?');">
+                    <i class="fas fa-check-double"></i> Mark All Read
+                </a>
+            <?php endif; ?>
+            
+            <?php if ($total_notifications > 0): ?>
+                <button type="button" class="btn-header-action btn-header-danger" onclick="openDeleteAllModal()">
+                    <i class="fas fa-trash-alt"></i> Delete All
+                </button>
+            <?php endif; ?>
+        </div>
     </div>
 
     <!-- STATS CARDS -->
@@ -610,9 +859,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <i class="fas fa-list"></i> All notifications
                 </div>
             </div>
-            <div class="stat-icon">
-                <i class="fas fa-bell"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-bell"></i></div>
         </a>
         
         <a href="notifications.php?filter=unread" class="stat-card-custom blue-2">
@@ -623,9 +870,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <i class="fas fa-envelope"></i> Needs attention
                 </div>
             </div>
-            <div class="stat-icon">
-                <i class="fas fa-envelope"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-envelope"></i></div>
         </a>
         
         <a href="notifications.php?filter=read" class="stat-card-custom blue-3">
@@ -636,9 +881,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <i class="fas fa-envelope-open"></i> Already seen
                 </div>
             </div>
-            <div class="stat-icon">
-                <i class="fas fa-envelope-open"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-envelope-open"></i></div>
         </a>
     </div>
 
@@ -734,7 +977,101 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
 </main>
 
+<!-- DELETE ALL MODAL -->
+<div class="modal-overlay" id="deleteAllModal">
+    <div class="modal-box">
+        <div class="modal-icon">
+            <i class="fas fa-trash-alt"></i>
+        </div>
+        <h3 class="modal-title">Delete Notifications?</h3>
+        <p class="modal-text">
+            Choose what you want to delete.<br>
+            <span class="modal-warning">
+                <i class="fas fa-exclamation-circle"></i> This action CANNOT be undone!
+            </span>
+        </p>
+        
+        <form method="POST" id="deleteAllForm">
+            <input type="hidden" name="action" value="delete_all">
+            
+            <div class="delete-options">
+                <!-- Delete Read only -->
+                <label class="delete-option">
+                    <input type="radio" name="del_filter" value="read" checked>
+                    <div class="option-info">
+                        <span class="option-title"><i class="fas fa-envelope-open" style="color:#0B5ED7;"></i> Delete Read Notifications</span>
+                        <span class="option-desc">Delete only notifications that you've already read</span>
+                    </div>
+                    <span class="option-badge"><?= number_format($read_count) ?></span>
+                </label>
+                
+                <!-- Delete Unread -->
+                <label class="delete-option">
+                    <input type="radio" name="del_filter" value="unread">
+                    <div class="option-info">
+                        <span class="option-title"><i class="fas fa-envelope" style="color:#0B5ED7;"></i> Delete Unread Notifications</span>
+                        <span class="option-desc">Delete only notifications you haven't read yet</span>
+                    </div>
+                    <span class="option-badge"><?= number_format($unread_count) ?></span>
+                </label>
+                
+                <!-- Delete Old (30+ days) -->
+                <label class="delete-option">
+                    <input type="radio" name="del_filter" value="old">
+                    <div class="option-info">
+                        <span class="option-title"><i class="fas fa-clock" style="color:#D97706;"></i> Delete Old (30+ days)</span>
+                        <span class="option-desc">Delete notifications older than 30 days</span>
+                    </div>
+                    <span class="option-badge" style="background:#FEF3C7;color:#D97706;">30d+</span>
+                </label>
+                
+                <!-- Delete ALL -->
+                <label class="delete-option danger-option">
+                    <input type="radio" name="del_filter" value="all">
+                    <div class="option-info">
+                        <span class="option-title" style="color:#DC2626;"><i class="fas fa-exclamation-triangle"></i> Delete ALL Notifications</span>
+                        <span class="option-desc" style="color:#DC2626;">Delete every single notification (⚠️ PERMANENT)</span>
+                    </div>
+                    <span class="option-badge"><?= number_format($total_notifications) ?></span>
+                </label>
+            </div>
+            
+            <div class="modal-actions">
+                <button type="button" class="modal-btn cancel" onclick="closeDeleteAllModal()">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+                <button type="submit" class="modal-btn danger">
+                    <i class="fas fa-trash-alt"></i> Yes, Delete
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <script>
+// ================================================================
+// DELETE ALL MODAL
+// ================================================================
+function openDeleteAllModal() {
+    document.getElementById('deleteAllModal').classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeDeleteAllModal() {
+    document.getElementById('deleteAllModal').classList.remove('active');
+    document.body.style.overflow = '';
+}
+
+// Close modal on outside click
+document.getElementById('deleteAllModal')?.addEventListener('click', function(e) {
+    if (e.target === this) closeDeleteAllModal();
+});
+
+// Close modal on ESC
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeDeleteAllModal();
+});
+
 // ================================================================
 // FOOTER TIME
 // ================================================================
@@ -746,15 +1083,19 @@ setInterval(function() {
 }, 1000);
 
 // ================================================================
-// AUTO-REFRESH EVERY 30 SECONDS
+// AUTO-REFRESH EVERY 30 SECONDS (paused if modal open)
 // ================================================================
-setTimeout(function() {
-    window.location.reload();
+setInterval(function() {
+    var modal = document.getElementById('deleteAllModal');
+    if (!modal || !modal.classList.contains('active')) {
+        window.location.reload();
+    }
 }, 30000);
 
-console.log('%c🔔 Admin - Notifications (BLUE THEME)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+console.log('%c🔔 Admin - Notifications V2 (With Delete All)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
 console.log('%c✅ Dark mode inafanya kazi kikamilifu', 'font-size:12px;color:#34D399;');
 console.log('%c✅ Blue theme everywhere', 'font-size:12px;color:#34D399;');
+console.log('%c🗑️ Delete All with filter options', 'font-size:12px;color:#DC2626;font-weight:bold;');
 console.log('%c📊 Total: <?= $total_notifications ?> | Unread: <?= $unread_count ?> | Read: <?= $read_count ?>', 'font-size:12px;color:#64748B;');
 </script>
 

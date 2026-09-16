@@ -3,6 +3,7 @@
 // FILE: frontend/pages/pharmacy/new_otc_sale.php
 // PHARMACY - NEW OTC SALE
 // ✅ BLUE THEME
+// ✅ FIXED: No more Bills table insert - OTC only
 // ✅ FIXED: Multiple items stock deduction
 // ✅ FIXED: Quantity input starts empty, no scroll change
 // ✅ FIXED: Better FIFO - handles all expiry dates correctly
@@ -134,7 +135,7 @@ try {
 } catch (Exception $e) { $low_stock_count = 0; }
 
 // ================================================================
-// PROCESS OTC SALE
+// PROCESS OTC SALE - OTC ONLY (No Bills Table)
 // ================================================================
 $message = '';
 $message_type = '';
@@ -167,6 +168,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $errors = [];
     if (empty($items)) $errors[] = 'Please add at least one medicine';
     
+    // Check stock
     $stock_errors = [];
     foreach ($items as $item) {
         $stmt_check_stock = $db->prepare("
@@ -193,65 +195,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $db->beginTransaction();
             
             $sale_number = 'OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-            $bill_number = 'BILL-OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
             
             $patient_id = null;
-            $bill_status = ($payment_option === 'self') ? 'paid' : 'pending';
-            $balance = ($payment_option === 'self') ? 0 : $grand_total;
-            
-            $stmt_bill = $db->prepare("
-                INSERT INTO bills (
-                    bill_number, patient_id, visit_id,
-                    branch_id, created_by,
-                    subtotal, discount_amount, total_amount, paid_amount, balance,
-                    status, payment_method, notes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-            ");
-            $stmt_bill->execute([
-                $bill_number, $patient_id, null, $user_branch_id, $user_id,
-                $subtotal, $discount_amount, $grand_total,
-                ($payment_option === 'self') ? $grand_total : 0,
-                $balance, $bill_status, $payment_method,
-                'OTC Sale - ' . ($payment_option === 'self' ? 'Paid by Pharmacy' : 'Pending Cashier Payment') . ' - Customer: ' . $customer_name . ($premium_amount > 0 ? ' | Premium: TSh ' . number_format($premium_amount) : '')
-            ]);
-            $bill_id = $db->lastInsertId();
-            
-            foreach ($items as $item) {
-                $item_payment_status = ($payment_option === 'self') ? 'paid' : 'pending';
-                
-                $stmt_bill_item = $db->prepare("
-                    INSERT INTO bill_items (
-                        bill_id, patient_id, branch_id,
-                        item_type, item_id, item_name,
-                        quantity, unit_price, total_price,
-                        status, reference_type, created_at
-                    ) VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, ?, ?, 'otc_sale', NOW())
-                ");
-                $stmt_bill_item->execute([
-                    $bill_id, $patient_id, $user_branch_id, null,
-                    $item['name'], $item['quantity'], $item['price'], $item['total'],
-                    $item_payment_status
-                ]);
-            }
-            
             $otc_payment_status = ($payment_option === 'self') ? 'paid' : 'pending';
             $payment_notes = ($payment_option === 'self') ? 'Paid by Pharmacy (Self)' : 'OTC Sale - Bill sent to Cashier';
             
+            // ================================================================
+            // ✅ OTC SALE INSERT (NO BILLS TABLE)
+            // ================================================================
             $stmt_otc = $db->prepare("
                 INSERT INTO otc_sales (
                     sale_number, customer_name, customer_phone, 
                     patient_id, subtotal, discount_amount, premium_amount, premium_note, total_amount, bill_id,
                     payment_method, payment_status, sold_by, branch_id, notes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NOW())
             ");
             $stmt_otc->execute([
                 $sale_number, $customer_name, $customer_phone, $patient_id,
-                $subtotal, $discount_amount, $premium_amount, $premium_note, $grand_total, $bill_id,
+                $subtotal, $discount_amount, $premium_amount, $premium_note, $grand_total,
                 $payment_method, $otc_payment_status, $user_id, $user_branch_id,
                 $payment_notes . ' - Customer: ' . $customer_name . ($premium_amount > 0 ? ' | Premium: TSh ' . number_format($premium_amount) . ' - ' . $premium_note : '')
             ]);
             $sale_id = $db->lastInsertId();
             
+            // ================================================================
+            // ✅ OTC SALE ITEMS INSERT
+            // ================================================================
             foreach ($items as $item) {
                 $stmt_otc_item = $db->prepare("
                     INSERT INTO otc_sale_items (
@@ -267,6 +236,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ]);
             }
             
+            // ================================================================
+            // STOCK DEDUCTION - FIFO (First Expiry First Out)
+            // ================================================================
             $movement_type = ($payment_option === 'self') ? 'out' : 'reserved';
             $ref_type = ($payment_option === 'self') ? 'otc' : 'otc_pending';
             $note_prefix = ($payment_option === 'self') ? 'OTC Sale - PAID: ' : 'OTC Sale - PENDING: ';
@@ -371,32 +343,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             
             error_log("=== STOCK DEDUCTION END ===");
             
-            if ($payment_option === 'self' && $grand_total > 0) {
-                $receipt_number = 'RCP-OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-                
-                $stmt_pay = $db->prepare("
-                    INSERT INTO payments (
-                        receipt_number, bill_id, patient_id, amount, 
-                        payment_method, received_by, branch_id, received_at, notes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)
-                ");
-                $stmt_pay->execute([
-                    $receipt_number, $bill_id, $patient_id, $grand_total,
-                    $payment_method, $user_id, $user_branch_id,
-                    'OTC Sale - Paid by Pharmacy (Self) - Customer: ' . $customer_name
-                ]);
-                
-                $stmt_upd_items = $db->prepare("UPDATE bill_items SET status = 'paid', updated_at = NOW() WHERE bill_id = ?");
-                $stmt_upd_items->execute([$bill_id]);
-                
-                $stmt_upd_bill = $db->prepare("UPDATE bills SET status = 'paid', paid_amount = ?, updated_at = NOW() WHERE id = ?");
-                $stmt_upd_bill->execute([$grand_total, $bill_id]);
-            }
-            
             $db->commit();
             
             if ($payment_option === 'self') {
-                $message = "✅ OTC Sale completed! Stock deducted for all items. Bill Paid.";
+                $message = "✅ OTC Sale completed! Stock deducted for all items. Payment received.";
             } else {
                 $message = "✅ OTC Sale completed! Stock reserved for all items. Bill sent to Cashier.";
             }
@@ -480,7 +430,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         body { font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif; background: var(--bg-body); color: var(--text-primary); transition: background 0.3s ease; }
         .main-content { margin-left: 270px; margin-top: 68px; padding: 28px 32px; min-height: calc(100vh - 68px); }
         
-        /* ✅ PAGE HEADER - BLUE THEME */
+        /* PAGE HEADER - BLUE THEME */
         .page-header {
             background: linear-gradient(135deg, #0B5ED7, #0A3D8A);
             border-radius: 16px; padding: 24px 32px; margin-bottom: 24px;
@@ -502,7 +452,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .page-header .btn-outline-light { background: rgba(255,255,255,0.12); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 8px 16px; border-radius: 10px; font-weight: 500; font-size: 0.82rem; transition: all 0.3s; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; backdrop-filter: blur(4px); position: relative; z-index: 1; }
         .page-header .btn-outline-light:hover { background: rgba(255,255,255,0.25); transform: translateY(-2px); }
         
-        /* ✅ STATS - BLUE THEME CARDS */
+        /* STATS - BLUE THEME CARDS */
         .stats-2-cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px; }
         .stat-card-2 { border-radius: 14px; padding: 18px 22px; display: flex; align-items: center; gap: 16px; color: white; min-height: 100px; transition: all 0.4s; }
         .stat-card-2:hover { transform: translateY(-4px) scale(1.01); }
@@ -510,11 +460,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .stat-card-2 .stat-label { font-size: 0.65rem; color: rgba(255,255,255,0.85); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin: 0; }
         .stat-card-2 .stat-number { font-size: 2.2rem; font-weight: 800; color: white; margin: 0; line-height: 1.1; }
         
-        /* ✅ BLUE THEME CARD VARIANTS */
+        /* BLUE THEME CARD VARIANTS */
         .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .card-blue-dark { background: linear-gradient(135deg, #0A4CA8, #083A80); }
         .card-blue-light { background: linear-gradient(135deg, #1E88E5, #1565C0); }
-        .card-sky { background: linear-gradient(135deg, #0288D1, #01579B); }
         
         .sale-form-card { background: var(--bg-card); border-radius: 16px; padding: 28px 32px; border: 2px solid var(--border-color); margin-bottom: 20px; transition: all 0.3s; }
         .sale-form-card:hover { border-color: var(--primary); box-shadow: 0 8px 30px rgba(0,0,0,0.12); }
@@ -697,7 +645,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
 <main class="main-content">
 
-    <!-- ✅ PAGE HEADER - BLUE THEME -->
+    <!-- PAGE HEADER - BLUE THEME -->
     <div class="page-header">
         <div>
             <h1 class="page-title"><i class="fas fa-plus-circle"></i> New OTC Sale</h1>
@@ -728,7 +676,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- ✅ STATS - BLUE THEME -->
+    <!-- STATS - BLUE THEME -->
     <div class="stats-2-cards">
         <div class="stat-card-2 card-blue">
             <div class="stat-icon"><i class="fas fa-pills"></i></div>
@@ -1696,11 +1644,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         if (e.key === 'Enter' && document.activeElement?.id === 'premiumAmountInput') { e.preventDefault(); applyPremium(); }
     });
 
-    console.log('%c💊 Braick OTC - BLUE THEME', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
-    console.log('%c✅ Blue theme applied', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ Quantity starts EMPTY', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ Scroll mouse DOES NOT change quantity', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ Only numbers allowed in quantity', 'font-size:13px;color:#34D399;');
+    console.log('%c💊 Braick OTC - NO BILLS TABLE', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
+    console.log('%c✅ BLUE THEME', 'font-size:13px;color:#34D399;');
+    console.log('%c✅ OTC Sales go to otc_sales table only', 'font-size:13px;color:#34D399;');
+    console.log('%c✅ NO bills table insert', 'font-size:13px;color:#34D399;');
+    console.log('%c✅ NO bill_items table insert', 'font-size:13px;color:#34D399;');
+    console.log('%c✅ NO payments table insert', 'font-size:13px;color:#34D399;');
+    console.log('%c✅ Stock deducted from medications_inventory', 'font-size:13px;color:#34D399;');
 </script>
 
 </body>

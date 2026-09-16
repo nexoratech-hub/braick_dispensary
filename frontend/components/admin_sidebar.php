@@ -4,8 +4,10 @@
 // SUPER ADMIN - SHARED SIDEBAR
 // ✅ FIXED: Documents count from patient_documents
 // ✅ FIXED: Sick Sheets count from external_sick_sheets + patient_documents
-// ✅ FIXED: Audit menu - shows "NEW" badge (not user count)
+// ✅ FIXED: Audit menu - inaelekeza /admin/audit/dashboard.php
+// ✅ FIXED: Audit active state kwa /admin/audit/ path
 // ✅ Uses internal_documents for documents
+// ✅ ADDED: Toggle button inside sidebar component
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -78,9 +80,7 @@ $module_counts = ['pharmacy' => 0, 'reception' => 0, 'laboratory' => 0, 'cashier
 
 if ($db !== null) {
     try {
-        // ================================================================
         // EMPLOYEES & DOCTORS
-        // ================================================================
         if ($selected_branch_id === 'all') {
             $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin' AND status = 'active'");
         } else {
@@ -97,9 +97,7 @@ if ($db !== null) {
         }
         $total_doctors = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // ================================================================
         // MODULE COUNTS
-        // ================================================================
         $modules = ['pharmacy', 'reception', 'laboratory', 'cashier'];
         foreach ($modules as $module) {
             try {
@@ -117,9 +115,7 @@ if ($db !== null) {
             }
         }
         
-        // ================================================================
         // PATIENTS
-        // ================================================================
         if ($selected_branch_id === 'all') {
             $stmt = $db->query("SELECT COUNT(*) as count FROM patients");
         } else {
@@ -136,9 +132,7 @@ if ($db !== null) {
         }
         $today_patients = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // ================================================================
         // SERVICES
-        // ================================================================
         if ($selected_branch_id === 'all') {
             $stmt = $db->query("SELECT COUNT(*) as count FROM bill_items WHERE status != 'cancelled'");
         } else {
@@ -155,9 +149,7 @@ if ($db !== null) {
         }
         $today_services = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // ================================================================
         // PRESCRIPTIONS & LAB
-        // ================================================================
         if ($selected_branch_id === 'all') {
             $stmt = $db->query("SELECT COUNT(*) as count FROM prescriptions WHERE status IN ('pending', 'confirmed')");
         } else {
@@ -174,15 +166,11 @@ if ($db !== null) {
         }
         $pending_lab_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // ================================================================
         // BRANCHES
-        // ================================================================
         $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
         $total_branches = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // ================================================================
-        // ✅ REFERRALS
-        // ================================================================
+        // REFERRALS
         try {
             if ($selected_branch_id === 'all') {
                 $stmt = $db->query("SELECT COUNT(*) as count FROM referrals WHERE status != 'cancelled'");
@@ -193,9 +181,7 @@ if ($db !== null) {
             $total_referrals = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         } catch (Exception $e) { $total_referrals = 0; }
         
-        // ================================================================
-        // ✅ FIXED: DOCUMENTS — from patient_documents (excluding sick_sheets)
-        // ================================================================
+        // DOCUMENTS
         try {
             if ($selected_branch_id === 'all') {
                 $stmt = $db->query("
@@ -215,17 +201,13 @@ if ($db !== null) {
             $total_documents = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         } catch (Exception $e) { 
             $total_documents = 0; 
-            error_log("Documents count error: " . $e->getMessage());
         }
         
-        // ================================================================
-        // ✅ FIXED: SICK SHEETS — from external_sick_sheets + patient_documents
-        // ================================================================
+        // SICK SHEETS
         try {
             $external_count = 0;
             $internal_count = 0;
             
-            // External sick sheets
             if ($selected_branch_id === 'all') {
                 $stmt = $db->query("SELECT COUNT(*) as count FROM external_sick_sheets WHERE status = 'active'");
             } else {
@@ -234,7 +216,6 @@ if ($db !== null) {
             }
             $external_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // Internal sick sheets (from patient_documents)
             if ($selected_branch_id === 'all') {
                 $stmt = $db->query("
                     SELECT COUNT(*) as count FROM patient_documents 
@@ -252,12 +233,9 @@ if ($db !== null) {
             $total_sick_sheets = $external_count + $internal_count;
         } catch (Exception $e) { 
             $total_sick_sheets = 0;
-            error_log("Sick sheets count error: " . $e->getMessage());
         }
         
-        // ================================================================
-        // ✅ APPOINTMENTS
-        // ================================================================
+        // APPOINTMENTS
         try {
             if ($selected_branch_id === 'all') {
                 $stmt = $db->query("SELECT COUNT(*) as count FROM appointments WHERE status NOT IN ('cancelled', 'completed')");
@@ -279,22 +257,20 @@ if ($db !== null) {
             $today_appointments = 0; 
         }
         
-        // ================================================================
-        // ✅ AUDIT LOGS
-        // ================================================================
+        // AUDIT LOGS
         try {
             if ($selected_branch_id === 'all') {
-                $stmt = $db->query("SELECT COUNT(*) as count FROM audit_logs");
+                $stmt = $db->query("SELECT COUNT(*) as count FROM activity_logs");
             } else {
-                $stmt = $db->prepare("SELECT COUNT(*) as count FROM audit_logs WHERE branch_id = ?");
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM activity_logs WHERE branch_id = ?");
                 $stmt->execute([(int)$selected_branch_id]);
             }
             $total_audit_logs = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
             if ($selected_branch_id === 'all') {
-                $stmt = $db->query("SELECT COUNT(*) as count FROM audit_logs WHERE DATE(created_at) = CURDATE()");
+                $stmt = $db->query("SELECT COUNT(*) as count FROM activity_logs WHERE DATE(created_at) = CURDATE()");
             } else {
-                $stmt = $db->prepare("SELECT COUNT(*) as count FROM audit_logs WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM activity_logs WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
                 $stmt->execute([(int)$selected_branch_id]);
             }
             $today_audit_logs = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
@@ -309,6 +285,10 @@ if ($db !== null) {
 }
 
 $current_page = basename($_SERVER['PHP_SELF']);
+$current_path = $_SERVER['PHP_SELF'];
+
+// ✅ Helper: Check kama uko kwenye /admin/audit/ folder
+$is_in_admin_audit = (strpos($current_path, '/admin/audit/') !== false);
 
 function isActive($page) {
     global $current_page;
@@ -318,6 +298,12 @@ function isActive($page) {
 function isAdminPage($pages) {
     global $current_page;
     return in_array($current_page, $pages) ? 'active' : '';
+}
+
+// ✅ Helper: Check kama page ni ya audit (admin/audit/*)
+function isAuditPage() {
+    global $is_in_admin_audit;
+    return $is_in_admin_audit ? 'active' : '';
 }
 
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
@@ -467,9 +453,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     overflow: hidden; text-overflow: ellipsis;
 }
 
-/* ================================================================ */
 /* BADGES */
-/* ================================================================ */
 .sidebar-link .badge {
     margin-left: auto;
     background: #0B5ED7 !important;
@@ -487,7 +471,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     line-height: 1.4;
 }
 
-/* ✅ NEW badge style - bright green */
 .sidebar-link .badge.badge-new {
     background: #10B981 !important;
     color: #FFFFFF !important;
@@ -639,13 +622,36 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 
 #sidebarOverlay.active { display: block !important; }
 
-@media (min-width: 1025px) {
-    .sidebar {
-        transform: translateX(0) !important;
-        z-index: 50;
-        box-shadow: 4px 0 20px rgba(0,0,0,0.08);
-    }
-    #sidebarOverlay { display: none !important; }
+/* TOGGLE BUTTON */
+#sidebarToggle {
+    display: none;
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    z-index: 9999;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #0B4EA8 0%, #0A3D7A 100%);
+    color: white;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(11, 78, 168, 0.4);
+    transition: all 0.3s ease;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+}
+
+#sidebarToggle:hover {
+    transform: scale(1.05);
+    box-shadow: 0 6px 16px rgba(11, 78, 168, 0.6);
+}
+
+#sidebarToggle:active { transform: scale(0.95); }
+
+[data-theme="dark"] #sidebarToggle {
+    background: linear-gradient(135deg, #0A3D7A 0%, #082F5E 100%);
 }
 
 @media (max-width: 1024px) {
@@ -684,6 +690,20 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     .sidebar-link .badge { font-size: 0.55rem; padding: 1px 7px; }
     .sidebar-nav .nav-label { font-size: 0.45rem; }
     .sidebar-status { padding: 8px 14px; }
+    
+    #sidebarToggle {
+        display: flex;
+    }
+}
+
+@media (min-width: 1025px) {
+    .sidebar {
+        transform: translateX(0) !important;
+        z-index: 50;
+        box-shadow: 4px 0 20px rgba(0,0,0,0.08);
+    }
+    #sidebarOverlay { display: none !important; }
+    #sidebarToggle { display: none; }
 }
 
 @media (max-width: 768px) {
@@ -717,6 +737,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 @media print {
     .sidebar { display: none !important; }
     #sidebarOverlay { display: none !important; }
+    #sidebarToggle { display: none !important; }
 }
 
 .flex { display: flex; }
@@ -727,6 +748,10 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 </style>
 
 <div id="sidebarOverlay"></div>
+
+<button id="sidebarToggle" aria-label="Toggle Sidebar" title="Toggle Sidebar">
+    <i class="fas fa-bars"></i>
+</button>
 
 <aside class="sidebar" id="sidebar" role="navigation" aria-label="Admin Sidebar">
     
@@ -766,7 +791,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <div class="nav-label"><span class="label-icon">📋</span> Main Menu</div>
         
         <a href="/dispensary_system/frontend/pages/admin/dashboard.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('dashboard.php') ?>">
+           class="sidebar-link <?= isActive('dashboard.php') && !$is_in_admin_audit ? 'active' : '' ?>">
             <i class="fas fa-home"></i>
             <span class="link-text">Dashboard</span>
         </a>
@@ -840,9 +865,11 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <span class="badge" id="badgeCashier"><?= $module_counts['cashier'] ?? 0 ?></span>
         </a>
         
-        <!-- ✅ AUDIT MODULE — with "NEW" badge -->
-        <a href="/dispensary_system/frontend/pages/admin/audit_dashboard.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('audit_dashboard.php') || isAdminPage(['audit_logs.php', 'audit_users.php', 'audit_settings.php']) ? 'active' : '' ?>">
+        <!-- ============================================================ -->
+        <!-- ✅ AUDIT MODULE — INAELEKEZA /admin/audit/dashboard.php -->
+        <!-- ============================================================ -->
+        <a href="/dispensary_system/frontend/pages/admin/audit/dashboard.php?branch=<?= $selected_branch_id ?>" 
+           class="sidebar-link <?= $is_in_admin_audit ? 'active' : '' ?>">
             <i class="fas fa-clipboard-check"></i>
             <span class="link-text">Audit</span>
             <span class="badge badge-new" id="badgeAudit">NEW</span>
@@ -877,7 +904,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <span class="badge" id="badgeReferrals"><?= $total_referrals ?></span>
         </a>
         
-        <!-- ✅ DOCUMENTS — count from patient_documents -->
         <a href="/dispensary_system/frontend/pages/admin/documents.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('documents.php') || isAdminPage(['view_document.php', 'add_document.php', 'edit_document.php']) ? 'active' : '' ?>">
             <i class="fas fa-folder-open"></i>
@@ -885,7 +911,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <span class="badge" id="badgeDocuments"><?= $total_documents ?></span>
         </a>
         
-        <!-- ✅ SICK SHEETS — count from external + internal -->
         <a href="/dispensary_system/frontend/pages/admin/sick_sheets.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('sick_sheets.php') || isAdminPage(['view_sick_sheet.php', 'add_sick_sheet.php', 'edit_sick_sheet.php']) ? 'active' : '' ?>">
             <i class="fas fa-file-medical"></i>
@@ -971,7 +996,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 var SIDEBAR_CONFIG = {
     CHECK_INTERVAL: 5000,
     BRANCH_ID: '<?= $selected_branch_id ?>',
-    CURRENT_PAGE: '<?= $current_page ?>'
+    CURRENT_PAGE: '<?= $current_page ?>',
+    IS_IN_ADMIN_AUDIT: <?= $is_in_admin_audit ? 'true' : 'false' ?>
 };
 
 var sidebarState = {
@@ -1007,7 +1033,19 @@ function switchBranch(branchId) {
             document.body.appendChild(overlay);
         }
         
-        if (!sidebar) return;
+        if (!sidebar) {
+            console.warn('Sidebar element not found');
+            return;
+        }
+        
+        if (!toggleBtn) {
+            toggleBtn = document.createElement('button');
+            toggleBtn.id = 'sidebarToggle';
+            toggleBtn.setAttribute('aria-label', 'Toggle Sidebar');
+            toggleBtn.title = 'Toggle Sidebar';
+            toggleBtn.innerHTML = '<i class="fas fa-bars"></i>';
+            document.body.appendChild(toggleBtn);
+        }
         
         function openSidebar() {
             sidebar.classList.add('open');
@@ -1021,6 +1059,9 @@ function switchBranch(branchId) {
             sidebar.style.zIndex = '99999';
             overlay.style.zIndex = '99998';
             sidebarState.isOpen = true;
+            
+            var icon = toggleBtn.querySelector('i');
+            if (icon) icon.className = 'fas fa-times';
         }
         
         function closeSidebar() {
@@ -1035,26 +1076,24 @@ function switchBranch(branchId) {
             sidebar.style.zIndex = '';
             overlay.style.zIndex = '';
             sidebarState.isOpen = false;
+            
+            var icon = toggleBtn.querySelector('i');
+            if (icon) icon.className = 'fas fa-bars';
         }
         
         function toggleSidebar() {
-            if (sidebar.classList.contains('open')) closeSidebar();
-            else openSidebar();
-        }
-        
-        if (toggleBtn) {
-            var newToggle = toggleBtn.cloneNode(true);
-            toggleBtn.parentNode.replaceChild(newToggle, toggleBtn);
-            var freshToggle = document.getElementById('sidebarToggle');
-            
-            if (freshToggle) {
-                freshToggle.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    toggleSidebar();
-                });
+            if (sidebar.classList.contains('open')) {
+                closeSidebar();
+            } else {
+                openSidebar();
             }
         }
+        
+        toggleBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleSidebar();
+        });
         
         if (overlay) {
             overlay.addEventListener('click', function(e) {
@@ -1081,6 +1120,10 @@ function switchBranch(branchId) {
                 }
             });
         });
+        
+        window.toggleSidebar = toggleSidebar;
+        window.openSidebar = openSidebar;
+        window.closeSidebar = closeSidebar;
     }
     
     if (document.readyState === 'loading') {
@@ -1143,10 +1186,6 @@ function refreshSidebarBadges() {
                 }
             }
             
-            // ✅ Audit badge is now "NEW" - no update needed
-            // (removed from badgeMap)
-            
-            // Pending prescriptions
             var prEl = document.getElementById('badgePendingPrescriptions');
             if (prEl && data.data.pending_prescriptions !== undefined) {
                 var val = parseInt(data.data.pending_prescriptions);
@@ -1154,7 +1193,6 @@ function refreshSidebarBadges() {
                 else { prEl.style.display = 'none'; }
             }
             
-            // Pending lab tests
             var ltEl = document.getElementById('badgePendingLabTests');
             if (ltEl && data.data.pending_lab_tests !== undefined) {
                 var val2 = parseInt(data.data.pending_lab_tests);
@@ -1162,7 +1200,6 @@ function refreshSidebarBadges() {
                 else { ltEl.style.display = 'none'; }
             }
             
-            // Today's patients
             var tpEl = document.getElementById('badgePatientsToday');
             if (tpEl && data.data.today_patients !== undefined) {
                 var val3 = parseInt(data.data.today_patients);
@@ -1170,7 +1207,6 @@ function refreshSidebarBadges() {
                 else { tpEl.style.display = 'none'; }
             }
             
-            // Today's services
             var tsEl = document.getElementById('badgeServicesToday');
             if (tsEl && data.data.today_services !== undefined) {
                 var val4 = parseInt(data.data.today_services);
@@ -1178,7 +1214,6 @@ function refreshSidebarBadges() {
                 else { tsEl.style.display = 'none'; }
             }
             
-            // Today's appointments
             var aptEl = document.getElementById('badgeAppointmentsToday');
             if (aptEl && data.data.today_appointments !== undefined) {
                 var val6 = parseInt(data.data.today_appointments);
@@ -1214,9 +1249,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
 window.refreshSidebarData = refreshSidebarBadges;
 
-console.log('%c🏥 Braick - Admin Sidebar (FIXED)', 'font-size:16px; font-weight:bold; color:#0AA84F;');
-console.log('%c✅ Documents count from patient_documents', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Sick Sheets count from external + internal', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Audit badge shows NEW', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c🏥 Braick - Admin Sidebar (FIXED + Toggle Button)', 'font-size:16px; font-weight:bold; color:#0AA84F;');
+console.log('%c✅ Audit link: /admin/audit/dashboard.php', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Audit active state: /admin/audit/ detection', 'font-size:13px; color:#34D399;');
+console.log('%c✅ Toggle button added for mobile', 'font-size:13px; color:#34D399;');
 console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#34D399;');
 </script>

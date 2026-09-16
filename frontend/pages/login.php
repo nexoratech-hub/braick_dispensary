@@ -2,6 +2,10 @@
 // ================================================================
 // FILE: frontend/pages/login.php
 // BRAICK DISPENSARY - LOGIN (DUAL GENERAL MODES)
+// ✅ ADDED: Audit role support
+// ✅ UPDATED: Bigger logo size
+// ✅ UPDATED: Better text field CSS
+// ✅ UPDATED: Better button CSS
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -26,6 +30,7 @@ if (isset($_SESSION['user_id']) && isset($_SESSION['role'])) {
             case 'pharmacy': $redirect = 'pharmacy/dashboard.php'; break;
             case 'laboratory': $redirect = 'laboratory/dashboard.php'; break;
             case 'cashier': $redirect = 'cashier/dashboard.php'; break;
+            case 'audit': $redirect = 'audit/dashboard.php'; break;
             default: $redirect = 'dashboard.php'; break;
         }
         echo json_encode(['success' => true, 'redirect' => $redirect, 'message' => 'Already logged in']);
@@ -40,6 +45,7 @@ if (isset($_SESSION['user_id']) && isset($_SESSION['role'])) {
         case 'pharmacy': header('Location: pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: laboratory/dashboard.php'); break;
         case 'cashier': header('Location: cashier/dashboard.php'); break;
+        case 'audit': header('Location: audit/dashboard.php'); break;
         default: header('Location: login.php'); break;
     }
     exit;
@@ -85,7 +91,7 @@ function getPrimaryRoleFromRoles($roles) {
     if (count($roles) === 1) {
         return $roles[0];
     }
-    $priority_roles = array('admin', 'doctor', 'pharmacy', 'laboratory', 'cashier');
+    $priority_roles = array('admin', 'doctor', 'pharmacy', 'laboratory', 'cashier', 'audit');
     foreach ($priority_roles as $priority) {
         if (in_array($priority, $roles)) {
             return $priority;
@@ -106,6 +112,7 @@ function getDashboardUrlByRole($role) {
         case 'pharmacy': return 'pharmacy/dashboard.php';
         case 'laboratory': return 'laboratory/dashboard.php';
         case 'cashier': return 'cashier/dashboard.php';
+        case 'audit': return 'audit/dashboard.php';
         default: return 'dashboard.php';
     }
 }
@@ -130,9 +137,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         try {
             $db = Database::getInstance()->getConnection();
             
-            // ================================================================
-            // CASE-SENSITIVE USERNAME CHECK - BINARY COMPARISON
-            // ================================================================
             $stmt = $db->prepare("
                 SELECT id, username, password, full_name, email, phone, role, branch_id, 
                        specialty, is_online, profile_pic, status, created_at,
@@ -578,24 +582,26 @@ foreach ($possible_paths as $path) {
             margin-bottom: 6px;
         }
         
+        /* ✅ UPDATED: BIGGER LOGO */
         .login-logo-image {
-            width: 6rem;
-            height: 6rem;
+            width: 10rem;
+            height: 10rem;
             display: flex;
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
-            margin-bottom: 6px;
+            margin-bottom: 8px;
         }
         
         .login-logo-image img {
             width: 100%;
             height: 100%;
             object-fit: contain;
+            filter: drop-shadow(0 4px 12px rgba(0,0,0,0.15));
         }
         
         .login-logo-image .logo-placeholder {
-            font-size: 3.5rem;
+            font-size: 6rem;
             font-weight: 900;
             color: white;
             letter-spacing: -2px;
@@ -653,9 +659,6 @@ foreach ($possible_paths as $path) {
             margin-right: 6px;
         }
         
-        /* ================================================================ */
-        /* MODE SWITCH - BLUE TOP, GREEN BOTTOM */
-        /* ================================================================ */
         .mode-switch-container {
             display: flex;
             flex-direction: column;
@@ -719,13 +722,11 @@ foreach ($possible_paths as $path) {
             color: rgba(255,255,255,0.8);
         }
         
-        /* Blue button specific */
         .mode-btn.blue-btn.active {
             background: rgba(59, 130, 246, 0.25);
             border-left: 3px solid #3B82F6;
         }
         
-        /* Green button specific */
         .mode-btn.green-btn.active {
             background: rgba(5, 150, 105, 0.25);
             border-left: 3px solid #059669;
@@ -769,7 +770,7 @@ foreach ($possible_paths as $path) {
         }
         
         .login-right .form-group {
-            margin-bottom: 16px;
+            margin-bottom: 18px;
         }
         
         .login-right .form-group label {
@@ -777,8 +778,9 @@ foreach ($possible_paths as $path) {
             font-size: 0.85rem;
             font-weight: 600;
             color: var(--gray-700);
-            margin-bottom: 4px;
+            margin-bottom: 6px;
             transition: all 0.4s ease;
+            letter-spacing: 0.01em;
         }
         
         .login-right .form-group .input-wrapper {
@@ -787,43 +789,63 @@ foreach ($possible_paths as $path) {
         
         .login-right .form-group .input-wrapper .input-icon {
             position: absolute;
-            left: 14px;
+            left: 16px;
             top: 50%;
             transform: translateY(-50%);
             color: var(--gray-400);
-            font-size: 1rem;
+            font-size: 1.05rem;
             transition: color 0.3s ease;
             z-index: 2;
             pointer-events: none;
         }
         
+        /* ✅ UPDATED: BETTER TEXT FIELD CSS */
         .login-right .form-group .input-wrapper input {
             width: 100%;
-            padding: 13px 48px 13px 48px;
+            padding: 15px 52px 15px 52px;
             border: 2px solid var(--gray-200);
-            border-radius: var(--radius);
+            border-radius: 14px;
             font-size: 1rem;
             font-family: 'Inter', sans-serif;
-            background: var(--gray-50);
-            transition: all 0.3s ease;
+            font-weight: 500;
+            background: linear-gradient(135deg, #FFFFFF 0%, #F8FAFC 100%);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             color: var(--gray-800);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04), inset 0 1px 2px rgba(0,0,0,0.02);
+            letter-spacing: 0.01em;
+        }
+        
+        .login-right .form-group .input-wrapper input:hover:not(:focus) {
+            border-color: var(--gray-300);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
         }
         
         .login-right .form-group .input-wrapper input:focus {
             border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.08);
-            background: white;
+            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12), 0 4px 12px rgba(11, 94, 215, 0.15);
+            background: #FFFFFF;
             outline: none;
+            transform: translateY(-1px);
+        }
+        
+        .login-right .form-group .input-wrapper input:focus + .input-icon,
+        .login-right .form-group .input-wrapper input:hover + .input-icon {
+            color: var(--primary);
         }
         
         .login-container.green-mode .login-right .form-group .input-wrapper input:focus {
             border-color: var(--green);
-            box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.08);
+            box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.12), 0 4px 12px rgba(5, 150, 105, 0.15);
+        }
+        
+        .login-container.green-mode .login-right .form-group .input-wrapper input:focus + .input-icon {
+            color: var(--green);
         }
         
         .login-right .form-group .input-wrapper input::placeholder {
             color: var(--gray-400);
             font-size: 0.95rem;
+            font-weight: 400;
         }
         
         .password-toggle {
@@ -842,14 +864,15 @@ foreach ($possible_paths as $path) {
             display: flex;
             align-items: center;
             justify-content: center;
-            border-radius: 50%;
-            width: 34px;
-            height: 34px;
+            border-radius: 10px;
+            width: 38px;
+            height: 38px;
         }
         
         .password-toggle:hover {
             color: var(--primary);
             background: var(--gray-100);
+            transform: translateY(-50%) scale(1.05);
         }
         
         .login-container.green-mode .password-toggle:hover {
@@ -868,25 +891,26 @@ foreach ($possible_paths as $path) {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin: 2px 0 16px 0;
+            margin: 4px 0 20px 0;
         }
         
         .login-options .remember {
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 8px;
             font-size: 0.9rem;
             color: var(--gray-600);
             cursor: pointer;
             user-select: none;
+            font-weight: 500;
         }
         
         .login-options .remember input[type="checkbox"] {
-            width: 16px;
-            height: 16px;
+            width: 17px;
+            height: 17px;
             accent-color: var(--primary);
             cursor: pointer;
-            border-radius: 4px;
+            border-radius: 5px;
         }
         
         .login-container.green-mode .login-options .remember input[type="checkbox"] {
@@ -897,13 +921,14 @@ foreach ($possible_paths as $path) {
             font-size: 0.9rem;
             color: var(--primary);
             text-decoration: none;
-            font-weight: 500;
-            transition: color 0.3s;
+            font-weight: 600;
+            transition: all 0.3s;
         }
         
         .login-options .forgot:hover {
             color: var(--primary-dark);
             text-decoration: underline;
+            transform: translateX(2px);
         }
         
         .login-container.green-mode .login-options .forgot {
@@ -914,43 +939,62 @@ foreach ($possible_paths as $path) {
             color: var(--green-dark);
         }
         
+        /* ✅ UPDATED: BETTER BUTTON CSS */
         .btn-login {
             width: 100%;
-            padding: 13px;
+            padding: 16px 20px;
             background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
             color: white;
             border: none;
-            border-radius: var(--radius);
+            border-radius: 14px;
             font-size: 1.05rem;
-            font-weight: 600;
+            font-weight: 700;
             font-family: 'Inter', sans-serif;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 10px;
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
+            gap: 12px;
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.35), 0 1px 3px rgba(0,0,0,0.1);
             position: relative;
             overflow: hidden;
+            letter-spacing: 0.02em;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.15);
+        }
+        
+        .btn-login::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+            transition: left 0.5s ease;
+        }
+        
+        .btn-login:hover::before {
+            left: 100%;
         }
         
         .login-container.green-mode .btn-login {
             background: linear-gradient(135deg, #059669 0%, #047857 100%);
-            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
+            box-shadow: 0 4px 20px rgba(5, 150, 105, 0.35), 0 1px 3px rgba(0,0,0,0.1);
         }
         
         .btn-login:hover:not(.loading):not(.success):not(.error) {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 28px rgba(11, 94, 215, 0.35);
+            transform: translateY(-3px);
+            box-shadow: 0 12px 32px rgba(11, 94, 215, 0.45), 0 2px 6px rgba(0,0,0,0.1);
         }
         
         .login-container.green-mode .btn-login:hover:not(.loading):not(.success):not(.error) {
-            box-shadow: 0 8px 28px rgba(5, 150, 105, 0.35);
+            box-shadow: 0 12px 32px rgba(5, 150, 105, 0.45), 0 2px 6px rgba(0,0,0,0.1);
         }
         
         .btn-login:active:not(.loading):not(.success):not(.error) {
-            transform: scale(0.97);
+            transform: translateY(-1px) scale(0.99);
+            box-shadow: 0 6px 16px rgba(11, 94, 215, 0.4);
         }
         
         .btn-login:disabled {
@@ -978,6 +1022,17 @@ foreach ($possible_paths as $path) {
             background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%) !important;
             box-shadow: 0 4px 30px rgba(220, 38, 38, 0.6) !important;
             animation: btnErrorShake 0.5s ease forwards;
+        }
+        
+        .btn-login .btn-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+        }
+        
+        .btn-login .btn-text {
+            display: inline-block;
         }
         
         @keyframes btnPulse {
@@ -1024,14 +1079,16 @@ foreach ($possible_paths as $path) {
         }
         
         .alert {
-            padding: 12px 16px;
-            border-radius: var(--radius);
-            margin-bottom: 16px;
+            padding: 14px 18px;
+            border-radius: 12px;
+            margin-bottom: 18px;
             font-size: 0.9rem;
+            font-weight: 500;
             display: flex;
             align-items: center;
             gap: 10px;
             animation: slideDown 0.3s ease;
+            border-left: 4px solid;
         }
         
         @keyframes slideDown {
@@ -1043,22 +1100,25 @@ foreach ($possible_paths as $path) {
             background: var(--danger-bg);
             color: #DC2626;
             border: 1px solid #FCA5A5;
+            border-left-color: #DC2626;
         }
         
         .alert-success {
             background: var(--success-bg);
             color: #059669;
             border: 1px solid #6EE7B7;
+            border-left-color: #059669;
         }
         
         .alert-info {
             background: #DBEAFE;
             color: #1D4ED8;
             border: 1px solid #93C5FD;
+            border-left-color: #1D4ED8;
         }
         
         .login-footer {
-            margin-top: 18px;
+            margin-top: 20px;
             text-align: center;
             font-size: 0.8rem;
             color: var(--gray-400);
@@ -1067,7 +1127,7 @@ foreach ($possible_paths as $path) {
         
         .login-footer .brand {
             color: var(--primary);
-            font-weight: 600;
+            font-weight: 700;
             transition: all 0.4s ease;
         }
         
@@ -1077,6 +1137,12 @@ foreach ($possible_paths as $path) {
         
         .login-footer .heart {
             color: #EF4444;
+            animation: heartbeat 1.5s ease infinite;
+        }
+        
+        @keyframes heartbeat {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
         }
         
         .dark-mode-toggle {
@@ -1100,7 +1166,7 @@ foreach ($possible_paths as $path) {
         }
         
         .dark-mode-toggle:hover {
-            transform: scale(1.05);
+            transform: scale(1.08);
             box-shadow: 0 4px 20px rgba(0,0,0,0.15);
         }
         
@@ -1114,17 +1180,20 @@ foreach ($possible_paths as $path) {
             background: #334155;
         }
         
+        /* ================================================================ */
+        /* RESPONSIVE */
+        /* ================================================================ */
         @media (max-width: 1024px) {
             .login-wrapper { max-width: 98%; }
             .login-container { max-width: 100%; min-height: 480px; max-height: 95vh; }
             .login-left { padding: 35px 30px; min-width: 250px; }
             .login-right { padding: 35px 35px 38px 35px; min-width: 250px; }
-            .login-logo-image { width: 5.5rem; height: 5.5rem; }
+            .login-logo-image { width: 9rem; height: 9rem; }
             .login-brand-text .brand-name { font-size: 2.6rem; }
             .login-brand-text .brand-tagline { font-size: 0.75rem; }
             .login-right .welcome-text h2 { font-size: 1.6rem; }
-            .login-right .form-group .input-wrapper input { padding: 13px 46px 13px 46px; font-size: 0.95rem; }
-            .btn-login { padding: 13px; font-size: 1rem; }
+            .login-right .form-group .input-wrapper input { padding: 14px 48px 14px 48px; font-size: 0.95rem; }
+            .btn-login { padding: 15px; font-size: 1rem; }
             .mode-btn { font-size: 0.8rem; padding: 10px 14px; }
             .mode-switch-container { max-width: 240px; }
         }
@@ -1134,13 +1203,13 @@ foreach ($possible_paths as $path) {
             .login-container { flex-direction: column; min-height: auto; max-height: none; border-radius: var(--radius-lg); }
             .login-left { width: 100%; padding: 30px 24px; border-radius: var(--radius-lg) var(--radius-lg) 0 0; min-width: auto; }
             .login-right { width: 100%; padding: 28px 28px 30px 28px; min-width: auto; }
-            .login-logo-image { width: 5rem; height: 5rem; }
+            .login-logo-image { width: 8rem; height: 8rem; }
             .login-brand-text .brand-name { font-size: 2.4rem; }
             .login-brand-text .brand-tagline { font-size: 0.7rem; }
             .login-right .welcome-text h2 { font-size: 1.4rem; }
             .login-right .welcome-text .subtitle { font-size: 0.85rem; }
-            .login-right .form-group .input-wrapper input { padding: 12px 42px 12px 42px; font-size: 0.9rem; }
-            .btn-login { padding: 12px; font-size: 0.95rem; }
+            .login-right .form-group .input-wrapper input { padding: 13px 44px 13px 44px; font-size: 0.9rem; }
+            .btn-login { padding: 14px; font-size: 0.95rem; }
             .mode-switch-container { flex-direction: row; max-width: 100%; gap: 6px; margin-top: 10px; }
             .mode-btn { font-size: 0.75rem; padding: 8px 12px; }
             .dark-mode-toggle { top: 14px; right: 14px; width: 42px; height: 42px; font-size: 1rem; }
@@ -1148,24 +1217,24 @@ foreach ($possible_paths as $path) {
         
         @media (max-width: 480px) {
             .login-left { padding: 22px 16px; }
-            .login-logo-image { width: 4rem; height: 4rem; }
+            .login-logo-image { width: 6.5rem; height: 6.5rem; }
             .login-brand-text .brand-name { font-size: 1.8rem; }
             .login-brand-text .brand-tagline { font-size: 0.6rem; letter-spacing: 2px; }
             .login-brand-text .divider-line { width: 40px; height: 2px; }
             .login-right { padding: 20px 16px 22px 16px; }
             .login-right .welcome-text h2 { font-size: 1.2rem; }
             .login-right .welcome-text .subtitle { font-size: 0.75rem; }
-            .login-right .form-group { margin-bottom: 12px; }
+            .login-right .form-group { margin-bottom: 14px; }
             .login-right .form-group label { font-size: 0.75rem; }
-            .login-right .form-group .input-wrapper input { padding: 10px 38px 10px 38px; font-size: 0.85rem; }
-            .login-right .form-group .input-wrapper .input-icon { font-size: 0.85rem; left: 12px; }
-            .password-toggle { width: 32px; height: 32px; right: 12px; }
+            .login-right .form-group .input-wrapper input { padding: 11px 40px 11px 40px; font-size: 0.85rem; }
+            .login-right .form-group .input-wrapper .input-icon { font-size: 0.9rem; left: 14px; }
+            .password-toggle { width: 34px; height: 34px; right: 10px; }
             .password-toggle i { font-size: 0.85rem; }
-            .login-options { flex-direction: column; gap: 6px; align-items: flex-start; margin: 2px 0 14px 0; }
+            .login-options { flex-direction: column; gap: 6px; align-items: flex-start; margin: 2px 0 16px 0; }
             .login-options .remember { font-size: 0.75rem; }
             .login-options .forgot { font-size: 0.75rem; }
-            .btn-login { padding: 10px; font-size: 0.85rem; gap: 8px; }
-            .login-footer { font-size: 0.65rem; margin-top: 12px; }
+            .btn-login { padding: 12px; font-size: 0.85rem; gap: 8px; }
+            .login-footer { font-size: 0.65rem; margin-top: 14px; }
             .mode-btn { font-size: 0.6rem; padding: 6px 10px; }
             .mode-btn i { font-size: 0.7rem; }
             .mode-btn .badge { font-size: 0.4rem; padding: 1px 6px; }
@@ -1176,21 +1245,15 @@ foreach ($possible_paths as $path) {
 </head>
 <body class="<?= $active_mode === 'general_green' ? 'green-mode' : '' ?>" id="bodyElement">
 
-<!-- ================================================================ -->
 <!-- DARK MODE TOGGLE -->
-<!-- ================================================================ -->
 <button class="dark-mode-toggle" id="darkModeToggle" aria-label="Toggle Dark Mode" title="Toggle Dark Mode">
     <i class="fas fa-moon" id="darkModeIcon"></i>
 </button>
 
-<!-- ================================================================ -->
 <!-- LOGIN FORM -->
-<!-- ================================================================ -->
 <div class="login-wrapper">
     <div class="login-container <?= $active_mode === 'general_green' ? 'green-mode' : '' ?>" id="loginContainer">
-        <!-- ================================================================ -->
         <!-- LEFT PANEL -->
-        <!-- ================================================================ -->
         <div class="login-left <?= $active_mode === 'general_green' ? 'green-mode' : '' ?>" id="leftPanel">
             <div class="login-brand-wrapper">
                 <div class="login-logo-image">
@@ -1208,11 +1271,8 @@ foreach ($possible_paths as $path) {
                 <i class="fas fa-palette"></i> Choose Theme
             </div>
             
-            <!-- ================================================================ -->
-            <!-- MODE TOGGLE - BLUE JUU, GREEN CHINI -->
-            <!-- ================================================================ -->
+            <!-- MODE TOGGLE -->
             <div class="mode-switch-container">
-                <!-- BLUE - JUU -->
                 <button type="button" class="mode-btn blue-btn <?= $active_mode === 'general_blue' ? 'active' : '' ?>" 
                         id="blueToggle" data-mode="general_blue">
                     <i class="fas fa-circle" style="color:#3B82F6;"></i>
@@ -1220,7 +1280,6 @@ foreach ($possible_paths as $path) {
                     <span class="badge">Default</span>
                 </button>
                 
-                <!-- GREEN - CHINI -->
                 <button type="button" class="mode-btn green-btn <?= $active_mode === 'general_green' ? 'active' : '' ?>" 
                         id="greenToggle" data-mode="general_green">
                     <i class="fas fa-circle" style="color:#059669;"></i>
@@ -1230,9 +1289,7 @@ foreach ($possible_paths as $path) {
             </div>
         </div>
         
-        <!-- ================================================================ -->
-        <!-- RIGHT PANEL - Form -->
-        <!-- ================================================================ -->
+        <!-- RIGHT PANEL -->
         <div class="login-right">
             <div class="welcome-text">
                 <h2 id="formTitle">Welcome Back</h2>
@@ -1241,9 +1298,6 @@ foreach ($possible_paths as $path) {
             
             <div id="alertContainer"></div>
             
-            <!-- ================================================================ -->
-            <!-- SINGLE FORM -->
-            <!-- ================================================================ -->
             <form method="POST" action="" id="loginForm" autocomplete="off">
                 <input type="hidden" name="login_mode" id="loginMode" value="<?= $active_mode ?>">
                 
@@ -1294,9 +1348,7 @@ foreach ($possible_paths as $path) {
 </div>
 
 <script>
-// ================================================================
 // DARK MODE TOGGLE
-// ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     var darkToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkModeIcon');
@@ -1314,9 +1366,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
-// ================================================================
-// TOGGLE BETWEEN BLUE AND GREEN GENERAL MODES
-// ================================================================
+// TOGGLE BLUE AND GREEN MODES
 document.addEventListener('DOMContentLoaded', function() {
     var blueToggle = document.getElementById('blueToggle');
     var greenToggle = document.getElementById('greenToggle');
@@ -1334,53 +1384,32 @@ document.addEventListener('DOMContentLoaded', function() {
     var alertContainer = document.getElementById('alertContainer');
     
     function setMode(mode) {
-        // Update body class
         bodyElement.classList.remove('green-mode');
         if (mode === 'general_green') {
             bodyElement.classList.add('green-mode');
         }
         
-        // Update container class
         loginContainer.classList.remove('green-mode');
         if (mode === 'general_green') {
             loginContainer.classList.add('green-mode');
         }
         
-        // Update left panel class
         leftPanel.classList.remove('green-mode');
         if (mode === 'general_green') {
             leftPanel.classList.add('green-mode');
         }
         
-        // Update toggle buttons
         blueToggle.classList.remove('active');
         greenToggle.classList.remove('active');
         
         if (mode === 'general_blue') {
             blueToggle.classList.add('active');
-            brandTagline.textContent = 'Dispensary & Healthcare';
-            modeLabel.innerHTML = '<i class="fas fa-palette"></i> Choose Theme';
-            formTitle.textContent = 'Welcome Back';
-            formSubtitle.textContent = 'Enter your credentials to access your account';
-            btnText.textContent = 'Sign In';
             loginMode.value = 'general_blue';
-            if (btnIcon) btnIcon.className = 'fas fa-sign-in-alt';
-            loginBtn.className = 'btn-login';
-            loginBtn.disabled = false;
         } else {
             greenToggle.classList.add('active');
-            brandTagline.textContent = 'Dispensary & Healthcare';
-            modeLabel.innerHTML = '<i class="fas fa-palette"></i> Choose Theme';
-            formTitle.textContent = 'Welcome Back';
-            formSubtitle.textContent = 'Enter your credentials to access your account';
-            btnText.textContent = 'Sign In';
             loginMode.value = 'general_green';
-            if (btnIcon) btnIcon.className = 'fas fa-sign-in-alt';
-            loginBtn.className = 'btn-login';
-            loginBtn.disabled = false;
         }
         
-        // Clear alerts
         var alerts = alertContainer.querySelectorAll('.alert');
         alerts.forEach(function(el) { el.remove(); });
         
@@ -1400,9 +1429,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
-// ================================================================
 // PASSWORD TOGGLE
-// ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     var togglePassword = document.getElementById('togglePassword');
     var passwordInput = document.getElementById('password');
@@ -1426,16 +1453,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// ================================================================
 // LOGIN FORM HANDLER
-// ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     var loginForm = document.getElementById('loginForm');
     var loginBtn = document.getElementById('loginBtn');
     var usernameInput = document.getElementById('username');
     var passwordInput = document.getElementById('password');
     var alertContainer = document.getElementById('alertContainer');
-    var loginMode = document.getElementById('loginMode');
     
     function showError(message) {
         var alertDiv = document.createElement('div');
@@ -1549,9 +1573,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// ================================================================
 // ENTER KEY SUPPORT
-// ================================================================
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Enter') {
         var active = document.activeElement;
@@ -1561,9 +1583,7 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-// ================================================================
 // RIPPLE EFFECT
-// ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     var loginBtn = document.getElementById('loginBtn');
     if (loginBtn) {
@@ -1585,18 +1605,19 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// ================================================================
 // AUTO-FOCUS
-// ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     var username = document.getElementById('username');
     if (!username.value) username.focus();
 });
 
-console.log('%c🏥 Braick Dispensary - Login (Blue Top | Green Bottom)', 'font-size:24px; font-weight:bold; color:#0B5ED7;');
+console.log('%c🏥 Braick Dispensary - Login (AUDIT ROLE SUPPORTED)', 'font-size:24px; font-weight:bold; color:#0B5ED7;');
 console.log('%c✅ Blue Theme - TOP (Default)', 'font-size:14px; color:#3B82F6;');
 console.log('%c✅ Green Theme - BOTTOM (Alternative)', 'font-size:14px; color:#059669;');
-console.log('%c✅ Both are GENERAL modes - same login logic', 'font-size:14px; color:#D97706;');
+console.log('%c✅ Audit role support ADDED', 'font-size:14px; color:#DC2626; font-weight:bold;');
+console.log('%c✅ Bigger logo (10rem)', 'font-size:14px; color:#D97706;');
+console.log('%c✅ Better text field CSS', 'font-size:14px; color:#D97706;');
+console.log('%c✅ Better button CSS', 'font-size:14px; color:#D97706;');
 console.log('%c✅ Case-sensitive username check enabled', 'font-size:14px; color:#D97706;');
 </script>
 

@@ -1,13 +1,10 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/dashboard.php
-// SUPER ADMIN DASHBOARD - MODERN DESIGN
-// 8 CARDS: Revenue, Expenses, Profit, Prescriptions, OTC, Stock, Expiry, Equipment
-// ✅ FIXED: Same medicine in different branches counted separately
-// ✅ FIXED: Equipment with NULL or '0000-00-00' expiry date NOT counted as expired
-// ✅ FIXED: Expiry badge shows EXPIRED and EXPIRING SOON separately
-// ✅ FIXED: Dark mode toggle ipo kwenye header TU (dashboard haina button)
-// ✅ REMOVED: Quick Reports section
+// SUPER ADMIN DASHBOARD - BLUE THEME
+// ✅ BLUE THEME (cards zote)
+// ✅ RED: Expenses + Expiry
+// ✅ GREEN: Profit
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -341,15 +338,13 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// ✅ SHARED HEADER + SIDEBAR
+// SHARED HEADER + SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
-<!-- ================================================================ -->
 <!-- PAGE-SPECIFIC CSS -->
-<!-- ================================================================ -->
 <style>
 :root {
     --primary: #0B5ED7;
@@ -408,16 +403,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     pointer-events: none;
 }
 
-.page-header::after {
-    content: '';
-    position: absolute;
-    bottom: -40%; left: -5%;
-    width: 300px; height: 300px;
-    background: rgba(255,255,255,0.02);
-    border-radius: 50%;
-    pointer-events: none;
-}
-
 .page-header .page-title {
     color: white;
     font-size: 1.6rem;
@@ -431,10 +416,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     margin: 0;
 }
 
-.page-header .page-title i {
-    font-size: 1.8rem;
-    opacity: 0.9;
-}
+.page-header .page-title i { font-size: 1.8rem; opacity: 0.9; }
 
 .page-header .page-subtitle {
     color: rgba(255,255,255,0.85);
@@ -448,10 +430,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     margin-top: 6px;
 }
 
-.page-header .page-subtitle strong {
-    color: white;
-    font-weight: 600;
-}
+.page-header .page-subtitle strong { color: white; font-weight: 600; }
 
 .page-header .header-badge {
     background: rgba(255,255,255,0.1);
@@ -483,6 +462,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     backdrop-filter: blur(4px);
     position: relative;
     z-index: 1;
+    cursor: pointer;
 }
 
 .page-header .btn-outline-light:hover {
@@ -516,29 +496,32 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     border: none;
 }
 
+/* ✅ BLUE THEME (Cards zote) */
 .stat-card.card-revenue { background: #0B5ED7; }
 .stat-card.card-revenue:hover { background: #0A4CA8; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(11,94,215,0.35); }
 
+.stat-card.card-prescription { background: #0B5ED7; }
+.stat-card.card-prescription:hover { background: #0A4CA8; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(11,94,215,0.35); }
+
+.stat-card.card-otc { background: #0B5ED7; }
+.stat-card.card-otc:hover { background: #0A4CA8; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(11,94,215,0.35); }
+
+.stat-card.card-stock { background: #0B5ED7; }
+.stat-card.card-stock:hover { background: #0A4CA8; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(11,94,215,0.35); }
+
+.stat-card.card-equipment { background: #0B5ED7; }
+.stat-card.card-equipment:hover { background: #0A4CA8; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(11,94,215,0.35); }
+
+/* ✅ RED THEME (Expenses + Expiry) */
 .stat-card.card-expenses { background: #E11D48; }
 .stat-card.card-expenses:hover { background: #BE123C; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(225,29,72,0.35); }
-
-.stat-card.card-profit { background: #059669; }
-.stat-card.card-profit:hover { background: #047857; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(5,150,105,0.35); }
-
-.stat-card.card-prescription { background: #7C3AED; }
-.stat-card.card-prescription:hover { background: #6D28D9; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(124,58,237,0.35); }
-
-.stat-card.card-otc { background: #D97706; }
-.stat-card.card-otc:hover { background: #B45309; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(217,119,6,0.35); }
-
-.stat-card.card-stock { background: #0891B2; }
-.stat-card.card-stock:hover { background: #0E7490; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(8,145,178,0.35); }
 
 .stat-card.card-expiry { background: #DC2626; }
 .stat-card.card-expiry:hover { background: #B91C1C; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(220,38,38,0.35); }
 
-.stat-card.card-equipment { background: #4F46E5; }
-.stat-card.card-equipment:hover { background: #4338CA; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(79,70,229,0.35); }
+/* ✅ GREEN THEME (Profit) */
+.stat-card.card-profit { background: #059669; }
+.stat-card.card-profit:hover { background: #047857; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(5,150,105,0.35); }
 
 .stat-card::before {
     content: '';
@@ -735,13 +718,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     transition: var(--transition);
 }
 
-.activity-item:hover {
-    background: var(--primary-bg);
-}
-
-[data-theme="dark"] .activity-item:hover {
-    background: rgba(30, 58, 95, 0.3);
-}
+.activity-item:hover { background: var(--primary-bg); }
+[data-theme="dark"] .activity-item:hover { background: rgba(30, 58, 95, 0.3); }
 
 .activity-icon {
     width: 24px;
@@ -757,10 +735,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     margin-top: 2px;
 }
 
-.activity-content {
-    flex: 1;
-    min-width: 0;
-}
+.activity-content { flex: 1; min-width: 0; }
 
 .activity-action {
     font-size: 0.75rem;
@@ -783,7 +758,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
 .max-h-50 { max-height: 180px; overflow-y: auto; }
 
-/* FOOTER */
 .footer {
     margin-top: 16px;
     padding: 12px 0;
@@ -793,18 +767,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     color: var(--text-secondary);
 }
 
-.footer .footer-brand {
-    color: var(--primary);
-    font-weight: 600;
-}
+.footer .footer-brand { color: var(--primary); font-weight: 600; }
 
-/* UTILITIES */
 .flex { display: flex; }
 .flex-wrap { flex-wrap: wrap; }
 .items-center { align-items: center; }
 .justify-between { justify-content: space-between; }
 .gap-2 { gap: 8px; }
-.mb-4 { margin-bottom: 16px; }
 .text-xs { font-size: 0.7rem; }
 .text-sm { font-size: 0.85rem; }
 .text-gray-400 { color: var(--text-secondary); }
@@ -815,7 +784,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 .mx-2 { margin-left: 8px; margin-right: 8px; }
 .mr-2 { margin-right: 8px; }
 
-/* RESPONSIVE */
 @media (max-width: 1200px) {
     .stat-grid { grid-template-columns: repeat(4, 1fr); gap: 12px; }
     .stat-card .stat-number { font-size: 1.4rem; }
@@ -880,9 +848,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 }
 </style>
 
-<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
     <!-- Page Header -->
@@ -893,7 +859,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 Welcome back, <strong><?= htmlspecialchars($user_full_name) ?></strong>!
-                <span class="header-badge"><i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?></span>
+                <span class="header-badge"><i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name_display) ?></span>
                 <span class="header-badge"><i class="fas fa-calendar-day"></i> <?= date('F d, Y') ?></span>
             </p>
         </div>
@@ -910,13 +876,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <!-- 8 CARDS -->
     <div class="stat-grid">
         
+        <!-- 1. Revenue - BLUE -->
         <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="stat-card card-revenue">
             <div class="card-content">
                 <div class="card-top">
                     <div>
                         <p class="stat-label">Total Revenue</p>
                         <p class="stat-number">TSh <?= number_format($total_revenue) ?></p>
-                        <p class="stat-sub">Bills + OTC (Prescriptions included in Bills)</p>
+                        <p class="stat-sub">Bills + OTC</p>
                     </div>
                     <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
                 </div>
@@ -925,6 +892,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
+        <!-- 2. Expenses - RED -->
         <a href="expenses.php?branch=<?= $selected_branch_id ?>" class="stat-card card-expenses">
             <div class="card-content">
                 <div class="card-top">
@@ -940,6 +908,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
+        <!-- 3. Profit - GREEN -->
         <a href="profit.php?branch=<?= $selected_branch_id ?>" class="stat-card card-profit">
             <div class="card-content">
                 <div class="card-top">
@@ -967,6 +936,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
+        <!-- 4. Prescriptions - BLUE -->
         <a href="prescriptions.php?branch=<?= $selected_branch_id ?>" class="stat-card card-prescription">
             <div class="card-content">
                 <div class="card-top">
@@ -974,16 +944,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <p class="stat-label">Prescription Sales</p>
                         <p class="stat-number">TSh <?= number_format($prescription_revenue) ?></p>
                         <p class="stat-sub"><?= $prescription_count ?> prescriptions</p>
-                        <p class="stat-sub" style="font-size: 0.5rem; opacity: 0.7;">* Included in Bills Revenue</p>
                     </div>
                     <div class="stat-icon"><i class="fas fa-prescription"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-pills"></i> Dispensed (Display Only)</div>
+                <div class="stat-trend"><i class="fas fa-pills"></i> Dispensed</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <a href="../admin/otc_sales.php?branch=<?= $selected_branch_id ?>" class="stat-card card-otc">
+        <!-- 5. OTC Sales - BLUE -->
+        <a href="otc_sales.php?branch=<?= $selected_branch_id ?>" class="stat-card card-otc">
             <div class="card-content">
                 <div class="card-top">
                     <div>
@@ -998,6 +968,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
+        <!-- 6. Medication Stock - BLUE -->
         <a href="inventory.php?branch=<?= $selected_branch_id ?>" class="stat-card card-stock">
             <div class="card-content">
                 <div class="card-top">
@@ -1012,11 +983,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </div>
                     <div class="stat-icon"><i class="fas fa-pills"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-warehouse"></i> <?= $med_total_items ?> entries (per branch)</div>
+                <div class="stat-trend"><i class="fas fa-warehouse"></i> <?= $med_total_items ?> entries</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
+        <!-- 7. Medication Expiry - RED -->
         <a href="inventory.php?filter=expired&branch=<?= $selected_branch_id ?>" class="stat-card card-expiry">
             <div class="card-content">
                 <div class="card-top">
@@ -1041,6 +1013,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
+        <!-- 8. Medical Equipment - BLUE -->
         <a href="equipment_inventory.php?branch=<?= $selected_branch_id ?>" class="stat-card card-equipment">
             <div class="card-content">
                 <div class="card-top">
@@ -1061,7 +1034,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </div>
                     <div class="stat-icon"><i class="fas fa-microscope"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-tools"></i> <?= $equip_total_items ?> entries (per branch)</div>
+                <div class="stat-trend"><i class="fas fa-tools"></i> <?= $equip_total_items ?> entries</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
@@ -1123,9 +1096,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 </main>
 
 <script>
-// ================================================================
 // SYNC DARK MODE
-// ================================================================
 (function() {
     var htmlElement = document.documentElement;
     window.addEventListener('storage', function(e) {
@@ -1139,9 +1110,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     });
 })();
 
-// ================================================================
 // UPDATE FOOTER TIME
-// ================================================================
 setInterval(function() {
     var now = new Date();
     var timeStr = now.toLocaleTimeString('en-US', {
@@ -1151,9 +1120,7 @@ setInterval(function() {
     if (ftEl) ftEl.textContent = timeStr;
 }, 1000);
 
-// ================================================================
 // REVENUE CHART
-// ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     var ctx = document.getElementById('revenueChart')?.getContext('2d');
     if (ctx && typeof Chart !== 'undefined') {
@@ -1232,8 +1199,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
 console.log('%c🏥 Braick Dispensary - Super Admin Dashboard', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
 console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-console.log('%c✅ Quick Reports section REMOVED', 'font-size:13px; color:#DC2626; font-weight:bold;');
-console.log('%c✅ Dashboard simplified', 'font-size:13px; color:#34D399;');
+console.log('%c🔵 BLUE THEME: Revenue, Prescription, OTC, Stock, Equipment', 'font-size:13px; color:#0B5ED7;');
+console.log('%c🔴 RED THEME: Expenses, Expiry', 'font-size:13px; color:#E11D48;');
+console.log('%c🟢 GREEN THEME: Profit', 'font-size:13px; color:#059669;');
 </script>
 
 </body>
