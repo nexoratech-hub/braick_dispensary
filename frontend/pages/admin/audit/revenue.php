@@ -1,11 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/revenue.php
-// ADMIN AUDIT - REVENUE REPORT (V9 - PRESCRIPTION FIXED)
-// ✅ FIXED: Prescription inahesabiwa tu kutoka PAID bills
-// ✅ FIXED: Breakdown types zinatumia b.status = 'paid'
-// ✅ FIXED: NO FALLBACK to prescription_items
-// ✅ View/Edit buttons → AUDIT pages
+// ADMIN AUDIT - REVENUE REPORT (V10)
+// ✅ Removed "Medications" card (same as Prescription)
+// ✅ Added "Item Details" column to All Transactions
+// ✅ Added "Received By" tracking for payments
+// ✅ Prescription: ONLY from PAID bills
 // ✅ Expenses table (RED THEME)
 // ================================================================
 
@@ -265,30 +265,26 @@ if ($payment_method !== 'all') {
 // BRANCH CONDITIONS
 $branch_cond_b = "";
 $branch_cond_o = "";
-$branch_cond_p = "";
 $branch_cond_e = "";
 $branch_cond_bi = "";
 $branch_params_b = [];
 $branch_params_o = [];
-$branch_params_p = [];
 $branch_params_e = [];
 $branch_params_bi = [];
 
 if ($selected_branch_id !== 'all') {
     $branch_cond_b = " AND b.branch_id = ?";
     $branch_cond_o = " AND o.branch_id = ?";
-    $branch_cond_p = " AND p.branch_id = ?";
     $branch_cond_e = " AND e.branch_id = ?";
     $branch_cond_bi = " AND bi.branch_id = ?";
     $branch_params_b = [(int)$selected_branch_id];
     $branch_params_o = [(int)$selected_branch_id];
-    $branch_params_p = [(int)$selected_branch_id];
     $branch_params_e = [(int)$selected_branch_id];
     $branch_params_bi = [(int)$selected_branch_id];
 }
 
 // ================================================================
-// ✅ STATS
+// STATS
 // ================================================================
 $patient_bills_revenue = 0;
 $patient_bills_count = 0;
@@ -318,11 +314,7 @@ try {
     $otc_count = (int)($data['count'] ?? 0);
 } catch (Exception $e) {}
 
-// ================================================================
-// ✅ PRESCRIPTION REVENUE - ONLY FROM PAID BILLS
-// Using b.status = 'paid' (bill-level payment)
-// NO FALLBACK to prescription_items
-// ================================================================
+// PRESCRIPTION REVENUE
 $prescription_revenue = 0;
 $prescription_count = 0;
 try {
@@ -342,15 +334,11 @@ try {
     $data = $stmt->fetch(PDO::FETCH_ASSOC);
     $prescription_revenue = (float)($data['total'] ?? 0);
     $prescription_count = (int)($data['count'] ?? 0);
-    
-    // ❌ NO FALLBACK - removed to prevent counting unpaid bills
 } catch (Exception $e) {
     error_log("Prescription error: " . $e->getMessage());
 }
 
-// ================================================================
-// ✅ BREAKDOWN BY ITEM TYPE - Using b.status = 'paid'
-// ================================================================
+// BREAKDOWN
 $breakdown_types = ['consultation', 'lab_test', 'procedure', 'medication', 'registration', 'equipment'];
 $breakdown_data = [];
 foreach ($breakdown_types as $type) {
@@ -409,7 +397,9 @@ try {
 $net_profit = $total_revenue - $total_expenses;
 $profit_percentage = ($total_revenue > 0) ? round(($net_profit / $total_revenue) * 100, 1) : 0;
 
-// TRANSACTIONS
+// ================================================================
+// TRANSACTIONS - With Item Details + Received By
+// ================================================================
 $transactions = [];
 try {
     $search_cond_bills = "";
@@ -432,6 +422,10 @@ try {
             COALESCE(u.role, 'user') as received_by_role,
             br.name as branch_name, NULL as customer_phone,
             (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND status != 'cancelled') as item_count,
+            (SELECT GROUP_CONCAT(DISTINCT item_type ORDER BY item_type SEPARATOR ',') 
+             FROM bill_items WHERE bill_id = b.id AND status != 'cancelled') as item_types,
+            (SELECT GROUP_CONCAT(CONCAT(item_name, ' (', quantity, ')') SEPARATOR '\n') 
+             FROM bill_items WHERE bill_id = b.id AND status != 'cancelled') as items_summary,
             b.notes
         FROM bills b
         LEFT JOIN patients p ON b.patient_id = p.id
@@ -451,6 +445,9 @@ try {
             COALESCE(u2.role, 'user') as received_by_role,
             br2.name as branch_name, o.customer_phone,
             (SELECT COUNT(*) FROM otc_sale_items WHERE sale_id = o.id) as item_count,
+            'medication' as item_types,
+            (SELECT GROUP_CONCAT(CONCAT(item_name, ' (', quantity, ')') SEPARATOR '\n') 
+             FROM otc_sale_items WHERE sale_id = o.id) as items_summary,
             o.notes
         FROM otc_sales o
         LEFT JOIN users u2 ON o.sold_by = u2.id
@@ -1077,11 +1074,6 @@ html, body {
 .stat-card.lab .stat-icon { background: linear-gradient(135deg, #3B82F6, #93C5FD); }
 .stat-card.lab .stat-value .money-number { color: var(--primary); }
 
-.stat-card.medication::before { background: linear-gradient(90deg, #D97706, #FBBF24, #D97706); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
-.stat-card.medication:hover { border-color: #D97706; }
-.stat-card.medication .stat-icon { background: linear-gradient(135deg, #D97706, #FBBF24); }
-.stat-card.medication .stat-value .money-number { color: var(--warning); }
-
 .stat-card.expenses::before { background: linear-gradient(90deg, #DC2626, #F87171, #DC2626); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
 .stat-card.expenses:hover { border-color: #DC2626; }
 .stat-card.expenses .stat-icon { background: linear-gradient(135deg, #DC2626, #F87171); }
@@ -1664,6 +1656,83 @@ mark.search-highlight {
     box-shadow: 0 2px 4px rgba(0,0,0,0.15);
 }
 
+/* ================================================================
+   ITEM DETAILS CELL - MULTI-LINE
+   ================================================================ */
+.item-details-cell {
+    max-width: 220px;
+    min-width: 160px;
+    padding: 8px 10px !important;
+}
+.item-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: 120px;
+    overflow-y: auto;
+}
+.item-list::-webkit-scrollbar { width: 4px; }
+.item-list::-webkit-scrollbar-track { background: var(--border-color); border-radius: 10px; }
+.item-list::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+
+.item-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    font-size: 0.68rem;
+    line-height: 1.35;
+    color: var(--text-primary);
+    font-weight: 600;
+    word-break: break-word;
+}
+.item-line .item-bullet {
+    color: var(--primary);
+    font-weight: 900;
+    flex-shrink: 0;
+    font-size: 0.7rem;
+    line-height: 1.3;
+}
+.item-line .item-name {
+    flex: 1;
+    word-break: break-word;
+}
+.item-line .item-qty {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    font-weight: 800;
+    color: var(--primary);
+    background: var(--primary-bg);
+    padding: 1px 5px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.item-type-tag {
+    display: inline-block;
+    font-size: 0.5rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-top: 4px;
+    background: var(--primary-bg);
+    color: var(--primary);
+    letter-spacing: 0.03em;
+}
+.item-type-tag.medication { background: #FEF3C7; color: #D97706; }
+.item-type-tag.lab_test { background: #DBEAFE; color: #1E40AF; }
+.item-type-tag.consultation { background: #D1FAE5; color: #059669; }
+.item-type-tag.procedure { background: #CCFBF1; color: #0D9488; }
+.item-type-tag.registration { background: #F1F5F9; color: #64748B; }
+.item-type-tag.equipment { background: #EDE9FE; color: #7C3AED; }
+[data-theme="dark"] .item-type-tag.medication { background: #78350F; color: #FDE68A; }
+[data-theme="dark"] .item-type-tag.lab_test { background: #1E3A8A; color: #93C5FD; }
+[data-theme="dark"] .item-type-tag.consultation { background: #1A3A2A; color: #34D399; }
+[data-theme="dark"] .item-type-tag.procedure { background: #134E4A; color: #5EEAD4; }
+[data-theme="dark"] .item-type-tag.registration { background: #334155; color: #94A3B8; }
+[data-theme="dark"] .item-type-tag.equipment { background: #2D1B4E; color: #A78BFA; }
+
 /* MODAL */
 .modal-overlay {
     position: fixed;
@@ -1793,6 +1862,7 @@ mark.search-highlight {
     .quick-btn { font-size: 0.65rem; padding: 5px 10px; }
     .table-toolbar { flex-direction: column; align-items: stretch; }
     .table-toolbar-right { justify-content: flex-end; }
+    .item-details-cell { max-width: 180px; min-width: 140px; }
 }
 
 @media (max-width: 480px) {
@@ -1944,7 +2014,7 @@ mark.search-highlight {
         </form>
     </div>
 
-    <!-- STATS GRID -->
+    <!-- STATS GRID - MEDICATION REMOVED -->
     <div class="stats-grid">
         <div class="stat-card revenue">
             <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
@@ -2006,16 +2076,6 @@ mark.search-highlight {
             <div class="stat-sub"><i class="fas fa-microscope"></i> <?= number_format($lab_count) ?> tests</div>
         </div>
         
-        <div class="stat-card medication">
-            <div class="stat-icon"><i class="fas fa-pills"></i></div>
-            <div class="stat-label">Medications</div>
-            <div class="stat-value">
-                <span class="currency-symbol"><?= $currency ?></span>
-                <span class="money-number"><?= number_format($medication_revenue, 0) ?></span>
-            </div>
-            <div class="stat-sub"><i class="fas fa-box"></i> <?= number_format($medication_count) ?> items</div>
-        </div>
-        
         <div class="stat-card expenses">
             <div class="stat-icon"><i class="fas fa-receipt"></i></div>
             <div class="stat-label">Expenses</div>
@@ -2056,7 +2116,7 @@ mark.search-highlight {
         </div>
     </div>
 
-    <!-- ALL TRANSACTIONS TABLE -->
+    <!-- ALL TRANSACTIONS TABLE - WITH ITEM DETAILS + RECEIVED BY -->
     <div class="table-card">
         <div class="table-header">
             <span class="title"><i class="fas fa-list"></i> All Transactions</span>
@@ -2068,7 +2128,7 @@ mark.search-highlight {
                 <div class="search-box" id="transSearchBox">
                     <i class="fas fa-search search-icon"></i>
                     <input type="text" id="transSearch" 
-                           placeholder="Search bill #, customer, receiver..."
+                           placeholder="Search bill #, customer, item, receiver..."
                            oninput="filterTable('transTable', this.value, 'transCount')"
                            autocomplete="off">
                     <button type="button" class="search-clear" onclick="clearSearch('transTable', 'transSearch', 'transCount')">
@@ -2091,7 +2151,7 @@ mark.search-highlight {
         </div>
         
         <div class="table-scroll-wrapper" id="transWrapper">
-            <table class="data-table" id="transTable" style="min-width:1500px;">
+            <table class="data-table" id="transTable" style="min-width:1700px;">
                 <thead>
                     <tr>
                         <th style="width:40px;">#</th>
@@ -2099,9 +2159,10 @@ mark.search-highlight {
                         <th style="text-align:center;">Type</th>
                         <th>Customer / Patient</th>
                         <th style="text-align:center;">Items</th>
+                        <th>Item Details (Drugs/Service)</th>
                         <th>Payment</th>
-                        <th style="text-align:center;">Status</th>
                         <th>Received By</th>
+                        <th style="text-align:center;">Status</th>
                         <th>Branch</th>
                         <th style="text-align:right;">Amount</th>
                         <th>Date & Time</th>
@@ -2123,6 +2184,11 @@ mark.search-highlight {
                             $initials = count($name_parts) >= 2 
                                 ? strtoupper(substr($name_parts[0], 0, 1) . substr($name_parts[1], 0, 1))
                                 : strtoupper(substr($trans['received_by_name'] ?? 'NA', 0, 2));
+                            
+                            $item_types_str = $trans['item_types'] ?? '';
+                            $items_summary = $trans['items_summary'] ?? '';
+                            $item_count = (int)($trans['item_count'] ?? 0);
+                            $item_lines = !empty($items_summary) ? explode("\n", $items_summary) : [];
                         ?>
                             <tr>
                                 <td style="text-align:center;font-weight:700;color:var(--text-secondary);"><?= $row_num++ ?></td>
@@ -2146,14 +2212,68 @@ mark.search-highlight {
                                         </div>
                                     <?php endif; ?>
                                 </td>
-                                <td style="text-align:center;font-weight:700;color:var(--primary);" class="searchable-cell">
-                                    <?= (int)($trans['item_count'] ?? 0) ?>
+                                <td style="text-align:center;" class="searchable-cell">
+                                    <div style="font-weight:800;color:var(--primary);font-family:var(--font-mono);font-size:0.85rem;">
+                                        <?= $item_count ?>
+                                    </div>
+                                    <div style="font-size:0.55rem;font-weight:700;text-transform:uppercase;color:var(--text-secondary);">
+                                        <?= $is_otc ? 'Meds' : 'Items' ?>
+                                    </div>
+                                </td>
+                                <td class="searchable-cell item-details-cell">
+                                    <?php if (count($item_lines) > 0): ?>
+                                        <div class="item-list">
+                                            <?php foreach ($item_lines as $line): 
+                                                $line = trim($line);
+                                                if (empty($line)) continue;
+                                                $item_name = $line;
+                                                $item_qty = '';
+                                                if (preg_match('/^(.+?)\s*\((\d+)\)\s*$/', $line, $m)) {
+                                                    $item_name = trim($m[1]);
+                                                    $item_qty = $m[2];
+                                                }
+                                            ?>
+                                                <div class="item-line">
+                                                    <span class="item-bullet">•</span>
+                                                    <span class="item-name"><?= htmlspecialchars($item_name) ?></span>
+                                                    <?php if ($item_qty): ?>
+                                                        <span class="item-qty">×<?= htmlspecialchars($item_qty) ?></span>
+                                                    <?php endif; ?>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                        <?php if (!empty($item_types_str)): 
+                                            $types = array_map('trim', explode(',', $item_types_str));
+                                        ?>
+                                            <div style="display:flex;flex-wrap:wrap;gap:2px;margin-top:4px;">
+                                                <?php foreach ($types as $type): ?>
+                                                    <span class="item-type-tag <?= htmlspecialchars($type) ?>">
+                                                        <?= htmlspecialchars(str_replace('_', ' ', $type)) ?>
+                                                    </span>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <span style="color:var(--text-secondary);font-size:0.68rem;">—</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td class="searchable-cell">
                                     <span class="payment-badge">
                                         <i class="fas fa-credit-card"></i>
                                         <?= htmlspecialchars(ucfirst(str_replace('_', ' ', $trans['payment_method'] ?? 'Cash'))) ?>
                                     </span>
+                                </td>
+                                <!-- ✅ RECEIVED BY COLUMN -->
+                                <td class="searchable-cell">
+                                    <div class="received-by">
+                                        <div class="received-by-avatar"><?= htmlspecialchars($initials) ?></div>
+                                        <div class="received-by-info">
+                                            <span class="received-by-name"><?= htmlspecialchars($trans['received_by_name'] ?? 'N/A') ?></span>
+                                            <span class="received-by-role">
+                                                <span class="role-tag <?= htmlspecialchars($role) ?>"><?= htmlspecialchars(strtoupper($role)) ?></span>
+                                            </span>
+                                        </div>
+                                    </div>
                                 </td>
                                 <td style="text-align:center;" class="searchable-cell">
                                     <?php if ($status_class === 'paid'): ?>
@@ -2165,17 +2285,6 @@ mark.search-highlight {
                                     <?php else: ?>
                                         <span class="status-badge pending"><i class="fas fa-clock"></i> PENDING</span>
                                     <?php endif; ?>
-                                </td>
-                                <td class="searchable-cell">
-                                    <div class="received-by">
-                                        <div class="received-by-avatar"><?= htmlspecialchars($initials) ?></div>
-                                        <div class="received-by-info">
-                                            <span class="received-by-name"><?= htmlspecialchars($trans['received_by_name'] ?? 'N/A') ?></span>
-                                            <span class="received-by-role">
-                                                <span class="role-tag <?= htmlspecialchars($role) ?>"><?= htmlspecialchars(strtoupper($role)) ?></span>
-                                            </span>
-                                        </div>
-                                    </div>
                                 </td>
                                 <td class="searchable-cell">
                                     <span style="font-size:0.7rem;color:var(--text-secondary);">
@@ -2224,7 +2333,7 @@ mark.search-highlight {
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="12" style="text-align:center;padding:50px 20px;color:var(--text-secondary);">
+                            <td colspan="13" style="text-align:center;padding:50px 20px;color:var(--text-secondary);">
                                 <i class="fas fa-inbox" style="font-size:2.5rem;opacity:0.3;display:block;margin-bottom:12px;"></i>
                                 <p style="font-weight:600;">No transactions found</p>
                             </td>
@@ -2802,11 +2911,10 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-console.log('%c📊 Revenue Report V9 - Prescription FIXED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Prescription: ONLY from PAID bills', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ NO fallback to prescription_items', 'font-size:13px; color:#FCD34D; font-weight:bold;');
-console.log('%c✅ Breakdown types: b.status = paid', 'font-size:13px; color:#34D399;');
-console.log('%c💰 Prescription: <?= $currency ?> <?= number_format($prescription_revenue, 0) ?>', 'font-size:13px; color:#7C3AED;');
+console.log('%c📊 Revenue Report V10 - Admin Audit', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ Removed "Medications" card', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Added "Item Details" column', 'font-size:13px; color:#34D399;');
+console.log('%c✅ Added "Received By" for payments', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

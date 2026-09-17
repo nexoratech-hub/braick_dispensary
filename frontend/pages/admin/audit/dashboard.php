@@ -1,10 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/dashboard.php
-// ADMIN - AUDIT DASHBOARD V8 - FIXED
-// ✅ Patient Bills inajumuisha PREMIUM (b.total_amount)
-// ✅ Other Bills HAINA PREMIUM (procedure + registration + equipment)
-// ✅ 8 CARDS COMPACT SIZE
+// ADMIN - AUDIT DASHBOARD V9
+// ✅ Patient Bills includes PREMIUM (b.total_amount)
+// ✅ 8 CARDS (Other Bills card removed)
 // ✅ BLUE THEME (#0B5ED7)
 // ✅ No double counting
 // ================================================================
@@ -29,6 +28,7 @@ $user_username = $_SESSION['username'] ?? 'admin';
 
 $selected_branch_id = $_GET['branch'] ?? 'all';
 
+// ✅ DATABASE PATH - juu mara 4 kutoka pages/admin/audit/
 require_once __DIR__ . '/../../../../backend/config/database.php';
 
 try {
@@ -115,7 +115,7 @@ $stats = [
 try {
     
     // ============================================================
-    // ✅ 1. PATIENT BILLS REVENUE (INCLUDES PREMIUM)
+    // 1. PATIENT BILLS REVENUE (INCLUDES PREMIUM)
     // ============================================================
     $patient_bills_revenue = 0;
     $patient_bills_count = 0;
@@ -134,10 +134,8 @@ try {
     $patient_bills_count = (int)($row['count'] ?? 0);
     
     // ============================================================
-    // ✅ 2. CATEGORY BREAKDOWN (from bill_items)
+    // 2. MEDICATIONS
     // ============================================================
-    
-    // 2a. MEDICATIONS
     $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
                    COUNT(DISTINCT bi.id) as count,
                    COALESCE(SUM(bi.quantity), 0) as qty
@@ -153,7 +151,9 @@ try {
     $stats['medication_count'] = (int)($row['count'] ?? 0);
     $stats['total_medicines_sold'] = (int)($row['qty'] ?? 0);
     
-    // 2b. PRESCRIPTION REVENUE
+    // ============================================================
+    // 3. PRESCRIPTION REVENUE
+    // ============================================================
     $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
                    COUNT(DISTINCT bi.id) as count 
             FROM bill_items bi
@@ -168,7 +168,9 @@ try {
     $stats['prescription_revenue'] = (float)($row['total'] ?? 0);
     $stats['prescription_count'] = (int)($row['count'] ?? 0);
     
-    // 2c. LAB TESTS
+    // ============================================================
+    // 4. LAB TESTS
+    // ============================================================
     $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
                    COUNT(DISTINCT bi.id) as count 
             FROM bill_items bi
@@ -182,7 +184,9 @@ try {
     $stats['lab_revenue'] = (float)($row['total'] ?? 0);
     $stats['lab_count'] = (int)($row['count'] ?? 0);
     
-    // 2d. CONSULTATION
+    // ============================================================
+    // 5. CONSULTATION
+    // ============================================================
     $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
                    COUNT(DISTINCT bi.id) as count 
             FROM bill_items bi
@@ -196,7 +200,10 @@ try {
     $stats['consultation_revenue'] = (float)($row['total'] ?? 0);
     $stats['consultation_count'] = (int)($row['count'] ?? 0);
     
-    // 2e. PROCEDURES
+    // ============================================================
+    // 6-8. PROCEDURES, REGISTRATION, EQUIPMENT
+    // (these sum up to "Other Bills" but not displayed as card)
+    // ============================================================
     $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total
             FROM bill_items bi
             INNER JOIN bills b ON bi.bill_id = b.id
@@ -207,7 +214,6 @@ try {
     $stmt = $db->prepare($sql); $stmt->execute($bi_branch_params);
     $stats['procedure_revenue'] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
     
-    // 2f. REGISTRATION
     $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total
             FROM bill_items bi
             INNER JOIN bills b ON bi.bill_id = b.id
@@ -218,7 +224,6 @@ try {
     $stmt = $db->prepare($sql); $stmt->execute($bi_branch_params);
     $stats['registration_revenue'] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
     
-    // 2g. EQUIPMENT / TOOL / OTHER
     $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total
             FROM bill_items bi
             INNER JOIN bills b ON bi.bill_id = b.id
@@ -230,7 +235,7 @@ try {
     $stats['equipment_revenue'] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
     
     // ============================================================
-    // ✅ 3. PREMIUM REVENUE (Separate tracking only)
+    // 9. PREMIUM REVENUE
     // ============================================================
     $sql = "SELECT COALESCE(SUM(b.premium_amount), 0) as total,
                    COUNT(DISTINCT b.id) as count
@@ -243,15 +248,15 @@ try {
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     $stats['premium_revenue'] = (float)($row['total'] ?? 0);
     
-    // ✅ OTHER BILLS = procedure + registration + equipment (NO PREMIUM)
+    // OTHER BILLS = procedure + registration + equipment (calculated for chart, not displayed as card)
     $stats['other_revenue'] = 
         $stats['procedure_revenue'] + 
         $stats['registration_revenue'] + 
         $stats['equipment_revenue'];
-    $stats['other_count'] = $stats['consultation_count']; // placeholder
+    $stats['other_count'] = $stats['consultation_count'];
     
     // ============================================================
-    // ✅ 4. OTC REVENUE
+    // 10. OTC REVENUE
     // ============================================================
     $sql = "SELECT COALESCE(SUM(total_amount), 0) as total, COUNT(*) as count 
             FROM otc_sales 
@@ -262,13 +267,13 @@ try {
     $stats['otc_count'] = (int)($row['count'] ?? 0);
     
     // ============================================================
-    // ✅ 5. TOTAL REVENUE
+    // 11. TOTAL REVENUE
     // ============================================================
     $stats['total_revenue'] = $patient_bills_revenue + $stats['otc_revenue'];
     $stats['total_bills'] = $patient_bills_count;
     
     // ============================================================
-    // ✅ 6. EXPENSES
+    // 12. EXPENSES
     // ============================================================
     $sql = "SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count 
             FROM expenses 
@@ -279,12 +284,12 @@ try {
     $stats['expenses_count'] = (int)($row['count'] ?? 0);
     
     // ============================================================
-    // ✅ 7. PROFIT
+    // 13. PROFIT
     // ============================================================
     $stats['profit'] = $stats['total_revenue'] - $stats['total_expenses'];
     
     // ============================================================
-    // ✅ 8. TODAY'S STATS
+    // 14. TODAY'S STATS
     // ============================================================
     $sql = "SELECT COALESCE(SUM(b.total_amount), 0) as total
             FROM bills b
@@ -312,7 +317,7 @@ try {
     $stats['today_profit'] = $stats['today_revenue'] - $stats['today_expenses'];
     
     // ============================================================
-    // ✅ 9. OTHER STATS
+    // 15. OTHER STATS
     // ============================================================
     $p_branch = $selected_branch_id !== 'all' ? " AND branch_id = ?" : "";
     
@@ -535,6 +540,7 @@ $profile_pic_url = !empty($profile_pic)
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
+// ✅ HEADER NA SIDEBAR
 include_once __DIR__ . '/../../../components/admin_audit_header.php';
 include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
 ?>
@@ -553,9 +559,6 @@ include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     
     <style>
-/* ================================================================
-   BLUE THEME + FONTS
-   ================================================================ */
 :root {
     --font-primary: 'Inter', -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', 'Courier New', monospace;
@@ -738,7 +741,7 @@ html, body {
     border: 2px solid rgba(255,255,255,0.3) !important;
 }
 
-/* 8 CARDS GRID */
+/* ✅ 8 CARDS GRID */
 .stats-grid-8 {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -888,12 +891,6 @@ html, body {
 .stat-card.lab .card-icon { background: linear-gradient(135deg, #3B82F6, #93C5FD); }
 .stat-card.lab .card-badge { background: var(--primary-soft); color: var(--primary); }
 .stat-card.lab .card-value { color: var(--primary); }
-
-.stat-card.other::before { background: linear-gradient(90deg, #D97706, #FBBF24, #D97706); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
-.stat-card.other:hover { border-color: #D97706; }
-.stat-card.other .card-icon { background: linear-gradient(135deg, #D97706, #FBBF24); }
-.stat-card.other .card-badge { background: var(--warning-bg); color: var(--warning); }
-.stat-card.other .card-value { color: var(--warning); }
 
 .stat-card.consultation::before { background: linear-gradient(90deg, #059669, #34D399, #059669); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
 .stat-card.consultation:hover { border-color: #059669; }
@@ -1212,7 +1209,7 @@ html, body {
         </div>
     </div>
 
-    <!-- 8 CARDS -->
+    <!-- ✅ 8 CARDS (Other Bills card removed) -->
     <div class="stats-grid-8">
 
         <!-- CARD 1: TOTAL REVENUE -->
@@ -1234,7 +1231,7 @@ html, body {
             </div>
         </div>
 
-        <!-- CARD 2: PATIENT BILLS (INCLUDES PREMIUM) -->
+        <!-- CARD 2: PATIENT BILLS -->
         <div class="stat-card revenue">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-file-invoice"></i></div>
@@ -1332,26 +1329,7 @@ html, body {
             </div>
         </div>
 
-        <!-- CARD 7: OTHER BILLS (NO PREMIUM - Proc + Reg + Equip) -->
-        <div class="stat-card other">
-            <div class="card-top">
-                <div class="card-icon"><i class="fas fa-file-invoice-dollar"></i></div>
-                <span class="card-badge"><i class="fas fa-folder-open"></i> OTHER</span>
-            </div>
-            <div>
-                <div class="card-label"><i class="fas fa-folder-open"></i> Other Bills</div>
-                <div class="card-value">
-                    <span class="currency"><?= $currency ?></span>
-                    <?= number_format($stats['other_revenue'], 0) ?>
-                </div>
-            </div>
-            <div class="card-footer">
-                <i class="fas fa-list-ul"></i>
-                Proc + Reg + Equip
-            </div>
-        </div>
-
-        <!-- CARD 8: EXPENSES -->
+        <!-- CARD 7: EXPENSES -->
         <div class="stat-card expenses">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-receipt"></i></div>
@@ -1370,7 +1348,7 @@ html, body {
             </div>
         </div>
 
-        <!-- CARD 9: PROFIT -->
+        <!-- CARD 8: PROFIT -->
         <div class="stat-card profit <?= $stats['profit'] < 0 ? 'loss' : '' ?>">
             <div class="card-top">
                 <div class="card-icon">
@@ -1876,13 +1854,10 @@ if (breakdownCtx) {
     });
 }
 
-console.log('%c👑 Audit Dashboard V8 - Other Bills (NO PREMIUM)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Patient Bills: b.total_amount (INCLUDES PREMIUM)', 'font-size:12px; color:#FCD34D; font-weight:bold;');
-console.log('%c✅ Other Bills: Procedure + Registration + Equipment (NO PREMIUM)', 'font-size:12px; color:#34D399; font-weight:bold;');
+console.log('%c👑 Audit Dashboard V9 - Admin (8 Cards)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ Other Bills card REMOVED', 'font-size:12px; color:#FCD34D; font-weight:bold;');
+console.log('%c✅ Patient Bills INCLUDES PREMIUM', 'font-size:12px; color:#34D399; font-weight:bold;');
 console.log('%c💰 Total Revenue: <?= $currency ?> <?= number_format($stats['total_revenue'], 0) ?>', 'font-size:12px; color:#0B5ED7;');
-console.log('%c📄 Patient Bills: <?= $currency ?> <?= number_format($patient_bills_revenue, 0) ?>', 'font-size:12px; color:#0B5ED7;');
-console.log('%c⭐ Premium (in Patient Bills): <?= $currency ?> <?= number_format($stats['premium_revenue'], 0) ?>', 'font-size:12px; color:#F59E0B;');
-console.log('%c📁 Other Bills (no premium): <?= $currency ?> <?= number_format($stats['other_revenue'], 0) ?>', 'font-size:12px; color:#D97706;');
 console.log('%c💎 Profit: <?= $currency ?> <?= number_format($stats['profit'], 0) ?>', 'font-size:12px; color:#059669; font-weight:bold;');
 </script>
 

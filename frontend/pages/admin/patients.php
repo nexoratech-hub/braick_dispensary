@@ -1,11 +1,10 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/patients.php
-// SUPER ADMIN - MANAGE PATIENTS
+// SUPER ADMIN - MANAGE PATIENTS (V2)
 // ✅ Inatumia SHARED HEADER & SIDEBAR pekee
-// ✅ Imeondoa top-nav, search, dark mode, datetime, bell, avatar, branch selector
-// ✅ Imeondoa DOCTYPE, html, head, body
-// ✅ VIEW, EDIT, DELETE buttons
+// ✅ ASSIGN DOCTOR + VISITS buttons kwenye card header
+// ✅ VIEW, EDIT, DELETE buttons kwenye table
 // ✅ BLUE THEME
 // ✅ REGISTERED BY column
 // ================================================================
@@ -342,7 +341,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     --purple-bg: #2D1B5F;
 }
 
-/* PAGE HEADER */
+/* ================================================================
+   PAGE HEADER
+   ================================================================ */
 .page-header-custom {
     background: var(--primary-gradient);
     border-radius: var(--radius-lg);
@@ -440,7 +441,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     transform: translateY(-2px);
 }
 
-/* STATS CARDS */
+/* ================================================================
+   STATS CARDS
+   ================================================================ */
 .stats-grid-mini {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -482,7 +485,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     margin-top: 4px;
 }
 
-/* TABLE CARD */
+/* ================================================================
+   TABLE CARD
+   ================================================================ */
 .table-card {
     background: var(--bg-card);
     border-radius: var(--radius-lg);
@@ -513,7 +518,88 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
 .table-card .card-title i { color: var(--primary); }
 
-/* FILTER BAR */
+/* ================================================================
+   ✅ HEADER ACTION BUTTONS - Assign Doctor + Visits
+   ================================================================ */
+.btn-header-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 18px;
+    border-radius: 10px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    text-decoration: none;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 2px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    font-family: inherit;
+}
+
+.btn-header-action i {
+    font-size: 0.95rem;
+    position: relative;
+    z-index: 1;
+}
+
+.btn-header-action span {
+    position: relative;
+    z-index: 1;
+}
+
+.btn-header-action:hover {
+    transform: translateY(-2px);
+    color: white;
+}
+
+/* ✅ ASSIGN DOCTOR - BLUE GRADIENT */
+.btn-header-assign {
+    background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+    color: white;
+    box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+}
+
+.btn-header-assign:hover {
+    background: linear-gradient(135deg, #0A4CA8, #083C8A);
+    box-shadow: 0 8px 24px rgba(11, 94, 215, 0.45);
+}
+
+/* ✅ VISITS - GREEN GRADIENT */
+.btn-header-visits {
+    background: linear-gradient(135deg, #059669, #047857);
+    color: white;
+    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+}
+
+.btn-header-visits:hover {
+    background: linear-gradient(135deg, #047857, #065F46);
+    box-shadow: 0 8px 24px rgba(5, 150, 105, 0.45);
+}
+
+/* ✅ Button shine effect */
+.btn-header-action::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.25), transparent);
+    transition: left 0.6s ease;
+    pointer-events: none;
+}
+
+.btn-header-action:hover::before {
+    left: 100%;
+}
+
+/* ================================================================
+   FILTER BAR
+   ================================================================ */
 .filter-bar {
     display: flex;
     align-items: center;
@@ -970,7 +1056,9 @@ select.filter-input {
     opacity: 0;
 }
 
-/* RESPONSIVE */
+/* ================================================================
+   RESPONSIVE
+   ================================================================ */
 @media (max-width: 768px) {
     .stats-grid-mini { grid-template-columns: repeat(2, 1fr); }
     .filter-bar { flex-direction: column; align-items: stretch; }
@@ -978,10 +1066,49 @@ select.filter-input {
     .search-input-wrapper input { width: 100%; min-width: unset; }
     .page-header-custom { padding: 16px 18px; }
     .page-header-custom .page-title { font-size: 1.2rem; }
+    
+    /* ✅ Mobile: Icon-only buttons */
+    .btn-header-action {
+        padding: 0;
+        width: 40px;
+        height: 40px;
+        justify-content: center;
+    }
+    
+    .btn-header-action span {
+        display: none;
+    }
+    
+    .btn-header-action i {
+        font-size: 1rem;
+        margin: 0;
+    }
 }
 
 @media (max-width: 480px) {
     .stats-grid-mini { grid-template-columns: 1fr; }
+    
+    /* ✅ Small mobile: Full-width buttons with text */
+    .table-card .card-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .table-card .card-header > div:last-child {
+        display: flex;
+        width: 100%;
+        gap: 8px;
+    }
+    
+    .btn-header-action {
+        flex: 1;
+        width: auto;
+        height: 38px;
+    }
+    
+    .btn-header-action span {
+        display: inline;
+    }
 }
 </style>
 
@@ -1056,12 +1183,34 @@ select.filter-input {
 
     <!-- TABLE CARD -->
     <div class="table-card animate-fade-in-up">
+        
+        <!-- ✅ CARD HEADER WITH ASSIGN DOCTOR + VISITS BUTTONS -->
         <div class="card-header">
+            <!-- LEFT: Title + Count -->
             <div class="card-title">
                 <i class="fas fa-list"></i> Patient List
                 <span id="patientCountBadge" style="background:var(--primary-bg);color:var(--primary);padding:2px 12px;border-radius:20px;font-size:0.7rem;font-weight:500;">
                     <?= $total_patients ?> patients
                 </span>
+            </div>
+            
+            <!-- RIGHT: Action Buttons -->
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                <!-- ✅ ASSIGN DOCTOR BUTTON -->
+                <a href="/dispensary_system/frontend/pages/admin/assign_doctor.php?branch=<?= urlencode($selected_branch_id) ?>" 
+                   class="btn-header-action btn-header-assign"
+                   title="Assign Doctor to Patient">
+                    <i class="fas fa-user-md"></i>
+                    <span>Assign Doctor</span>
+                </a>
+                
+                <!-- ✅ VISITS BUTTON -->
+                <a href="/dispensary_system/frontend/pages/admin/visits.php?branch=<?= urlencode($selected_branch_id) ?>" 
+                   class="btn-header-action btn-header-visits"
+                   title="View All Visits">
+                    <i class="fas fa-notes-medical"></i>
+                    <span>Visits</span>
+                </a>
             </div>
         </div>
         
@@ -1579,10 +1728,11 @@ function showToast(title, message, type) {
     showToast('🗑️ Deleted', 'Patient and all related data have been deleted', 'success');
 <?php endif; ?>
 
-console.log('%c👑 Braick - Admin Patients (Shared Header/Sidebar)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ Inatumia SHARED HEADER & SIDEBAR pekee', 'font-size:12px;color:#34D399;');
-console.log('%c✅ BLUE THEME applied', 'font-size:12px;color:#34D399;');
-console.log('%c✅ REGISTERED BY column added', 'font-size:12px;color:#7C3AED;font-weight:bold;');
+console.log('%c👑 Braick - Admin Patients V2', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ SHARED HEADER & SIDEBAR', 'font-size:12px;color:#34D399;');
+console.log('%c✅ ASSIGN DOCTOR button → /admin/assign_doctor.php', 'font-size:12px;color:#7C3AED;font-weight:bold;');
+console.log('%c✅ VISITS button → /admin/visits.php', 'font-size:12px;color:#059669;font-weight:bold;');
+console.log('%c✅ REGISTERED BY column', 'font-size:12px;color:#D97706;');
 console.log('%c📊 Total Patients: <?= $stats['total'] ?? 0 ?>', 'font-size:12px;color:#059669;');
 </script>
 

@@ -1,10 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/view_pharmacy.php
-// SUPER ADMIN - VIEW PHARMACY BRANCH DETAILS
-// ✅ Uses SHARED header & sidebar (NO DUPLICATES)
-// ✅ Blue theme + full dark mode support via --page-* variables
-// ✅ Prescription revenue from bill_items.total_price
+// SUPER ADMIN - VIEW PHARMACY BRANCH DETAILS (V4 FINAL)
+// ✅ Uses SHARED header & sidebar
+// ✅ Blue theme + full dark mode support
+// ✅ JetBrains Mono font kwa numbers
+// ✅ Inventory button inafilter kwa BRANCH iliyochaguliwa
+// ✅ Column ya Medicines kwenye Prescriptions & OTC
+// ✅ View buttons zimeondolewa
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -122,6 +125,16 @@ $otc_revenue = $pharmacy['otc_revenue'] ?? 0;
 $total_revenue = $prescription_revenue + $otc_revenue;
 
 // ================================================================
+// ✅ BUILD INVENTORY URL WITH BRANCH FILTER
+// ================================================================
+$inventory_base_url = '/dispensary_system/frontend/pages/admin/inventory.php';
+$inventory_url = $inventory_base_url . '?branch=' . $pharmacy['id'];
+$inventory_url_out = $inventory_base_url . '?branch=' . $pharmacy['id'] . '&stock_filter=out';
+$inventory_url_low = $inventory_base_url . '?branch=' . $pharmacy['id'] . '&stock_filter=low';
+$inventory_url_expired = $inventory_base_url . '?branch=' . $pharmacy['id'] . '&filter=expired';
+$inventory_url_expiring = $inventory_base_url . '?branch=' . $pharmacy['id'] . '&filter=expiring';
+
+// ================================================================
 // GET PHARMACISTS
 // ================================================================
 $pharmacists = [];
@@ -137,7 +150,7 @@ try {
 } catch (Exception $e) { $pharmacists = []; }
 
 // ================================================================
-// GET RECENT PRESCRIPTIONS
+// ✅ GET RECENT PRESCRIPTIONS (WITH MEDICINES)
 // ================================================================
 $recent_prescriptions = [];
 try {
@@ -160,7 +173,17 @@ try {
                 WHERE bi.reference_id = p.id 
                 AND bi.reference_type = 'prescription'
                 LIMIT 1
-            ), 0) as discount_amount
+            ), 0) as discount_amount,
+            (
+                SELECT GROUP_CONCAT(DISTINCT pi.medication_name SEPARATOR ', ')
+                FROM prescription_items pi
+                WHERE pi.prescription_id = p.id
+            ) as medicines_list,
+            (
+                SELECT COUNT(*) 
+                FROM prescription_items pi
+                WHERE pi.prescription_id = p.id
+            ) as medicines_count
         FROM prescriptions p
         LEFT JOIN patients pat ON p.patient_id = pat.id
         LEFT JOIN users u ON p.doctor_id = u.id
@@ -190,16 +213,34 @@ try {
 } catch (Exception $e) { $recent_inventory = []; }
 
 // ================================================================
-// GET RECENT OTC SALES
+// ✅ GET RECENT OTC SALES (WITH MEDICINES)
 // ================================================================
 $recent_otc_sales = [];
 try {
     $stmt = $db->prepare("
-        SELECT id, sale_number, customer_name, total_amount, subtotal as net_amount,
-               discount_amount, payment_method, payment_status, created_at
-        FROM otc_sales
-        WHERE branch_id = ?
-        ORDER BY created_at DESC
+        SELECT 
+            os.id, 
+            os.sale_number, 
+            os.customer_name, 
+            os.total_amount, 
+            os.subtotal as net_amount,
+            os.discount_amount, 
+            os.payment_method, 
+            os.payment_status, 
+            os.created_at,
+            (
+                SELECT GROUP_CONCAT(DISTINCT osi.item_name SEPARATOR ', ')
+                FROM otc_sale_items osi
+                WHERE osi.sale_id = os.id
+            ) as medicines_list,
+            (
+                SELECT COUNT(*) 
+                FROM otc_sale_items osi
+                WHERE osi.sale_id = os.id
+            ) as medicines_count
+        FROM otc_sales os
+        WHERE os.branch_id = ?
+        ORDER BY os.created_at DESC
         LIMIT 10
     ");
     $stmt->execute([$pharmacy_id]);
@@ -269,9 +310,37 @@ include_once '../../components/admin_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
-<!-- PAGE-SPECIFIC CSS - TUMIA VARIABLES ZA HEADER (--page-*) -->
+<!-- GOOGLE FONTS - JETBRAINS MONO -->
+<!-- ================================================================ -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC CSS -->
 <!-- ================================================================ -->
 <style>
+    /* ================================================================
+       ✅ FONTS - JetBrains Mono kwa numbers
+       ================================================================ */
+    :root {
+        --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+    }
+    
+    .font-mono,
+    .money-number,
+    .prescription-number,
+    .sale-number,
+    .stat-number-small,
+    .stat-amount-large,
+    .phone-number,
+    .date-value {
+        font-family: var(--font-mono) !important;
+        font-feature-settings: 'tnum' 1;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.02em;
+    }
+    
     /* ================================================================
        PAGE HEADER - BLUE GRADIENT
        ================================================================ */
@@ -386,12 +455,12 @@ include_once '../../components/admin_sidebar.php';
     }
 
     /* ================================================================
-       DETAIL CARD (Pharmacy Info)
+       DETAIL CARD (Pharmacy Info) - WITH INVENTORY BUTTON
        ================================================================ */
     .detail-card-pharm {
         background: var(--page-bg-card, #FFFFFF);
         border-radius: 16px;
-        padding: 20px 24px;
+        padding: 22px 26px;
         border: 2px solid var(--page-border, #E2E8F0);
         box-shadow: var(--page-shadow-sm, 0 1px 3px rgba(0,0,0,0.06));
         transition: all 0.3s ease;
@@ -401,6 +470,70 @@ include_once '../../components/admin_sidebar.php';
     .detail-card-pharm:hover {
         border-color: var(--page-primary, #0B5ED7);
         box-shadow: var(--page-shadow-md, 0 4px 12px rgba(0,0,0,0.08));
+    }
+
+    .detail-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 18px;
+        padding-bottom: 14px;
+        border-bottom: 2px dashed var(--page-border, #E2E8F0);
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .detail-card-title {
+        font-size: 0.95rem;
+        font-weight: 700;
+        color: var(--page-text-primary, #1E293B);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .detail-card-title i {
+        color: var(--page-primary, #0B5ED7);
+        font-size: 1.1rem;
+    }
+
+    /* ✅ INVENTORY BUTTON */
+    .btn-inventory {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 20px;
+        border-radius: 10px;
+        font-size: 0.82rem;
+        font-weight: 700;
+        text-decoration: none;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        border: 2px solid transparent;
+        cursor: pointer;
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
+    }
+
+    .btn-inventory:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(11, 94, 215, 0.4);
+        background: linear-gradient(135deg, #0A4CA8, #083C8A);
+        color: white;
+    }
+
+    .btn-inventory i {
+        font-size: 0.9rem;
+    }
+
+    .btn-inventory .count-badge {
+        background: rgba(255,255,255,0.25);
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        font-weight: 800;
+        font-family: var(--font-mono);
+        margin-left: 4px;
     }
 
     .detail-grid-pharm {
@@ -601,16 +734,25 @@ include_once '../../components/admin_sidebar.php';
         gap: 8px;
     }
 
+    .card-header-pharm .card-title-pharm i {
+        font-size: 1rem;
+        color: rgba(255,255,255,0.9);
+    }
+
     .card-header-pharm .card-action-pharm {
         color: rgba(255,255,255,0.7);
         font-size: 0.7rem;
         text-decoration: none;
         transition: all 0.3s;
         font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
     }
 
     .card-header-pharm .card-action-pharm:hover {
         color: white;
+        transform: translateX(2px);
     }
 
     .card-body-pharm {
@@ -651,7 +793,7 @@ include_once '../../components/admin_sidebar.php';
         padding: 10px 14px;
         border-bottom: 1px solid var(--page-border, #E2E8F0);
         color: var(--page-text-primary, #1E293B);
-        vertical-align: middle;
+        vertical-align: top;
     }
 
     .data-table-pharm tr:hover td {
@@ -668,7 +810,6 @@ include_once '../../components/admin_sidebar.php';
 
     .text-right { text-align: right; }
     .text-center { text-align: center; }
-    .font-mono { font-family: 'Courier New', monospace; }
     .font-semibold { font-weight: 600; }
     .font-medium { font-weight: 500; }
     .text-xs { font-size: 0.7rem; }
@@ -686,6 +827,121 @@ include_once '../../components/admin_sidebar.php';
     [data-theme="dark"] .text-gray-500 { color: #94A3B8; }
 
     /* ================================================================
+       ✅ MEDICINES CELL - Kwenye tables
+       ================================================================ */
+    .medicines-cell {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 180px;
+        max-width: 280px;
+    }
+    
+    .med-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 10px;
+        border-radius: 8px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        background: linear-gradient(135deg, #EFF6FF, #DBEAFE);
+        color: #1E40AF;
+        border: 1px solid #BFDBFE;
+        width: fit-content;
+        max-width: 100%;
+        transition: all 0.2s ease;
+    }
+    
+    .med-item:hover {
+        transform: translateX(2px);
+        box-shadow: 0 2px 6px rgba(11, 94, 215, 0.15);
+    }
+    
+    .med-item i {
+        font-size: 0.65rem;
+        color: #0B5ED7;
+        flex-shrink: 0;
+    }
+    
+    .med-item span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    
+    /* OTC variant - GREEN */
+    .med-item.otc {
+        background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
+        color: #047857;
+        border-color: #6EE7B7;
+    }
+    
+    .med-item.otc i {
+        color: #059669;
+    }
+    
+    /* +N more button */
+    .med-more {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 10px;
+        border-radius: 8px;
+        font-size: 0.68rem;
+        font-weight: 700;
+        background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+        color: #92400E;
+        border: 1px dashed #F59E0B;
+        width: fit-content;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        user-select: none;
+    }
+    
+    .med-more:hover {
+        background: linear-gradient(135deg, #FDE68A, #FCD34D);
+        transform: translateX(2px);
+        box-shadow: 0 2px 6px rgba(245, 158, 11, 0.25);
+    }
+    
+    .med-more i {
+        font-size: 0.65rem;
+        color: #D97706;
+    }
+    
+    /* Dark mode */
+    [data-theme="dark"] .med-item {
+        background: #1E3A5F;
+        color: #93C5FD;
+        border-color: #3B82F6;
+    }
+    
+    [data-theme="dark"] .med-item i {
+        color: #60A5FA;
+    }
+    
+    [data-theme="dark"] .med-item.otc {
+        background: #1A3A2A;
+        color: #6EE7B7;
+        border-color: #059669;
+    }
+    
+    [data-theme="dark"] .med-item.otc i {
+        color: #34D399;
+    }
+    
+    [data-theme="dark"] .med-more {
+        background: #3D2E0A;
+        color: #FBBF24;
+        border-color: #D97706;
+    }
+    
+    [data-theme="dark"] .med-more i {
+        color: #FCD34D;
+    }
+
+    /* ================================================================
        STATUS BADGES
        ================================================================ */
     .status-badge-pharm {
@@ -696,6 +952,7 @@ include_once '../../components/admin_sidebar.php';
         border-radius: 20px;
         font-size: 0.6rem;
         font-weight: 600;
+        white-space: nowrap;
     }
 
     .status-badge-pharm.success { background: #D1FAE5; color: #059669; }
@@ -713,66 +970,6 @@ include_once '../../components/admin_sidebar.php';
     /* ================================================================
        BUTTONS
        ================================================================ */
-    .btn-view-pharm {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 5px 14px;
-        border-radius: 8px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        text-decoration: none;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        border: 2px solid transparent;
-        cursor: pointer;
-        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-        color: white;
-        box-shadow: 0 2px 8px rgba(11, 94, 215, 0.2);
-    }
-
-    .btn-view-pharm:hover {
-        transform: translateY(-2px) scale(1.02);
-        box-shadow: 0 6px 20px rgba(11, 94, 215, 0.35);
-        background: linear-gradient(135deg, #0A4CA8, #083C8A);
-        color: white;
-    }
-
-    .btn-view-pharm i {
-        font-size: 0.65rem;
-    }
-
-    .btn-view-pharm.btn-view-sm {
-        padding: 3px 10px;
-        font-size: 0.6rem;
-        border-radius: 6px;
-    }
-
-    .btn-view-pharm.btn-view-sm i {
-        font-size: 0.55rem;
-    }
-
-    .btn-view-pharm.btn-view-success {
-        background: linear-gradient(135deg, #059669, #047857);
-    }
-
-    .btn-view-pharm.btn-view-success:hover {
-        background: linear-gradient(135deg, #047857, #065F46);
-        box-shadow: 0 6px 20px rgba(5, 150, 105, 0.35);
-    }
-
-    .btn-view-pharm.btn-view-outline {
-        background: transparent;
-        color: var(--page-primary, #0B5ED7);
-        border-color: var(--page-primary, #0B5ED7);
-        box-shadow: none;
-    }
-
-    .btn-view-pharm.btn-view-outline:hover {
-        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-        color: white;
-        border-color: transparent;
-    }
-
     .btn-add-pharm {
         display: inline-flex;
         align-items: center;
@@ -792,6 +989,27 @@ include_once '../../components/admin_sidebar.php';
         background: rgba(255,255,255,0.35);
         color: white;
         transform: translateY(-2px);
+    }
+
+    .btn-edit-small {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-decoration: none;
+        background: rgba(11, 94, 215, 0.1);
+        color: #0B5ED7;
+        border: 1px solid rgba(11, 94, 215, 0.3);
+        transition: all 0.2s ease;
+    }
+
+    .btn-edit-small:hover {
+        background: #0B5ED7;
+        color: white;
+        transform: translateY(-1px);
     }
 
     /* ================================================================
@@ -842,6 +1060,23 @@ include_once '../../components/admin_sidebar.php';
         .stat-card-8-pharm .stat-number-small { font-size: 1.8rem; }
         .stat-card-8-pharm .stat-amount-large { font-size: 1.4rem; }
         .stat-card-8-pharm .stat-icon-pharm { width: 38px; height: 38px; font-size: 1rem; }
+        .detail-card-header { flex-direction: column; align-items: flex-start; }
+        .btn-inventory { width: 100%; justify-content: center; }
+        
+        .medicines-cell {
+            min-width: 140px;
+            max-width: 200px;
+        }
+        
+        .med-item {
+            font-size: 0.65rem;
+            padding: 2px 8px;
+        }
+        
+        .med-more {
+            font-size: 0.62rem;
+            padding: 2px 8px;
+        }
     }
 
     @media (max-width: 480px) {
@@ -873,21 +1108,22 @@ include_once '../../components/admin_sidebar.php';
     <div class="page-header-pharm animate-fade-in-up-pharm">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-prescription-bottle"></i>
+                <i class="fas fa-prescription-bottle-medical"></i>
                 Pharmacy Details
                 <span class="role-badge-display">ADMIN</span>
             </h1>
             <p class="page-subtitle">
+                <i class="fas fa-store-alt"></i>
                 <strong><?= htmlspecialchars($pharmacy['name']) ?></strong>
                 <span class="header-badge">
                     <i class="fas fa-<?= $pharmacy['status'] === 'active' ? 'check-circle' : 'times-circle' ?>"></i>
                     <?= ucfirst($pharmacy['status']) ?>
                 </span>
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#6EE7B7;">
-                    <i class="fas fa-pills"></i> <?= number_format($pharmacy['total_medicines'] ?? 0) ?> Medicines
+                    <i class="fas fa-pills"></i> <span class="font-mono"><?= number_format($pharmacy['total_medicines'] ?? 0) ?></span> Medicines
                 </span>
                 <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
-                    <i class="fas fa-money-bill-wave"></i> <?= format_currency($total_revenue) ?>
+                    <i class="fas fa-money-bill-wave"></i> <span class="font-mono"><?= format_currency($total_revenue) ?></span>
                 </span>
             </p>
         </div>
@@ -901,8 +1137,24 @@ include_once '../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- PHARMACY INFO -->
+    <!-- ✅ PHARMACY INFO - WITH INVENTORY BUTTON (BRANCH FILTER) -->
     <div class="detail-card-pharm animate-fade-in-up-pharm" style="animation-delay:0.05s;">
+        
+        <div class="detail-card-header">
+            <div class="detail-card-title">
+                <i class="fas fa-info-circle"></i>
+                Pharmacy Information
+            </div>
+            <!-- ✅ INVENTORY BUTTON - INAFILTER KWA BRANCH -->
+            <a href="<?= $inventory_url ?>" 
+               class="btn-inventory"
+               title="Open Inventory for <?= htmlspecialchars($pharmacy['name']) ?>">
+                <i class="fas fa-boxes-stacked"></i>
+                Inventory
+                <span class="count-badge"><?= number_format($pharmacy['total_medicines'] ?? 0) ?></span>
+            </a>
+        </div>
+        
         <div class="detail-grid-pharm">
             <div>
                 <p class="detail-label-pharm"><i class="fas fa-map-marker-alt" style="margin-right:4px;"></i> Location</p>
@@ -910,7 +1162,7 @@ include_once '../../components/admin_sidebar.php';
             </div>
             <div>
                 <p class="detail-label-pharm"><i class="fas fa-phone" style="margin-right:4px;"></i> Phone</p>
-                <p class="detail-value-pharm"><?= htmlspecialchars($pharmacy['phone'] ?? 'N/A') ?></p>
+                <p class="detail-value-pharm font-mono"><?= htmlspecialchars($pharmacy['phone'] ?? 'N/A') ?></p>
             </div>
             <div>
                 <p class="detail-label-pharm"><i class="fas fa-envelope" style="margin-right:4px;"></i> Email</p>
@@ -918,18 +1170,22 @@ include_once '../../components/admin_sidebar.php';
             </div>
             <div>
                 <p class="detail-label-pharm"><i class="fas fa-calendar-plus" style="margin-right:4px;"></i> Created</p>
-                <p class="detail-value-pharm"><?= date('M d, Y h:i A', strtotime($pharmacy['created_at'] ?? 'now')) ?></p>
+                <p class="detail-value-pharm font-mono"><?= date('M d, Y h:i A', strtotime($pharmacy['created_at'] ?? 'now')) ?></p>
             </div>
             <div>
                 <p class="detail-label-pharm"><i class="fas fa-user-md" style="margin-right:4px;"></i> Pharmacists</p>
-                <p class="detail-value-pharm"><?= $pharmacy['active_pharmacists'] ?? 0 ?> Active / <?= $pharmacy['total_pharmacists'] ?? 0 ?> Total</p>
+                <p class="detail-value-pharm">
+                    <span class="font-mono"><?= $pharmacy['active_pharmacists'] ?? 0 ?></span> Active / 
+                    <span class="font-mono"><?= $pharmacy['total_pharmacists'] ?? 0 ?></span> Total
+                </p>
             </div>
         </div>
     </div>
 
-    <!-- 8 STATS CARDS -->
+    <!-- 8 STATS CARDS - ZOTE ZINA BRANCH FILTER -->
     <div class="stats-grid-8-pharm animate-fade-in-up-pharm" style="animation-delay:0.1s;">
-        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="stat-card-8-pharm card-blue-pharm">
+        <!-- ✅ Total Medicines - BRANCH FILTER -->
+        <a href="<?= $inventory_url ?>" class="stat-card-8-pharm card-blue-pharm">
             <div class="stat-icon-pharm"><i class="fas fa-pills"></i></div>
             <div class="stat-content-pharm">
                 <p class="stat-label-pharm">Total Medicines</p>
@@ -975,7 +1231,8 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
         
-        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=outofstock" class="stat-card-8-pharm card-orange-pharm">
+        <!-- ✅ Out of Stock - BRANCH FILTER -->
+        <a href="<?= $inventory_url_out ?>" class="stat-card-8-pharm card-orange-pharm">
             <div class="stat-icon-pharm"><i class="fas fa-times-circle"></i></div>
             <div class="stat-content-pharm">
                 <p class="stat-label-pharm">Out of Stock</p>
@@ -985,7 +1242,8 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
         
-        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=lowstock" class="stat-card-8-pharm card-orange-pharm">
+        <!-- ✅ Low Stock - BRANCH FILTER -->
+        <a href="<?= $inventory_url_low ?>" class="stat-card-8-pharm card-orange-pharm">
             <div class="stat-icon-pharm"><i class="fas fa-exclamation-triangle"></i></div>
             <div class="stat-content-pharm">
                 <p class="stat-label-pharm">Low Stock</p>
@@ -995,7 +1253,8 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
         
-        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=expired" class="stat-card-8-pharm card-red-pharm">
+        <!-- ✅ Expired - BRANCH FILTER -->
+        <a href="<?= $inventory_url_expired ?>" class="stat-card-8-pharm card-red-pharm">
             <div class="stat-icon-pharm"><i class="fas fa-skull"></i></div>
             <div class="stat-content-pharm">
                 <p class="stat-label-pharm">Expired</p>
@@ -1005,7 +1264,8 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
         
-        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=expiring" class="stat-card-8-pharm card-red-pharm">
+        <!-- ✅ Expiring Soon - BRANCH FILTER -->
+        <a href="<?= $inventory_url_expiring ?>" class="stat-card-8-pharm card-red-pharm">
             <div class="stat-icon-pharm"><i class="fas fa-hourglass-half"></i></div>
             <div class="stat-content-pharm">
                 <p class="stat-label-pharm">Expiring Soon</p>
@@ -1016,11 +1276,15 @@ include_once '../../components/admin_sidebar.php';
         </a>
     </div>
 
-    <!-- RECENT PRESCRIPTIONS -->
+    <!-- ✅ RECENT PRESCRIPTIONS - WITH MEDICINES COLUMN -->
     <div class="card-pharm animate-fade-in-up-pharm" style="animation-delay:0.15s;">
         <div class="card-header-pharm">
-            <h3 class="card-title-pharm"><i class="fas fa-prescription"></i> Recent Prescriptions</h3>
-            <a href="prescriptions.php?branch=<?= $pharmacy['id'] ?>" class="card-action-pharm">View All →</a>
+            <h3 class="card-title-pharm">
+                <i class="fas fa-prescription-bottle-medical"></i> Recent Prescriptions
+            </h3>
+            <a href="prescriptions.php?branch=<?= $pharmacy['id'] ?>" class="card-action-pharm">
+                View All <i class="fas fa-arrow-right"></i>
+            </a>
         </div>
         <div class="card-body-pharm">
             <?php if (count($recent_prescriptions) > 0): ?>
@@ -1029,11 +1293,11 @@ include_once '../../components/admin_sidebar.php';
                         <tr>
                             <th>#</th>
                             <th>Patient</th>
+                            <th>💊 Medicines</th>
                             <th>Doctor</th>
                             <th class="text-right">Amount</th>
                             <th>Status</th>
                             <th>Date</th>
-                            <th class="text-center">Action</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -1041,11 +1305,39 @@ include_once '../../components/admin_sidebar.php';
                             <tr>
                                 <td class="font-mono text-xs"><?= htmlspecialchars($rx['prescription_number'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($rx['patient_name'] ?? 'N/A') ?></td>
+                                <td>
+                                    <?php if (!empty($rx['medicines_list'])): 
+                                        $meds = explode(', ', $rx['medicines_list']);
+                                        $total_meds = count($meds);
+                                        $show_first = 2;
+                                    ?>
+                                        <div class="medicines-cell">
+                                            <?php foreach (array_slice($meds, 0, $show_first) as $med): ?>
+                                                <div class="med-item">
+                                                    <i class="fas fa-pills"></i>
+                                                    <span><?= htmlspecialchars(trim($med)) ?></span>
+                                                </div>
+                                            <?php endforeach; ?>
+                                            
+                                            <?php if ($total_meds > $show_first): ?>
+                                                <div class="med-more" 
+                                                     onclick="toggleMeds(this)" 
+                                                     data-full-list="<?= htmlspecialchars($rx['medicines_list']) ?>"
+                                                     data-count="<?= $total_meds ?>">
+                                                    <i class="fas fa-plus-circle"></i>
+                                                    <span>+<?= $total_meds - $show_first ?> more</span>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php else: ?>
+                                        <span class="text-xs text-gray-400">—</span>
+                                    <?php endif; ?>
+                                </td>
                                 <td><?= htmlspecialchars($rx['doctor_name'] ?? 'N/A') ?></td>
-                                <td class="text-right font-semibold text-blue-600">
+                                <td class="text-right font-semibold text-blue-600 font-mono">
                                     <?= format_currency($rx['total_amount'] ?? 0) ?>
                                     <?php if (($rx['discount_amount'] ?? 0) > 0): ?>
-                                        <span class="text-xs text-red-600" style="display:block;">(Discount: TSh <?= number_format($rx['discount_amount'], 0) ?>)</span>
+                                        <span class="text-xs text-red-600 font-mono" style="display:block;">(Discount: TSh <?= number_format($rx['discount_amount'], 0) ?>)</span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
@@ -1053,12 +1345,7 @@ include_once '../../components/admin_sidebar.php';
                                         <?= ucfirst($rx['status'] ?? 'Pending') ?>
                                     </span>
                                 </td>
-                                <td class="text-xs"><?= date('M d, Y', strtotime($rx['created_at'] ?? 'now')) ?></td>
-                                <td class="text-center">
-                                    <a href="view_prescription.php?id=<?= $rx['id'] ?>&branch=<?= $pharmacy['id'] ?>" class="btn-view-pharm btn-view-sm">
-                                        <i class="fas fa-eye"></i> View
-                                    </a>
-                                </td>
+                                <td class="text-xs font-mono"><?= date('M d, Y', strtotime($rx['created_at'] ?? 'now')) ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
@@ -1075,8 +1362,13 @@ include_once '../../components/admin_sidebar.php';
     <!-- RECENT INVENTORY -->
     <div class="card-pharm animate-fade-in-up-pharm" style="animation-delay:0.2s;">
         <div class="card-header-pharm">
-            <h3 class="card-title-pharm"><i class="fas fa-boxes"></i> Recent Inventory Updates</h3>
-            <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="card-action-pharm">View All →</a>
+            <h3 class="card-title-pharm">
+                <i class="fas fa-boxes-stacked"></i> Recent Inventory Updates
+            </h3>
+            <!-- ✅ VIEW ALL - WITH BRANCH FILTER -->
+            <a href="<?= $inventory_url ?>" class="card-action-pharm">
+                View All <i class="fas fa-arrow-right"></i>
+            </a>
         </div>
         <div class="card-body-pharm">
             <?php if (count($recent_inventory) > 0): ?>
@@ -1103,11 +1395,11 @@ include_once '../../components/admin_sidebar.php';
                         ?>
                             <tr>
                                 <td class="font-medium"><?= htmlspecialchars($item['medication_name'] ?? 'N/A') ?></td>
-                                <td class="text-right font-semibold <?= $is_out ? 'text-red-600' : ($is_low ? 'text-yellow-600' : 'text-green-600') ?>">
+                                <td class="text-right font-semibold font-mono <?= $is_out ? 'text-red-600' : ($is_low ? 'text-yellow-600' : 'text-green-600') ?>">
                                     <?= number_format($item['quantity'] ?? 0) ?>
                                 </td>
-                                <td class="text-right">TSh <?= number_format($item['selling_price'] ?? 0, 0) ?></td>
-                                <td class="<?= $is_expired ? 'text-red-600 font-semibold' : ($is_expiring ? 'text-yellow-600' : 'text-gray-500') ?>">
+                                <td class="text-right font-mono">TSh <?= number_format($item['selling_price'] ?? 0, 0) ?></td>
+                                <td class="font-mono <?= $is_expired ? 'text-red-600 font-semibold' : ($is_expiring ? 'text-yellow-600' : 'text-gray-500') ?>">
                                     <?= !empty($item['expiry_date']) ? date('M d, Y', strtotime($item['expiry_date'])) : 'N/A' ?>
                                 </td>
                                 <td>
@@ -1121,7 +1413,7 @@ include_once '../../components/admin_sidebar.php';
                                     </span>
                                 </td>
                                 <td class="text-center">
-                                    <a href="edit_inventory.php?id=<?= $item['id'] ?>&branch=<?= $pharmacy['id'] ?>" class="btn-view-pharm btn-view-sm btn-view-outline">
+                                    <a href="edit_inventory.php?id=<?= $item['id'] ?>&branch=<?= $pharmacy['id'] ?>" class="btn-edit-small">
                                         <i class="fas fa-edit"></i> Edit
                                     </a>
                                 </td>
@@ -1138,11 +1430,15 @@ include_once '../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- RECENT OTC SALES -->
+    <!-- ✅ RECENT OTC SALES - WITH MEDICINES COLUMN -->
     <div class="card-pharm animate-fade-in-up-pharm" style="animation-delay:0.25s;">
         <div class="card-header-pharm">
-            <h3 class="card-title-pharm"><i class="fas fa-shopping-cart"></i> Recent OTC Sales</h3>
-            <a href="otc_sales.php?branch=<?= $pharmacy['id'] ?>" class="card-action-pharm">View All →</a>
+            <h3 class="card-title-pharm">
+                <i class="fas fa-cash-register"></i> Recent OTC Sales
+            </h3>
+            <a href="otc_sales.php?branch=<?= $pharmacy['id'] ?>" class="card-action-pharm">
+                View All <i class="fas fa-arrow-right"></i>
+            </a>
         </div>
         <div class="card-body-pharm">
             <?php if (count($recent_otc_sales) > 0): ?>
@@ -1151,11 +1447,11 @@ include_once '../../components/admin_sidebar.php';
                         <tr>
                             <th>Sale #</th>
                             <th>Customer</th>
+                            <th>💊 Medicines</th>
                             <th class="text-right">Net Amount</th>
                             <th class="text-right">Discount</th>
                             <th>Status</th>
                             <th>Date</th>
-                            <th class="text-center">Action</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -1163,10 +1459,39 @@ include_once '../../components/admin_sidebar.php';
                             <tr>
                                 <td class="font-mono text-xs"><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($sale['customer_name'] ?? 'Walk-in') ?></td>
-                                <td class="text-right font-semibold text-green-600">
+                                <td>
+                                    <?php if (!empty($sale['medicines_list'])): 
+                                        $meds = explode(', ', $sale['medicines_list']);
+                                        $total_meds = count($meds);
+                                        $show_first = 2;
+                                    ?>
+                                        <div class="medicines-cell">
+                                            <?php foreach (array_slice($meds, 0, $show_first) as $med): ?>
+                                                <div class="med-item otc">
+                                                    <i class="fas fa-capsules"></i>
+                                                    <span><?= htmlspecialchars(trim($med)) ?></span>
+                                                </div>
+                                            <?php endforeach; ?>
+                                            
+                                            <?php if ($total_meds > $show_first): ?>
+                                                <div class="med-more" 
+                                                     onclick="toggleMeds(this)" 
+                                                     data-full-list="<?= htmlspecialchars($sale['medicines_list']) ?>"
+                                                     data-count="<?= $total_meds ?>"
+                                                     data-otc="1">
+                                                    <i class="fas fa-plus-circle"></i>
+                                                    <span>+<?= $total_meds - $show_first ?> more</span>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php else: ?>
+                                        <span class="text-xs text-gray-400">—</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="text-right font-semibold text-green-600 font-mono">
                                     TSh <?= number_format($sale['total_amount'] ?? 0, 0) ?>
                                 </td>
-                                <td class="text-right text-red-600">
+                                <td class="text-right text-red-600 font-mono">
                                     <?php if (($sale['discount_amount'] ?? 0) > 0): ?>
                                         - TSh <?= number_format($sale['discount_amount'] ?? 0, 0) ?>
                                     <?php else: ?>
@@ -1178,12 +1503,7 @@ include_once '../../components/admin_sidebar.php';
                                         <?= ucfirst($sale['payment_status'] ?? 'Pending') ?>
                                     </span>
                                 </td>
-                                <td class="text-xs"><?= date('M d, Y', strtotime($sale['created_at'] ?? 'now')) ?></td>
-                                <td class="text-center">
-                                    <a href="view_otc_sale.php?id=<?= $sale['id'] ?>&branch=<?= $pharmacy['id'] ?>" class="btn-view-pharm btn-view-sm btn-view-success">
-                                        <i class="fas fa-eye"></i> View
-                                    </a>
-                                </td>
+                                <td class="text-xs font-mono"><?= date('M d, Y', strtotime($sale['created_at'] ?? 'now')) ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
@@ -1200,7 +1520,12 @@ include_once '../../components/admin_sidebar.php';
     <!-- PHARMACISTS -->
     <div class="card-pharm animate-fade-in-up-pharm" style="animation-delay:0.3s;">
         <div class="card-header-pharm">
-            <h3 class="card-title-pharm"><i class="fas fa-user-md"></i> Pharmacists (<?= count($pharmacists) ?>)</h3>
+            <h3 class="card-title-pharm">
+                <i class="fas fa-user-md"></i> Pharmacists 
+                <span style="background:rgba(255,255,255,0.2);padding:2px 10px;border-radius:12px;font-size:0.7rem;font-family:var(--font-mono);">
+                    <?= count($pharmacists) ?>
+                </span>
+            </h3>
             <a href="add_employee.php?branch=<?= $pharmacy['id'] ?>&role=pharmacy" class="btn-add-pharm">
                 <i class="fas fa-plus"></i> Add Pharmacist
             </a>
@@ -1222,14 +1547,14 @@ include_once '../../components/admin_sidebar.php';
                             <tr>
                                 <td class="font-medium"><?= htmlspecialchars($pharmacist['full_name'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($pharmacist['email'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($pharmacist['phone'] ?? 'N/A') ?></td>
+                                <td class="font-mono"><?= htmlspecialchars($pharmacist['phone'] ?? 'N/A') ?></td>
                                 <td>
                                     <span class="status-badge-pharm <?= $pharmacist['status'] === 'active' ? 'success' : 'danger' ?>">
                                         <?= ucfirst($pharmacist['status'] ?? 'N/A') ?>
                                     </span>
                                 </td>
                                 <td class="text-center">
-                                    <a href="view_employee.php?id=<?= $pharmacist['id'] ?>&branch=<?= $pharmacy['id'] ?>" class="btn-view-pharm btn-view-sm">
+                                    <a href="view_employee.php?id=<?= $pharmacist['id'] ?>&branch=<?= $pharmacy['id'] ?>" class="btn-edit-small">
                                         <i class="fas fa-user"></i> View
                                     </a>
                                 </td>
@@ -1253,7 +1578,7 @@ include_once '../../components/admin_sidebar.php';
             <span style="color:#CBD5E1;margin:0 8px;">|</span>
             Pharmacy Details - <?= htmlspecialchars($pharmacy['name']) ?>
             <span style="color:#CBD5E1;margin:0 8px;">|</span>
-            <span id="footerTime"><?= date('H:i:s') ?></span>
+            <span class="font-mono" id="footerTime"><?= date('H:i:s') ?></span>
             <span style="color:#CBD5E1;margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1262,9 +1587,55 @@ include_once '../../components/admin_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- PAGE-SPECIFIC JAVASCRIPT (NO dark mode, NO sidebar, NO date-time) -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // ✅ TOGGLE MEDICINES - Onyesha zote / chache
+    // ================================================================
+    function toggleMeds(element) {
+        var fullList = element.getAttribute('data-full-list') || '';
+        var totalCount = parseInt(element.getAttribute('data-count')) || 0;
+        var isOtc = element.getAttribute('data-otc') === '1';
+        var meds = fullList.split(', ').map(function(m) { return m.trim(); });
+        
+        var parentCell = element.closest('.medicines-cell');
+        if (!parentCell) return;
+        
+        var isExpanded = element.getAttribute('data-expanded') === 'true';
+        var iconClass = isOtc ? 'fa-capsules' : 'fa-pills';
+        var itemClass = isOtc ? 'med-item otc' : 'med-item';
+        var moreClass = 'med-more';
+        var otcAttr = isOtc ? ' data-otc="1"' : '';
+        
+        if (isExpanded) {
+            // Collapse: Onyesha 2 tu
+            var html = '';
+            for (var i = 0; i < Math.min(2, meds.length); i++) {
+                html += '<div class="' + itemClass + '"><i class="fas ' + iconClass + '"></i><span>' + escapeHtml(meds[i]) + '</span></div>';
+            }
+            if (meds.length > 2) {
+                html += '<div class="' + moreClass + '" onclick="toggleMeds(this)" data-full-list="' + escapeHtml(fullList) + '" data-count="' + totalCount + '"' + otcAttr + '><i class="fas fa-plus-circle"></i><span>+' + (meds.length - 2) + ' more</span></div>';
+            }
+            parentCell.innerHTML = html;
+        } else {
+            // Expand: Onyesha zote
+            var html = '';
+            for (var i = 0; i < meds.length; i++) {
+                html += '<div class="' + itemClass + '"><i class="fas ' + iconClass + '"></i><span>' + escapeHtml(meds[i]) + '</span></div>';
+            }
+            html += '<div class="' + moreClass + '" onclick="toggleMeds(this)" data-full-list="' + escapeHtml(fullList) + '" data-count="' + totalCount + '" data-expanded="true"' + otcAttr + '><i class="fas fa-minus-circle"></i><span>Show less</span></div>';
+            parentCell.innerHTML = html;
+        }
+    }
+    
+    function escapeHtml(text) {
+        if (!text) return '';
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
     // ================================================================
     // FOOTER TIME
     // ================================================================
@@ -1277,12 +1648,13 @@ include_once '../../components/admin_sidebar.php';
         if (ftEl) ftEl.textContent = timeStr;
     }, 1000);
 
-    console.log('%c💊 Braick - View Pharmacy', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#059669;');
-    console.log('%c✅ NO duplicate dark mode JavaScript', 'font-size:13px; color:#059669;');
-    console.log('%c🌙 Dark mode: Handled by header', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🏥 Pharmacy: <?= htmlspecialchars($pharmacy['name']) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c💰 Total Revenue: <?= format_currency($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💊 Braick - View Pharmacy V4 FINAL', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Inventory button inafilter kwa BRANCH', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ Stats cards zote zina branch parameter', 'font-size:13px; color:#7C3AED;');
+    console.log('%c✅ Medicines column kwenye Prescriptions & OTC', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ JetBrains Mono font', 'font-size:13px; color:#0EA5E9;');
+    console.log('%c🏥 Pharmacy: <?= htmlspecialchars($pharmacy['name']) ?> (ID: <?= $pharmacy['id'] ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c🔗 Inventory URL: <?= $inventory_url ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

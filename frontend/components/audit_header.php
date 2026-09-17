@@ -1,8 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/components/audit_header.php
-// AUDIT - SHARED HEADER (DEEP BLUE THEME)
-// ✅ Deep blue theme matching audit sidebar (#0A2E5C, #0EA5E9)
+// AUDIT - SHARED HEADER (BLUE THEME - #0B5ED7)
+// ✅ Blue theme matching audit sidebar (#0B5ED7, #3B82F6)
 // ✅ No branch selector (audit has full access)
 // ✅ Dark mode support
 // ✅ Date/Time display
@@ -73,15 +73,15 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
     
     <style>
         /* ================================================================
-           ✅ GLOBAL THEME VARIABLES - DEEP BLUE AUDIT THEME
+           ✅ GLOBAL THEME VARIABLES - BLUE AUDIT THEME (#0B5ED7)
            ================================================================ */
         :root {
-            --page-primary: #0A2E5C;
-            --page-primary-dark: #071E3D;
-            --page-primary-light: #1E4B8C;
-            --page-primary-bg: #E5EEF9;
-            --page-accent: #0EA5E9;
-            --page-accent-dark: #0284C7;
+            --page-primary: #0B5ED7;
+            --page-primary-dark: #0A4CA8;
+            --page-primary-light: #3B82F6;
+            --page-primary-bg: #E8F0FE;
+            --page-accent: #60A5FA;
+            --page-accent-dark: #3B82F6;
             --page-bg-body: #F1F5F9;
             --page-bg-card: #FFFFFF;
             --page-bg-nav: #FFFFFF;
@@ -106,12 +106,12 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
         }
 
         [data-theme="dark"] {
-            --page-primary: #1E4B8C;
-            --page-primary-dark: #0A2E5C;
-            --page-primary-light: #3B82F6;
-            --page-primary-bg: #0A2E5C;
-            --page-accent: #38BDF8;
-            --page-accent-dark: #0EA5E9;
+            --page-primary: #3B82F6;
+            --page-primary-dark: #2563EB;
+            --page-primary-light: #60A5FA;
+            --page-primary-bg: #1E3A5F;
+            --page-accent: #93C5FD;
+            --page-accent-dark: #60A5FA;
             --page-bg-body: #0F172A;
             --page-bg-card: #1E293B;
             --page-bg-nav: #1E293B;
@@ -158,7 +158,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
         }
 
         .main-content {
-            margin-left: 270px;
+            margin-left: 260px;
             margin-top: 72px;
             padding: 24px 28px;
             min-height: calc(100vh - 72px);
@@ -172,12 +172,12 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
         }
 
         /* ================================================================
-           ✅ TOP NAV - DEEP BLUE BORDER
+           ✅ TOP NAV - BLUE BORDER (#0B5ED7)
            ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
-            left: 270px;
+            left: 260px;
             right: 0;
             height: 72px;
             background: #FFFFFF;
@@ -188,7 +188,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
             padding: 0 24px;
             border-bottom: 2px solid var(--page-primary);
             transition: all 0.3s ease;
-            box-shadow: 0 2px 12px rgba(10, 46, 92, 0.08);
+            box-shadow: 0 2px 12px rgba(11, 94, 215, 0.08);
         }
         
         [data-theme="dark"] .top-nav {
@@ -215,7 +215,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
         .top-nav .search-wrapper:focus-within {
             background: #FFFFFF;
             border-color: var(--page-primary);
-            box-shadow: 0 0 0 4px rgba(10, 46, 92, 0.12);
+            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
         }
         
         [data-theme="dark"] .top-nav .search-wrapper { background: #0F172A; }
@@ -223,7 +223,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
         [data-theme="dark"] .top-nav .search-wrapper:focus-within {
             background: #0F172A;
             border-color: var(--page-accent);
-            box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.15);
+            box-shadow: 0 0 0 4px rgba(96, 165, 250, 0.15);
         }
         
         .top-nav .search-wrapper .search-icon {
@@ -250,7 +250,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
             font-weight: 400;
         }
         
-        /* ✅ SEARCH BUTTON - DEEP BLUE GRADIENT */
+        /* ✅ SEARCH BUTTON - BLUE GRADIENT */
         .top-nav .search-wrapper .search-btn {
             background: linear-gradient(135deg, var(--page-primary), var(--page-primary-dark));
             color: white;
@@ -269,7 +269,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
         }
         
         .top-nav .search-wrapper .search-btn:hover {
-            background: linear-gradient(135deg, var(--page-primary-dark), #041228);
+            background: linear-gradient(135deg, var(--page-primary-dark), #083D8A);
             transform: translateX(1px);
         }
 
@@ -278,31 +278,31 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
             display: inline-flex;
             align-items: center;
             gap: 10px;
-            background: linear-gradient(135deg, #E5EEF9 0%, #DBEAFE 100%);
+            background: linear-gradient(135deg, #E8F0FE 0%, #DBEAFE 100%);
             border: 2px solid #BFDBFE;
             border-radius: 12px;
             padding: 6px 14px;
             height: 42px;
             transition: all 0.3s ease;
-            box-shadow: 0 2px 8px rgba(10, 46, 92, 0.08);
+            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.08);
         }
         
         .datetime-wrapper:hover {
             background: linear-gradient(135deg, #DBEAFE 0%, #BFDBFE 100%);
             border-color: #60A5FA;
-            box-shadow: 0 4px 12px rgba(10, 46, 92, 0.15);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.15);
         }
         
         [data-theme="dark"] .datetime-wrapper {
-            background: linear-gradient(135deg, #0A2E5C 0%, #1E4B8C 100%);
+            background: linear-gradient(135deg, #1E3A5F 0%, #1E40AF 100%);
             border-color: var(--page-primary-light);
-            box-shadow: 0 2px 8px rgba(14, 165, 233, 0.15);
+            box-shadow: 0 2px 8px rgba(96, 165, 250, 0.15);
         }
         
         [data-theme="dark"] .datetime-wrapper:hover {
-            background: linear-gradient(135deg, #1E4B8C 0%, #0A2E5C 100%);
+            background: linear-gradient(135deg, #1E40AF 0%, #1E3A5F 100%);
             border-color: var(--page-accent);
-            box-shadow: 0 4px 12px rgba(14, 165, 233, 0.25);
+            box-shadow: 0 4px 12px rgba(96, 165, 250, 0.25);
         }
         
         .datetime-wrapper .datetime-icon {
@@ -313,13 +313,13 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
             justify-content: center;
             width: 28px;
             height: 28px;
-            background: rgba(10, 46, 92, 0.1);
+            background: rgba(11, 94, 215, 0.1);
             border-radius: 8px;
         }
         
         [data-theme="dark"] .datetime-wrapper .datetime-icon {
             color: var(--page-accent);
-            background: rgba(14, 165, 233, 0.15);
+            background: rgba(96, 165, 250, 0.15);
         }
         
         .datetime-wrapper .datetime-content {
@@ -372,7 +372,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
             background: linear-gradient(135deg, #334155 0%, #1E293B 100%);
             border-color: var(--page-primary);
             transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(10, 46, 92, 0.25);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
         }
         
         .dark-toggle-btn i {
@@ -411,7 +411,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
         }
         
         .top-nav .icon-btn:hover {
-            background: #E5EEF9;
+            background: #E8F0FE;
             color: var(--page-primary);
             border-color: #BFDBFE;
             transform: translateY(-1px);
@@ -423,7 +423,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
         }
         
         [data-theme="dark"] .top-nav .icon-btn:hover {
-            background: #0A2E5C;
+            background: #1E3A5F;
             color: var(--page-accent);
             border-color: var(--page-primary-light);
         }
@@ -471,13 +471,13 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
         .top-nav .avatar:hover {
             border-color: var(--page-primary);
             transform: scale(1.05);
-            box-shadow: 0 4px 12px rgba(10, 46, 92, 0.25);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
         }
         
         [data-theme="dark"] .top-nav .avatar { border-color: #334155; }
         [data-theme="dark"] .top-nav .avatar:hover { border-color: var(--page-accent); }
 
-        /* ✅ AUDIT BADGE - DEEP BLUE GRADIENT */
+        /* ✅ AUDIT BADGE - BLUE GRADIENT (#0B5ED7) */
         .audit-badge {
             display: inline-flex;
             align-items: center;
@@ -490,8 +490,26 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            box-shadow: 0 2px 8px rgba(10, 46, 92, 0.3);
+            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.3);
             margin-right: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .audit-badge::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            animation: shine 3s infinite;
+        }
+        
+        @keyframes shine {
+            0% { left: -100%; }
+            50%, 100% { left: 100%; }
         }
         
         .audit-badge i { font-size: 0.75rem; }
@@ -502,6 +520,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
             border-radius: 50%;
             background: #34D399;
             animation: pulse-dot 1.5s infinite;
+            box-shadow: 0 0 8px rgba(52, 211, 153, 0.8);
         }
 
         /* FOOTER */
@@ -700,8 +719,9 @@ document.getElementById('sidebarToggle')?.addEventListener('click', function() {
     if (sidebar) sidebar.classList.toggle('open');
 });
 
-console.log('%c🔍 Audit Header - DEEP BLUE THEME', 'font-size:16px; font-weight:bold; color:#0A2E5C;');
-console.log('%c✅ Deep Blue: #0A2E5C → #071E3D', 'font-size:13px; color:#0EA5E9;');
-console.log('%c✅ Accent: #0EA5E9 (Sky Blue)', 'font-size:13px; color:#0EA5E9;');
+console.log('%c🔍 Audit Header - BLUE THEME', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ Blue: #0B5ED7 → #0A4CA8', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
+console.log('%c✅ Accent: #60A5FA (Light Blue)', 'font-size:13px; color:#60A5FA;');
 console.log('%c✅ Matching sidebar theme', 'font-size:13px; color:#34D399;');
+console.log('%c✅ Border-bottom: #0B5ED7', 'font-size:13px; color:#34D399;');
 </script>

@@ -1,11 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/assign_doctor.php
-// ADMIN - ASSIGN / CHANGE / REASSIGN DOCTOR & LAB TESTS
-// ✅ FIXED: Inaonyesha patients WOTE (fallback kama branch haina)
-// ✅ Debug mode kujua tatizo
-// ✅ Kama reception: Patient list ndani ya toggle + search
-// ✅ 5 Status filters
+// ADMIN - ASSIGN / CHANGE / REASSIGN DOCTOR & LAB TESTS (V6 FINAL)
+// ✅ FIXED: Assigned By column (jina la aliye-assign) - INAJAZWA
+// ✅ FIXED: Bill + bill_items zinatumwa kwa Cashier
+// ✅ FIXED: Notifications kwa Cashiers
+// ✅ FIXED: Buttons zote zinalingana (compact)
+// ✅ FIXED: Branch filter inafanya kazi
+// ✅ FIXED: Lab Test inaonyesha aliye request
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -30,20 +32,34 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
     exit;
 }
 
-$user_id = $_SESSION['user_id'];
+$user_id = (int)($_SESSION['user_id'] ?? 1);
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_id = (int)($_SESSION['branch_id'] ?? 1);
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// Branch selection
-$selected_branch_id = isset($_GET['branch_id']) ? (int)$_GET['branch_id'] : $user_branch_id;
-$branch_name = $user_branch_name;
-
-// For admin: detect branch with most patients if no branch specified
+// ================================================================
+// ✅ BRANCH SELECTION
+// ================================================================
+$selected_branch_id = 'all';
+$branch_name = 'All Branches';
 $show_all_branches = false;
+
+if (isset($_GET['branch']) && $_GET['branch'] !== '' && $_GET['branch'] !== 'all') {
+    $selected_branch_id = (int)$_GET['branch'];
+} elseif (isset($_GET['branch_id']) && $_GET['branch_id'] > 0) {
+    $selected_branch_id = (int)$_GET['branch_id'];
+} else {
+    $selected_branch_id = $user_branch_id;
+}
+
+if ($selected_branch_id === 'all' || $selected_branch_id === 0) {
+    $show_all_branches = true;
+    $branch_name = 'All Branches';
+    $selected_branch_id = 0;
+}
 
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
@@ -79,74 +95,34 @@ $selected_patient_data = null;
 $change_mode = isset($_GET['change']) && $_GET['change'] == 1;
 $lab_tests_catalog = [];
 $unread_notifications = 0;
-
-// DEBUG INFO
-$debug_info = [];
+$branch_has_patients = true;
 
 try {
-    // ============================================================
     // NOTIFICATIONS
-    // ============================================================
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
     $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-    // ============================================================
-    // AUTO-DETECT BRANCH (Kama admin hana patients kwenye branch yake)
-    // ============================================================
-    $stmt = $db->prepare("SELECT COUNT(*) as cnt FROM patients WHERE branch_id = ?");
-    $stmt->execute([$selected_branch_id]);
-    $branch_patient_count = (int)$stmt->fetch(PDO::FETCH_ASSOC)['cnt'];
-    
-    $debug_info['session_branch'] = $user_branch_id;
-    $debug_info['selected_branch'] = $selected_branch_id;
-    $debug_info['branch_patient_count'] = $branch_patient_count;
-
-    // Kama branch haina patients, tafuta branch yenye patients wengi
-    if ($branch_patient_count == 0) {
-        $stmt = $db->query("
-            SELECT branch_id, COUNT(*) as cnt 
-            FROM patients 
-            WHERE branch_id IS NOT NULL
-            GROUP BY branch_id 
-            ORDER BY cnt DESC 
-            LIMIT 1
-        ");
-        $best_branch = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if ($best_branch && $best_branch['cnt'] > 0) {
-            $selected_branch_id = (int)$best_branch['branch_id'];
-            $debug_info['auto_detected_branch'] = $selected_branch_id;
-            $debug_info['auto_detected_count'] = $best_branch['cnt'];
+    // BRANCH NAME
+    if (!$show_all_branches && $selected_branch_id > 0) {
+        $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
+        $stmt->execute([$selected_branch_id]);
+        $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($branch_data) {
+            $branch_name = $branch_data['name'];
         } else {
-            // Kama hakuna patients kabisa, chukua wote
-            $show_all_branches = true;
-            $debug_info['show_all'] = true;
+            $branch_name = 'Unknown Branch';
         }
     }
 
-    // Branch name
-    if ($selected_branch_id > 0 && !$show_all_branches) {
-        $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
-        $stmt->execute([$selected_branch_id]);
-        $branch = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($branch) $branch_name = $branch['name'];
-    } else {
-        $branch_name = 'All Branches';
-    }
-
-    // ============================================================
     // CONSULTATION SERVICES
-    // ============================================================
-    $stmt = $db->prepare("
-        SELECT id, service_name, description, price, unit, is_active
-        FROM services 
-        WHERE category_id = 2 
-        AND is_active = 1 
-        AND (branch_id = ? OR branch_id IS NULL)
-        ORDER BY service_name
-    ");
-    $stmt->execute([$selected_branch_id]);
+    if ($show_all_branches) {
+        $stmt = $db->prepare("SELECT id, service_name, description, price, unit, is_active FROM services WHERE category_id = 2 AND is_active = 1 ORDER BY service_name");
+        $stmt->execute();
+    } else {
+        $stmt = $db->prepare("SELECT id, service_name, description, price, unit, is_active FROM services WHERE category_id = 2 AND is_active = 1 AND (branch_id = ? OR branch_id IS NULL) ORDER BY service_name");
+        $stmt->execute([$selected_branch_id]);
+    }
     $consultation_services = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     $visit_type_options = [];
@@ -174,33 +150,24 @@ try {
         if ($default_service_id === null) $default_service_id = $service_id;
     }
 
-    // ============================================================
     // LAB TESTS CATALOG
-    // ============================================================
     $stmt = $db->prepare("SELECT id, test_name, price, category FROM lab_tests_catalog WHERE is_active = 1 ORDER BY category, test_name");
     $stmt->execute();
     $lab_tests_catalog = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // ============================================================
-    // GET DOCTORS
-    // ============================================================
-    $doctor_query = "SELECT id, full_name, specialty, is_online, branch_id FROM users WHERE role = 'doctor' AND status = 'active'";
-    $doctor_params = [];
-    
-    if (!$show_all_branches) {
-        $doctor_query .= " AND branch_id = ?";
-        $doctor_params[] = $selected_branch_id;
+    // DOCTORS
+    if ($show_all_branches) {
+        $stmt = $db->prepare("SELECT id, full_name, specialty, is_online, branch_id FROM users WHERE role = 'doctor' AND status = 'active' ORDER BY is_online DESC, full_name");
+        $stmt->execute();
+    } else {
+        $stmt = $db->prepare("SELECT id, full_name, specialty, is_online, branch_id FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ? ORDER BY is_online DESC, full_name");
+        $stmt->execute([$selected_branch_id]);
     }
-    
-    $doctor_query .= " ORDER BY is_online DESC, full_name";
-    
-    $stmt = $db->prepare($doctor_query);
-    $stmt->execute($doctor_params);
     $doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Kama hakuna doctors kwenye branch hii, chukua wote
-    if (empty($doctors)) {
-        $stmt = $db->query("SELECT id, full_name, specialty, is_online, branch_id FROM users WHERE role = 'doctor' AND status = 'active' ORDER BY is_online DESC, full_name");
+    if (empty($doctors) && !$show_all_branches) {
+        $stmt = $db->prepare("SELECT id, full_name, specialty, is_online, branch_id FROM users WHERE role = 'doctor' AND status = 'active' ORDER BY is_online DESC, full_name");
+        $stmt->execute();
         $doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
@@ -215,71 +182,65 @@ try {
     }
     $total_doctors = count($doctors);
 
-    // ============================================================
-    // ✅ GET ALL PATIENTS - SIMPLE + FALLBACK
-    // ============================================================
-    $patients_query = "
-        SELECT 
-            p.id,
-            p.full_name,
-            p.patient_id,
-            p.phone,
-            p.gender,
-            p.branch_id,
-            p.assigned_doctor_id,
-            p.created_at as patient_created_at,
-            u.full_name as assigned_doctor_name,
-            u.is_online as assigned_doctor_online,
-            DATEDIFF(NOW(), p.created_at) as patient_days
-        FROM patients p
-        LEFT JOIN users u ON p.assigned_doctor_id = u.id
-    ";
-    
-    if (!$show_all_branches) {
-        $patients_query .= " WHERE p.branch_id = ?";
-    }
-    
-    $patients_query .= " ORDER BY p.created_at DESC, p.id DESC";
-    
-    $stmt = $db->prepare($patients_query);
-    if (!$show_all_branches) {
-        $stmt->execute([$selected_branch_id]);
-    } else {
-        $stmt->execute();
-    }
-    $patients_raw = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    $debug_info['patients_found'] = count($patients_raw);
-
-    // Kama hakuna patients kwenye branch, chukua wote
-    if (empty($patients_raw)) {
-        $stmt = $db->query("
-            SELECT 
-                p.id, p.full_name, p.patient_id, p.phone, p.gender, p.branch_id,
-                p.assigned_doctor_id, p.created_at as patient_created_at,
-                u.full_name as assigned_doctor_name, u.is_online as assigned_doctor_online,
-                DATEDIFF(NOW(), p.created_at) as patient_days
+    // PATIENTS
+    if ($show_all_branches) {
+        $stmt = $db->prepare("
+            SELECT p.id, p.full_name, p.patient_id, p.phone, p.gender, 
+                   p.branch_id, p.assigned_doctor_id, 
+                   p.created_at as patient_created_at,
+                   u.full_name as assigned_doctor_name,
+                   u.is_online as assigned_doctor_online,
+                   DATEDIFF(NOW(), p.created_at) as patient_days
             FROM patients p
             LEFT JOIN users u ON p.assigned_doctor_id = u.id
             ORDER BY p.created_at DESC, p.id DESC
         ");
-        $patients_raw = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        $debug_info['fallback_used'] = true;
-        $debug_info['fallback_count'] = count($patients_raw);
+        $stmt->execute();
+    } else {
+        $stmt = $db->prepare("
+            SELECT p.id, p.full_name, p.patient_id, p.phone, p.gender, 
+                   p.branch_id, p.assigned_doctor_id, 
+                   p.created_at as patient_created_at,
+                   u.full_name as assigned_doctor_name,
+                   u.is_online as assigned_doctor_online,
+                   DATEDIFF(NOW(), p.created_at) as patient_days
+            FROM patients p
+            LEFT JOIN users u ON p.assigned_doctor_id = u.id
+            WHERE p.branch_id = ?
+            ORDER BY p.created_at DESC, p.id DESC
+        ");
+        $stmt->execute([$selected_branch_id]);
+    }
+    $patients_raw = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if (empty($patients_raw) && !$show_all_branches) {
+        $branch_has_patients = false;
     }
 
     // ============================================================
-    // KWA KILA PATIENT - TAFUTA LATEST ACTIVE VISIT
+    // ✅ GET LATEST VISIT FOR EACH PATIENT (WITH assigned_by info)
     // ============================================================
     $all_patients = [];
     foreach ($patients_raw as $patient) {
         $stmt = $db->prepare("
-            SELECT id, status, visit_number, visit_type, service_id, consultation_fee, 
-                   created_at as visit_created_at, doctor_id
-            FROM visits 
-            WHERE patient_id = ? 
-            AND status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test', 'waiting', 'prescribed', 'completed')
-            ORDER BY id DESC
+            SELECT 
+                v.id, 
+                v.status, 
+                v.visit_number, 
+                v.visit_type, 
+                v.service_id, 
+                v.consultation_fee, 
+                v.created_at as visit_created_at, 
+                v.doctor_id,
+                v.assigned_by_id,
+                v.assigned_at,
+                u_assigned.full_name as assigned_by_name,
+                u_assigned.role as assigned_by_role
+            FROM visits v
+            LEFT JOIN users u_assigned ON v.assigned_by_id = u_assigned.id
+            WHERE v.patient_id = ? 
+            AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test', 'waiting', 'prescribed', 'completed')
+            ORDER BY v.id DESC
             LIMIT 1
         ");
         $stmt->execute([$patient['id']]);
@@ -294,6 +255,11 @@ try {
             $patient['consultation_fee'] = $visit['consultation_fee'];
             $patient['visit_created_at'] = $visit['visit_created_at'];
             $patient['visit_doctor_id'] = $visit['doctor_id'];
+            // ✅ Assigned By info
+            $patient['assigned_by_id'] = $visit['assigned_by_id'];
+            $patient['assigned_by_name'] = $visit['assigned_by_name'] ?? null;
+            $patient['assigned_by_role'] = $visit['assigned_by_role'] ?? null;
+            $patient['assigned_at'] = $visit['assigned_at'];
         } else {
             $patient['visit_id'] = null;
             $patient['visit_status'] = null;
@@ -303,6 +269,10 @@ try {
             $patient['consultation_fee'] = null;
             $patient['visit_created_at'] = null;
             $patient['visit_doctor_id'] = null;
+            $patient['assigned_by_id'] = null;
+            $patient['assigned_by_name'] = null;
+            $patient['assigned_by_role'] = null;
+            $patient['assigned_at'] = null;
         }
 
         $patient['patient_days'] = isset($patient['patient_days']) ? (int)$patient['patient_days'] : 0;
@@ -311,9 +281,7 @@ try {
 
     $branch_patients_total = count($all_patients);
 
-    // ============================================================
-    // CATEGORIZE PATIENTS
-    // ============================================================
+    // CATEGORIZE
     foreach ($all_patients as $patient) {
         $status = $patient['visit_status'] ?? '';
 
@@ -347,7 +315,6 @@ try {
     $complete_count = count($complete_patients);
     $pending_count = count($pending_patients);
 
-    // Selected patient
     if ($selected_patient_id > 0) {
         foreach ($all_patients as $p) {
             if ($p['id'] == $selected_patient_id) {
@@ -357,7 +324,6 @@ try {
         }
     }
 
-    // Latest vital signs
     if ($selected_patient_id > 0) {
         $stmt = $db->prepare("SELECT * FROM vital_signs WHERE patient_id = ? ORDER BY recorded_at DESC LIMIT 1");
         $stmt->execute([$selected_patient_id]);
@@ -370,7 +336,6 @@ try {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
 
-        // GET LIVE DATA
         if ($action === 'get_live_data') {
             header('Content-Type: application/json');
             echo json_encode([
@@ -389,7 +354,9 @@ try {
             exit;
         }
 
-        // GET FILTERED LIST
+        // ============================================================
+        // ✅ GET FILTERED LIST (WITH ASSIGNED BY)
+        // ============================================================
         if ($action === 'get_filtered_list') {
             header('Content-Type: application/json');
             $status = $_POST['status'] ?? 'assigned';
@@ -411,8 +378,9 @@ try {
             $html .= '<th style="padding:12px 16px;text-align:left;font-size:0.68rem;text-transform:uppercase;color:var(--page-text-secondary);">Patient</th>';
             $html .= '<th style="padding:12px 16px;text-align:left;font-size:0.68rem;text-transform:uppercase;color:var(--page-text-secondary);">Patient ID</th>';
             $html .= '<th style="padding:12px 16px;text-align:left;font-size:0.68rem;text-transform:uppercase;color:var(--page-text-secondary);">Doctor</th>';
+            $html .= '<th style="padding:12px 16px;text-align:left;font-size:0.68rem;text-transform:uppercase;color:var(--page-text-secondary);">👤 Assigned By</th>';
             $html .= '<th style="padding:12px 16px;text-align:left;font-size:0.68rem;text-transform:uppercase;color:var(--page-text-secondary);">Status</th>';
-            $html .= '<th style="padding:12px 16px;text-align:left;font-size:0.68rem;text-transform:uppercase;color:var(--page-text-secondary);">Actions</th>';
+            $html .= '<th style="padding:12px 16px;text-align:right;font-size:0.68rem;text-transform:uppercase;color:var(--page-text-secondary);">Actions</th>';
             $html .= '</tr></thead><tbody>';
 
             foreach ($filtered as $p) {
@@ -423,6 +391,45 @@ try {
                     ? '<span class="assigned-doctor-tag"><i class="fas fa-user-md"></i> Dr. ' . htmlspecialchars($p['assigned_doctor_name']) . ' ' . ($p['assigned_doctor_online'] == 1 ? '🟢' : '⚪') . '</span>'
                     : '<span style="color:var(--page-text-secondary);font-size:0.75rem;">No doctor</span>';
 
+                // ✅ ASSIGNED BY - INAONYESHA JINA LA ALIYE ASSIGN
+                $assigned_by_html = '';
+                if (!empty($p['assigned_by_name'])) {
+                    $role_icon = 'fa-user';
+                    $role_color = '#0B5ED7';
+                    $role_bg = '#E8F0FE';
+                    $role = strtolower($p['assigned_by_role'] ?? '');
+                    
+                    if ($role === 'reception') {
+                        $role_icon = 'fa-user-tie';
+                        $role_color = '#7C3AED';
+                        $role_bg = '#EDE9FE';
+                    } elseif ($role === 'admin') {
+                        $role_icon = 'fa-user-shield';
+                        $role_color = '#D97706';
+                        $role_bg = '#FEF3C7';
+                    } elseif ($role === 'doctor') {
+                        $role_icon = 'fa-user-md';
+                        $role_color = '#059669';
+                        $role_bg = '#D1FAE5';
+                    }
+                    
+                    $assigned_date = !empty($p['assigned_at']) ? date('M d, H:i', strtotime($p['assigned_at'])) : '';
+                    
+                    $assigned_by_html = '<div style="display:flex;flex-direction:column;gap:3px;">';
+                    $assigned_by_html .= '<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:0.7rem;font-weight:600;background:' . $role_bg . ';color:' . $role_color . ';width:fit-content;">';
+                    $assigned_by_html .= '<i class="fas ' . $role_icon . '" style="font-size:0.65rem;"></i>';
+                    $assigned_by_html .= htmlspecialchars($p['assigned_by_name']);
+                    $assigned_by_html .= '</span>';
+                    if ($assigned_date) {
+                        $assigned_by_html .= '<span style="font-size:0.62rem;color:var(--page-text-secondary);margin-left:4px;">';
+                        $assigned_by_html .= '<i class="fas fa-clock" style="font-size:0.55rem;"></i> ' . $assigned_date;
+                        $assigned_by_html .= '</span>';
+                    }
+                    $assigned_by_html .= '</div>';
+                } else {
+                    $assigned_by_html = '<span style="color:var(--page-text-secondary);font-size:0.72rem;font-style:italic;">—</span>';
+                }
+
                 $status_badge = '';
                 if ($status === 'assigned') $status_badge = '<span class="status-badge assigned">✅ Assigned</span>';
                 elseif ($status === 'lab_test') $status_badge = '<span class="status-badge lab_only">🧪 Lab Test</span>';
@@ -432,21 +439,26 @@ try {
 
                 $actions = '';
                 if ($status === 'assigned') {
-                    $actions = '<button onclick="reassignDoctor(' . $p['id'] . ', ' . $p['visit_id'] . ')" class="btn-action" style="background:linear-gradient(135deg,#DC2626,#B91C1C);margin-right:4px;"><i class="fas fa-user-minus"></i> Reassign</button>';
-                    $actions .= '<button onclick="changeDoctor(' . $p['id'] . ')" class="btn-action" style="background:linear-gradient(135deg,#D97706,#B45309);"><i class="fas fa-sync-alt"></i> Change</button>';
+                    $actions = '<div class="action-group">';
+                    $actions .= '<button onclick="reassignDoctor(' . $p['id'] . ', ' . $p['visit_id'] . ')" class="btn-mini btn-mini-danger" title="Reassign"><i class="fas fa-user-minus"></i> Reassign</button>';
+                    $actions .= '<button onclick="changeDoctor(' . $p['id'] . ')" class="btn-mini btn-mini-warning" title="Change"><i class="fas fa-sync-alt"></i> Change</button>';
+                    $actions .= '</div>';
                 } elseif (in_array($status, ['lab_test', 'prescribed', 'waiting'])) {
-                    $actions = '<button onclick="completeVisit(' . $p['id'] . ', ' . $p['visit_id'] . ')" class="btn-action" style="background:linear-gradient(135deg,#059669,#047857);margin-right:4px;"><i class="fas fa-check"></i> Complete</button>';
-                    $actions .= '<button onclick="cancelVisit(' . $p['id'] . ', ' . $p['visit_id'] . ')" class="btn-action" style="background:linear-gradient(135deg,#DC2626,#B91C1C);"><i class="fas fa-times"></i> Cancel</button>';
+                    $actions = '<div class="action-group">';
+                    $actions .= '<button onclick="completeVisit(' . $p['id'] . ', ' . $p['visit_id'] . ')" class="btn-mini btn-mini-success" title="Complete"><i class="fas fa-check"></i> Complete</button>';
+                    $actions .= '<button onclick="cancelVisit(' . $p['id'] . ', ' . $p['visit_id'] . ')" class="btn-mini btn-mini-danger" title="Cancel"><i class="fas fa-times"></i> Cancel</button>';
+                    $actions .= '</div>';
                 } elseif ($status === 'complete') {
-                    $actions = '<span style="font-size:0.7rem;color:#059669;font-weight:600;padding:6px 12px;background:#D1FAE5;border-radius:8px;"><i class="fas fa-check-circle"></i> Completed</span>';
+                    $actions = '<span class="status-badge" style="background:#D1FAE5;color:#059669;"><i class="fas fa-check-circle"></i> Completed</span>';
                 }
 
                 $html .= '<tr id="patient-row-' . $p['id'] . '" style="border-bottom:1px solid var(--page-border);">';
                 $html .= '<td style="padding:12px 16px;font-weight:600;">' . htmlspecialchars($p['full_name']) . ' ' . $days_text . '</td>';
                 $html .= '<td style="padding:12px 16px;font-family:monospace;font-size:0.8rem;">' . htmlspecialchars($p['patient_id'] ?? 'N/A') . '</td>';
                 $html .= '<td style="padding:12px 16px;">' . $doctor_html . '</td>';
+                $html .= '<td style="padding:12px 16px;">' . $assigned_by_html . '</td>';
                 $html .= '<td style="padding:12px 16px;">' . $status_badge . '</td>';
-                $html .= '<td style="padding:12px 16px;">' . $actions . '</td>';
+                $html .= '<td style="padding:12px 16px;text-align:right;">' . $actions . '</td>';
                 $html .= '</tr>';
             }
 
@@ -455,7 +467,6 @@ try {
             exit;
         }
 
-        // REASSIGN
         if ($action === 'reassign_doctor') {
             header('Content-Type: application/json');
             $patient_id = (int)($_POST['patient_id'] ?? 0);
@@ -463,7 +474,7 @@ try {
 
             try {
                 $db->beginTransaction();
-                $stmt = $db->prepare("UPDATE visits SET doctor_id = NULL, status = 'pending', updated_at = NOW() WHERE id = ?");
+                $stmt = $db->prepare("UPDATE visits SET doctor_id = NULL, status = 'pending', assigned_by_id = NULL, assigned_at = NULL, updated_at = NOW() WHERE id = ?");
                 $stmt->execute([$visit_id]);
                 $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = NULL WHERE id = ?");
                 $stmt->execute([$patient_id]);
@@ -476,7 +487,6 @@ try {
             exit;
         }
 
-        // COMPLETE VISIT
         if ($action === 'complete_visit') {
             header('Content-Type: application/json');
             $visit_id = (int)($_POST['visit_id'] ?? 0);
@@ -490,7 +500,6 @@ try {
             exit;
         }
 
-        // CANCEL VISIT
         if ($action === 'cancel_visit') {
             header('Content-Type: application/json');
             $patient_id = (int)($_POST['patient_id'] ?? 0);
@@ -510,7 +519,6 @@ try {
             exit;
         }
 
-        // GET PATIENT DETAILS
         if ($action === 'get_patient_details') {
             header('Content-Type: application/json');
             $patient_id = (int)($_POST['patient_id'] ?? 0);
@@ -529,7 +537,9 @@ try {
             exit;
         }
 
-        // CHANGE DOCTOR
+        // ============================================================
+        // ✅ CHANGE DOCTOR - WITH BILL + NOTIFICATION + ASSIGNED_BY
+        // ============================================================
         if ($action === 'change_doctor') {
             header('Content-Type: application/json');
             $patient_id = (int)($_POST['patient_id'] ?? 0);
@@ -570,18 +580,59 @@ try {
                 $visit_status = $is_lab_only ? 'lab_test' : 'assigned';
                 $visit_id = null;
                 $visit_number = '';
-                $visit_branch = $selected_branch_id > 0 ? $selected_branch_id : $user_branch_id;
+                $visit_branch = (!$show_all_branches && $selected_branch_id > 0) ? $selected_branch_id : $user_branch_id;
 
                 if ($existing) {
                     $visit_id = $existing['id'];
                     $visit_number = $existing['visit_number'];
                     $visit_branch = $existing['branch_id'] ?: $visit_branch;
-                    $stmt = $db->prepare("UPDATE visits SET doctor_id = ?, status = ?, visit_type = ?, service_id = ?, symptoms = ?, notes = ?, consultation_fee = ?, updated_at = NOW() WHERE id = ?");
-                    $stmt->execute([$is_lab_only ? null : ($doctor_id > 0 ? $doctor_id : null), $visit_status, $service_name, $is_lab_only ? null : $service_id, $symptoms, $notes, $consultation_fee, $visit_id]);
+                    
+                    // ✅ UPDATE with assigned_by_id and assigned_at
+                    $stmt = $db->prepare("
+                        UPDATE visits 
+                        SET doctor_id = ?, 
+                            status = ?, 
+                            visit_type = ?, 
+                            service_id = ?, 
+                            symptoms = ?, 
+                            notes = ?, 
+                            assigned_by_id = ?,
+                            assigned_at = NOW(),
+                            updated_at = NOW() 
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([
+                        $is_lab_only ? null : ($doctor_id > 0 ? $doctor_id : null), 
+                        $visit_status, 
+                        $service_name, 
+                        $is_lab_only ? null : $service_id, 
+                        $symptoms, 
+                        $notes,
+                        $user_id,          // ✅ ALIYE ASSIGN
+                        $visit_id
+                    ]);
                 } else {
                     $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-                    $stmt = $db->prepare("INSERT INTO visits (visit_number, patient_id, doctor_id, branch_id, visit_type, service_id, status, symptoms, notes, created_at, updated_at, consultation_fee, receptionist_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?, ?)");
-                    $stmt->execute([$visit_number, $patient_id, $is_lab_only ? null : $doctor_id, $visit_branch, $service_name, $is_lab_only ? null : $service_id, $visit_status, $symptoms, $notes, $consultation_fee, $user_id]);
+                    
+                    // ✅ INSERT with assigned_by_id and assigned_at
+                    $stmt = $db->prepare("
+                        INSERT INTO visits 
+                        (visit_number, patient_id, doctor_id, assigned_by_id, assigned_at, branch_id, visit_type, service_id, status, symptoms, notes, created_at, updated_at, receptionist_id) 
+                        VALUES (?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?)
+                    ");
+                    $stmt->execute([
+                        $visit_number, 
+                        $patient_id, 
+                        $is_lab_only ? null : $doctor_id, 
+                        $user_id,          // ✅ ALIYE ASSIGN
+                        $visit_branch, 
+                        $service_name, 
+                        $is_lab_only ? null : $service_id, 
+                        $visit_status, 
+                        $symptoms, 
+                        $notes, 
+                        $user_id
+                    ]);
                     $visit_id = $db->lastInsertId();
                 }
 
@@ -594,7 +645,32 @@ try {
                     $stmt->execute([$doctor_id, $patient_id]);
                 }
 
-                // Lab tests
+                // ============================================================
+                // ✅ CREATE BILL WITH ITEMS
+                // ============================================================
+                $bill_created = false;
+                $bill_number = null;
+                $bill_id = null;
+                $total_bill_amount = 0;
+                $lab_test_names = [];
+                $lab_count = 0;
+
+                $stmt = $db->prepare("SELECT id, bill_number FROM bills WHERE visit_id = ? AND status IN ('pending', 'partial') LIMIT 1");
+                $stmt->execute([$visit_id]);
+                $existing_bill = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($existing_bill) {
+                    $bill_id = $existing_bill['id'];
+                    $bill_number = $existing_bill['bill_number'];
+                } else {
+                    $prefix = $is_lab_only ? 'BILL-LAB' : 'BILL-CONS';
+                    $bill_number = $prefix . '-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
+                    $stmt = $db->prepare("INSERT INTO bills (bill_number, patient_id, visit_id, branch_id, created_by, subtotal, total_amount, balance, status, created_at) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 'pending', NOW())");
+                    $stmt->execute([$bill_number, $patient_id, $visit_id, $visit_branch, $user_id]);
+                    $bill_id = $db->lastInsertId();
+                }
+
+                // ✅ ADD LAB TESTS (with requested_by_id)
                 if ($is_lab_only && !empty($_POST['lab_test_ids'])) {
                     $lab_ids = $_POST['lab_test_ids'];
                     if (!is_array($lab_ids)) $lab_ids = [$lab_ids];
@@ -605,28 +681,139 @@ try {
                         $stmt = $db->prepare("SELECT test_name, price FROM lab_tests_catalog WHERE id = ?");
                         $stmt->execute([$test_id]);
                         $test = $stmt->fetch(PDO::FETCH_ASSOC);
+                        
                         if ($test) {
-                            $stmt = $db->prepare("INSERT INTO lab_tests (visit_id, patient_id, test_id, test_name, test_price, status, branch_id, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, NOW())");
-                            $stmt->execute([$visit_id, $patient_id, $test_id, $test['test_name'], $test['price'], $visit_branch]);
+                            // ✅ Ongeza requested_by_id na requested_at
+                            $stmt = $db->prepare("
+                                INSERT INTO lab_tests 
+                                (visit_id, patient_id, test_id, test_name, test_price, status, branch_id, requested_by_id, requested_at, created_at) 
+                                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, NOW(), NOW())
+                            ");
+                            $stmt->execute([
+                                $visit_id, $patient_id, $test_id, $test['test_name'], $test['price'], 
+                                $visit_branch, $user_id
+                            ]);
+                            $lab_test_id = $db->lastInsertId();
+                            
+                            $stmt = $db->prepare("
+                                INSERT INTO bill_items 
+                                (bill_id, patient_id, branch_id, item_type, item_name, quantity, unit_price, total_price, status, reference_type, reference_id, created_at) 
+                                VALUES (?, ?, ?, 'lab_test', ?, 1, ?, ?, 'pending', 'lab_test', ?, NOW())
+                            ");
+                            $stmt->execute([
+                                $bill_id, $patient_id, $visit_branch, 
+                                $test['test_name'], $test['price'], $test['price'], 
+                                $lab_test_id
+                            ]);
+                            
                             $total_lab_fee += (float)$test['price'];
+                            $lab_test_names[] = $test['test_name'];
+                            $lab_count++;
                         }
                     }
-
+                    
                     if ($total_lab_fee > 0) {
-                        $bill_number = 'BILL-LAB-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT);
-                        $stmt = $db->prepare("INSERT INTO bills (bill_number, patient_id, visit_id, branch_id, created_by, subtotal, total_amount, balance, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())");
-                        $stmt->execute([$bill_number, $patient_id, $visit_id, $visit_branch, $user_id, $total_lab_fee, $total_lab_fee, $total_lab_fee]);
+                        $stmt = $db->prepare("UPDATE bills SET subtotal = subtotal + ?, total_amount = total_amount + ?, balance = balance + ?, updated_at = NOW() WHERE id = ?");
+                        $stmt->execute([$total_lab_fee, $total_lab_fee, $total_lab_fee, $bill_id]);
+                        
+                        $stmt = $db->prepare("UPDATE visits SET lab_fees_total = COALESCE(lab_fees_total, 0) + ? WHERE id = ?");
+                        $stmt->execute([$total_lab_fee, $visit_id]);
+                        
+                        $total_bill_amount += $total_lab_fee;
                     }
                 }
 
-                // Consultation bill
+                // ADD CONSULTATION
                 if (!$is_lab_only && $consultation_fee > 0) {
-                    $bill_number = 'BILL-CONS-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT);
-                    $stmt = $db->prepare("INSERT INTO bills (bill_number, patient_id, visit_id, branch_id, created_by, subtotal, total_amount, balance, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())");
-                    $stmt->execute([$bill_number, $patient_id, $visit_id, $visit_branch, $user_id, $consultation_fee, $consultation_fee, $consultation_fee]);
+                    $stmt = $db->prepare("
+                        INSERT INTO bill_items 
+                        (bill_id, patient_id, branch_id, item_type, item_name, quantity, unit_price, total_price, status, reference_type, created_at) 
+                        VALUES (?, ?, ?, 'consultation', ?, 1, ?, ?, 'pending', 'visit', NOW())
+                    ");
+                    $stmt->execute([
+                        $bill_id, $patient_id, $visit_branch, 
+                        $service_name, $consultation_fee, $consultation_fee
+                    ]);
+                    
+                    $stmt = $db->prepare("UPDATE bills SET subtotal = subtotal + ?, total_amount = total_amount + ?, balance = balance + ?, updated_at = NOW() WHERE id = ?");
+                    $stmt->execute([$consultation_fee, $consultation_fee, $consultation_fee, $bill_id]);
+                    
+                    $stmt = $db->prepare("UPDATE visits SET consultation_fee = ? WHERE id = ?");
+                    $stmt->execute([$consultation_fee, $visit_id]);
+                    
+                    $total_bill_amount += $consultation_fee;
                 }
 
-                // Vital signs
+                // NOTIFY CASHIERS
+                if ($total_bill_amount > 0 && $bill_id) {
+                    try {
+                        $stmt = $db->prepare("SELECT full_name, patient_id FROM patients WHERE id = ?");
+                        $stmt->execute([$patient_id]);
+                        $patient_info = $stmt->fetch(PDO::FETCH_ASSOC);
+                        
+                        $stmt = $db->prepare("SELECT id FROM users WHERE role = 'cashier' AND status = 'active' AND branch_id = ?");
+                        $stmt->execute([$visit_branch]);
+                        $cashiers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                        
+                        if (empty($cashiers)) {
+                            $stmt = $db->query("SELECT id FROM users WHERE role = 'cashier' AND status = 'active'");
+                            $cashiers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                        }
+                        
+                        if ($is_lab_only) {
+                            $title = '🧪 Lab Test Bill Created';
+                            $message = 'Lab Test bill #' . $bill_number 
+                                     . ' (TSh ' . number_format($total_bill_amount, 0) . ') '
+                                     . 'for patient ' . $patient_info['full_name'] 
+                                     . ' (ID: ' . $patient_info['patient_id'] . ')'
+                                     . ' — ' . implode(', ', $lab_test_names);
+                        } else {
+                            $title = '💰 Consultation Bill Created';
+                            $message = 'Consultation bill #' . $bill_number 
+                                     . ' (TSh ' . number_format($total_bill_amount, 0) . ') '
+                                     . 'for patient ' . $patient_info['full_name'] 
+                                     . ' (ID: ' . $patient_info['patient_id'] . ')'
+                                     . ' — ' . $service_name;
+                        }
+                        
+                        foreach ($cashiers as $cashier) {
+                            $stmt = $db->prepare("
+                                INSERT INTO notifications 
+                                (user_id, branch_id, title, message, type, link, is_read, created_at) 
+                                VALUES (?, ?, ?, ?, 'bill', ?, 0, NOW())
+                            ");
+                            $stmt->execute([
+                                $cashier['id'], 
+                                $visit_branch, 
+                                $title, 
+                                $message,
+                                '/dispensary_system/frontend/pages/cashier/dashboard.php'
+                            ]);
+                        }
+                        
+                        $bill_created = true;
+                        
+                        try {
+                            $stmt = $db->prepare("
+                                INSERT INTO activity_logs 
+                                (user_id, branch_id, action, details, created_at) 
+                                VALUES (?, ?, 'bill_created', ?, NOW())
+                            ");
+                            $stmt->execute([
+                                $user_id, 
+                                $visit_branch,
+                                ($is_lab_only ? 'Lab Test' : 'Consultation') . ' bill #' . $bill_number 
+                                . ' - TSh ' . number_format($total_bill_amount, 0) 
+                                . ' for ' . $patient_info['full_name']
+                            ]);
+                        } catch (Exception $e) {}
+                        
+                    } catch (Exception $e) {
+                        error_log("Cashier notification error: " . $e->getMessage());
+                    }
+                }
+
+                // Vitals
                 $temperature = $_POST['temperature'] ?? null;
                 $bp_systolic = $_POST['bp_systolic'] ?? null;
                 $bp_diastolic = $_POST['bp_diastolic'] ?? null;
@@ -654,9 +841,20 @@ try {
                     $doctor_name = $stmt->fetch(PDO::FETCH_ASSOC)['full_name'] ?? 'Doctor';
                 }
 
+                $success_msg = $is_lab_only 
+                    ? "🧪 {$lab_count} Lab test(s) requested! Visit: {$visit_number}" 
+                    : "✅ Dr. {$doctor_name} assigned! Visit: {$visit_number}";
+                
+                if ($bill_created) {
+                    $success_msg .= " 💰 Bill #{$bill_number} (TSh " . number_format($total_bill_amount, 0) . ") sent to Cashier!";
+                }
+
                 $response['success'] = true;
-                $response['message'] = $is_lab_only ? '🧪 Lab tests requested!' : "✅ Dr. $doctor_name assigned! Visit: $visit_number";
+                $response['message'] = $success_msg;
                 $response['patient_id'] = $patient_id;
+                $response['bill_created'] = $bill_created;
+                $response['bill_number'] = $bill_number;
+                $response['bill_amount'] = $total_bill_amount;
 
             } catch (Exception $e) {
                 $db->rollBack();
@@ -671,7 +869,6 @@ try {
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
-    $debug_info['error'] = $e->getMessage();
 }
 
 $common_symptoms = ['Fever', 'Headache', 'Cough', 'Sore Throat', 'Body Pain', 'Fatigue', 'Nausea', 'Vomiting', 'Diarrhea', 'Chest Pain', 'Shortness of Breath', 'Abdominal Pain', 'Dizziness', 'Rash', 'Swelling'];
@@ -724,20 +921,61 @@ if ($user_role === 'admin') {
 }
 html[data-theme="dark"] body, html[data-theme="dark"] .main-content { background: #0F172A !important; }
 
-.debug-box {
-    background: #FEF3C7;
-    border: 2px solid #D97706;
-    padding: 12px 16px;
-    margin: 0 auto 20px;
-    border-radius: 10px;
-    font-family: monospace;
-    font-size: 0.72rem;
-    max-width: 1300px;
-    color: #92400E;
+.btn-mini {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 5px 12px;
+    border-radius: 8px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.25s ease;
+    white-space: nowrap;
+    min-height: 28px;
+    min-width: 85px;
+    letter-spacing: 0.01em;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
 }
-.debug-box strong { color: #B45309; }
+.btn-mini:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+.btn-mini:active { transform: translateY(0); }
+.btn-mini i { font-size: 0.65rem; }
+.btn-mini-success { background: linear-gradient(135deg, #059669, #047857); color: white; }
+.btn-mini-success:hover { background: linear-gradient(135deg, #047857, #065F46); }
+.btn-mini-danger { background: linear-gradient(135deg, #DC2626, #B91C1C); color: white; }
+.btn-mini-danger:hover { background: linear-gradient(135deg, #B91C1C, #991B1B); }
+.btn-mini-warning { background: linear-gradient(135deg, #D97706, #B45309); color: white; }
+.btn-mini-warning:hover { background: linear-gradient(135deg, #B45309, #92400E); }
 
-/* PAGE HEADER */
+.action-group {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    align-items: center;
+}
+
+.no-patients-notice {
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    border: 2px solid #D97706;
+    border-radius: 16px;
+    padding: 24px 28px;
+    margin: 0 auto 24px;
+    max-width: 1300px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+.no-patients-notice i { font-size: 2rem; color: #D97706; flex-shrink: 0; }
+.no-patients-notice strong { color: #92400E; font-size: 1.05rem; display: block; margin-bottom: 4px; }
+.no-patients-notice p { color: #78350F; font-size: 0.85rem; margin: 0; }
+[data-theme="dark"] .no-patients-notice { background: #3D2E0A; border-color: #D97706; }
+[data-theme="dark"] .no-patients-notice strong { color: #FBBF24; }
+[data-theme="dark"] .no-patients-notice p { color: #FDE68A; }
+
 .page-header-card {
     background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 50%, #1E40AF 100%);
     border-radius: 20px;
@@ -833,7 +1071,6 @@ html[data-theme="dark"] body, html[data-theme="dark"] .main-content { background
     color: white;
 }
 
-/* STATUS TOGGLE */
 .status-toggle-group {
     display: flex;
     gap: 8px;
@@ -897,7 +1134,6 @@ html[data-theme="dark"] body, html[data-theme="dark"] .main-content { background
     font-weight: 700;
 }
 
-/* MODERN CARD */
 .modern-card {
     background: var(--page-bg-card);
     border-radius: 18px;
@@ -952,7 +1188,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
 }
 .modern-card-body { padding: 0; }
 
-/* STATUS BADGES */
 .status-badge {
     display: inline-flex;
     align-items: center;
@@ -990,24 +1225,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
     border: 1.5px solid #34D399;
 }
 
-/* ACTION BUTTONS */
-.btn-action {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 14px;
-    color: white;
-    border: none;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 0.72rem;
-    cursor: pointer;
-    font-family: inherit;
-    transition: all 0.3s;
-}
-.btn-action:hover { transform: translateY(-2px); }
-
-/* PATIENT TOGGLE */
 .patient-toggle-btn {
     display: flex;
     align-items: center;
@@ -1046,7 +1263,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
     margin-top: 12px;
 }
 
-/* SEARCH */
 .patient-search-wrapper { position: relative; margin-bottom: 10px; }
 .patient-search-wrapper i {
     position: absolute;
@@ -1072,7 +1288,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
     box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
 }
 
-/* PATIENT LIST */
 .patient-list-container {
     max-height: 320px;
     overflow-y: auto;
@@ -1115,7 +1330,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
     flex-wrap: wrap;
 }
 
-/* FORM */
 .form-card-modern {
     background: var(--page-bg-card);
     border-radius: 20px;
@@ -1181,7 +1395,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
 .grid-2-modern { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .form-row-modern { margin-bottom: 20px; }
 
-/* VITAL */
 .vital-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px; }
 .vital-grid-row2 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .vital-card {
@@ -1243,7 +1456,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
 .spo2-status.low { background: rgba(217, 119, 6, 0.15); color: #D97706; }
 .spo2-status.critical { background: rgba(220, 38, 38, 0.15); color: #DC2626; }
 
-/* LAB */
 .lab-modal-container-modern {
     background: var(--page-bg-card);
     border-radius: 12px;
@@ -1308,7 +1520,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
     gap: 8px;
 }
 
-/* BUTTONS */
 .btn-modern {
     display: inline-flex;
     align-items: center;
@@ -1356,7 +1567,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
     flex-wrap: wrap;
 }
 
-/* STATS */
 .stats-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -1391,7 +1601,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
 .stat-number.doctors { color: #7C3AED; }
 .stat-label { font-size: 0.78rem; color: var(--page-text-secondary); font-weight: 600; margin: 0; text-transform: uppercase; }
 
-/* TOAST */
 .toast-modern {
     position: fixed;
     bottom: 24px;
@@ -1432,35 +1641,32 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
     .vital-grid { grid-template-columns: repeat(2, 1fr); }
     .vital-grid-row2 { grid-template-columns: repeat(2, 1fr); }
     .page-header-card { padding: 20px; }
+    
+    .btn-mini {
+        width: 30px;
+        height: 30px;
+        min-width: 30px;
+        padding: 0;
+        justify-content: center;
+    }
+    .btn-mini span { display: none; }
+    .btn-mini i { font-size: 0.75rem; margin: 0; }
+    .action-group { justify-content: flex-end; }
 }
 </style>
 
 <main class="main-content">
 
-    <!-- DEBUG INFO (ONDOA BAADAYE) -->
-    <?php if (!empty($debug_info)): ?>
-    <div class="debug-box">
-        <strong>🔍 DEBUG INFO (ondoa baadaye):</strong><br>
-        Session Branch: <?= $debug_info['session_branch'] ?? 'N/A' ?> |
-        Selected Branch: <?= $debug_info['selected_branch'] ?? 'N/A' ?> |
-        Branch Patients: <?= $debug_info['branch_patient_count'] ?? 0 ?><br>
-        <?php if (isset($debug_info['auto_detected_branch'])): ?>
-            🎯 Auto-detected branch: <strong><?= $debug_info['auto_detected_branch'] ?></strong> (<?= $debug_info['auto_detected_count'] ?> patients)<br>
-        <?php endif; ?>
-        <?php if (isset($debug_info['show_all'])): ?>
-            ⚠️ Showing ALL branches<br>
-        <?php endif; ?>
-        <?php if (isset($debug_info['fallback_used'])): ?>
-            🔄 Fallback used — Total patients: <strong><?= $debug_info['fallback_count'] ?></strong><br>
-        <?php endif; ?>
-        Patients Found: <strong><?= $debug_info['patients_found'] ?? 0 ?></strong>
-        <?php if (isset($debug_info['error'])): ?>
-            <br>❌ Error: <?= htmlspecialchars($debug_info['error']) ?>
-        <?php endif; ?>
+    <?php if (!$branch_has_patients): ?>
+    <div class="no-patients-notice">
+        <i class="fas fa-exclamation-triangle"></i>
+        <div>
+            <strong>⚠️ Hakuna Patients kwenye <?= htmlspecialchars($branch_name) ?></strong>
+            <p>Branch <strong><?= htmlspecialchars($branch_name) ?></strong> haina patients bado. Chagua branch nyingine au ongeza patients kwanza.</p>
+        </div>
     </div>
     <?php endif; ?>
 
-    <!-- PAGE HEADER -->
     <div class="page-header-card">
         <div>
             <h1 class="page-header-title">
@@ -1497,7 +1703,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
         </div>
     <?php endif; ?>
 
-    <!-- STATUS TOGGLE -->
     <div class="status-toggle-group">
         <span style="font-size:0.75rem;font-weight:600;color:var(--page-text-secondary);margin-right:8px;">
             <i class="fas fa-filter"></i> Filter:
@@ -1522,7 +1727,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
         </span>
     </div>
 
-    <!-- PATIENTS LIST -->
     <div class="modern-card">
         <div class="modern-card-header">
             <div class="modern-card-title">
@@ -1540,7 +1744,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
         </div>
     </div>
 
-    <!-- FORM -->
     <div class="form-card-modern" id="mainFormCard">
         <div class="form-header">
             <div class="form-header-icon">
@@ -1548,16 +1751,16 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
             </div>
             <div>
                 <h3>Assign / Change Doctor or Lab Test</h3>
-                <p>Select patient and assign a doctor OR request lab tests</p>
+                <p>Select patient and assign a doctor OR request lab tests — <strong><?= htmlspecialchars($branch_name) ?></strong></p>
             </div>
         </div>
 
-        <form method="POST" action="" id="assignForm">
+        <form method="POST" action="?branch=<?= urlencode($selected_branch_id) ?>" id="assignForm">
             <input type="hidden" name="action" value="change_doctor">
             <input type="hidden" name="patient_id" id="selectedPatientInput" value="<?= $selected_patient_id ?>">
+            <input type="hidden" name="branch_id" value="<?= $selected_branch_id ?>">
 
             <div class="grid-2-modern">
-                <!-- LEFT -->
                 <div>
                     <div class="form-row-modern">
                         <label class="form-label">
@@ -1634,8 +1837,8 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
                                 <?php else: ?>
                                     <div class="empty-state">
                                         <i class="fas fa-user-slash"></i>
-                                        <p>No patients found</p>
-                                        <p style="font-size:0.7rem;margin-top:8px;">Branch: <?= htmlspecialchars($branch_name) ?> (ID: <?= $selected_branch_id ?>)</p>
+                                        <p><strong>Hakuna patients kwenye <?= htmlspecialchars($branch_name) ?></strong></p>
+                                        <p style="font-size:0.7rem;margin-top:8px;color:var(--page-text-secondary);">Chagua branch nyingine au ongeza patients kwanza.</p>
                                     </div>
                                 <?php endif; ?>
                             </div>
@@ -1680,7 +1883,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
                     </div>
                 </div>
 
-                <!-- RIGHT -->
                 <div>
                     <div class="form-row-modern" id="visitTypeSection">
                         <label class="form-label">
@@ -1756,7 +1958,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
                 </div>
             </div>
 
-            <!-- VITALS -->
             <div class="form-row-modern" style="margin-top:20px;">
                 <label class="form-label" style="font-size:0.85rem;">
                     <i class="fas fa-heartbeat" style="color:#DC2626;"></i> Vital Signs
@@ -1825,7 +2026,6 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
         </form>
     </div>
 
-    <!-- STATS -->
     <div class="stats-grid">
         <div class="stat-card assigned">
             <span class="stat-icon">✅</span>
@@ -1855,6 +2055,9 @@ html[data-theme="dark"] .modern-card-header { background: #0F172A; border-bottom
 </div>
 
 <script>
+var BRANCH_PARAM = '<?= urlencode($selected_branch_id) ?>';
+var FETCH_URL = '?branch=' + BRANCH_PARAM;
+
 function showToast(title, message, type) {
     var toast = document.getElementById('toast');
     if (!toast) return;
@@ -1868,7 +2071,7 @@ function showToast(title, message, type) {
     toast.timeout = setTimeout(function() {
         toast.classList.remove('show');
         setTimeout(function() { toast.style.display = 'none'; }, 400);
-    }, 4000);
+    }, 5000);
 }
 
 function togglePatientList() {
@@ -2039,7 +2242,7 @@ function updateVisitTypePrice() {
 }
 
 function changeDoctor(patientId) {
-    window.location.href = 'assign_doctor.php?patient_id=' + patientId + '&change=1&branch_id=<?= $selected_branch_id ?>';
+    window.location.href = '?branch=' + BRANCH_PARAM + '&patient_id=' + patientId + '&change=1';
 }
 
 function reassignDoctor(patientId, visitId) {
@@ -2050,7 +2253,7 @@ function reassignDoctor(patientId, visitId) {
     formData.append('patient_id', patientId);
     formData.append('visit_id', visitId);
     
-    fetch(window.location.href, { method: 'POST', body: formData })
+    fetch(FETCH_URL, { method: 'POST', body: formData })
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.success) {
@@ -2070,7 +2273,7 @@ function completeVisit(patientId, visitId) {
     formData.append('patient_id', patientId);
     formData.append('visit_id', visitId);
     
-    fetch(window.location.href, { method: 'POST', body: formData })
+    fetch(FETCH_URL, { method: 'POST', body: formData })
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.success) {
@@ -2090,7 +2293,7 @@ function cancelVisit(patientId, visitId) {
     formData.append('patient_id', patientId);
     formData.append('visit_id', visitId);
     
-    fetch(window.location.href, { method: 'POST', body: formData })
+    fetch(FETCH_URL, { method: 'POST', body: formData })
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.success) {
@@ -2125,7 +2328,7 @@ function filterByStatus(status) {
     formData.append('action', 'get_filtered_list');
     formData.append('status', status);
     
-    fetch(window.location.href, { method: 'POST', body: formData })
+    fetch(FETCH_URL, { method: 'POST', body: formData })
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.success && data.html) {
@@ -2163,7 +2366,7 @@ document.getElementById('assignForm')?.addEventListener('submit', function(e) {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> Processing...';
     
-    fetch(window.location.href, { method: 'POST', body: formData })
+    fetch(FETCH_URL, { method: 'POST', body: formData })
         .then(function(r) { return r.json(); })
         .then(function(data) {
             btn.disabled = false;
@@ -2171,7 +2374,7 @@ document.getElementById('assignForm')?.addEventListener('submit', function(e) {
             
             if (data.success) {
                 showToast('✅ Success', data.message, 'success');
-                setTimeout(function() { location.reload(); }, 2500);
+                setTimeout(function() { location.reload(); }, 3000);
             } else {
                 showToast('❌ Error', data.message, 'error');
             }
@@ -2196,9 +2399,13 @@ document.addEventListener('DOMContentLoaded', function() {
     <?php endif; ?>
 });
 
-console.log('%c👨‍⚕️ Braick - Assign Doctor (FIXED v2)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ Auto-detect branch with patients', 'font-size:12px;color:#059669;');
-console.log('%c📊 Patients loaded: <?= $branch_patients_total ?>', 'font-size:12px;color:#7C3AED;');
+console.log('%c👨‍⚕️ Braick - Assign Doctor V6 FINAL', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ Assigned By column imeongezwa na inajazwa', 'font-size:12px;color:#7C3AED;font-weight:bold;');
+console.log('%c✅ Bill + bill_items zinatumwa kwa Cashier', 'font-size:12px;color:#059669;font-weight:bold;');
+console.log('%c✅ Notifications kwa Cashier', 'font-size:12px;color:#059669;');
+console.log('%c✅ Lab Test inaonyesha aliye request', 'font-size:12px;color:#7C3AED;');
+console.log('%c📊 Branch: <?= htmlspecialchars($branch_name) ?> (ID: <?= $selected_branch_id ?>)', 'font-size:12px;color:#0B5ED7;');
+console.log('%c📊 Patients: <?= $branch_patients_total ?>', 'font-size:12px;color:#059669;');
 </script>
 
 </body>
