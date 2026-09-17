@@ -1,16 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/view_patient_prescriptions.php
-// PHARMACY - VIEW PATIENT PRESCRIPTIONS
-// ✅ FIXED: SQL Syntax Error (CONCAT with ) inside string)
-// ✅ FIXED: Discount uses discount_amount column
-// ✅ FIXED: total_discount accumulates all discounts
-// ✅ FIXED: total_amount = subtotal - total_discount
-// ✅ FIXED: PREMIUM IS CUMULATIVE (adds to existing, not replaces)
-// ✅ ADDED: Premium Card (left) - Additional charge
-// ✅ ADDED: Discount Card (right) - Discount amount
-// ✅ ADDED: Final row shows Subtotal → Premium → Discount → Final Amount
-// ✅ FIXED: Premium amount CUMULATIVE saves to bills.premium_amount column
+// PHARMACY - VIEW PATIENT PRESCRIPTIONS V4 (PENDING + VISIT-STRICT)
+// ✅ FIXED: Inachukua PENDING TU (sio confirmed/dispensed)
+// ✅ FIXED: Inafilter kwa visit_id STRICT
+// ✅ FIXED: Haichanganyi dawa za visits tofauti
+// ✅ FIXED: Premium CUMULATIVE
+// ✅ FIXED: Discount applied correctly
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -38,7 +34,12 @@ try {
     die("Database connection failed: " . $e->getMessage());
 }
 
+// ================================================================
+// ✅ GET PATIENT_ID NA VISIT_ID
+// ================================================================
 $patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
+$visit_id = isset($_GET['visit_id']) ? (int)$_GET['visit_id'] : 0;
+
 $message = '';
 $message_type = '';
 $currency = 'TSh';
@@ -47,22 +48,12 @@ $currency = 'TSh';
 // PRE-DEFINED OPTIONS
 // ================================================================
 $instruction_options = [
-    'Take with food',
-    'Take on empty stomach',
-    'Take after meals',
-    'Take before meals',
-    'Take with plenty of water',
-    'Do not crush or chew',
-    'Take at bedtime',
-    'Take in the morning',
-    'Take with milk',
-    'Avoid alcohol',
-    'Avoid driving',
-    'Complete full course',
-    'Store in a cool dry place',
-    'Keep out of reach of children',
-    'As directed by doctor',
-    'Other - Please specify'
+    'Take with food', 'Take on empty stomach', 'Take after meals',
+    'Take before meals', 'Take with plenty of water', 'Do not crush or chew',
+    'Take at bedtime', 'Take in the morning', 'Take with milk',
+    'Avoid alcohol', 'Avoid driving', 'Complete full course',
+    'Store in a cool dry place', 'Keep out of reach of children',
+    'As directed by doctor', 'Other - Please specify'
 ];
 
 $frequency_options = [
@@ -95,12 +86,11 @@ try {
     $currency = $settings['currency'] ?? 'TSh';
     
     // ================================================================
-    // ✅ FIXED: HANDLE SAVE - Premium & Discount
-    // ✅ SQL Syntax Error fixed
-    // ✅ Premium is CUMULATIVE (adds to existing premium_amount)
+    // ✅ HANDLE SAVE - Premium & Discount (VISIT-SPECIFIC)
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'save_and_confirm') {
         $patient_id = isset($_POST['patient_id']) ? (int)$_POST['patient_id'] : 0;
+        $visit_id = isset($_POST['visit_id']) ? (int)$_POST['visit_id'] : 0;
         $premium_amount = isset($_POST['premium_amount']) ? (float)str_replace(',', '', $_POST['premium_amount']) : 0;
         $discount_amount = isset($_POST['discount_amount']) ? (float)str_replace(',', '', $_POST['discount_amount']) : 0;
         
@@ -115,41 +105,34 @@ try {
                 
                 $stmt = $db->prepare("
                     UPDATE prescription_items 
-                    SET dosage = ?,
-                        frequency = ?,
-                        route = ?,
-                        duration = ?,
-                        instructions = ?
+                    SET dosage = ?, frequency = ?, route = ?, duration = ?, instructions = ?
                     WHERE id = ? AND patient_id = ? AND branch_id = ?
                 ");
                 $stmt->execute([
-                    $dosage,
-                    $frequency,
-                    $route,
-                    $duration,
-                    $instructions,
-                    $item_id,
-                    $patient_id,
-                    $user_branch_id
+                    $dosage, $frequency, $route, $duration, $instructions,
+                    $item_id, $patient_id, $user_branch_id
                 ]);
             }
         }
         
-        if ($patient_id > 0) {
+        if ($patient_id > 0 && $visit_id > 0) {
             try {
                 $db->beginTransaction();
                 
-                // Get all prescriptions for this patient
+                // ✅ Get ONLY PENDING prescriptions FOR THIS VISIT
                 $stmt = $db->prepare("
                     SELECT id, prescription_number, visit_id 
                     FROM prescriptions 
-                    WHERE patient_id = ? AND branch_id = ? AND status = 'pending'
+                    WHERE patient_id = ? 
+                      AND branch_id = ? 
+                      AND visit_id = ?
+                      AND status = 'pending'
                 ");
-                $stmt->execute([$patient_id, $user_branch_id]);
+                $stmt->execute([$patient_id, $user_branch_id, $visit_id]);
                 $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
                 if (empty($prescriptions)) {
-                    throw new Exception("No pending prescriptions found for this patient");
+                    throw new Exception("No pending prescriptions found for this visit");
                 }
                 
                 // Update all prescriptions to confirmed
@@ -158,45 +141,39 @@ try {
                 
                 $stmt = $db->prepare("
                     UPDATE prescriptions 
-                    SET status = 'confirmed', 
-                        pharmacy_id = ?,
-                        updated_at = NOW()
+                    SET status = 'confirmed', pharmacy_id = ?, updated_at = NOW()
                     WHERE id IN ($placeholders) AND branch_id = ?
                 ");
                 $params = array_merge([$user_id], $prescription_ids, [$user_branch_id]);
                 $stmt->execute($params);
                 
-                // Get the visit_id from the first prescription
-                $visit_id = $prescriptions[0]['visit_id'] ?? null;
-                
                 // ================================================================
-                // Check if bill exists
+                // Check if bill exists FOR THIS VISIT
                 // ================================================================
                 $stmt = $db->prepare("
                     SELECT id, total_amount, paid_amount, balance, discount_amount, 
                            total_discount, subtotal, premium_amount, premium_note
                     FROM bills 
-                    WHERE patient_id = ? AND visit_id = ? AND status IN ('pending', 'partial')
+                    WHERE patient_id = ? 
+                      AND visit_id = ? 
+                      AND branch_id = ?
+                      AND status IN ('pending', 'partial')
                     ORDER BY id DESC LIMIT 1
                 ");
-                $stmt->execute([$patient_id, $visit_id]);
+                $stmt->execute([$patient_id, $visit_id, $user_branch_id]);
                 $existing_bill = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 $bill_id = null;
                 
                 if ($existing_bill) {
                     $bill_id = $existing_bill['id'];
-                    $current_total = (float)$existing_bill['total_amount'];
+                    $current_subtotal = (float)$existing_bill['subtotal'];
                     $current_paid = (float)$existing_bill['paid_amount'];
-                    $current_balance = (float)$existing_bill['balance'];
                     $current_total_discount = (float)$existing_bill['total_discount'];
                     $current_discount_amount = (float)$existing_bill['discount_amount'];
-                    $current_subtotal = (float)$existing_bill['subtotal'];
                     $current_premium = (float)($existing_bill['premium_amount'] ?? 0);
                     
-                    // ================================================================
-                    // GET MEDICATION TOTAL FROM BILL_ITEMS
-                    // ================================================================
+                    // Get medication total FROM BILL_ITEMS
                     $stmt_med = $db->prepare("
                         SELECT SUM(total_price) as med_total, COUNT(*) as med_count
                         FROM bill_items
@@ -204,63 +181,44 @@ try {
                     ");
                     $stmt_med->execute([$bill_id]);
                     $med_data = $stmt_med->fetch(PDO::FETCH_ASSOC);
-                    $med_total = $med_data['med_total'] ?? 0;
                     $med_count = $med_data['med_count'] ?? 0;
                     
-                    // ================================================================
-                    // GET OTHER ITEMS TOTAL
-                    // ================================================================
+                    // Get other items total
                     $stmt_other = $db->prepare("
                         SELECT SUM(total_price) as other_total
                         FROM bill_items
                         WHERE bill_id = ? AND item_type != 'medication' AND status != 'cancelled'
                     ");
                     $stmt_other->execute([$bill_id]);
-                    $other_data = $stmt_other->fetch(PDO::FETCH_ASSOC);
-                    $other_total = $other_data['other_total'] ?? 0;
+                    $other_total = $stmt_other->fetch(PDO::FETCH_ASSOC)['other_total'] ?? 0;
                     
-                    // ================================================================
                     // ✅ CUMULATIVE PREMIUM
-                    // ================================================================
                     $new_premium_amount = $current_premium + $premium_amount;
                     
-                    // ================================================================
-                    // ✅ APPLY PREMIUM (new added) AND DISCOUNT TO MEDICATION ITEMS
-                    // ================================================================
+                    // Apply NEW premium and discount
                     $premium_per_item = ($premium_amount > 0 && $med_count > 0) 
-                        ? $premium_amount / $med_count 
-                        : 0;
-                    
+                        ? $premium_amount / $med_count : 0;
                     $discount_per_item = ($discount_amount > 0 && $med_count > 0) 
-                        ? $discount_amount / $med_count 
-                        : 0;
+                        ? $discount_amount / $med_count : 0;
                     
-                    // Update each medication item with NEW premium and discount
                     $stmt_update_items = $db->prepare("
                         UPDATE bill_items 
                         SET discount_amount = discount_amount + ?,
                             total_price = total_price + ? - ?,
                             final_price = total_price + ? - ?,
                             updated_at = NOW()
-                        WHERE bill_id = ? 
-                        AND item_type = 'medication'
-                        AND status != 'cancelled'
+                        WHERE bill_id = ? AND item_type = 'medication' AND status != 'cancelled'
                     ");
                     $stmt_update_items->execute([
                         $discount_per_item,
-                        $premium_per_item,
-                        $discount_per_item,
-                        $premium_per_item,
-                        $discount_per_item,
+                        $premium_per_item, $discount_per_item,
+                        $premium_per_item, $discount_per_item,
                         $bill_id
                     ]);
                     
-                    // ================================================================
-                    // GET NEW MEDICATION TOTAL FROM BILL_ITEMS
-                    // ================================================================
+                    // Get new med total
                     $stmt_new_med = $db->prepare("
-                        SELECT SUM(total_price) as med_total, 
-                               SUM(discount_amount) as med_discount
+                        SELECT SUM(total_price) as med_total, SUM(discount_amount) as med_discount
                         FROM bill_items
                         WHERE bill_id = ? AND item_type = 'medication' AND status != 'cancelled'
                     ");
@@ -269,21 +227,12 @@ try {
                     $new_med_total = $new_med_data['med_total'] ?? 0;
                     $new_med_discount = $new_med_data['med_discount'] ?? 0;
                     
-                    // ================================================================
-                    // ✅ CALCULATE NEW BILL TOTAL
-                    // ================================================================
                     $new_total = $new_med_total + $other_total;
-                    
-                    // ================================================================
-                    // ✅ UPDATE BILL - CUMULATIVE premium_amount
-                    // ✅ FIXED: SQL Syntax Error - ')' inside string
-                    // ================================================================
                     $new_total_discount = $current_total_discount + $discount_amount;
                     $new_discount_amount = $current_discount_amount + $discount_amount;
                     $new_balance = $new_total - $current_paid;
                     if ($new_balance < 0) $new_balance = 0;
                     
-                    // Determine new status
                     if ($new_balance <= 0) {
                         $new_status = 'paid';
                     } elseif ($current_paid > 0) {
@@ -292,17 +241,10 @@ try {
                         $new_status = 'pending';
                     }
                     
-                    // ✅ FIXED: SQL Syntax Error - parenthesis moved into string
                     $stmt_update_bill = $db->prepare("
                         UPDATE bills 
-                        SET 
-                            discount_amount = ?,
-                            total_discount = ?,
-                            premium_amount = ?,
-                            total_amount = ?,
-                            balance = ?,
-                            status = ?,
-                            updated_at = NOW(),
+                        SET discount_amount = ?, total_discount = ?, premium_amount = ?,
+                            total_amount = ?, balance = ?, status = ?, updated_at = NOW(),
                             notes = CONCAT(
                                 COALESCE(notes, ''), 
                                 ' | Pharmacy: Premium +TSh ', ?, 
@@ -313,48 +255,35 @@ try {
                         WHERE id = ? AND patient_id = ? AND visit_id = ?
                     ");
                     $stmt_update_bill->execute([
-                        $new_discount_amount,
-                        $new_total_discount,
-                        $new_premium_amount,
-                        $new_total,
-                        $new_balance,
-                        $new_status,
+                        $new_discount_amount, $new_total_discount,
+                        $new_premium_amount, $new_total, $new_balance, $new_status,
                         number_format($premium_amount, 0),
                         number_format($new_premium_amount, 0),
                         number_format($discount_amount, 0),
-                        $bill_id,
-                        $patient_id,
-                        $visit_id
+                        $bill_id, $patient_id, $visit_id
                     ]);
                     
-                    $message = "✅ Prescription(s) confirmed! Bill updated.<br>";
-                    $message .= "Subtotal: " . $currency . " " . number_format($current_subtotal, 0) . "<br>";
-                    if ($premium_amount > 0) {
-                        $message .= "➕ Premium Added: " . $currency . " " . number_format($premium_amount, 0) . "<br>";
-                        $message .= "📊 Total Premium: " . $currency . " " . number_format($new_premium_amount, 0) . "<br>";
-                    }
-                    if ($discount_amount > 0) {
-                        $message .= "➖ Discount: " . $currency . " " . number_format($discount_amount, 0) . "<br>";
-                    }
-                    $message .= "✅ New bill total: " . $currency . " " . number_format($new_total, 0) . "<br>";
-                    $message .= "New balance: " . $currency . " " . number_format($new_balance, 0);
+                    $message = "✅ Prescription(s) confirmed! Bill updated.";
                     $message_type = 'success';
                     
                 } else {
                     // ================================================================
-                    // CREATE NEW BILL (NO EXISTING BILL)
+                    // CREATE NEW BILL FOR THIS VISIT
                     // ================================================================
                     $bill_number = 'BILL-PRES-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
                     
+                    // ✅ Get items FOR THIS VISIT ONLY (PENDING)
                     $stmt_items = $db->prepare("
-                        SELECT SUM(total_price) as med_total
+                        SELECT SUM(pi.total_price) as med_total
                         FROM prescription_items pi
                         JOIN prescriptions p ON pi.prescription_id = p.id
-                        WHERE pi.patient_id = ? AND p.branch_id = ?
+                        WHERE pi.patient_id = ? 
+                          AND p.branch_id = ? 
+                          AND p.visit_id = ?
+                          AND p.status = 'pending'
                     ");
-                    $stmt_items->execute([$patient_id, $user_branch_id]);
-                    $item_total = $stmt_items->fetch(PDO::FETCH_ASSOC);
-                    $med_total = $item_total['med_total'] ?? 0;
+                    $stmt_items->execute([$patient_id, $user_branch_id, $visit_id]);
+                    $med_total = $stmt_items->fetch(PDO::FETCH_ASSOC)['med_total'] ?? 0;
                     
                     $final_total = $med_total + $premium_amount - $discount_amount;
                     if ($final_total < 0) $final_total = 0;
@@ -362,44 +291,41 @@ try {
                     $stmt = $db->prepare("
                         INSERT INTO bills (
                             bill_number, patient_id, visit_id, branch_id, created_by,
-                            subtotal, discount_amount, total_discount,
-                            premium_amount, premium_note,
+                            subtotal, discount_amount, total_discount, premium_amount, premium_note,
                             total_amount, paid_amount, balance, status, payment_method, notes,
                             created_at, updated_at
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'cash', ?, NOW(), NOW())
                     ");
                     $stmt->execute([
                         $bill_number, $patient_id, $visit_id, $user_branch_id, $user_id,
-                        $med_total, 
-                        $discount_amount,
-                        $discount_amount,
+                        $med_total, $discount_amount, $discount_amount,
                         $premium_amount,
                         'Premium added by Pharmacy: ' . number_format($premium_amount, 0),
-                        $final_total,
-                        0,
-                        $final_total,
+                        $final_total, 0, $final_total,
                         "Prescription confirmed - Premium: " . number_format($premium_amount, 2) . " Discount: " . number_format($discount_amount, 2)
                     ]);
                     $bill_id = $db->lastInsertId();
                     
+                    // ✅ Get items FOR THIS VISIT ONLY (PENDING)
                     $stmt_items = $db->prepare("
                         SELECT pi.*, p.prescription_number 
                         FROM prescription_items pi
                         JOIN prescriptions p ON pi.prescription_id = p.id
-                        WHERE pi.patient_id = ? AND p.branch_id = ?
+                        WHERE pi.patient_id = ? 
+                          AND p.branch_id = ? 
+                          AND p.visit_id = ?
+                          AND p.status = 'pending'
                     ");
-                    $stmt_items->execute([$patient_id, $user_branch_id]);
-                    $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
+                    $stmt_items->execute([$patient_id, $user_branch_id, $visit_id]);
+                    $items_for_bill = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
                     
-                    $total_items = count($items);
+                    $total_items_bill = count($items_for_bill);
                     
-                    foreach ($items as $item) {
-                        $premium_per_item = ($premium_amount > 0 && $total_items > 0) 
-                            ? $premium_amount / $total_items 
-                            : 0;
-                        $discount_per_item = ($discount_amount > 0 && $total_items > 0) 
-                            ? $discount_amount / $total_items 
-                            : 0;
+                    foreach ($items_for_bill as $item) {
+                        $premium_per_item = ($premium_amount > 0 && $total_items_bill > 0) 
+                            ? $premium_amount / $total_items_bill : 0;
+                        $discount_per_item = ($discount_amount > 0 && $total_items_bill > 0) 
+                            ? $discount_amount / $total_items_bill : 0;
                         $final_price = $item['total_price'] + $premium_per_item - $discount_per_item;
                         
                         $stmt = $db->prepare("
@@ -412,24 +338,13 @@ try {
                         ");
                         $stmt->execute([
                             $bill_id, $patient_id, $user_branch_id,
-                            $item['medication_name'] . ' (' . $item['dosage'] . ')',
+                            $item['medication_name'] . ' (' . ($item['dosage'] ?? '') . ')',
                             $item['quantity'], $item['unit_price'], $item['total_price'],
-                            $discount_per_item,
-                            0, 
-                            $final_price, 
-                            $item['id']
+                            $discount_per_item, 0, $final_price, $item['id']
                         ]);
                     }
                     
-                    $message = "✅ Prescription(s) confirmed! New bill created.<br>";
-                    $message .= "Subtotal: " . $currency . " " . number_format($med_total, 0) . "<br>";
-                    if ($premium_amount > 0) {
-                        $message .= "➕ Premium: " . $currency . " " . number_format($premium_amount, 0) . "<br>";
-                    }
-                    if ($discount_amount > 0) {
-                        $message .= "➖ Discount: " . $currency . " " . number_format($discount_amount, 0) . "<br>";
-                    }
-                    $message .= "✅ Final Total: " . $currency . " " . number_format($final_total, 0);
+                    $message = "✅ Prescription(s) confirmed! New bill created.";
                     $message_type = 'success';
                 }
                 
@@ -450,11 +365,9 @@ try {
     }
     
     // ================================================================
-    // GET PATIENT INFORMATION
+    // ✅ GET PATIENT INFORMATION
     // ================================================================
-    $stmt = $db->prepare("
-        SELECT * FROM patients WHERE id = ? AND branch_id = ?
-    ");
+    $stmt = $db->prepare("SELECT * FROM patients WHERE id = ? AND branch_id = ?");
     $stmt->execute([$patient_id, $user_branch_id]);
     $patient = $stmt->fetch(PDO::FETCH_ASSOC);
     
@@ -464,61 +377,94 @@ try {
     }
     
     // ================================================================
-    // GET ALL PRESCRIPTIONS FOR THIS PATIENT
+    // ✅ GET VISIT INFORMATION (STRICT)
+    // Kama visit_id haipo URL, chukua latest visit yenye PENDING TU
     // ================================================================
-    $prescriptions = [];
-    $stmt = $db->prepare("
-        SELECT p.*, u.full_name as doctor_name, v.visit_number
-        FROM prescriptions p
-        LEFT JOIN users u ON p.doctor_id = u.id
-        LEFT JOIN visits v ON p.visit_id = v.id
-        WHERE p.patient_id = ? AND p.branch_id = ?
-        ORDER BY p.created_at DESC
-    ");
-    $stmt->execute([$patient_id, $user_branch_id]);
-    $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    if ($visit_id <= 0) {
+        $stmt_v = $db->prepare("
+            SELECT visit_id FROM prescriptions 
+            WHERE patient_id = ? 
+              AND branch_id = ? 
+              AND status = 'pending'
+            ORDER BY created_at DESC LIMIT 1
+        ");
+        $stmt_v->execute([$patient_id, $user_branch_id]);
+        $v_data = $stmt_v->fetch(PDO::FETCH_ASSOC);
+        $visit_id = (int)($v_data['visit_id'] ?? 0);
+    }
+    
+    $visit_info = null;
+    if ($visit_id > 0) {
+        $stmt_v = $db->prepare("SELECT * FROM visits WHERE id = ? AND patient_id = ?");
+        $stmt_v->execute([$visit_id, $patient_id]);
+        $visit_info = $stmt_v->fetch(PDO::FETCH_ASSOC);
+    }
     
     // ================================================================
-    // GET ALL PRESCRIPTION ITEMS FOR THIS PATIENT
+    // ✅ GET ONLY PENDING PRESCRIPTIONS FOR THIS VISIT
+    // ================================================================
+    $prescriptions = [];
+    if ($visit_id > 0) {
+        $stmt = $db->prepare("
+            SELECT p.*, u.full_name as doctor_name, v.visit_number, v.visit_date
+            FROM prescriptions p
+            LEFT JOIN users u ON p.doctor_id = u.id
+            LEFT JOIN visits v ON p.visit_id = v.id
+            WHERE p.patient_id = ? 
+              AND p.branch_id = ?
+              AND p.visit_id = ?
+              AND p.status = 'pending'
+            ORDER BY p.created_at DESC
+        ");
+        $stmt->execute([$patient_id, $user_branch_id, $visit_id]);
+        $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+    
+    // ================================================================
+    // ✅ GET ONLY PENDING ITEMS FOR THIS VISIT
     // ================================================================
     $items = [];
     $total_quantity = 0;
     $total_amount = 0;
     $total_items = 0;
     
-    $stmt = $db->prepare("
-        SELECT 
-            pi.*,
-            p.prescription_number,
-            p.visit_id,
-            p.status as prescription_status,
-            p.created_at as prescription_date
-        FROM prescription_items pi
-        JOIN prescriptions p ON pi.prescription_id = p.id
-        WHERE pi.patient_id = ? AND p.branch_id = ?
-        ORDER BY pi.created_at DESC
-    ");
-    $stmt->execute([$patient_id, $user_branch_id]);
-    $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    foreach ($items as $item) {
-        $total_quantity += $item['quantity'];
-        $total_amount += $item['total_price'];
-        $total_items++;
+    if ($visit_id > 0) {
+        $stmt = $db->prepare("
+            SELECT 
+                pi.*,
+                p.prescription_number,
+                p.visit_id,
+                p.status as prescription_status,
+                p.created_at as prescription_date
+            FROM prescription_items pi
+            JOIN prescriptions p ON pi.prescription_id = p.id
+            WHERE pi.patient_id = ? 
+              AND p.branch_id = ?
+              AND p.visit_id = ?
+              AND p.status = 'pending'
+            ORDER BY pi.created_at DESC
+        ");
+        $stmt->execute([$patient_id, $user_branch_id, $visit_id]);
+        $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($items as $item) {
+            $total_quantity += $item['quantity'];
+            $total_amount += $item['total_price'];
+            $total_items++;
+        }
     }
     
     // ================================================================
-    // GET BILL INFORMATION
+    // ✅ GET BILL FOR THIS VISIT ONLY
     // ================================================================
     $bill = null;
-    $visit_id = $prescriptions[0]['visit_id'] ?? null;
-    if ($visit_id) {
+    if ($visit_id > 0) {
         $stmt = $db->prepare("
             SELECT * FROM bills 
-            WHERE patient_id = ? AND visit_id = ? 
+            WHERE patient_id = ? AND visit_id = ? AND branch_id = ?
             ORDER BY id DESC LIMIT 1
         ");
-        $stmt->execute([$patient_id, $visit_id]);
+        $stmt->execute([$patient_id, $visit_id, $user_branch_id]);
         $bill = $stmt->fetch(PDO::FETCH_ASSOC);
     }
     
@@ -578,18 +524,13 @@ function formatDate($datetime) {
     return date('d/m/Y h:i A', strtotime($datetime));
 }
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// EXISTING PREMIUM (for pre-fill)
-// ================================================================
+// Existing premium for pre-fill
 $existing_premium = 0;
 if ($bill && isset($bill['premium_amount'])) {
     $existing_premium = (float)$bill['premium_amount'];
@@ -598,7 +539,6 @@ if ($bill && isset($bill['premium_amount'])) {
 include_once '../../components/pharmacy_header.php';
 include_once '../../components/pharmacy_sidebar.php';
 ?>
-
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -613,6 +553,10 @@ include_once '../../components/pharmacy_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
     <style>
         :root {
             --primary: #0B5ED7;
@@ -626,28 +570,22 @@ include_once '../../components/pharmacy_sidebar.php';
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
-            --premium-color: #D97706;
-            --premium-bg: #FEF3C7;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
             --gray-300: #CBD5E1;
             --gray-400: #94A3B8;
             --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --text-primary: #1E293B;
             --text-secondary: #64748B;
+            --text-muted: #94A3B8;
             --border-color: #E2E8F0;
             --radius: 10px;
             --radius-lg: 16px;
             --shadow: 0 2px 8px rgba(0,0,0,0.06);
             --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
-            --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
             --transition: all 0.3s ease;
             --field-height: 34px;
         }
@@ -657,20 +595,14 @@ include_once '../../components/pharmacy_sidebar.php';
             --bg-card: #1E293B;
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
+            --text-muted: #64748B;
             --border-color: #334155;
             --gray-50: #1A1A2E;
             --gray-100: #1E293B;
-            --gray-200: #2D3748;
-            --gray-300: #4A5568;
-            --gray-400: #718096;
-            --gray-500: #A0AEC0;
-            --gray-600: #CBD5E1;
-            --gray-700: #E2E8F0;
             --primary-bg: #1E3A5F;
             --success-bg: #1A3A2A;
             --danger-bg: #3A1A1A;
             --warning-bg: #3A2A1A;
-            --premium-bg: #3A2A1A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -679,7 +611,17 @@ include_once '../../components/pharmacy_sidebar.php';
             font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
             background: var(--bg-body);
             color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
+            -webkit-font-smoothing: antialiased;
+        }
+        
+        /* MONO FONTS */
+        .mono, .money, .money-value, .date-mono, .stat-value,
+        .visit-number-badge, .patient-id, .qty-number, .total-qty,
+        .summary-number, .item-price {
+            font-family: 'JetBrains Mono', monospace !important;
+            font-feature-settings: 'tnum';
+            font-variant-numeric: tabular-nums;
+            letter-spacing: -0.02em;
         }
         
         .main-content {
@@ -743,33 +685,93 @@ include_once '../../components/pharmacy_sidebar.php';
             transform: translateY(-2px);
         }
         
-        .live-badge {
+        /* VISIT BADGE */
+        .visit-badge {
+            background: linear-gradient(135deg, #FCD34D, #F59E0B);
+            color: #78350F;
+            padding: 3px 12px;
+            border-radius: 8px;
+            font-size: 0.65rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            font-family: 'JetBrains Mono', monospace;
+            box-shadow: 0 2px 8px rgba(245, 158, 11, 0.4);
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            background: rgba(52, 211, 153, 0.2);
-            color: #34D399;
-            padding: 2px 10px;
-            border-radius: 16px;
-            font-size: 0.5rem;
-            border: 1px solid rgba(52, 211, 153, 0.2);
         }
         
-        .live-update-indicator {
-            display: inline-block;
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: #34D399;
-            animation: pulse-dot 1s infinite;
-            margin-right: 4px;
+        .visit-date-badge {
+            background: rgba(255,255,255,0.25);
+            padding: 3px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            border: 1px solid rgba(255,255,255,0.3);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
         }
         
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.3; transform: scale(0.8); }
+        /* ✅ VISIT INFO CARD */
+        .visit-info-card {
+            background: linear-gradient(135deg, var(--bg-card) 0%, var(--primary-bg) 100%);
+            border-radius: var(--radius-lg);
+            padding: 16px 22px;
+            border: 2px solid var(--primary);
+            margin-bottom: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 16px;
+            box-shadow: var(--shadow);
         }
         
+        .visit-info-card .visit-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #FCD34D, #F59E0B);
+            color: #78350F;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+            flex-shrink: 0;
+        }
+        
+        .visit-info-card .visit-details {
+            flex: 1;
+            min-width: 150px;
+        }
+        
+        .visit-info-card .visit-label {
+            font-size: 0.6rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 3px;
+        }
+        
+        .visit-info-card .visit-value {
+            font-size: 0.95rem;
+            font-weight: 800;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+        }
+        
+        .visit-info-card .visit-number-value {
+            font-size: 1.1rem;
+            font-weight: 800;
+            color: #78350F;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        
+        /* PATIENT CARD */
         .patient-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -798,6 +800,7 @@ include_once '../../components/pharmacy_sidebar.php';
             font-weight: 700;
             color: white;
             flex-shrink: 0;
+            font-family: 'JetBrains Mono', monospace;
         }
         
         .patient-info h2 {
@@ -821,6 +824,7 @@ include_once '../../components/pharmacy_sidebar.php';
             gap: 4px;
         }
         
+        /* ITEMS GRID */
         .items-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
@@ -852,6 +856,7 @@ include_once '../../components/pharmacy_sidebar.php';
             right: 0;
             height: 4px;
             background: linear-gradient(90deg, var(--primary), var(--primary-light));
+            border-radius: var(--radius-lg) var(--radius-lg) 0 0;
         }
         
         .item-card .item-header {
@@ -875,6 +880,7 @@ include_once '../../components/pharmacy_sidebar.php';
             background: var(--gray-100);
             padding: 2px 8px;
             border-radius: 12px;
+            font-family: 'JetBrains Mono', monospace;
         }
         
         .item-card .item-details {
@@ -915,6 +921,7 @@ include_once '../../components/pharmacy_sidebar.php';
             color: var(--primary);
             font-weight: 700;
             border-color: var(--primary-light);
+            font-family: 'JetBrains Mono', monospace;
         }
         
         .item-card .item-detail select,
@@ -1047,12 +1054,14 @@ include_once '../../components/pharmacy_sidebar.php';
             font-weight: 700;
             font-size: 0.95rem;
             color: var(--success);
+            font-family: 'JetBrains Mono', monospace;
         }
         
         .item-card .item-price .label {
             font-weight: 400;
             color: var(--text-secondary);
             font-size: 0.7rem;
+            font-family: 'Inter', sans-serif;
         }
         
         .item-card .item-badge {
@@ -1065,8 +1074,10 @@ include_once '../../components/pharmacy_sidebar.php';
             border-radius: 12px;
             background: var(--primary-bg);
             color: var(--primary);
+            font-family: 'JetBrains Mono', monospace;
         }
         
+        /* SUMMARY */
         .summary-section {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -1093,6 +1104,7 @@ include_once '../../components/pharmacy_sidebar.php';
             font-size: 1.8rem;
             font-weight: 800;
             display: block;
+            font-family: 'JetBrains Mono', monospace;
         }
         
         .summary-card .summary-label {
@@ -1108,6 +1120,7 @@ include_once '../../components/pharmacy_sidebar.php';
         .summary-card.qty .summary-number { color: var(--warning); }
         .summary-card.amount .summary-number { color: var(--success); }
         
+        /* DISCOUNT SECTION */
         .discount-section {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -1175,9 +1188,7 @@ include_once '../../components/pharmacy_sidebar.php';
             color: white;
         }
         
-        .discount-grid-card .card-content {
-            flex: 1;
-        }
+        .discount-grid-card .card-content { flex: 1; }
         
         .discount-grid-card .card-label {
             font-size: 0.7rem;
@@ -1227,19 +1238,7 @@ include_once '../../components/pharmacy_sidebar.php';
             outline: none;
             height: 100%;
             min-width: 60px;
-        }
-        
-        .discount-grid-card .card-input-group input::placeholder {
-            color: var(--text-muted);
-            font-weight: 400;
-        }
-        
-        .discount-grid-card.premium-card .card-input-group input {
-            color: #D97706;
-        }
-        
-        .discount-grid-card.discount-card .card-input-group input {
-            color: var(--primary);
+            font-family: 'JetBrains Mono', monospace;
         }
         
         .discount-grid-card .card-help {
@@ -1290,30 +1289,21 @@ include_once '../../components/pharmacy_sidebar.php';
             display: block;
             margin-top: 2px;
             color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
         }
         
-        .final-item .final-value.premium-value {
-            color: #D97706;
-        }
-        
-        .final-item .final-value.discount-value {
-            color: var(--primary);
-        }
+        .final-item .final-value.premium-value { color: #D97706; }
+        .final-item .final-value.discount-value { color: var(--primary); }
         
         .final-item.final-total {
             background: linear-gradient(135deg, var(--success), var(--success-dark));
             border-radius: var(--radius);
         }
         
-        .final-item.final-total .final-label {
-            color: rgba(255,255,255,0.8);
-        }
+        .final-item.final-total .final-label { color: rgba(255,255,255,0.8); }
+        .final-item.final-total .final-value { color: white; font-size: 1.3rem; }
         
-        .final-item.final-total .final-value {
-            color: white;
-            font-size: 1.3rem;
-        }
-        
+        /* BUTTONS */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1328,20 +1318,14 @@ include_once '../../components/pharmacy_sidebar.php';
             text-decoration: none;
         }
         
-        .btn-primary {
-            background: var(--primary);
-            color: white;
-        }
+        .btn-primary { background: var(--primary); color: white; }
         .btn-primary:hover {
             background: var(--primary-dark);
             transform: translateY(-2px);
             box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
         }
         
-        .btn-success {
-            background: var(--success);
-            color: white;
-        }
+        .btn-success { background: var(--success); color: white; }
         .btn-success:hover {
             background: var(--success-dark);
             transform: translateY(-2px);
@@ -1369,6 +1353,7 @@ include_once '../../components/pharmacy_sidebar.php';
             border-top: 2px solid var(--border-color);
         }
         
+        /* BADGES */
         .badge-status {
             display: inline-block;
             padding: 3px 12px;
@@ -1388,6 +1373,28 @@ include_once '../../components/pharmacy_sidebar.php';
         [data-theme="dark"] .badge-success { background: #1A3A2A; color: #34D399; border-color: #059669; }
         [data-theme="dark"] .badge-danger { background: #3A1A1A; color: #F87171; border-color: #DC2626; }
         
+        /* ✅ EMPTY STATE */
+        .empty-state {
+            text-align: center;
+            padding: 80px 20px;
+            color: var(--text-secondary);
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            border: 2px dashed var(--border-color);
+        }
+        
+        .empty-state i {
+            font-size: 4rem;
+            color: var(--success);
+            display: block;
+            margin-bottom: 16px;
+            opacity: 0.6;
+        }
+        
+        .empty-state p { font-size: 1.1rem; font-weight: 600; color: var(--text-primary); }
+        .empty-state .sub { font-size: 0.85rem; color: var(--text-secondary); margin-top: 6px; font-weight: 400; }
+        
+        /* TOAST */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1424,13 +1431,11 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
+        /* PDF MODAL */
         .pdf-modal-overlay {
             display: none;
             position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
+            top: 0; left: 0; right: 0; bottom: 0;
             background: rgba(0,0,0,0.7);
             z-index: 9999;
             backdrop-filter: blur(4px);
@@ -1490,18 +1495,14 @@ include_once '../../components/pharmacy_sidebar.php';
             font-size: 0.75rem;
         }
         
-        .pdf-modal-header .modal-actions .btn:hover {
-            background: rgba(255,255,255,0.25);
-        }
+        .pdf-modal-header .modal-actions .btn:hover { background: rgba(255,255,255,0.25); }
         
         .pdf-modal-header .modal-actions .btn-danger-modal {
             background: rgba(239, 68, 68, 0.3);
             border-color: rgba(239, 68, 68, 0.3);
         }
         
-        .pdf-modal-header .modal-actions .btn-danger-modal:hover {
-            background: rgba(239, 68, 68, 0.5);
-        }
+        .pdf-modal-header .modal-actions .btn-danger-modal:hover { background: rgba(239, 68, 68, 0.5); }
         
         .pdf-modal-body {
             padding: 20px;
@@ -1518,10 +1519,10 @@ include_once '../../components/pharmacy_sidebar.php';
             box-shadow: 0 2px 8px rgba(0,0,0,0.06);
         }
         
+        /* RESPONSIVE */
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 14px; }
             .items-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
-            .discount-grid { grid-template-columns: 1fr 1fr; }
         }
         
         @media (max-width: 768px) {
@@ -1534,6 +1535,7 @@ include_once '../../components/pharmacy_sidebar.php';
             .patient-card { flex-direction: column; text-align: center; }
             .patient-info .patient-details { justify-content: center; }
             .item-card .item-details { grid-template-columns: 1fr; }
+            .visit-info-card { flex-direction: column; text-align: center; }
         }
         
         @media (max-width: 480px) {
@@ -1549,28 +1551,32 @@ include_once '../../components/pharmacy_sidebar.php';
 
 <main class="main-content">
 
+    <!-- PAGE HEADER -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-prescription"></i>
-                Patient Prescriptions
+                Pending Prescriptions
                 <span style="background:rgba(255,255,255,0.2);color:white;padding:2px 10px;border-radius:20px;font-size:0.55rem;font-weight:600;text-transform:uppercase;">PHARMACY</span>
-                <span class="live-badge">
-                    <span class="live-update-indicator"></span>
-                    Live Update
-                </span>
+                <?php if ($visit_info): ?>
+                    <span class="visit-badge">
+                        <i class="fas fa-calendar-check"></i>
+                        <?= htmlspecialchars($visit_info['visit_number'] ?? 'N/A') ?>
+                    </span>
+                    <span class="visit-date-badge">
+                        <i class="fas fa-calendar-day"></i>
+                        <?= $visit_info['visit_date'] ? date('d M Y', strtotime($visit_info['visit_date'])) : date('d M Y', strtotime($visit_info['created_at'] ?? 'now')) ?>
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-user"></i>
-                View and manage all prescriptions for this patient
+                <i class="fas fa-hourglass-half"></i>
+                <strong>PENDING ONLY</strong> — Dawa za visit hii pekee (zilizosubiri kuthibitishwa)
                 <?php if ($patient): ?>
                     <span style="background:rgba(255,255,255,0.12);color:white;padding:2px 10px;border-radius:20px;font-size:0.55rem;">
                         <?= htmlspecialchars($patient['full_name']) ?>
                     </span>
                 <?php endif; ?>
-                <span style="background:rgba(52,211,153,0.12);color:#34D399;padding:2px 10px;border-radius:20px;font-size:0.5rem;">
-                    <i class="fas fa-sync-alt fa-spin"></i> Auto-update
-                </span>
             </p>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1592,6 +1598,37 @@ include_once '../../components/pharmacy_sidebar.php';
 
     <?php if ($patient && count($items) > 0): ?>
     
+    <!-- ✅ VISIT INFO CARD -->
+    <?php if ($visit_info): ?>
+    <div class="visit-info-card">
+        <div class="visit-icon">
+            <i class="fas fa-calendar-check"></i>
+        </div>
+        <div class="visit-details">
+            <div class="visit-label">Visit Number</div>
+            <div class="visit-number-value"><?= htmlspecialchars($visit_info['visit_number'] ?? 'N/A') ?></div>
+        </div>
+        <div class="visit-details">
+            <div class="visit-label">Visit Date</div>
+            <div class="visit-value">
+                <?= $visit_info['visit_date'] ? date('d M Y', strtotime($visit_info['visit_date'])) : date('d M Y', strtotime($visit_info['created_at'] ?? 'now')) ?>
+            </div>
+        </div>
+        <div class="visit-details">
+            <div class="visit-label">Doctor</div>
+            <div class="visit-value">
+                <?= htmlspecialchars($prescriptions[0]['doctor_name'] ?? 'N/A') ?>
+            </div>
+        </div>
+        <div style="margin-left:auto;">
+            <span class="badge-status badge-warning" style="font-size:0.7rem;padding:4px 16px;">
+                ⏳ Pending
+            </span>
+        </div>
+    </div>
+    <?php endif; ?>
+    
+    <!-- PATIENT CARD -->
     <div class="patient-card">
         <div class="patient-avatar" style="background: <?= '#' . substr(md5($patient['full_name']), 0, 6) ?>;">
             <?= strtoupper(substr($patient['full_name'], 0, 1)) ?>
@@ -1599,21 +1636,18 @@ include_once '../../components/pharmacy_sidebar.php';
         <div class="patient-info">
             <h2><?= htmlspecialchars($patient['full_name']) ?></h2>
             <div class="patient-details">
-                <span><i class="fas fa-id-card"></i> ID: <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span>
+                <span><i class="fas fa-id-card"></i> ID: <span class="mono"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span></span>
                 <span><i class="fas fa-venus-mars"></i> <?= ucfirst($patient['gender'] ?? 'N/A') ?></span>
-                <span><i class="fas fa-calendar-alt"></i> <?= calculateAge($patient['date_of_birth'] ?? '') ?> yrs</span>
-                <span><i class="fas fa-phone"></i> <?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span>
-                <span><i class="fas fa-envelope"></i> <?= htmlspecialchars($patient['email'] ?? 'N/A') ?></span>
-                <span><i class="fas fa-tint"></i> <?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?></span>
+                <span><i class="fas fa-calendar-alt"></i> <span class="mono"><?= calculateAge($patient['date_of_birth'] ?? '') ?></span> yrs</span>
+                <span><i class="fas fa-phone"></i> <span class="mono"><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span></span>
+                <?php if (!empty($patient['blood_group'])): ?>
+                    <span><i class="fas fa-tint"></i> <?= htmlspecialchars($patient['blood_group']) ?></span>
+                <?php endif; ?>
             </div>
-        </div>
-        <div style="margin-left:auto;">
-            <span class="badge-status <?= getStatusBadgeClass($prescriptions[0]['status'] ?? 'pending') ?>" style="font-size:0.7rem;padding:4px 16px;">
-                <?= getStatusLabel($prescriptions[0]['status'] ?? 'pending') ?>
-            </span>
         </div>
     </div>
 
+    <!-- SUMMARY CARDS -->
     <div class="summary-section" id="summarySection">
         <div class="summary-card total">
             <span class="summary-number"><?= count($prescriptions) ?></span>
@@ -1633,13 +1667,16 @@ include_once '../../components/pharmacy_sidebar.php';
         </div>
     </div>
 
+    <!-- FORM -->
     <form method="POST" action="" id="prescriptionForm">
         <input type="hidden" name="action" value="save_and_confirm">
         <input type="hidden" name="patient_id" value="<?= $patient_id ?>">
+        <input type="hidden" name="visit_id" value="<?= $visit_id ?>">
         <input type="hidden" name="total_amount" id="totalAmountHidden" value="<?= $total_amount ?>">
         <input type="hidden" name="premium_amount" id="premiumAmountHidden" value="0">
         <input type="hidden" name="discount_amount" id="discountAmountHidden" value="0">
         
+        <!-- ITEMS GRID -->
         <div class="items-grid" id="itemsGrid">
             <?php foreach ($items as $index => $item): ?>
                 <div class="item-card" data-item-id="<?= $item['id'] ?>">
@@ -1652,7 +1689,7 @@ include_once '../../components/pharmacy_sidebar.php';
                     
                     <div class="item-details">
                         <div class="item-detail">
-                            <span class="label">💊 Dosage <span class="live-update-badge"><i class="fas fa-sync-alt fa-spin"></i></span></span>
+                            <span class="label">💊 Dosage</span>
                             <div class="field-wrapper">
                                 <select name="items[<?= $item['id'] ?>][dosage]" class="dosage-select" data-item-id="<?= $item['id'] ?>" onchange="updateLiveData()">
                                     <option value="">--</option>
@@ -1669,7 +1706,7 @@ include_once '../../components/pharmacy_sidebar.php';
                         </div>
                         
                         <div class="item-detail">
-                            <span class="label">🕐 Frequency <span class="live-update-badge"><i class="fas fa-sync-alt fa-spin"></i></span></span>
+                            <span class="label">🕐 Frequency</span>
                             <div class="field-wrapper">
                                 <select name="items[<?= $item['id'] ?>][frequency]" class="frequency-select" data-item-id="<?= $item['id'] ?>" onchange="updateLiveData()">
                                     <option value="">--</option>
@@ -1693,7 +1730,7 @@ include_once '../../components/pharmacy_sidebar.php';
                         </div>
                         
                         <div class="item-detail">
-                            <span class="label">📅 Duration <span class="live-update-badge"><i class="fas fa-sync-alt fa-spin"></i></span></span>
+                            <span class="label">📅 Duration</span>
                             <div class="field-wrapper">
                                 <select class="duration-select" data-item-id="<?= $item['id'] ?>" onchange="updateLiveData()">
                                     <option value="">--</option>
@@ -1718,7 +1755,7 @@ include_once '../../components/pharmacy_sidebar.php';
                         </div>
                         
                         <div class="item-detail" style="grid-column: span 2;">
-                            <span class="label">📏 Route <span class="live-update-badge"><i class="fas fa-sync-alt fa-spin"></i></span></span>
+                            <span class="label">📏 Route</span>
                             <div class="field-wrapper">
                                 <select name="items[<?= $item['id'] ?>][route]" class="route-select" data-item-id="<?= $item['id'] ?>" onchange="updateLiveData()">
                                     <option value="">--</option>
@@ -1736,7 +1773,7 @@ include_once '../../components/pharmacy_sidebar.php';
                     </div>
                     
                     <div class="item-instructions">
-                        <label><i class="fas fa-edit"></i> Instructions (Pharmacy) <span class="live-update-badge"><i class="fas fa-sync-alt fa-spin"></i></span></label>
+                        <label><i class="fas fa-edit"></i> Instructions</label>
                         <div class="instr-row">
                             <select id="instr_select_<?= $item['id'] ?>" class="instr-select" data-item-id="<?= $item['id'] ?>" onchange="updateInstructionInput(<?= $item['id'] ?>); updateLiveData();">
                                 <option value="">-- Select --</option>
@@ -1765,12 +1802,13 @@ include_once '../../components/pharmacy_sidebar.php';
             <?php endforeach; ?>
         </div>
 
+        <!-- DISCOUNT SECTION -->
         <div class="discount-section">
             <div class="discount-title">
                 <i class="fas fa-tag"></i>
-                Premium & Discount <span class="live-update-badge" style="font-size:0.6rem;"><i class="fas fa-sync-alt fa-spin"></i> Live</span>
+                Premium & Discount
                 <span style="font-size:0.55rem;font-weight:400;color:var(--text-secondary);margin-left:8px;">
-                    (Premium is CUMULATIVE - adds to existing)
+                    (Premium is CUMULATIVE)
                 </span>
             </div>
             
@@ -1785,12 +1823,12 @@ include_once '../../components/pharmacy_sidebar.php';
                                    placeholder="0" value="0" 
                                    oninput="calculateFinal()">
                         </div>
-                        <div class="card-help">Additional charge (adds to existing premium)</div>
+                        <div class="card-help">Additional charge (adds to existing)</div>
                         
                         <?php if ($existing_premium > 0): ?>
                             <div class="existing-premium-note">
                                 <i class="fas fa-info-circle"></i>
-                                Existing Premium: <?= $currency ?> <?= formatMoney($existing_premium) ?>
+                                Existing: <?= $currency ?> <?= formatMoney($existing_premium) ?>
                             </div>
                         <?php endif; ?>
                     </div>
@@ -1830,16 +1868,16 @@ include_once '../../components/pharmacy_sidebar.php';
                 </div>
             </div>
             
-            <!-- Cumulative Premium Display -->
             <div style="text-align:center;margin-top:12px;padding:8px 16px;background:var(--bg-body);border-radius:var(--radius);font-size:0.75rem;color:var(--text-secondary);">
                 <i class="fas fa-calculator" style="color:var(--primary);"></i>
                 <strong>New Premium</strong> will be added to existing:
-                <?= $currency ?> <span id="existingPremiumDisplay"><?= formatMoney($existing_premium) ?></span>
-                + <?= $currency ?> <span id="newPremiumDisplay">0</span>
-                = <strong style="color:#D97706;"><?= $currency ?> <span id="totalPremiumDisplay"><?= formatMoney($existing_premium) ?></span></strong>
+                <?= $currency ?> <span id="existingPremiumDisplay" class="mono"><?= formatMoney($existing_premium) ?></span>
+                + <?= $currency ?> <span id="newPremiumDisplay" class="mono">0</span>
+                = <strong style="color:#D97706;"><?= $currency ?> <span id="totalPremiumDisplay" class="mono"><?= formatMoney($existing_premium) ?></span></strong>
             </div>
         </div>
 
+        <!-- ACTION BUTTONS -->
         <div class="action-buttons">
             <a href="pending_prescriptions.php" class="btn btn-outline">
                 <i class="fas fa-arrow-left"></i> Cancel
@@ -1851,20 +1889,30 @@ include_once '../../components/pharmacy_sidebar.php';
     </form>
 
     <?php else: ?>
-        <div class="text-center py-8" style="color:var(--text-secondary);">
-            <i class="fas fa-prescription text-4xl block mb-3" style="color:var(--border-color);"></i>
-            <p style="font-size:1.1rem;">No prescriptions found for this patient</p>
-            <a href="pending_prescriptions.php" class="btn btn-primary mt-3">
+        <!-- ✅ EMPTY STATE - PENDING HAKUNA -->
+        <div class="empty-state">
+            <i class="fas fa-check-circle"></i>
+            <p>Hakuna pending prescriptions kwa visit hii</p>
+            <p class="sub">
+                <?php if ($visit_info): ?>
+                    Visit: <strong><?= htmlspecialchars($visit_info['visit_number'] ?? 'N/A') ?></strong> 
+                    (<?= $visit_info['visit_date'] ? date('d M Y', strtotime($visit_info['visit_date'])) : 'N/A' ?>)
+                    <br>
+                <?php endif; ?>
+                Dawa zote zimekwisha thibitishwa au kutolewa ✅
+            </p>
+            <a href="pending_prescriptions.php" class="btn btn-primary" style="margin-top:16px;">
                 <i class="fas fa-arrow-left"></i> Back to Prescriptions
             </a>
         </div>
     <?php endif; ?>
 
+    <!-- FOOTER -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Patient Prescriptions
+            Pending Prescriptions (Visit-Specific)
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1874,12 +1922,13 @@ include_once '../../components/pharmacy_sidebar.php';
 
 </main>
 
+<!-- PDF MODAL -->
 <div class="pdf-modal-overlay" id="pdfModal">
     <div class="pdf-modal">
         <div class="pdf-modal-header">
             <div class="modal-title">
                 <i class="fas fa-file-pdf" style="color:rgba(255,255,255,0.8);"></i>
-                Patient Prescriptions PDF - <?= htmlspecialchars($patient['full_name'] ?? 'Patient') ?>
+                Prescriptions PDF - <?= htmlspecialchars($patient['full_name'] ?? 'Patient') ?>
             </div>
             <div class="modal-actions">
                 <button onclick="downloadPDF()" class="btn">
@@ -1889,17 +1938,17 @@ include_once '../../components/pharmacy_sidebar.php';
                     <i class="fas fa-print"></i> Print
                 </button>
                 <button onclick="closePDFModal()" class="btn btn-danger-modal">
-                    <i class="fas fa-times"></i> Cancel
+                    <i class="fas fa-times"></i> Close
                 </button>
             </div>
         </div>
         <div class="pdf-modal-body" id="pdfModalBody">
-            <div class="pdf-content" id="pdfContent">
-            </div>
+            <div class="pdf-content" id="pdfContent"></div>
         </div>
     </div>
 </div>
 
+<!-- TOAST -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:0.9rem;"></i>
     <div>
@@ -1909,223 +1958,130 @@ include_once '../../components/pharmacy_sidebar.php';
 </div>
 
 <script>
+    // DARK MODE
     var htmlElement = document.documentElement;
     var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-    } else if (savedDarkMode === 'false') {
-        htmlElement.removeAttribute('data-theme');
-    } else {
+    if (savedDarkMode === 'true') htmlElement.setAttribute('data-theme', 'dark');
+    else if (savedDarkMode === 'false') htmlElement.removeAttribute('data-theme');
+    else {
         var cookieDark = document.cookie.match(/dark_mode=([^;]+)/);
-        if (cookieDark && cookieDark[1] === 'true') {
-            htmlElement.setAttribute('data-theme', 'dark');
-        }
+        if (cookieDark && cookieDark[1] === 'true') htmlElement.setAttribute('data-theme', 'dark');
     }
     
-    window.addEventListener('storage', function(e) {
-        if (e.key === 'darkMode') {
-            if (e.newValue === 'true') {
-                htmlElement.setAttribute('data-theme', 'dark');
-            } else {
-                htmlElement.removeAttribute('data-theme');
-            }
-        }
-    });
-
+    // SIDEBAR TOGGLE
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-    
     if (sidebarToggle && sidebar) {
-        sidebarToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('open');
-        });
+        sidebarToggle.addEventListener('click', function() { sidebar.classList.toggle('open'); });
     }
     
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
+    // DATE & TIME
     function updateDateTime() {
         var now = new Date();
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
+        var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
         var footerTimestamp = document.getElementById('footerTimestamp');
-        if (footerTimestamp) {
-            footerTimestamp.textContent = 'Last updated: ' + timeStr;
-        }
+        if (footerTimestamp) footerTimestamp.textContent = 'Last updated: ' + timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    function formatMoney(amount) {
-        return Number(amount).toLocaleString('en-US');
-    }
-
-    function unformatMoney(str) {
-        return parseFloat(str.replace(/,/g, '')) || 0;
-    }
-
+    // HELPERS
+    function formatMoney(amount) { return Number(amount).toLocaleString('en-US'); }
+    function unformatMoney(str) { return parseFloat(String(str).replace(/,/g, '')) || 0; }
+    
     var existingPremium = <?= (float)$existing_premium ?>;
-
+    
+    // SYNC FIELDS
     function syncField(selectSelector, inputSelector, dataAttr) {
-        var selects = document.querySelectorAll(selectSelector);
         var inputs = document.querySelectorAll(inputSelector);
-        
         inputs.forEach(function(input) {
             var itemId = input.getAttribute(dataAttr);
             var select = document.querySelector(selectSelector + '[data-item-id="' + itemId + '"]');
-            
             if (select) {
                 input.addEventListener('input', function() {
                     var val = this.value.trim();
                     var found = false;
                     for (var i = 0; i < select.options.length; i++) {
-                        if (select.options[i].value === val) {
-                            select.selectedIndex = i;
-                            found = true;
-                            break;
-                        }
+                        if (select.options[i].value === val) { select.selectedIndex = i; found = true; break; }
                     }
-                    if (!found && val !== '') {
-                        for (var i = 0; i < select.options.length; i++) {
-                            if (select.options[i].text === val) {
-                                select.selectedIndex = i;
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!found && val === '') {
-                        select.selectedIndex = 0;
-                    }
+                    if (!found && val === '') select.selectedIndex = 0;
                     updateLiveData();
                 });
-                
                 select.addEventListener('change', function() {
-                    var val = this.value;
-                    if (val !== '') {
-                        input.value = val;
-                    } else {
-                        input.value = '';
-                    }
+                    if (this.value !== '') input.value = this.value;
+                    else input.value = '';
                     updateLiveData();
                 });
             }
         });
     }
-
+    
+    // UPDATE LIVE DATA
     function updateLiveData() {
-        var totalQty = 0;
-        var totalAmount = 0;
-        var totalItems = 0;
-        
-        var itemCards = document.querySelectorAll('.item-card');
-        itemCards.forEach(function(card) {
+        var totalQty = 0, totalAmount = 0, totalItems = 0;
+        document.querySelectorAll('.item-card').forEach(function(card) {
             var qtyEl = card.querySelector('.qty-display');
-            if (qtyEl) {
-                var qty = parseInt(qtyEl.textContent) || 0;
-                totalQty += qty;
-                totalItems++;
-            }
+            if (qtyEl) { totalQty += parseInt(qtyEl.textContent) || 0; totalItems++; }
             var priceEl = card.querySelector('.item-price');
             if (priceEl) {
-                var priceText = priceEl.textContent.replace(/[^0-9]/g, '');
-                var amount = parseInt(priceText) || 0;
+                var amount = parseInt(priceEl.textContent.replace(/[^0-9]/g, '')) || 0;
                 totalAmount += amount;
             }
         });
         
-        var totalQtyEl = document.getElementById('totalQty');
-        var totalItemsEl = document.getElementById('totalItems');
-        var totalAmountDisplay = document.getElementById('totalAmountDisplay');
-        var subtotalDisplay = document.getElementById('subtotalDisplay');
-        var totalAmountHidden = document.getElementById('totalAmountHidden');
-        
-        if (totalQtyEl) totalQtyEl.textContent = totalQty;
-        if (totalItemsEl) totalItemsEl.textContent = totalItems;
-        
-        var formattedAmount = '<?= $currency ?> ' + formatMoney(totalAmount);
-        if (totalAmountDisplay) totalAmountDisplay.textContent = formattedAmount;
-        if (subtotalDisplay) subtotalDisplay.textContent = formattedAmount;
-        if (totalAmountHidden) totalAmountHidden.value = totalAmount;
+        document.getElementById('totalQty').textContent = totalQty;
+        document.getElementById('totalItems').textContent = totalItems;
+        document.getElementById('totalAmountDisplay').textContent = '<?= $currency ?> ' + formatMoney(totalAmount);
+        document.getElementById('subtotalDisplay').textContent = '<?= $currency ?> ' + formatMoney(totalAmount);
+        document.getElementById('totalAmountHidden').value = totalAmount;
         
         calculateFinal();
     }
-
+    
+    // CALCULATE FINAL
     function calculateFinal() {
         var totalAmount = parseFloat(document.getElementById('totalAmountHidden').value) || 0;
-        var premiumInput = document.getElementById('premiumAmount');
-        var discountInput = document.getElementById('discountAmount');
+        var premiumValue = unformatMoney(document.getElementById('premiumAmount').value);
+        var discountValue = unformatMoney(document.getElementById('discountAmount').value);
         
-        var finalDisplay = document.getElementById('finalAmount');
-        var premiumDisplay = document.getElementById('premiumDisplay');
-        var discountDisplay = document.getElementById('discountDisplay');
-        var subtotalDisplay = document.getElementById('subtotalDisplay');
-        var premiumHidden = document.getElementById('premiumAmountHidden');
-        var discountHidden = document.getElementById('discountAmountHidden');
+        if (premiumValue < 0) { premiumValue = 0; document.getElementById('premiumAmount').value = '0'; }
+        if (discountValue < 0) { discountValue = 0; document.getElementById('discountAmount').value = '0'; }
         
-        var premiumValue = unformatMoney(premiumInput.value) || 0;
-        var discountValue = unformatMoney(discountInput.value) || 0;
-        
-        if (premiumValue < 0) {
-            premiumValue = 0;
-            premiumInput.value = '0';
-        }
-        if (discountValue < 0) {
-            discountValue = 0;
-            discountInput.value = '0';
-        }
-        
-        var subtotal = totalAmount;
         var totalPremium = existingPremium + premiumValue;
-        var withPremium = subtotal + premiumValue;
-        var finalAmount = withPremium - discountValue;
+        var finalAmount = totalAmount + premiumValue - discountValue;
         if (finalAmount < 0) finalAmount = 0;
         
-        if (premiumHidden) premiumHidden.value = premiumValue;
-        if (discountHidden) discountHidden.value = discountValue;
+        document.getElementById('premiumAmountHidden').value = premiumValue;
+        document.getElementById('discountAmountHidden').value = discountValue;
         
-        if (subtotalDisplay) {
-            subtotalDisplay.textContent = '<?= $currency ?> ' + formatMoney(subtotal);
-        }
-        if (premiumDisplay) {
-            premiumDisplay.textContent = '<?= $currency ?> ' + formatMoney(premiumValue);
-        }
-        if (discountDisplay) {
-            discountDisplay.textContent = '<?= $currency ?> ' + formatMoney(discountValue);
-        }
-        if (finalDisplay) {
-            finalDisplay.textContent = '<?= $currency ?> ' + formatMoney(finalAmount);
-        }
+        document.getElementById('subtotalDisplay').textContent = '<?= $currency ?> ' + formatMoney(totalAmount);
+        document.getElementById('premiumDisplay').textContent = '<?= $currency ?> ' + formatMoney(premiumValue);
+        document.getElementById('discountDisplay').textContent = '<?= $currency ?> ' + formatMoney(discountValue);
+        document.getElementById('finalAmount').textContent = '<?= $currency ?> ' + formatMoney(finalAmount);
         
-        var existingPremiumDisplay = document.getElementById('existingPremiumDisplay');
-        var newPremiumDisplay = document.getElementById('newPremiumDisplay');
-        var totalPremiumDisplay = document.getElementById('totalPremiumDisplay');
-        
-        if (existingPremiumDisplay) existingPremiumDisplay.textContent = formatMoney(existingPremium);
-        if (newPremiumDisplay) newPremiumDisplay.textContent = formatMoney(premiumValue);
-        if (totalPremiumDisplay) totalPremiumDisplay.textContent = formatMoney(totalPremium);
+        document.getElementById('existingPremiumDisplay').textContent = formatMoney(existingPremium);
+        document.getElementById('newPremiumDisplay').textContent = formatMoney(premiumValue);
+        document.getElementById('totalPremiumDisplay').textContent = formatMoney(totalPremium);
     }
-
+    
+    // CONFIRM
     function confirmPrescription() {
         var patientName = '<?= addslashes($patient['full_name'] ?? 'Unknown') ?>';
+        var visitNumber = '<?= addslashes($visit_info['visit_number'] ?? 'N/A') ?>';
         var totalItems = document.getElementById('totalItems').textContent;
         var totalQty = document.getElementById('totalQty').textContent;
         var subtotal = document.getElementById('subtotalDisplay').textContent;
         var finalAmount = document.getElementById('finalAmount').textContent;
-        var premiumInput = document.getElementById('premiumAmount');
-        var discountInput = document.getElementById('discountAmount');
-        var premiumValue = unformatMoney(premiumInput.value) || 0;
-        var discountValue = unformatMoney(discountInput.value) || 0;
+        var premiumValue = unformatMoney(document.getElementById('premiumAmount').value);
+        var discountValue = unformatMoney(document.getElementById('discountAmount').value);
         var totalPremium = existingPremium + premiumValue;
         
         var message = 'Confirm this prescription?\n\n';
-        message += '✅ Status will change to: Confirmed\n';
+        message += '📅 Visit: ' + visitNumber + '\n';
+        message += '👤 Patient: ' + patientName + '\n';
+        message += '📦 Total Items: ' + totalItems + '\n';
+        message += '📊 Total Quantity: ' + totalQty + '\n';
+        message += '💰 Subtotal: ' + subtotal + '\n';
         if (premiumValue > 0) {
             message += '⭐ New Premium: <?= $currency ?> ' + formatMoney(premiumValue) + '\n';
             message += '📊 Total Premium: <?= $currency ?> ' + formatMoney(totalPremium) + '\n';
@@ -2133,74 +2089,61 @@ include_once '../../components/pharmacy_sidebar.php';
         if (discountValue > 0) {
             message += '🎯 Discount: <?= $currency ?> ' + formatMoney(discountValue) + '\n';
         }
-        message += '\n👤 Patient: ' + patientName + '\n';
-        message += '📦 Total Items: ' + totalItems + '\n';
-        message += '📊 Total Quantity: ' + totalQty + '\n';
-        message += '💰 Subtotal: ' + subtotal + '\n';
         message += '✅ Final Amount: ' + finalAmount + '\n\n';
-        message += '⚠️ Premium is CUMULATIVE (adds to existing)';
+        message += '⚠️ Premium is CUMULATIVE';
         
         return confirm(message);
     }
-
+    
+    // INSTRUCTION INPUT
+    function updateInstructionInput(itemId) {
+        var select = document.getElementById('instr_select_' + itemId);
+        var input = document.getElementById('instr_input_' + itemId);
+        if (select.value === '__custom__') {
+            input.value = '';
+            input.focus();
+            input.style.borderColor = 'var(--warning)';
+        } else {
+            input.value = select.value;
+            input.style.borderColor = 'var(--border-color)';
+        }
+        updateLiveData();
+    }
+    
+    // INIT
     document.addEventListener('DOMContentLoaded', function() {
         syncField('.dosage-select', '.dosage-manual', 'data-item-id');
         syncField('.frequency-select', '.frequency-manual', 'data-item-id');
         syncField('.duration-select', '.duration-manual', 'data-item-id');
         syncField('.route-select', '.route-manual', 'data-item-id');
         
+        // Premium input
         var premiumInput = document.getElementById('premiumAmount');
         if (premiumInput) {
-            premiumInput.addEventListener('input', function(e) {
-                var start = this.selectionStart;
-                var end = this.selectionEnd;
-                
+            premiumInput.addEventListener('input', function() {
                 var raw = this.value.replace(/,/g, '');
                 var num = parseFloat(raw);
-                
-                if (!isNaN(num) && raw.length > 0) {
-                    var formatted = formatMoney(num);
-                    this.value = formatted;
-                    var diff = formatted.length - raw.length;
-                    this.setSelectionRange(start + diff, end + diff);
-                } else if (raw.length === 0) {
-                    this.value = '0';
-                }
-                
+                if (!isNaN(num) && raw.length > 0) this.value = formatMoney(num);
+                else if (raw.length === 0) this.value = '0';
                 calculateFinal();
             });
-            
-            premiumInput.addEventListener('focus', function() {
-                this.select();
-            });
+            premiumInput.addEventListener('focus', function() { this.select(); });
         }
         
+        // Discount input
         var discountInput = document.getElementById('discountAmount');
         if (discountInput) {
-            discountInput.addEventListener('input', function(e) {
-                var start = this.selectionStart;
-                var end = this.selectionEnd;
-                
+            discountInput.addEventListener('input', function() {
                 var raw = this.value.replace(/,/g, '');
                 var num = parseFloat(raw);
-                
-                if (!isNaN(num) && raw.length > 0) {
-                    var formatted = formatMoney(num);
-                    this.value = formatted;
-                    var diff = formatted.length - raw.length;
-                    this.setSelectionRange(start + diff, end + diff);
-                } else if (raw.length === 0) {
-                    this.value = '0';
-                }
-                
+                if (!isNaN(num) && raw.length > 0) this.value = formatMoney(num);
+                else if (raw.length === 0) this.value = '0';
                 calculateFinal();
             });
-            
-            discountInput.addEventListener('focus', function() {
-                this.select();
-            });
+            discountInput.addEventListener('focus', function() { this.select(); });
         }
         
+        // Preselect instructions
         <?php foreach ($items as $item): ?>
             var instrInput<?= $item['id'] ?> = document.getElementById('instr_input_<?= $item['id'] ?>');
             var instrSelect<?= $item['id'] ?> = document.getElementById('instr_select_<?= $item['id'] ?>');
@@ -2215,67 +2158,38 @@ include_once '../../components/pharmacy_sidebar.php';
                             break;
                         }
                     }
-                    if (!found) {
-                        instrSelect<?= $item['id'] ?>.value = '__custom__';
-                    }
+                    if (!found) instrSelect<?= $item['id'] ?>.value = '__custom__';
                 }
             }
         <?php endforeach; ?>
         
-        document.querySelectorAll('.dosage-select, .dosage-manual, .frequency-select, .frequency-manual, .duration-select, .duration-manual, .route-select, .route-manual, .instr-select, .instr-input').forEach(function(el) {
-            el.addEventListener('change', updateLiveData);
-            el.addEventListener('input', updateLiveData);
-        });
-        
         calculateFinal();
     });
 
-    function updateInstructionInput(itemId) {
-        var select = document.getElementById('instr_select_' + itemId);
-        var input = document.getElementById('instr_input_' + itemId);
-        
-        if (select.value === '__custom__') {
-            input.value = '';
-            input.focus();
-            input.style.borderColor = 'var(--warning)';
-        } else {
-            input.value = select.value;
-            input.style.borderColor = 'var(--border-color)';
-        }
-        updateLiveData();
-    }
-
+    // TOAST
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
+        document.getElementById('toastTitle').textContent = title;
+        document.getElementById('toastMessage').textContent = message;
         toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
         toast.style.display = 'flex';
-        
         toast.classList.add('show');
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
+            setTimeout(function() { toast.style.display = 'none'; }, 400);
         }, 3500);
     }
-
+    
+    // GENERATE PDF
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
         var content = document.getElementById('pdfContent');
         
         var itemsHtml = '';
-        var totalQty = 0;
-        var totalAmount = 0;
-        var totalItems = 0;
+        var totalQty = 0, totalAmount = 0, totalItems = 0;
         
-        var itemCards = document.querySelectorAll('.item-card');
-        itemCards.forEach(function(card, index) {
+        document.querySelectorAll('.item-card').forEach(function(card) {
             var medName = card.querySelector('.item-name')?.textContent || 'N/A';
             var prescription = card.querySelector('.item-prescription')?.textContent || 'N/A';
             var dosage = card.querySelector('.dosage-select')?.value || card.querySelector('.dosage-manual')?.value || 'N/A';
@@ -2294,7 +2208,7 @@ include_once '../../components/pharmacy_sidebar.php';
                 <div style="border:1px solid #E2E8F0;border-radius:8px;padding:12px 16px;margin-bottom:10px;page-break-inside:avoid;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                         <strong style="color:#0B5ED7;font-size:16px;">${medName}</strong>
-                        <span style="font-size:12px;color:#64748B;">${prescription}</span>
+                        <span style="font-size:12px;color:#64748B;font-family:monospace;">${prescription}</span>
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:14px;">
                         <div><span style="font-weight:600;color:#64748B;">Dosage:</span> ${dosage}</div>
@@ -2306,7 +2220,7 @@ include_once '../../components/pharmacy_sidebar.php';
                             <span style="font-weight:600;color:#64748B;">Instructions:</span> 
                             <span style="color:#1E293B;">${instructions}</span>
                         </div>
-                        <div style="grid-column:span 2;text-align:right;font-weight:700;color:#059669;font-size:15px;">
+                        <div style="grid-column:span 2;text-align:right;font-weight:700;color:#059669;font-size:15px;font-family:monospace;">
                             Total: <?= $currency ?> ${formatMoney(price)}
                         </div>
                     </div>
@@ -2314,25 +2228,26 @@ include_once '../../components/pharmacy_sidebar.php';
             `;
         });
         
-        var premiumValue = unformatMoney(document.getElementById('premiumAmount')?.value) || 0;
-        var discountValue = unformatMoney(document.getElementById('discountAmount')?.value) || 0;
+        var premiumValue = unformatMoney(document.getElementById('premiumAmount')?.value);
+        var discountValue = unformatMoney(document.getElementById('discountAmount')?.value);
         var totalPremium = existingPremium + premiumValue;
         var finalAmount = totalAmount + premiumValue - discountValue;
         if (finalAmount < 0) finalAmount = 0;
         
+        var visitNumber = '<?= addslashes($visit_info['visit_number'] ?? 'N/A') ?>';
+        var visitDate = '<?= $visit_info ? date('d M Y', strtotime($visit_info['visit_date'] ?? $visit_info['created_at'] ?? 'now')) : date('d M Y') ?>';
+        
         var html = `
             <div style="font-family:'Inter',sans-serif;padding:20px;">
                 <div style="text-align:center;padding-bottom:16px;border-bottom:3px solid #0B5ED7;margin-bottom:20px;">
-                    <div style="display:flex;flex-direction:column;align-items:center;">
-                        <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" 
-                             alt="Braick Logo" 
-                             style="height:55px;width:auto;object-fit:contain;margin-bottom:6px;"
-                             onerror="this.style.display='none'">
-                        <div style="font-size:1.6rem;font-weight:800;color:#0B5ED7;">BRAICK DISPENSARY</div>
-                        <div style="font-size:0.8rem;color:#64748B;">Tunajali Afya Yako</div>
-                    </div>
+                    <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" 
+                         alt="Braick Logo" 
+                         style="height:55px;width:auto;object-fit:contain;margin-bottom:6px;"
+                         onerror="this.style.display='none'">
+                    <div style="font-size:1.6rem;font-weight:800;color:#0B5ED7;">BRAICK DISPENSARY</div>
+                    <div style="font-size:0.8rem;color:#64748B;">Tunajali Afya Yako</div>
                     <div style="font-size:0.9rem;font-weight:600;color:#0B5ED7;margin-top:6px;">
-                        Patient Prescriptions Report
+                        Pending Prescriptions
                     </div>
                     <div style="font-size:0.7rem;color:#64748B;margin-top:2px;">
                         Generated: ${new Date().toLocaleString()}
@@ -2341,16 +2256,16 @@ include_once '../../components/pharmacy_sidebar.php';
                 
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;margin-bottom:16px;padding:12px 16px;background:#F8FAFC;border-radius:8px;">
                     <div><span style="font-weight:600;color:#64748B;">Patient:</span> <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></div>
-                    <div><span style="font-weight:600;color:#64748B;">ID:</span> <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></div>
+                    <div><span style="font-weight:600;color:#64748B;">ID:</span> <span style="font-family:monospace;"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span></div>
                     <div><span style="font-weight:600;color:#64748B;">Gender:</span> <?= ucfirst($patient['gender'] ?? 'N/A') ?></div>
                     <div><span style="font-weight:600;color:#64748B;">Age:</span> <?= calculateAge($patient['date_of_birth'] ?? '') ?> yrs</div>
-                    <div><span style="font-weight:600;color:#64748B;">Phone:</span> <?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></div>
-                    <div><span style="font-weight:600;color:#64748B;">Branch:</span> <?= htmlspecialchars($user_branch_name) ?></div>
+                    <div><span style="font-weight:600;color:#64748B;">Visit #:</span> <span style="font-family:monospace;font-weight:700;color:#0B5ED7;">${visitNumber}</span></div>
+                    <div><span style="font-weight:600;color:#64748B;">Visit Date:</span> <span style="font-family:monospace;">${visitDate}</span></div>
                 </div>
                 
                 <div style="margin-bottom:16px;">
                     <div style="font-size:1rem;font-weight:700;color:#0B5ED7;border-bottom:2px solid #6EA8FE;padding-bottom:4px;margin-bottom:10px;">
-                        📋 Prescription Items (${totalItems})
+                        📋 Pending Items (${totalItems})
                     </div>
                     ${itemsHtml}
                 </div>
@@ -2358,24 +2273,24 @@ include_once '../../components/pharmacy_sidebar.php';
                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:10px;margin:16px 0;padding:12px 16px;background:#E8F0FE;border-radius:8px;">
                     <div style="text-align:center;">
                         <div style="font-size:0.6rem;font-weight:600;color:#64748B;text-transform:uppercase;">Total Items</div>
-                        <div style="font-size:1.2rem;font-weight:700;color:#0B5ED7;">${totalItems}</div>
+                        <div style="font-size:1.2rem;font-weight:700;color:#0B5ED7;font-family:monospace;">${totalItems}</div>
                     </div>
                     <div style="text-align:center;">
                         <div style="font-size:0.6rem;font-weight:600;color:#64748B;text-transform:uppercase;">Total Quantity</div>
-                        <div style="font-size:1.2rem;font-weight:700;color:#D97706;">${totalQty}</div>
+                        <div style="font-size:1.2rem;font-weight:700;color:#D97706;font-family:monospace;">${totalQty}</div>
                     </div>
                     <div style="text-align:center;">
                         <div style="font-size:0.6rem;font-weight:600;color:#64748B;text-transform:uppercase;">Subtotal</div>
-                        <div style="font-size:1.2rem;font-weight:700;color:#0B5ED7;"><?= $currency ?> ${formatMoney(totalAmount)}</div>
+                        <div style="font-size:1.2rem;font-weight:700;color:#0B5ED7;font-family:monospace;"><?= $currency ?> ${formatMoney(totalAmount)}</div>
                     </div>
                     <div style="text-align:center;">
                         <div style="font-size:0.6rem;font-weight:600;color:#64748B;text-transform:uppercase;">${premiumValue > 0 ? '⭐ New Premium' : 'Premium'}</div>
-                        <div style="font-size:1.2rem;font-weight:700;color:#D97706;"><?= $currency ?> ${formatMoney(premiumValue)}</div>
-                        ${premiumValue > 0 ? `<div style="font-size:0.5rem;color:#64748B;">Total Premium: <?= $currency ?> ${formatMoney(totalPremium)}</div>` : ''}
+                        <div style="font-size:1.2rem;font-weight:700;color:#D97706;font-family:monospace;"><?= $currency ?> ${formatMoney(premiumValue)}</div>
+                        ${premiumValue > 0 ? `<div style="font-size:0.5rem;color:#64748B;">Total: <?= $currency ?> ${formatMoney(totalPremium)}</div>` : ''}
                     </div>
                     <div style="text-align:center;">
                         <div style="font-size:0.6rem;font-weight:600;color:#64748B;text-transform:uppercase;">💰 Final Amount</div>
-                        <div style="font-size:1.2rem;font-weight:700;color:#059669;"><?= $currency ?> ${formatMoney(finalAmount)}</div>
+                        <div style="font-size:1.2rem;font-weight:700;color:#059669;font-family:monospace;"><?= $currency ?> ${formatMoney(finalAmount)}</div>
                         ${discountValue > 0 ? `<div style="font-size:0.6rem;color:#0B5ED7;">Discount: <?= $currency ?> ${formatMoney(discountValue)}</div>` : ''}
                     </div>
                 </div>
@@ -2410,41 +2325,28 @@ include_once '../../components/pharmacy_sidebar.php';
         var element = document.getElementById('pdfContent');
         var opt = {
             margin: [10, 10, 10, 10],
-            filename: 'Patient_Prescriptions_<?= $patient_id ?>.pdf',
+            filename: 'Pending_Prescriptions_Visit_<?= $visit_id ?>.pdf',
             image: { type: 'jpeg', quality: 0.98 },
-            html2canvas: { 
-                scale: 2, 
-                useCORS: true,
-                backgroundColor: '#ffffff',
-                logging: false
-            },
-            jsPDF: { 
-                unit: 'mm', 
-                format: 'a4', 
-                orientation: 'portrait' 
-            },
+            html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
             pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
         };
-        
         html2pdf().set(opt).from(element).save();
     }
 
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            closePDFModal();
-        }
+        if (e.key === 'Escape') closePDFModal();
     });
-
+    
     document.getElementById('pdfModal').addEventListener('click', function(e) {
-        if (e.target === this) {
-            closePDFModal();
-        }
+        if (e.target === this) closePDFModal();
     });
 
-    console.log('%c💊 Braick - Patient Prescriptions View', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ SQL Syntax Error FIXED', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ PREMIUM IS CUMULATIVE (adds to existing)', 'font-size:13px; color:#F59E0B;');
-    console.log('%c✅ Existing Premium: <?= $currency ?> <?= formatMoney($existing_premium) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c💊 Braick - Pending Prescriptions (VISIT-SPECIFIC)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ FIXED: Inachukua PENDING TU', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ FIXED: Visit filter STRICT', 'font-size:13px; color:#FCD34D;');
+    console.log('%c📅 Visit ID: <?= $visit_id ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

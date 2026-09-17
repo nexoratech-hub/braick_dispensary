@@ -1,10 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/dashboard.php
-// SUPER ADMIN DASHBOARD - BLUE THEME
-// ✅ BLUE THEME (cards zote)
-// ✅ RED: Expenses + Expiry
-// ✅ GREEN: Profit
+// SUPER ADMIN DASHBOARD - KAMA REVENUE.PHP
+// ✅ Prescriptions, Consultation, Lab Tests = PAID ONLY
+// ✅ Cards 8: Revenue, Patient Bills, OTC, Prescriptions,
+//             Consultation, Lab Tests, Expenses, Profit
+// ✅ BLUE THEME (Revenue, Patient, OTC, Consultation, Stock, Equipment)
+// ✅ RED THEME (Expenses, Expiry)
+// ✅ GREEN THEME (Profit)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -42,131 +45,253 @@ require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
 
-// GET UNREAD NOTIFICATIONS COUNT
+// ================================================================
+// BRANCH SELECTION
+// ================================================================
+$selected_branch_id = $_GET['branch'] ?? 'all';
+$branch_name_display = 'All Branches';
+
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
+    $stmt->execute([(int)$selected_branch_id]);
+    $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch_data) $branch_name_display = $branch_data['name'];
+} else {
+    $selected_branch_id = 'all';
+}
+
+// Branch filters
+$branch_filter_b = "";
+$branch_params_b = [];
+if ($selected_branch_id !== 'all') {
+    $branch_filter_b = " AND b.branch_id = ?";
+    $branch_params_b[] = (int)$selected_branch_id;
+}
+
+$branch_filter = "";
+$branch_params = [];
+if ($selected_branch_id !== 'all') {
+    $branch_filter = " AND branch_id = ?";
+    $branch_params[] = (int)$selected_branch_id;
+}
+
+// ================================================================
+// NOTIFICATIONS
+// ================================================================
 $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
     $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
+} catch (Exception $e) {}
 
-// BRANCH SELECTION
-$selected_branch_id = $_GET['branch'] ?? 'all';
-$branch_name_display = 'All Branches';
-
-if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    $branch_id_param = (int)$selected_branch_id;
-    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
-    $stmt->execute([$branch_id_param]);
-    $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($branch_data) {
-        $branch_name_display = $branch_data['name'];
-    }
-} else {
-    $selected_branch_id = 'all';
-}
-
-// BRANCH FILTERS
-$branch_filter_b = "";
-if ($selected_branch_id !== 'all') {
-    $branch_filter_b = " AND b.branch_id = " . (int)$selected_branch_id;
-}
-
-$branch_filter_p = "";
-if ($selected_branch_id !== 'all') {
-    $branch_filter_p = " AND p.branch_id = " . (int)$selected_branch_id;
-}
-
-$branch_filter = "";
-if ($selected_branch_id !== 'all') {
-    $branch_filter = " AND branch_id = " . (int)$selected_branch_id;
-}
-
-$today = date('Y-m-d');
-
+// ================================================================
 // 1. PATIENT BILLS REVENUE
-$stmt = $db->query("
-    SELECT COALESCE(SUM(b.paid_amount), 0) as total 
-    FROM bills b
-    WHERE b.status = 'paid'
-    AND b.patient_id IS NOT NULL
-    AND b.visit_id IS NOT NULL
-    $branch_filter_b
-");
-$patient_bills_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-// 2. OTC REVENUE
-$stmt = $db->query("
-    SELECT COALESCE(SUM(total_amount), 0) as total 
-    FROM otc_sales 
-    WHERE payment_status = 'paid'
-    $branch_filter
-");
-$otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-// 3. PRESCRIPTION REVENUE
-$stmt = $db->query("
-    SELECT COALESCE(SUM(pi.total_price), 0) as total 
-    FROM prescription_items pi
-    INNER JOIN prescriptions p ON pi.prescription_id = p.id
-    WHERE p.status = 'dispensed'
-    $branch_filter_p
-");
-$prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-// 4. TOTAL REVENUE
-$total_revenue = $patient_bills_revenue + $otc_revenue;
-
-// 5. TOTAL EXPENSES
-$expenses_table_exists = false;
+// ================================================================
+$patient_bills_revenue = 0;
+$patient_bills_count = 0;
 try {
-    $stmt = $db->query("SHOW TABLES LIKE 'expenses'");
-    if ($stmt->rowCount() > 0) {
-        $expenses_table_exists = true;
+    $sql = "SELECT COALESCE(SUM(b.paid_amount), 0) as total, COUNT(*) as count 
+            FROM bills b
+            WHERE b.status = 'paid'
+            AND b.patient_id IS NOT NULL
+            AND b.visit_id IS NOT NULL
+            AND b.bill_number NOT LIKE 'BILL-OTC-%'" . $branch_filter_b;
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params_b);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $patient_bills_revenue = $data['total'] ?? 0;
+    $patient_bills_count = $data['count'] ?? 0;
+} catch (Exception $e) {}
+
+// ================================================================
+// 2. OTC REVENUE
+// ================================================================
+$otc_revenue = 0;
+$otc_count = 0;
+try {
+    $sql = "SELECT COALESCE(SUM(total_amount), 0) as total, COUNT(*) as count 
+            FROM otc_sales WHERE payment_status = 'paid'" . $branch_filter;
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $otc_revenue = $data['total'] ?? 0;
+    $otc_count = $data['count'] ?? 0;
+} catch (Exception $e) {}
+
+// ================================================================
+// 3. PRESCRIPTION REVENUE - PAID ONLY
+// ================================================================
+$prescription_revenue = 0;
+$prescription_count = 0;
+try {
+    $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
+                   COUNT(DISTINCT bi.id) as count 
+            FROM bill_items bi
+            INNER JOIN bills b ON bi.bill_id = b.id
+            WHERE b.status = 'paid'
+            AND bi.reference_type = 'prescription'
+            AND bi.item_type = 'medication'
+            AND b.patient_id IS NOT NULL
+            AND b.visit_id IS NOT NULL
+            AND b.bill_number NOT LIKE 'BILL-OTC-%'" . $branch_filter_b;
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params_b);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $prescription_revenue = $data['total'] ?? 0;
+    $prescription_count = $data['count'] ?? 0;
+    
+    // Fallback
+    if ($prescription_revenue == 0) {
+        $sql = "SELECT COALESCE(SUM(pi.total_price), 0) as total, COUNT(DISTINCT pi.id) as count 
+                FROM prescription_items pi
+                INNER JOIN prescriptions p ON pi.prescription_id = p.id
+                WHERE p.status = 'dispensed'";
+        if ($selected_branch_id !== 'all') $sql .= " AND p.branch_id = ?";
+        $stmt = $db->prepare($sql);
+        $stmt->execute($selected_branch_id !== 'all' ? [(int)$selected_branch_id] : []);
+        $data = $stmt->fetch(PDO::FETCH_ASSOC);
+        $prescription_revenue = $data['total'] ?? 0;
+        $prescription_count = $data['count'] ?? 0;
     }
-} catch (Exception $e) {
-    $expenses_table_exists = false;
-}
+} catch (Exception $e) {}
 
+// ================================================================
+// 4. CONSULTATION REVENUE - PAID ONLY
+// ================================================================
+$consultation_revenue = 0;
+$consultation_count = 0;
+try {
+    $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
+                   COUNT(DISTINCT bi.id) as count 
+            FROM bill_items bi
+            INNER JOIN bills b ON bi.bill_id = b.id
+            WHERE b.status = 'paid'
+            AND bi.item_type = 'consultation'
+            AND b.patient_id IS NOT NULL
+            AND b.visit_id IS NOT NULL
+            AND b.bill_number NOT LIKE 'BILL-OTC-%'" . $branch_filter_b;
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params_b);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $consultation_revenue = $data['total'] ?? 0;
+    $consultation_count = $data['count'] ?? 0;
+} catch (Exception $e) {}
+
+// ================================================================
+// 5. LAB TESTS REVENUE - PAID ONLY
+// ================================================================
+$lab_revenue = 0;
+$lab_count = 0;
+try {
+    $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
+                   COUNT(DISTINCT bi.id) as count 
+            FROM bill_items bi
+            INNER JOIN bills b ON bi.bill_id = b.id
+            WHERE b.status = 'paid'
+            AND bi.item_type = 'lab_test'
+            AND b.patient_id IS NOT NULL
+            AND b.visit_id IS NOT NULL
+            AND b.bill_number NOT LIKE 'BILL-OTC-%'" . $branch_filter_b;
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params_b);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $lab_revenue = $data['total'] ?? 0;
+    $lab_count = $data['count'] ?? 0;
+} catch (Exception $e) {}
+
+// ================================================================
+// 6. MEDICATIONS REVENUE - PAID ONLY
+// ================================================================
+$medication_revenue = 0;
+$medication_count = 0;
+try {
+    $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
+                   COUNT(DISTINCT bi.id) as count 
+            FROM bill_items bi
+            INNER JOIN bills b ON bi.bill_id = b.id
+            WHERE b.status = 'paid'
+            AND bi.item_type = 'medication'
+            AND b.patient_id IS NOT NULL
+            AND b.visit_id IS NOT NULL
+            AND b.bill_number NOT LIKE 'BILL-OTC-%'" . $branch_filter_b;
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params_b);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $medication_revenue = $data['total'] ?? 0;
+    $medication_count = $data['count'] ?? 0;
+} catch (Exception $e) {}
+
+// ================================================================
+// 7. PROCEDURES REVENUE - PAID ONLY
+// ================================================================
+$procedure_revenue = 0;
+$procedure_count = 0;
+try {
+    $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
+                   COUNT(DISTINCT bi.id) as count 
+            FROM bill_items bi
+            INNER JOIN bills b ON bi.bill_id = b.id
+            WHERE b.status = 'paid'
+            AND bi.item_type = 'procedure'
+            AND b.patient_id IS NOT NULL
+            AND b.visit_id IS NOT NULL
+            AND b.bill_number NOT LIKE 'BILL-OTC-%'" . $branch_filter_b;
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params_b);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $procedure_revenue = $data['total'] ?? 0;
+    $procedure_count = $data['count'] ?? 0;
+} catch (Exception $e) {}
+
+// ================================================================
+// 8. REGISTRATION REVENUE - PAID ONLY
+// ================================================================
+$registration_revenue = 0;
+$registration_count = 0;
+try {
+    $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
+                   COUNT(DISTINCT bi.id) as count 
+            FROM bill_items bi
+            INNER JOIN bills b ON bi.bill_id = b.id
+            WHERE b.status = 'paid'
+            AND bi.item_type = 'registration'
+            AND b.patient_id IS NOT NULL
+            AND b.visit_id IS NOT NULL
+            AND b.bill_number NOT LIKE 'BILL-OTC-%'" . $branch_filter_b;
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params_b);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $registration_revenue = $data['total'] ?? 0;
+    $registration_count = $data['count'] ?? 0;
+} catch (Exception $e) {}
+
+// ================================================================
+// 9. TOTAL REVENUE
+// ================================================================
+$total_revenue = $patient_bills_revenue + $otc_revenue;
+$total_transactions = $patient_bills_count + $otc_count;
+
+// ================================================================
+// 10. EXPENSES
+// ================================================================
 $total_expenses = 0;
-if ($expenses_table_exists) {
-    $stmt = $db->query("
-        SELECT COALESCE(SUM(amount), 0) as total 
-        FROM expenses 
-        WHERE status = 'paid'
-        $branch_filter
-    ");
-    $total_expenses = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-}
+$expenses_count = 0;
+try {
+    $sql = "SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE status = 'paid'" . $branch_filter;
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $total_expenses = $data['total'] ?? 0;
+    $expenses_count = $data['count'] ?? 0;
+} catch (Exception $e) {}
 
-// 6. NET PROFIT
 $net_profit = $total_revenue - $total_expenses;
 $profit_percentage = ($total_revenue > 0) ? round(($net_profit / $total_revenue) * 100, 1) : 0;
 
-// 7. PRESCRIPTION COUNT
-$stmt = $db->query("
-    SELECT COUNT(*) as count 
-    FROM prescriptions p
-    WHERE p.status = 'dispensed'
-    $branch_filter_p
-");
-$prescription_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// 8. OTC SALES DETAILS
-$stmt = $db->query("
-    SELECT COUNT(*) as count, 
-           COALESCE(SUM(total_amount), 0) as total
-    FROM otc_sales 
-    WHERE payment_status = 'paid'
-    $branch_filter
-");
-$otc_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$otc_count = $otc_data['count'] ?? 0;
-$otc_total = $otc_data['total'] ?? 0;
-
-// 9. MEDICATION STOCK
+// ================================================================
+// 11. MEDICATION STOCK
+// ================================================================
 $stmt = $db->query("
     SELECT 
         COUNT(DISTINCT CONCAT(medication_name, '-', branch_id)) as total_items,
@@ -178,8 +303,7 @@ $stmt = $db->query("
             THEN CONCAT(medication_name, '-', branch_id)
         END) as low_stock_items,
         COUNT(DISTINCT CASE 
-            WHEN quantity <= 0 
-            AND status = 'active'
+            WHEN quantity <= 0 AND status = 'active'
             THEN CONCAT(medication_name, '-', branch_id)
         END) as out_of_stock_items
     FROM medications_inventory 
@@ -192,32 +316,26 @@ $med_total_quantity = $stock_data['total_quantity'] ?? 0;
 $med_low_stock = $stock_data['low_stock_items'] ?? 0;
 $med_out_of_stock = $stock_data['out_of_stock_items'] ?? 0;
 
-// 10. MEDICATION EXPIRY
+// ================================================================
+// 12. MEDICATION EXPIRY
+// ================================================================
 $today_date = date('Y-m-d');
 $stmt = $db->query("
     SELECT 
         COALESCE(SUM(CASE 
-            WHEN expiry_date IS NOT NULL 
-            AND expiry_date != '0000-00-00' 
-            AND expiry_date < '$today_date' 
-            THEN quantity ELSE 0 END), 0) as expired_quantity,
+            WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
+            AND expiry_date < '$today_date' THEN quantity ELSE 0 END), 0) as expired_quantity,
         COALESCE(SUM(CASE 
-            WHEN expiry_date IS NOT NULL 
-            AND expiry_date != '0000-00-00' 
+            WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
             AND expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) 
             THEN quantity ELSE 0 END), 0) as expiring_soon_quantity,
         COUNT(DISTINCT CASE 
-            WHEN expiry_date IS NOT NULL 
-            AND expiry_date != '0000-00-00' 
-            AND expiry_date < '$today_date' 
-            THEN CONCAT(medication_name, '-', branch_id)
-        END) as expired_items,
+            WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
+            AND expiry_date < '$today_date' THEN CONCAT(medication_name, '-', branch_id) END) as expired_items,
         COUNT(DISTINCT CASE 
-            WHEN expiry_date IS NOT NULL 
-            AND expiry_date != '0000-00-00' 
+            WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
             AND expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) 
-            THEN CONCAT(medication_name, '-', branch_id)
-        END) as expiring_soon_items
+            THEN CONCAT(medication_name, '-', branch_id) END) as expiring_soon_items
     FROM medications_inventory 
     WHERE status = 'active' 
     $branch_filter
@@ -228,44 +346,27 @@ $med_expiring_quantity = $expiry_data['expiring_soon_quantity'] ?? 0;
 $med_expired_items = $expiry_data['expired_items'] ?? 0;
 $med_expiring_items = $expiry_data['expiring_soon_items'] ?? 0;
 
-// 11. MEDICAL EQUIPMENT
+// ================================================================
+// 13. MEDICAL EQUIPMENT
+// ================================================================
 $stmt = $db->query("
     SELECT 
         COUNT(DISTINCT CONCAT(equipment_name, '-', branch_id)) as total_items,
         COALESCE(SUM(quantity), 0) as total_quantity,
         COUNT(DISTINCT CASE 
-            WHEN quantity > 0 AND quantity <= reorder_level 
-            AND status = 'active' 
+            WHEN quantity > 0 AND quantity <= reorder_level AND status = 'active' 
             AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
-            THEN CONCAT(equipment_name, '-', branch_id)
-        END) as low_stock_items,
+            THEN CONCAT(equipment_name, '-', branch_id) END) as low_stock_items,
         COUNT(DISTINCT CASE 
-            WHEN quantity <= 0 
-            AND status = 'active'
-            THEN CONCAT(equipment_name, '-', branch_id)
-        END) as out_of_stock_items,
-        COALESCE(SUM(CASE 
-            WHEN expiry_date IS NOT NULL 
-            AND expiry_date != '0000-00-00' 
-            AND expiry_date < '$today_date' 
-            THEN quantity ELSE 0 END), 0) as expired_quantity,
-        COALESCE(SUM(CASE 
-            WHEN expiry_date IS NOT NULL 
-            AND expiry_date != '0000-00-00' 
+            WHEN quantity <= 0 AND status = 'active'
+            THEN CONCAT(equipment_name, '-', branch_id) END) as out_of_stock_items,
+        COUNT(DISTINCT CASE 
+            WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
+            AND expiry_date < '$today_date' THEN CONCAT(equipment_name, '-', branch_id) END) as expired_items,
+        COUNT(DISTINCT CASE 
+            WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
             AND expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) 
-            THEN quantity ELSE 0 END), 0) as expiring_soon_quantity,
-        COUNT(DISTINCT CASE 
-            WHEN expiry_date IS NOT NULL 
-            AND expiry_date != '0000-00-00' 
-            AND expiry_date < '$today_date' 
-            THEN CONCAT(equipment_name, '-', branch_id)
-        END) as expired_items,
-        COUNT(DISTINCT CASE 
-            WHEN expiry_date IS NOT NULL 
-            AND expiry_date != '0000-00-00' 
-            AND expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) 
-            THEN CONCAT(equipment_name, '-', branch_id)
-        END) as expiring_soon_items
+            THEN CONCAT(equipment_name, '-', branch_id) END) as expiring_soon_items
     FROM medical_equipment 
     WHERE status = 'active' 
     $branch_filter
@@ -275,12 +376,12 @@ $equip_total_items = $equipment_data['total_items'] ?? 0;
 $equip_total_quantity = $equipment_data['total_quantity'] ?? 0;
 $equip_low_stock = $equipment_data['low_stock_items'] ?? 0;
 $equip_out_of_stock = $equipment_data['out_of_stock_items'] ?? 0;
-$equip_expired_quantity = $equipment_data['expired_quantity'] ?? 0;
-$equip_expiring_quantity = $equipment_data['expiring_soon_quantity'] ?? 0;
 $equip_expired_items = $equipment_data['expired_items'] ?? 0;
 $equip_expiring_items = $equipment_data['expiring_soon_items'] ?? 0;
 
-// CHART DATA
+// ================================================================
+// CHART DATA (Last 7 days)
+// ================================================================
 $chart_labels = [];
 $chart_values = [];
 
@@ -290,6 +391,9 @@ for ($i = 6; $i >= 0; $i--) {
     
     $daily_total = 0;
     
+    $params_b = [$date];
+    if ($selected_branch_id !== 'all') $params_b[] = (int)$selected_branch_id;
+    
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(b.paid_amount), 0) as total 
         FROM bills b
@@ -297,30 +401,35 @@ for ($i = 6; $i >= 0; $i--) {
         AND b.status = 'paid'
         AND b.patient_id IS NOT NULL
         AND b.visit_id IS NOT NULL
-        $branch_filter_b
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
+        " . ($selected_branch_id !== 'all' ? " AND b.branch_id = ?" : "") . "
     ");
-    $stmt->execute([$date]);
+    $stmt->execute($params_b);
     $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    
+    $params = [$date];
+    if ($selected_branch_id !== 'all') $params[] = (int)$selected_branch_id;
     
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(total_amount), 0) as total 
         FROM otc_sales 
         WHERE DATE(created_at) = ? 
         AND payment_status = 'paid'
-        $branch_filter
+        " . ($selected_branch_id !== 'all' ? " AND branch_id = ?" : "") . "
     ");
-    $stmt->execute([$date]);
+    $stmt->execute($params);
     $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
     $chart_values[] = (float)$daily_total;
 }
 
-// GET BRANCHES
+// ================================================================
+// BRANCHES + RECENT ACTIVITIES
+// ================================================================
 $branches = [];
-$stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active'");
+$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
 $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// GET RECENT ACTIVITIES
 $recent_activities = [];
 try {
     $stmt = $db->query("SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT 5");
@@ -337,14 +446,10 @@ $profile_pic_url = !empty($profile_pic)
 
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// SHARED HEADER + SIDEBAR
-// ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
-<!-- PAGE-SPECIFIC CSS -->
 <style>
 :root {
     --primary: #0B5ED7;
@@ -353,7 +458,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     --primary-bg: #E8F0FE;
     --bg-body: #F1F5F9;
     --bg-card: #FFFFFF;
-    --bg-nav: #FFFFFF;
     --text-primary: #1E293B;
     --text-secondary: #64748B;
     --border-color: #E2E8F0;
@@ -362,19 +466,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     --shadow-lg: 0 8px 25px rgba(0,0,0,0.12);
     --radius: 12px;
     --radius-lg: 16px;
-    --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 [data-theme="dark"] {
     --bg-body: #0F172A;
     --bg-card: #1E293B;
-    --bg-nav: #1E293B;
     --text-primary: #F1F5F9;
     --text-secondary: #94A3B8;
     --border-color: #334155;
-    --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
-    --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-    --shadow-lg: 0 8px 25px rgba(0,0,0,0.4);
 }
 
 /* PAGE HEADER */
@@ -488,7 +587,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     text-decoration: none;
     display: block;
     overflow: hidden;
-    transition: var(--transition);
+    transition: all 0.3s;
     box-shadow: var(--shadow-sm);
     min-height: 120px;
     height: 100%;
@@ -496,15 +595,23 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     border: none;
 }
 
-/* ✅ BLUE THEME (Cards zote) */
 .stat-card.card-revenue { background: #0B5ED7; }
 .stat-card.card-revenue:hover { background: #0A4CA8; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(11,94,215,0.35); }
 
-.stat-card.card-prescription { background: #0B5ED7; }
-.stat-card.card-prescription:hover { background: #0A4CA8; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(11,94,215,0.35); }
+.stat-card.card-patient { background: #0B5ED7; }
+.stat-card.card-patient:hover { background: #0A4CA8; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(11,94,215,0.35); }
 
-.stat-card.card-otc { background: #0B5ED7; }
-.stat-card.card-otc:hover { background: #0A4CA8; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(11,94,215,0.35); }
+.stat-card.card-otc { background: #0891B2; }
+.stat-card.card-otc:hover { background: #0E7490; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(8,145,178,0.35); }
+
+.stat-card.card-prescription { background: #7C3AED; }
+.stat-card.card-prescription:hover { background: #5B21B6; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(124,58,237,0.35); }
+
+.stat-card.card-consultation { background: #059669; }
+.stat-card.card-consultation:hover { background: #047857; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(5,150,105,0.35); }
+
+.stat-card.card-lab { background: #7C3AED; }
+.stat-card.card-lab:hover { background: #5B21B6; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(124,58,237,0.35); }
 
 .stat-card.card-stock { background: #0B5ED7; }
 .stat-card.card-stock:hover { background: #0A4CA8; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(11,94,215,0.35); }
@@ -512,14 +619,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 .stat-card.card-equipment { background: #0B5ED7; }
 .stat-card.card-equipment:hover { background: #0A4CA8; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(11,94,215,0.35); }
 
-/* ✅ RED THEME (Expenses + Expiry) */
 .stat-card.card-expenses { background: #E11D48; }
 .stat-card.card-expenses:hover { background: #BE123C; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(225,29,72,0.35); }
 
 .stat-card.card-expiry { background: #DC2626; }
 .stat-card.card-expiry:hover { background: #B91C1C; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(220,38,38,0.35); }
 
-/* ✅ GREEN THEME (Profit) */
 .stat-card.card-profit { background: #059669; }
 .stat-card.card-profit:hover { background: #047857; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(5,150,105,0.35); }
 
@@ -531,7 +636,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     border-radius: 50%;
     background: rgba(255,255,255,0.04);
     pointer-events: none;
-    transition: var(--transition);
+    transition: all 0.3s;
 }
 
 .stat-card::after {
@@ -542,7 +647,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     border-radius: 50%;
     background: rgba(255,255,255,0.02);
     pointer-events: none;
-    transition: var(--transition);
+    transition: all 0.3s;
 }
 
 .stat-card:hover::before { transform: scale(1.2); right: -20%; }
@@ -576,7 +681,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     color: white;
     flex-shrink: 0;
     backdrop-filter: blur(4px);
-    transition: var(--transition);
+    transition: all 0.3s;
 }
 
 .stat-card:hover .stat-icon {
@@ -639,20 +744,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     gap: 3px;
 }
 
-.stat-card .stat-badge.danger {
-    background: rgba(239, 68, 68, 0.25);
-    color: #FCA5A5;
-}
-
-.stat-card .stat-badge.warning {
-    background: rgba(245, 158, 11, 0.25);
-    color: #FCD34D;
-}
-
-.stat-card .stat-badge.success {
-    background: rgba(52, 211, 153, 0.2);
-    color: #6EE7B7;
-}
+.stat-card .stat-badge.danger { background: rgba(239, 68, 68, 0.25); color: #FCA5A5; }
+.stat-card .stat-badge.warning { background: rgba(245, 158, 11, 0.25); color: #FCD34D; }
+.stat-card .stat-badge.success { background: rgba(52, 211, 153, 0.2); color: #6EE7B7; }
 
 .stat-card .stat-arrow {
     position: absolute;
@@ -660,7 +754,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     bottom: 16px;
     color: rgba(255,255,255,0.2);
     font-size: 0.75rem;
-    transition: var(--transition);
+    transition: all 0.3s;
     z-index: 1;
 }
 
@@ -675,7 +769,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     border-radius: var(--radius-lg);
     border: 1px solid var(--border-color);
     overflow: hidden;
-    transition: var(--transition);
+    transition: all 0.3s;
     box-shadow: var(--shadow-sm);
     margin-bottom: 24px;
 }
@@ -707,6 +801,49 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 .card-title i { margin-right: 8px; }
 .title-blue { color: #0B5ED7; }
 .title-green { color: #059669; }
+.title-purple { color: #7C3AED; }
+
+/* REVENUE BREAKDOWN TABLE */
+.revenue-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+
+.revenue-table thead { background: var(--bg-body); }
+[data-theme="dark"] .revenue-table thead { background: #0F172A; }
+
+.revenue-table th {
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-secondary);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.revenue-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary);
+}
+
+.revenue-table tr:hover td { background: var(--primary-bg); }
+[data-theme="dark"] .revenue-table tr:hover td { background: rgba(30,58,95,0.3); }
+
+.revenue-table tr.total-row td {
+    border-top: 2px solid var(--border-color);
+    font-weight: 700;
+    font-size: 0.9rem;
+}
+
+.revenue-table .source-blue { color: #0B5ED7; }
+.revenue-table .source-cyan { color: #0891B2; }
+.revenue-table .source-purple { color: #7C3AED; }
+.revenue-table .source-green { color: #059669; }
+.revenue-table .source-red { color: #E11D48; }
 
 /* RECENT ACTIVITIES */
 .activity-item {
@@ -715,7 +852,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     gap: 10px;
     padding: 8px 12px;
     border-radius: 8px;
-    transition: var(--transition);
+    transition: all 0.3s;
 }
 
 .activity-item:hover { background: var(--primary-bg); }
@@ -752,7 +889,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
 .activity-time {
     font-size: 0.6rem;
-    color: var(--text-muted, #94A3B8);
+    color: #94A3B8;
     margin: 2px 0 0 0;
 }
 
@@ -769,20 +906,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
 .footer .footer-brand { color: var(--primary); font-weight: 600; }
 
-.flex { display: flex; }
-.flex-wrap { flex-wrap: wrap; }
-.items-center { align-items: center; }
-.justify-between { justify-content: space-between; }
-.gap-2 { gap: 8px; }
 .text-xs { font-size: 0.7rem; }
-.text-sm { font-size: 0.85rem; }
 .text-gray-400 { color: var(--text-secondary); }
-.font-medium { font-weight: 500; }
-.font-normal { font-weight: 400; }
-.hover\:underline:hover { text-decoration: underline; }
 .text-blue-600 { color: #0B5ED7; }
-.mx-2 { margin-left: 8px; margin-right: 8px; }
-.mr-2 { margin-right: 8px; }
+.hover\:underline:hover { text-decoration: underline; }
 
 @media (max-width: 1200px) {
     .stat-grid { grid-template-columns: repeat(4, 1fr); gap: 12px; }
@@ -804,10 +931,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .stat-card .stat-sub { font-size: 0.55rem; }
     .stat-card .stat-icon { width: 32px; height: 32px; font-size: 0.85rem; }
     .stat-card .stat-arrow { display: none; }
-    .stat-card .stat-badge { font-size: 0.5rem; padding: 1px 8px; }
     .page-header { padding: 14px 18px; }
     .page-header .page-title { font-size: 1.1rem; }
-    .page-header .page-subtitle { font-size: 0.7rem; }
 }
 
 @media (max-width: 480px) {
@@ -815,40 +940,22 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .stat-card { min-height: 80px; padding: 10px 12px; border-radius: 12px; }
     .stat-card .stat-number { font-size: 0.95rem; }
     .stat-card .stat-label { font-size: 0.5rem; }
-    .stat-card .stat-sub { font-size: 0.45rem; }
     .stat-card .stat-icon { width: 26px; height: 26px; font-size: 0.7rem; }
     .page-header { padding: 10px 14px; flex-direction: column; align-items: flex-start; }
-    .page-header .page-title { font-size: 0.95rem; }
-    .page-header .page-subtitle { font-size: 0.6rem; }
 }
 
 @media print {
     .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
     .search-wrapper, .page-header .btn-outline-light,
     .footer, #sidebarToggle { display: none !important; }
-    
     .main-content { margin: 0; padding: 20px; }
-    
-    .stat-card {
-        border: 1px solid #ddd !important;
-        box-shadow: none !important;
-        -webkit-print-color-adjust: exact !important;
-        print-color-adjust: exact !important;
-    }
-    
-    .page-header {
-        background: #0B5ED7 !important;
-        -webkit-print-color-adjust: exact !important;
-        print-color-adjust: exact !important;
-    }
-    
+    .stat-card { border: 1px solid #ddd !important; box-shadow: none !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    .page-header { background: #0B5ED7 !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
     .page-title, .page-subtitle { color: white !important; }
-    
     .card { border: 1px solid #ddd !important; box-shadow: none !important; }
 }
 </style>
 
-<!-- MAIN CONTENT -->
 <main class="main-content">
 
     <!-- Page Header -->
@@ -861,11 +968,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 Welcome back, <strong><?= htmlspecialchars($user_full_name) ?></strong>!
                 <span class="header-badge"><i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name_display) ?></span>
                 <span class="header-badge"><i class="fas fa-calendar-day"></i> <?= date('F d, Y') ?></span>
+                <span class="header-badge"><i class="fas fa-money-bill-wave"></i> TSh <?= number_format($total_revenue, 0) ?> Revenue</span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap">
+        <div class="flex gap-2 flex-wrap" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="reports.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-file-export"></i> Report
+            </a>
+            <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
+                <i class="fas fa-chart-line"></i> Revenue
             </a>
             <button onclick="location.reload()" class="btn-outline-light">
                 <i class="fas fa-sync-alt"></i> Refresh
@@ -873,10 +984,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- 8 CARDS -->
+    <!-- STAT CARDS GRID -->
     <div class="stat-grid">
         
-        <!-- 1. Revenue - BLUE -->
+        <!-- 1. TOTAL REVENUE -->
         <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="stat-card card-revenue">
             <div class="card-content">
                 <div class="card-top">
@@ -887,79 +998,35 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </div>
                     <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-arrow-up"></i> Paid amounts only</div>
+                <div class="stat-trend"><i class="fas fa-arrow-up"></i> <?= number_format($total_transactions) ?> transactions</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 2. Expenses - RED -->
-        <a href="expenses.php?branch=<?= $selected_branch_id ?>" class="stat-card card-expenses">
+        <!-- 2. PATIENT BILLS -->
+        <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="stat-card card-patient">
             <div class="card-content">
                 <div class="card-top">
                     <div>
-                        <p class="stat-label">Total Expenses</p>
-                        <p class="stat-number">TSh <?= number_format($total_expenses) ?></p>
-                        <p class="stat-sub">Paid expenses</p>
+                        <p class="stat-label">Patient Bills</p>
+                        <p class="stat-number">TSh <?= number_format($patient_bills_revenue) ?></p>
+                        <p class="stat-sub"><?= number_format($patient_bills_count) ?> paid bills</p>
                     </div>
-                    <div class="stat-icon"><i class="fas fa-coins"></i></div>
+                    <div class="stat-icon"><i class="fas fa-file-invoice"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-arrow-down"></i> All time</div>
+                <div class="stat-trend"><i class="fas fa-check-circle"></i> Paid only</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 3. Profit - GREEN -->
-        <a href="profit.php?branch=<?= $selected_branch_id ?>" class="stat-card card-profit">
-            <div class="card-content">
-                <div class="card-top">
-                    <div>
-                        <p class="stat-label"><?= $net_profit >= 0 ? '💰 Net Profit' : '📉 Net Loss' ?></p>
-                        <p class="stat-number">TSh <?= number_format(abs($net_profit)) ?></p>
-                        <p class="stat-sub">
-                            <?php if ($total_revenue > 0): ?>
-                                <?= $profit_percentage ?>% margin
-                            <?php else: ?>
-                                No revenue yet
-                            <?php endif; ?>
-                        </p>
-                    </div>
-                    <div class="stat-icon"><i class="fas <?= $net_profit >= 0 ? 'fa-chart-line' : 'fa-exclamation-triangle' ?>"></i></div>
-                </div>
-                <div class="stat-trend">
-                    <?php if ($net_profit >= 0): ?>
-                        <i class="fas fa-arrow-up"></i> Revenue - Expenses
-                    <?php else: ?>
-                        <i class="fas fa-arrow-down"></i> Expenses exceed revenue
-                    <?php endif; ?>
-                </div>
-            </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
-        </a>
-        
-        <!-- 4. Prescriptions - BLUE -->
-        <a href="prescriptions.php?branch=<?= $selected_branch_id ?>" class="stat-card card-prescription">
-            <div class="card-content">
-                <div class="card-top">
-                    <div>
-                        <p class="stat-label">Prescription Sales</p>
-                        <p class="stat-number">TSh <?= number_format($prescription_revenue) ?></p>
-                        <p class="stat-sub"><?= $prescription_count ?> prescriptions</p>
-                    </div>
-                    <div class="stat-icon"><i class="fas fa-prescription"></i></div>
-                </div>
-                <div class="stat-trend"><i class="fas fa-pills"></i> Dispensed</div>
-            </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
-        </a>
-        
-        <!-- 5. OTC Sales - BLUE -->
+        <!-- 3. OTC SALES -->
         <a href="otc_sales.php?branch=<?= $selected_branch_id ?>" class="stat-card card-otc">
             <div class="card-content">
                 <div class="card-top">
                     <div>
                         <p class="stat-label">OTC Sales</p>
-                        <p class="stat-number">TSh <?= number_format($otc_total) ?></p>
-                        <p class="stat-sub"><?= $otc_count ?> transactions</p>
+                        <p class="stat-number">TSh <?= number_format($otc_revenue) ?></p>
+                        <p class="stat-sub"><?= number_format($otc_count) ?> transactions</p>
                     </div>
                     <div class="stat-icon"><i class="fas fa-cash-register"></i></div>
                 </div>
@@ -968,14 +1035,105 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 6. Medication Stock - BLUE -->
+        <!-- 4. PRESCRIPTIONS -->
+        <a href="prescriptions.php?branch=<?= $selected_branch_id ?>" class="stat-card card-prescription">
+            <div class="card-content">
+                <div class="card-top">
+                    <div>
+                        <p class="stat-label">Prescriptions</p>
+                        <p class="stat-number">TSh <?= number_format($prescription_revenue) ?></p>
+                        <p class="stat-sub"><?= number_format($prescription_count) ?> dispensed</p>
+                    </div>
+                    <div class="stat-icon"><i class="fas fa-prescription"></i></div>
+                </div>
+                <div class="stat-trend"><i class="fas fa-pills"></i> Paid bills only</div>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </a>
+        
+        <!-- 5. CONSULTATION -->
+        <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="stat-card card-consultation">
+            <div class="card-content">
+                <div class="card-top">
+                    <div>
+                        <p class="stat-label">Consultation</p>
+                        <p class="stat-number">TSh <?= number_format($consultation_revenue) ?></p>
+                        <p class="stat-sub"><?= number_format($consultation_count) ?> consultations</p>
+                    </div>
+                    <div class="stat-icon"><i class="fas fa-stethoscope"></i></div>
+                </div>
+                <div class="stat-trend"><i class="fas fa-check-circle"></i> Paid only</div>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </a>
+        
+        <!-- 6. LAB TESTS -->
+        <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="stat-card card-lab">
+            <div class="card-content">
+                <div class="card-top">
+                    <div>
+                        <p class="stat-label">Lab Tests</p>
+                        <p class="stat-number">TSh <?= number_format($lab_revenue) ?></p>
+                        <p class="stat-sub"><?= number_format($lab_count) ?> tests</p>
+                    </div>
+                    <div class="stat-icon"><i class="fas fa-flask"></i></div>
+                </div>
+                <div class="stat-trend"><i class="fas fa-check-circle"></i> Paid only</div>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </a>
+        
+        <!-- 7. EXPENSES (RED) -->
+        <a href="expenses.php?branch=<?= $selected_branch_id ?>" class="stat-card card-expenses">
+            <div class="card-content">
+                <div class="card-top">
+                    <div>
+                        <p class="stat-label">Total Expenses</p>
+                        <p class="stat-number">TSh <?= number_format($total_expenses) ?></p>
+                        <p class="stat-sub"><?= number_format($expenses_count) ?> records</p>
+                    </div>
+                    <div class="stat-icon"><i class="fas fa-receipt"></i></div>
+                </div>
+                <div class="stat-trend"><i class="fas fa-arrow-down"></i> All time</div>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </a>
+        
+        <!-- 8. NET PROFIT (GREEN) -->
+        <a href="profit.php?branch=<?= $selected_branch_id ?>" class="stat-card card-profit">
+            <div class="card-content">
+                <div class="card-top">
+                    <div>
+                        <p class="stat-label"><?= $net_profit >= 0 ? '💰 Net Profit' : '📉 Net Loss' ?></p>
+                        <p class="stat-number">TSh <?= number_format(abs($net_profit)) ?></p>
+                        <p class="stat-sub"><?= $profit_percentage ?>% margin</p>
+                    </div>
+                    <div class="stat-icon"><i class="fas <?= $net_profit >= 0 ? 'fa-chart-line' : 'fa-exclamation-triangle' ?>"></i></div>
+                </div>
+                <div class="stat-trend">
+                    <?php if ($net_profit >= 0): ?>
+                        <i class="fas fa-arrow-up"></i> Revenue - Expenses
+                    <?php else: ?>
+                        <i class="fas fa-arrow-down"></i> Loss
+                    <?php endif; ?>
+                </div>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </a>
+        
+    </div>
+
+    <!-- INVENTORY CARDS ROW -->
+    <div class="stat-grid">
+        
+        <!-- 9. MEDICATION STOCK -->
         <a href="inventory.php?branch=<?= $selected_branch_id ?>" class="stat-card card-stock">
             <div class="card-content">
                 <div class="card-top">
                     <div>
                         <p class="stat-label">Medication Stock</p>
                         <p class="stat-number"><?= number_format($med_total_items) ?></p>
-                        <p class="stat-sub">📦 <?= number_format($med_total_quantity) ?> total units</p>
+                        <p class="stat-sub">📦 <?= number_format($med_total_quantity) ?> units</p>
                         <div class="stat-badge-row">
                             <span class="stat-badge warning"><i class="fas fa-exclamation-triangle"></i> <?= $med_low_stock ?> Low</span>
                             <span class="stat-badge danger"><i class="fas fa-times-circle"></i> <?= $med_out_of_stock ?> Out</span>
@@ -983,24 +1141,18 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </div>
                     <div class="stat-icon"><i class="fas fa-pills"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-warehouse"></i> <?= $med_total_items ?> entries</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 7. Medication Expiry - RED -->
+        <!-- 10. MEDICATION EXPIRY (RED) -->
         <a href="inventory.php?filter=expired&branch=<?= $selected_branch_id ?>" class="stat-card card-expiry">
             <div class="card-content">
                 <div class="card-top">
                     <div>
                         <p class="stat-label">Medication Expiry</p>
-                        <p class="stat-number">
-                            <?php 
-                                $total_expired_items = $med_expired_items + $med_expiring_items;
-                                echo number_format($total_expired_items);
-                            ?>
-                        </p>
-                        <p class="stat-sub">📦 <?= number_format($med_expired_quantity + $med_expiring_quantity) ?> units affected</p>
+                        <p class="stat-number"><?= number_format($med_expired_items + $med_expiring_items) ?></p>
+                        <p class="stat-sub">📦 <?= number_format($med_expired_quantity + $med_expiring_quantity) ?> units</p>
                         <div class="stat-badge-row">
                             <span class="stat-badge danger"><i class="fas fa-skull"></i> <?= $med_expired_items ?> Expired</span>
                             <span class="stat-badge warning"><i class="fas fa-clock"></i> <?= $med_expiring_items ?> Soon</span>
@@ -1008,33 +1160,44 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </div>
                     <div class="stat-icon"><i class="fas fa-calendar-times"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-clock"></i> <?= $total_expired_items ?> entries affected</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 8. Medical Equipment - BLUE -->
+        <!-- 11. MEDICAL EQUIPMENT -->
         <a href="equipment_inventory.php?branch=<?= $selected_branch_id ?>" class="stat-card card-equipment">
             <div class="card-content">
                 <div class="card-top">
                     <div>
                         <p class="stat-label">Medical Equipment</p>
                         <p class="stat-number"><?= number_format($equip_total_items) ?></p>
-                        <p class="stat-sub">📦 <?= number_format($equip_total_quantity) ?> total units</p>
-                        <div class="stat-badge-row" style="flex-wrap: wrap; gap: 3px;">
+                        <p class="stat-sub">📦 <?= number_format($equip_total_quantity) ?> units</p>
+                        <div class="stat-badge-row">
                             <span class="stat-badge warning"><i class="fas fa-exclamation-triangle"></i> <?= $equip_low_stock ?> Low</span>
                             <span class="stat-badge danger"><i class="fas fa-times-circle"></i> <?= $equip_out_of_stock ?> Out</span>
-                            <?php if ($equip_expired_items > 0): ?>
-                                <span class="stat-badge danger"><i class="fas fa-skull"></i> <?= $equip_expired_items ?> Expired</span>
-                            <?php endif; ?>
-                            <?php if ($equip_expiring_items > 0): ?>
-                                <span class="stat-badge warning"><i class="fas fa-clock"></i> <?= $equip_expiring_items ?> Soon</span>
-                            <?php endif; ?>
                         </div>
                     </div>
                     <div class="stat-icon"><i class="fas fa-microscope"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-tools"></i> <?= $equip_total_items ?> entries</div>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </a>
+        
+        <!-- 12. EQUIPMENT EXPIRY -->
+        <a href="equipment_inventory.php?filter=expired&branch=<?= $selected_branch_id ?>" class="stat-card card-expiry">
+            <div class="card-content">
+                <div class="card-top">
+                    <div>
+                        <p class="stat-label">Equipment Expiry</p>
+                        <p class="stat-number"><?= number_format($equip_expired_items + $equip_expiring_items) ?></p>
+                        <p class="stat-sub">Total affected</p>
+                        <div class="stat-badge-row">
+                            <span class="stat-badge danger"><i class="fas fa-skull"></i> <?= $equip_expired_items ?> Expired</span>
+                            <span class="stat-badge warning"><i class="fas fa-clock"></i> <?= $equip_expiring_items ?> Soon</span>
+                        </div>
+                    </div>
+                    <div class="stat-icon"><i class="fas fa-calendar-times"></i></div>
+                </div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
@@ -1046,11 +1209,95 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-chart-line title-blue"></i> Revenue Overview (Last 7 Days)
-                <span class="text-xs text-gray-400 font-normal" style="margin-left:8px;">TSh <?= number_format(array_sum($chart_values)) ?> total</span>
+                <span class="text-xs text-gray-400" style="margin-left:8px;font-weight:400;">TSh <?= number_format(array_sum($chart_values)) ?> total</span>
             </h3>
         </div>
         <div style="height: 180px; padding: 12px 16px;">
             <canvas id="revenueChart"></canvas>
+        </div>
+    </div>
+
+    <!-- REVENUE BREAKDOWN TABLE -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-list title-purple"></i> Revenue Breakdown by Source
+            </h3>
+            <span class="text-xs text-gray-400">Total: TSh <?= number_format($total_revenue, 0) ?></span>
+        </div>
+        <div style="overflow-x:auto;">
+            <table class="revenue-table">
+                <thead>
+                    <tr>
+                        <th>Source</th>
+                        <th style="text-align:right;">Revenue</th>
+                        <th style="text-align:right;">% of Total</th>
+                        <th style="text-align:right;">Transactions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="source-blue">●</span> Patient Bills</td>
+                        <td style="text-align:right;font-weight:600;color:#0B5ED7;">TSh <?= number_format($patient_bills_revenue, 0) ?></td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= $total_revenue > 0 ? round(($patient_bills_revenue / $total_revenue) * 100, 1) : 0 ?>%</td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= number_format($patient_bills_count) ?></td>
+                    </tr>
+                    <tr>
+                        <td><span class="source-cyan">●</span> OTC Sales</td>
+                        <td style="text-align:right;font-weight:600;color:#0891B2;">TSh <?= number_format($otc_revenue, 0) ?></td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= $total_revenue > 0 ? round(($otc_revenue / $total_revenue) * 100, 1) : 0 ?>%</td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= number_format($otc_count) ?></td>
+                    </tr>
+                    <tr style="background:var(--primary-bg);">
+                        <td><span class="source-purple">●</span> Prescriptions <span style="font-size:0.6rem;color:var(--text-secondary);">(from paid bills)</span></td>
+                        <td style="text-align:right;font-weight:600;color:#7C3AED;">TSh <?= number_format($prescription_revenue, 0) ?></td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= $total_revenue > 0 ? round(($prescription_revenue / $total_revenue) * 100, 1) : 0 ?>%</td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= number_format($prescription_count) ?></td>
+                    </tr>
+                    <tr>
+                        <td style="padding-left:24px;"><span class="source-green">●</span> Consultation</td>
+                        <td style="text-align:right;font-weight:500;color:#059669;">TSh <?= number_format($consultation_revenue, 0) ?></td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= $total_revenue > 0 ? round(($consultation_revenue / $total_revenue) * 100, 1) : 0 ?>%</td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= number_format($consultation_count) ?></td>
+                    </tr>
+                    <tr>
+                        <td style="padding-left:24px;"><span class="source-purple">●</span> Lab Tests</td>
+                        <td style="text-align:right;font-weight:500;color:#7C3AED;">TSh <?= number_format($lab_revenue, 0) ?></td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= $total_revenue > 0 ? round(($lab_revenue / $total_revenue) * 100, 1) : 0 ?>%</td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= number_format($lab_count) ?></td>
+                    </tr>
+                    <tr>
+                        <td style="padding-left:24px;"><span style="color:#D97706;">●</span> Medications</td>
+                        <td style="text-align:right;font-weight:500;color:#D97706;">TSh <?= number_format($medication_revenue, 0) ?></td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= $total_revenue > 0 ? round(($medication_revenue / $total_revenue) * 100, 1) : 0 ?>%</td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= number_format($medication_count) ?></td>
+                    </tr>
+                    <tr>
+                        <td style="padding-left:24px;"><span style="color:#0D9488;">●</span> Procedures</td>
+                        <td style="text-align:right;font-weight:500;color:#0D9488;">TSh <?= number_format($procedure_revenue, 0) ?></td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= $total_revenue > 0 ? round(($procedure_revenue / $total_revenue) * 100, 1) : 0 ?>%</td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= number_format($procedure_count) ?></td>
+                    </tr>
+                    <tr>
+                        <td style="padding-left:24px;"><span style="color:#64748B;">●</span> Registration</td>
+                        <td style="text-align:right;font-weight:500;color:#64748B;">TSh <?= number_format($registration_revenue, 0) ?></td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= $total_revenue > 0 ? round(($registration_revenue / $total_revenue) * 100, 1) : 0 ?>%</td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= number_format($registration_count) ?></td>
+                    </tr>
+                    <tr style="background:#FFE4E6;">
+                        <td><span class="source-red">●</span> <strong>Total Expenses</strong></td>
+                        <td style="text-align:right;font-weight:700;color:#E11D48;">- TSh <?= number_format($total_expenses, 0) ?></td>
+                        <td style="text-align:right;color:var(--text-secondary);">—</td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= number_format($expenses_count) ?></td>
+                    </tr>
+                    <tr class="total-row">
+                        <td style="font-weight:700;">NET <?= $net_profit >= 0 ? 'PROFIT' : 'LOSS' ?></td>
+                        <td style="text-align:right;font-weight:700;color:<?= $net_profit >= 0 ? '#059669' : '#E11D48' ?>;">TSh <?= number_format(abs($net_profit), 0) ?></td>
+                        <td style="text-align:right;font-weight:700;color:<?= $net_profit >= 0 ? '#059669' : '#E11D48' ?>;"><?= $profit_percentage ?>%</td>
+                        <td style="text-align:right;font-weight:700;color:var(--primary);"><?= number_format($total_transactions) ?></td>
+                    </tr>
+                </tbody>
+            </table>
         </div>
     </div>
 
@@ -1060,20 +1307,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <h3 class="card-title">
                 <i class="fas fa-clock title-green"></i> Recent Activities
             </h3>
-            <a href="system_logs.php" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+            <a href="system_logs.php" class="text-xs text-blue-600 hover:underline" style="font-weight:500;">View All →</a>
         </div>
         <div class="max-h-50" style="padding: 8px 12px;">
             <?php foreach ($recent_activities as $activity): ?>
                 <div class="activity-item">
-                    <div class="activity-icon">
-                        <i class="fas fa-circle"></i>
-                    </div>
+                    <div class="activity-icon"><i class="fas fa-circle"></i></div>
                     <div class="activity-content">
                         <p class="activity-action"><?= htmlspecialchars($activity['action'] ?? 'Action') ?></p>
                         <p class="activity-details"><?= htmlspecialchars($activity['details'] ?? '') ?></p>
-                        <p class="activity-time">
-                            <?= isset($activity['created_at']) ? time_ago($activity['created_at']) : 'Just now' ?>
-                        </p>
+                        <p class="activity-time"><?= isset($activity['created_at']) ? time_ago($activity['created_at']) : 'Just now' ?></p>
                     </div>
                 </div>
             <?php endforeach; ?>
@@ -1084,16 +1327,18 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="mx-2">|</span>
+            <span style="margin:0 8px;">|</span>
             Super Admin Dashboard
-            <span class="mx-2">|</span>
+            <span style="margin:0 8px;">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="mx-2">|</span>
+            <span style="margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
 
 </main>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
 <script>
 // SYNC DARK MODE
@@ -1101,21 +1346,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     var htmlElement = document.documentElement;
     window.addEventListener('storage', function(e) {
         if (e.key === 'darkMode') {
-            if (e.newValue === 'true') {
-                htmlElement.setAttribute('data-theme', 'dark');
-            } else {
-                htmlElement.removeAttribute('data-theme');
-            }
+            if (e.newValue === 'true') htmlElement.setAttribute('data-theme', 'dark');
+            else htmlElement.removeAttribute('data-theme');
         }
     });
 })();
 
-// UPDATE FOOTER TIME
 setInterval(function() {
     var now = new Date();
-    var timeStr = now.toLocaleTimeString('en-US', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-    });
+    var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
     var ftEl = document.getElementById('footerTime');
     if (ftEl) ftEl.textContent = timeStr;
 }, 1000);
@@ -1156,40 +1395,19 @@ document.addEventListener('DOMContentLoaded', function() {
                 plugins: {
                     legend: { 
                         display: true,
-                        labels: {
-                            font: { size: 9, weight: '600' },
-                            boxWidth: 10,
-                            padding: 8,
-                            color: textColor
-                        }
+                        labels: { font: { size: 9, weight: '600' }, boxWidth: 10, padding: 8, color: textColor }
                     },
                     tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                return 'TSh ' + context.raw.toLocaleString();
-                            }
-                        }
+                        callbacks: { label: function(context) { return 'TSh ' + context.raw.toLocaleString(); } }
                     }
                 },
                 scales: {
                     y: {
                         beginAtZero: true,
-                        ticks: {
-                            callback: function(value) {
-                                return 'TSh ' + value.toLocaleString();
-                            },
-                            font: { size: 8 },
-                            color: textColor
-                        },
+                        ticks: { callback: function(value) { return 'TSh ' + value.toLocaleString(); }, font: { size: 8 }, color: textColor },
                         grid: { color: gridColor }
                     },
-                    x: { 
-                        grid: { display: false },
-                        ticks: { 
-                            font: { size: 8 },
-                            color: textColor
-                        }
-                    }
+                    x: { grid: { display: false }, ticks: { font: { size: 8 }, color: textColor } }
                 },
                 interaction: { intersect: false, mode: 'index' }
             }
@@ -1197,11 +1415,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-console.log('%c🏥 Braick Dispensary - Super Admin Dashboard', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c🏥 Braick Dispensary - Super Admin Dashboard (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
 console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-console.log('%c🔵 BLUE THEME: Revenue, Prescription, OTC, Stock, Equipment', 'font-size:13px; color:#0B5ED7;');
-console.log('%c🔴 RED THEME: Expenses, Expiry', 'font-size:13px; color:#E11D48;');
-console.log('%c🟢 GREEN THEME: Profit', 'font-size:13px; color:#059669;');
+console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0B5ED7;');
+console.log('%c💊 Prescriptions: TSh <?= number_format($prescription_revenue, 0) ?>', 'font-size:13px; color:#7C3AED;');
+console.log('%c👨‍⚕️ Consultation: TSh <?= number_format($consultation_revenue, 0) ?>', 'font-size:13px; color:#059669;');
+console.log('%c🧪 Lab Tests: TSh <?= number_format($lab_revenue, 0) ?>', 'font-size:13px; color:#7C3AED;');
+console.log('%c✅ Only PAID items are counted', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

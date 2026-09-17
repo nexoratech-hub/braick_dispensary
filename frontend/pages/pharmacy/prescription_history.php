@@ -1,13 +1,17 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/prescription_history.php
-// PHARMACY - PRESCRIPTION HISTORY (GROUPED BY PATIENT)
-// ✅ FILTERS FIRST (All, Pending, Confirmed, Dispensed, Cancelled)
-// ✅ THEN SEARCH BAR - Inatafuta dawa na inaonyesha total qty
-// ✅ THEN PATIENT TABLES - Kila patient ana card yake
-// ✅ VIEW BUTTON - Small width, "VIEW" text only
+// PHARMACY - PRESCRIPTION HISTORY V3 (GROUPED BY VISIT + DYNAMIC VIEW)
+// ✅ FIXED: Kila visit inaonyeshwa tofauti ndani ya patient card
+// ✅ FIXED: Dawa za visit 1, visit 2, ... zinatenganishwa
+// ✅ FIXED: Doctor + Visit date + Visit number per visit
+// ✅ FIXED: VIEW button per visit - inaenda kwa page tofauti kulingana na status
+//   - Pending   → view_patient_prescriptions.php
+//   - Confirmed → view_confirmed_prescriptions.php
+//   - Dispensed → view_dispensed_prescriptions.php
+// ✅ FILTERS: All, Pending, Confirmed, Dispensed, Cancelled
+// ✅ SEARCH BAR - Inatafuta dawa na inaonyesha total qty
 // ✅ BLUE THEME
-// ✅ TAREHE INAONYESHA - Prescription dates included
 // ================================================================
 
 session_start();
@@ -36,9 +40,7 @@ $message = '';
 $message_type = '';
 $currency = 'TSh';
 
-// ================================================================
-// GET SYSTEM SETTINGS
-// ================================================================
+// SYSTEM SETTINGS
 try {
     $settings = [];
     $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
@@ -49,39 +51,32 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// HELPER FUNCTIONS - DATE FORMATTING
+// HELPER FUNCTIONS
 // ================================================================
 function formatDate($datetime, $showTime = true) {
-    if (empty($datetime) || $datetime === '0000-00-00 00:00:00') {
-        return 'N/A';
-    }
+    if (empty($datetime) || $datetime === '0000-00-00 00:00:00') return 'N/A';
     $timestamp = strtotime($datetime);
     if ($timestamp === false) return 'N/A';
     return $showTime ? date('d M Y, H:i', $timestamp) : date('d M Y', $timestamp);
 }
 
 function formatDateShort($datetime) {
-    if (empty($datetime) || $datetime === '0000-00-00 00:00:00') {
-        return 'N/A';
-    }
+    if (empty($datetime) || $datetime === '0000-00-00 00:00:00') return 'N/A';
     $timestamp = strtotime($datetime);
     if ($timestamp === false) return 'N/A';
     return date('d/m/Y', $timestamp);
 }
 
 function timeAgo($datetime) {
-    if (empty($datetime) || $datetime === '0000-00-00 00:00:00') {
-        return 'N/A';
-    }
+    if (empty($datetime) || $datetime === '0000-00-00 00:00:00') return 'N/A';
     $timestamp = strtotime($datetime);
     if ($timestamp === false) return 'N/A';
     
     $now = time();
     $diff = $now - $timestamp;
     
-    if ($diff < 60) {
-        return 'Just now';
-    } elseif ($diff < 3600) {
+    if ($diff < 60) return 'Just now';
+    elseif ($diff < 3600) {
         $mins = floor($diff / 60);
         return $mins . ' min' . ($mins > 1 ? 's' : '') . ' ago';
     } elseif ($diff < 86400) {
@@ -95,6 +90,76 @@ function timeAgo($datetime) {
     }
 }
 
+function calculateAge($dob) {
+    if (empty($dob)) return 'N/A';
+    return (new DateTime($dob))->diff(new DateTime('today'))->y;
+}
+
+function getStatusBadgeClass($status) {
+    $map = [
+        'pending' => 'badge-warning',
+        'confirmed' => 'badge-info',
+        'dispensed' => 'badge-success',
+        'cancelled' => 'badge-danger'
+    ];
+    return $map[$status] ?? 'badge-warning';
+}
+
+function getStatusLabel($status) {
+    $map = [
+        'pending' => '⏳ Pending',
+        'confirmed' => '✅ Confirmed',
+        'dispensed' => '💊 Dispensed',
+        'cancelled' => '❌ Cancelled'
+    ];
+    return $map[$status] ?? ucfirst($status);
+}
+
+// ✅ DYNAMIC VIEW URL BUILDER
+function getViewUrl($status, $patient_id, $visit_id) {
+    $base_params = '?patient_id=' . urlencode($patient_id) . '&visit_id=' . urlencode($visit_id);
+    
+    switch ($status) {
+        case 'confirmed':
+            return 'view_confirmed_prescriptions.php' . $base_params;
+        case 'dispensed':
+            return 'view_dispensed_prescriptions.php' . $base_params;
+        case 'pending':
+        default:
+            return 'view_patient_prescriptions.php' . $base_params;
+    }
+}
+
+function getViewIcon($status) {
+    $map = [
+        'pending' => 'fa-eye',
+        'confirmed' => 'fa-check-circle',
+        'dispensed' => 'fa-pills',
+        'cancelled' => 'fa-ban'
+    ];
+    return $map[$status] ?? 'fa-eye';
+}
+
+function getViewButtonStyle($status) {
+    $map = [
+        'pending' => 'background: linear-gradient(135deg, #D97706, #B45309);',
+        'confirmed' => 'background: linear-gradient(135deg, #3B82F6, #0B5ED7);',
+        'dispensed' => 'background: linear-gradient(135deg, #059669, #047857);',
+        'cancelled' => 'background: linear-gradient(135deg, #6B7280, #4B5563); pointer-events: none; opacity: 0.7;'
+    ];
+    return $map[$status] ?? '';
+}
+
+function getViewTitle($status) {
+    $map = [
+        'pending' => 'View & Confirm Prescriptions',
+        'confirmed' => 'View Confirmed Prescriptions',
+        'dispensed' => 'View Dispensed Prescriptions',
+        'cancelled' => 'Cancelled - No view available'
+    ];
+    return $map[$status] ?? 'View Prescriptions';
+}
+
 // ================================================================
 // GET FILTER PARAMETERS
 // ================================================================
@@ -104,7 +169,7 @@ $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
 // ================================================================
-// BUILD QUERY - GROUPED BY PATIENT
+// BUILD QUERY
 // ================================================================
 $conditions = ["p.branch_id = ?"];
 $params = [$user_branch_id];
@@ -137,18 +202,8 @@ if (!empty($date_to)) {
 $where_clause = implode(" AND ", $conditions);
 
 // ================================================================
-// GET PRESCRIPTIONS - GROUPED BY PATIENT
+// GET PATIENTS WITH PRESCRIPTIONS
 // ================================================================
-$count_sql = "
-    SELECT COUNT(DISTINCT pat.id) as total 
-    FROM prescriptions p
-    LEFT JOIN patients pat ON p.patient_id = pat.id
-    WHERE $where_clause
-";
-$stmt = $db->prepare($count_sql);
-$stmt->execute($params);
-$total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
 $sql = "
     SELECT 
         pat.id as patient_id,
@@ -159,21 +214,10 @@ $sql = "
         pat.date_of_birth,
         MAX(p.created_at) as last_prescription_date,
         MIN(p.created_at) as first_prescription_date,
-        COUNT(p.id) as prescription_count,
-        GROUP_CONCAT(DISTINCT p.id ORDER BY p.id DESC) as prescription_ids,
-        GROUP_CONCAT(DISTINCT p.prescription_number ORDER BY p.id DESC SEPARATOR '|') as prescription_numbers,
-        GROUP_CONCAT(DISTINCT p.status ORDER BY p.id DESC SEPARATOR '|') as prescription_statuses,
-        GROUP_CONCAT(DISTINCT u.full_name ORDER BY p.id DESC SEPARATOR '|') as doctor_names,
-        GROUP_CONCAT(DISTINCT p.created_at ORDER BY p.id DESC SEPARATOR '|') as created_dates,
-        MAX(CASE WHEN p.status != 'cancelled' THEN p.status END) as overall_status,
-        SUM(CASE 
-            WHEN p.status != 'cancelled' 
-            THEN COALESCE((SELECT SUM(pi.total_price) FROM prescription_items pi WHERE pi.prescription_id = p.id), 0)
-            ELSE 0 
-        END) as total_amount
+        COUNT(DISTINCT p.id) as prescription_count,
+        COUNT(DISTINCT p.visit_id) as visit_count
     FROM prescriptions p
-    LEFT JOIN patients pat ON p.patient_id = pat.id
-    LEFT JOIN users u ON p.doctor_id = u.id
+    INNER JOIN patients pat ON p.patient_id = pat.id
     WHERE $where_clause
     GROUP BY pat.id, pat.full_name, pat.patient_id, pat.phone, pat.gender, pat.date_of_birth
     ORDER BY last_prescription_date DESC
@@ -184,163 +228,193 @@ $stmt->execute($params);
 $grouped_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET ALL ITEMS FOR EACH PATIENT
+// GET PRESCRIPTIONS GROUPED BY VISIT FOR EACH PATIENT
 // ================================================================
 $patient_ids = array_column($grouped_prescriptions, 'patient_id');
-$patient_items_map = [];
+$visits_map = [];
 
 if (!empty($patient_ids)) {
     $placeholders = implode(',', array_fill(0, count($patient_ids), '?'));
+    
+    // Get ALL prescriptions per patient with visit_id
+    $stmt = $db->prepare("
+        SELECT 
+            p.id as prescription_id,
+            p.prescription_number,
+            p.visit_id,
+            p.status as prescription_status,
+            p.created_at as prescription_date,
+            p.updated_at as prescription_updated_at,
+            p.dispensed_at as prescription_dispensed_at,
+            p.patient_id,
+            u.full_name as doctor_name,
+            v.visit_number,
+            v.visit_date,
+            v.created_at as visit_created_at
+        FROM prescriptions p
+        LEFT JOIN users u ON p.doctor_id = u.id
+        LEFT JOIN visits v ON p.visit_id = v.id
+        WHERE p.patient_id IN ($placeholders)
+        AND p.branch_id = ?
+        AND p.status IN ('pending', 'confirmed', 'dispensed', 'cancelled')
+        ORDER BY p.visit_id DESC, p.created_at DESC
+    ");
+    $pres_params = array_merge($patient_ids, [$user_branch_id]);
+    $stmt->execute($pres_params);
+    $all_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Get ALL items per patient
     $stmt = $db->prepare("
         SELECT 
             pi.*,
             p.prescription_number,
+            p.visit_id,
             p.status as prescription_status,
-            p.created_at as prescription_date,
-            p.dispensed_at as prescription_dispensed_at,
-            p.updated_at as prescription_updated_at
+            p.created_at as prescription_date
         FROM prescription_items pi
         INNER JOIN prescriptions p ON pi.prescription_id = p.id
         WHERE pi.patient_id IN ($placeholders)
         AND p.branch_id = ?
         AND p.status IN ('pending', 'confirmed', 'dispensed', 'cancelled')
-        ORDER BY p.created_at DESC, pi.id DESC
+        ORDER BY p.visit_id DESC, p.created_at DESC, pi.id DESC
     ");
-    $item_params = array_merge($patient_ids, [$user_branch_id]);
-    $stmt->execute($item_params);
+    $stmt->execute($pres_params);
     $all_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
+    // Build items map by prescription_id
+    $items_by_prescription = [];
     foreach ($all_items as $item) {
-        $patient_items_map[$item['patient_id']][] = $item;
+        $items_by_prescription[$item['prescription_id']][] = $item;
     }
+    
+    // Build visits map: patient_id => [ visit_id => { visit_info, prescriptions, items, statuses } ]
+    foreach ($all_prescriptions as $pres) {
+        $pid = $pres['patient_id'];
+        $vid = $pres['visit_id'] ?? 0;
+        
+        if (!isset($visits_map[$pid])) {
+            $visits_map[$pid] = [];
+        }
+        
+        if (!isset($visits_map[$pid][$vid])) {
+            $visits_map[$pid][$vid] = [
+                'visit_id' => $vid,
+                'visit_number' => $pres['visit_number'] ?? ($vid > 0 ? 'VIS-' . $vid : 'NO-VISIT'),
+                'visit_date' => $pres['visit_date'] ?? $pres['visit_created_at'] ?? $pres['prescription_date'],
+                'doctor_names' => [],
+                'prescriptions' => [],
+                'items' => [],
+                'statuses' => [],
+                'dates' => [],
+                'total_qty' => 0,
+                'medication_count' => 0,
+                'total_amount' => 0
+            ];
+        }
+        
+        $visits_map[$pid][$vid]['prescriptions'][] = $pres;
+        
+        if (!empty($pres['doctor_name']) && !in_array($pres['doctor_name'], $visits_map[$pid][$vid]['doctor_names'])) {
+            $visits_map[$pid][$vid]['doctor_names'][] = $pres['doctor_name'];
+        }
+        
+        $visits_map[$pid][$vid]['statuses'][] = $pres['prescription_status'];
+        
+        if (!empty($pres['prescription_date'])) {
+            $visits_map[$pid][$vid]['dates'][] = $pres['prescription_date'];
+        }
+        
+        if (isset($items_by_prescription[$pres['prescription_id']])) {
+            foreach ($items_by_prescription[$pres['prescription_id']] as $item) {
+                $visits_map[$pid][$vid]['items'][] = $item;
+                $visits_map[$pid][$vid]['total_qty'] += $item['quantity'];
+                $visits_map[$pid][$vid]['medication_count']++;
+                $visits_map[$pid][$vid]['total_amount'] += ($item['total_price'] ?? 0);
+            }
+        }
+    }
+    
+    // Calculate overall_status per visit
+    foreach ($visits_map as $pid => &$patient_visits) {
+        foreach ($patient_visits as $vid => &$visit) {
+            $statuses = $visit['statuses'];
+            if (in_array('pending', $statuses)) {
+                $visit['overall_status'] = 'pending';
+            } elseif (in_array('confirmed', $statuses)) {
+                $visit['overall_status'] = 'confirmed';
+            } elseif (in_array('dispensed', $statuses)) {
+                $visit['overall_status'] = 'dispensed';
+            } elseif (in_array('cancelled', $statuses)) {
+                $visit['overall_status'] = 'cancelled';
+            } else {
+                $visit['overall_status'] = 'pending';
+            }
+            
+            rsort($visit['dates']);
+            $visit['latest_date'] = !empty($visit['dates']) ? $visit['dates'][0] : null;
+        }
+        unset($visit);
+    }
+    unset($patient_visits);
 }
 
-// Process each patient
+// ================================================================
+// CALCULATE TOTALS PER PATIENT
+// ================================================================
 foreach ($grouped_prescriptions as &$group) {
     $pid = $group['patient_id'];
-    $group['items'] = $patient_items_map[$pid] ?? [];
+    $patient_visits = $visits_map[$pid] ?? [];
     
-    // Calculate totals
     $total_qty = 0;
     $medication_count = 0;
-    $unique_meds = [];
+    $total_amount = 0;
+    $all_doctor_names = [];
     
-    foreach ($group['items'] as $item) {
-        $total_qty += $item['quantity'];
-        $medication_count++;
+    foreach ($patient_visits as $visit) {
+        $total_qty += $visit['total_qty'];
+        $medication_count += $visit['medication_count'];
+        $total_amount += $visit['total_amount'];
         
-        $med_name = $item['medication_name'];
-        if (!isset($unique_meds[$med_name])) {
-            $unique_meds[$med_name] = 0;
+        foreach ($visit['doctor_names'] as $doc) {
+            if (!in_array($doc, $all_doctor_names)) {
+                $all_doctor_names[] = $doc;
+            }
         }
-        $unique_meds[$med_name] += $item['quantity'];
     }
     
+    $group['visits'] = $patient_visits;
     $group['total_qty'] = $total_qty;
     $group['medication_count'] = $medication_count;
-    $group['unique_medications'] = $unique_meds;
-    
-    // Search data
-    $search_parts = [
-        $group['patient_name'] ?? '',
-        $group['patient_number'] ?? '',
-        $group['patient_phone'] ?? '',
-        $group['patient_gender'] ?? ''
-    ];
-    
-    foreach ($group['items'] as $item) {
-        $search_parts[] = $item['medication_name'];
-        $search_parts[] = $item['prescription_number'];
-        if (!empty($item['prescription_date'])) {
-            $search_parts[] = date('d M Y', strtotime($item['prescription_date']));
-            $search_parts[] = date('d/m/Y', strtotime($item['prescription_date']));
-        }
-    }
-    
-    $group['search_data'] = strtolower(implode(' ', $search_parts));
-    
-    // Status
-    $status = $group['overall_status'] ?? 'pending';
-    $group['status_label'] = ucfirst($status);
-    
-    // Prescription numbers
-    $group['prescription_numbers_array'] = !empty($group['prescription_numbers']) 
-        ? explode('|', $group['prescription_numbers']) 
-        : [];
-    
-    // Doctor names
-    $group['doctor_names_array'] = !empty($group['doctor_names']) 
-        ? array_unique(explode('|', $group['doctor_names'])) 
-        : [];
-    
-    // Created dates array
-    $group['created_dates_array'] = !empty($group['created_dates']) 
-        ? explode('|', $group['created_dates']) 
-        : [];
+    $group['total_amount'] = $total_amount;
+    $group['doctor_names_array'] = $all_doctor_names;
 }
 unset($group);
 
 // ================================================================
 // STATISTICS
 // ================================================================
-$stats_where = " WHERE 1=1";
-$stats_params = [];
-
-if ($user_branch_id) {
-    $stats_where .= " AND p.branch_id = ?";
-    $stats_params[] = $user_branch_id;
-}
+$stats_where = " WHERE p.branch_id = ?";
+$stats_params = [$user_branch_id];
 
 $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $stats_where");
 $stmt->execute($stats_params);
 $total_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$pending_where = $stats_where . " AND p.status = 'pending'";
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $pending_where");
+$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $stats_where AND p.status = 'pending'");
 $stmt->execute($stats_params);
 $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$confirmed_where = $stats_where . " AND p.status = 'confirmed'";
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $confirmed_where");
+$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $stats_where AND p.status = 'confirmed'");
 $stmt->execute($stats_params);
 $confirmed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$dispensed_where = $stats_where . " AND p.status = 'dispensed'";
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $dispensed_where");
+$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $stats_where AND p.status = 'dispensed'");
 $stmt->execute($stats_params);
 $dispensed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$cancelled_where = $stats_where . " AND p.status = 'cancelled'";
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $cancelled_where");
+$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $stats_where AND p.status = 'cancelled'");
 $stmt->execute($stats_params);
 $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-function calculateAge($dob) {
-    if (empty($dob)) return 'N/A';
-    $birthDate = new DateTime($dob);
-    $today = new DateTime('today');
-    return $birthDate->diff($today)->y;
-}
-
-function getStatusBadgeClass($status) {
-    $map = [
-        'pending' => 'badge-warning',
-        'confirmed' => 'badge-info',
-        'dispensed' => 'badge-success',
-        'cancelled' => 'badge-danger'
-    ];
-    return $map[$status] ?? 'badge-warning';
-}
-
-function getStatusLabel($status) {
-    $map = [
-        'pending' => '⏳ Pending',
-        'confirmed' => '✅ Confirmed',
-        'dispensed' => '💊 Dispensed',
-        'cancelled' => '❌ Cancelled'
-    ];
-    return $map[$status] ?? ucfirst($status);
-}
 
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
@@ -364,34 +438,29 @@ include_once '../../components/pharmacy_sidebar.php';
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
     <style>
         :root {
+            --font-primary: 'Inter', -apple-system, sans-serif;
+            --font-mono: 'JetBrains Mono', 'Courier New', monospace;
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
-            --primary-darker: #083C8A;
             --primary-light: #6EA8FE;
             --primary-bg: #E8F0FE;
             --info: #3B82F6;
             --info-bg: #DBEAFE;
             --success: #059669;
-            --success-dark: #047857;
             --success-bg: #D1FAE5;
             --danger: #DC2626;
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --text-primary: #1E293B;
@@ -415,10 +484,16 @@ include_once '../../components/pharmacy_sidebar.php';
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            font-family: var(--font-primary);
             background: var(--bg-body);
             color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
+            -webkit-font-smoothing: antialiased;
+        }
+        
+        .mono, .patient-id, .qty-number, .money, .date-mono, .visit-number-badge {
+            font-family: var(--font-mono) !important;
+            font-feature-settings: 'tnum';
+            font-variant-numeric: tabular-nums;
         }
         
         ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -432,7 +507,6 @@ include_once '../../components/pharmacy_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* PAGE HEADER */
         .page-header {
             background: linear-gradient(135deg, #0B5ED7, #0A4CA8, #083C8A);
             border-radius: 16px;
@@ -451,10 +525,8 @@ include_once '../../components/pharmacy_sidebar.php';
         .page-header::before {
             content: '';
             position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 300px;
-            height: 300px;
+            top: -50%; right: -20%;
+            width: 300px; height: 300px;
             background: rgba(255,255,255,0.05);
             border-radius: 50%;
             pointer-events: none;
@@ -493,7 +565,6 @@ include_once '../../components/pharmacy_sidebar.php';
             font-size: 0.65rem;
             font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
             backdrop-filter: blur(4px);
         }
         
@@ -518,7 +589,6 @@ include_once '../../components/pharmacy_sidebar.php';
             border-radius: 10px;
             font-weight: 500;
             font-size: 0.82rem;
-            transition: all 0.3s;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
@@ -545,9 +615,7 @@ include_once '../../components/pharmacy_sidebar.php';
             backdrop-filter: blur(4px);
         }
         
-        /* ================================================================ */
         /* FILTER TABS */
-        /* ================================================================ */
         .filter-tabs {
             display: flex;
             gap: 8px;
@@ -593,10 +661,7 @@ include_once '../../components/pharmacy_sidebar.php';
             font-weight: 800;
         }
         
-        .filter-tab:hover .tab-count {
-            background: var(--primary);
-            color: white;
-        }
+        .filter-tab:hover .tab-count { background: var(--primary); color: white; }
         
         .filter-tab.active {
             border-color: transparent;
@@ -604,36 +669,17 @@ include_once '../../components/pharmacy_sidebar.php';
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
         
-        .filter-tab.active .tab-count {
-            background: rgba(255,255,255,0.3);
-            color: white;
-        }
+        .filter-tab.active .tab-count { background: rgba(255,255,255,0.3); color: white; }
         
-        .filter-tab.all.active {
-            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-        }
+        .filter-tab.all.active { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+        .filter-tab.pending.active { background: linear-gradient(135deg, #D97706, #B45309); }
+        .filter-tab.confirmed.active { background: linear-gradient(135deg, #3B82F6, #0B5ED7); }
+        .filter-tab.dispensed.active { background: linear-gradient(135deg, #059669, #047857); }
+        .filter-tab.cancelled.active { background: linear-gradient(135deg, #DC2626, #B91C1C); }
         
-        .filter-tab.pending.active {
-            background: linear-gradient(135deg, #D97706, #B45309);
-        }
+        .filter-tab .tab-icon { font-size: 0.9rem; }
         
-        .filter-tab.confirmed.active {
-            background: linear-gradient(135deg, #3B82F6, #0B5ED7);
-        }
-        
-        .filter-tab.dispensed.active {
-            background: linear-gradient(135deg, #059669, #047857);
-        }
-        
-        .filter-tab.cancelled.active {
-            background: linear-gradient(135deg, #DC2626, #B91C1C);
-        }
-        
-        .filter-tab .tab-icon {
-            font-size: 0.9rem;
-        }
-        
-        /* DATE RANGE FILTERS */
+        /* DATE FILTERS */
         .date-filters {
             display: flex;
             gap: 6px;
@@ -650,7 +696,6 @@ include_once '../../components/pharmacy_sidebar.php';
             background: var(--bg-card);
             color: var(--text-primary);
             outline: none;
-            transition: all 0.3s ease;
             height: 34px;
         }
         
@@ -668,17 +713,13 @@ include_once '../../components/pharmacy_sidebar.php';
             font-weight: 700;
             font-size: 0.72rem;
             cursor: pointer;
-            transition: all 0.3s ease;
             height: 34px;
             display: inline-flex;
             align-items: center;
             gap: 5px;
         }
         
-        .btn-date-filter:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
+        .btn-date-filter:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
         
         .btn-clear-filter {
             padding: 6px 12px;
@@ -694,13 +735,9 @@ include_once '../../components/pharmacy_sidebar.php';
             align-items: center;
             gap: 5px;
             height: 34px;
-            transition: all 0.3s ease;
         }
         
-        .btn-clear-filter:hover {
-            background: var(--danger);
-            color: white;
-        }
+        .btn-clear-filter:hover { background: var(--danger); color: white; }
         
         /* SEARCH TOOLBAR */
         .search-toolbar {
@@ -733,7 +770,6 @@ include_once '../../components/pharmacy_sidebar.php';
             border: 2px solid rgba(255,255,255,0.25);
             border-radius: 10px;
             padding: 0 14px;
-            transition: all 0.3s ease;
             min-width: 380px;
             height: 40px;
         }
@@ -741,7 +777,6 @@ include_once '../../components/pharmacy_sidebar.php';
         .search-toolbar .search-wrapper:focus-within {
             background: rgba(255,255,255,0.25);
             border-color: rgba(255,255,255,0.5);
-            box-shadow: 0 0 0 3px rgba(255,255,255,0.1);
         }
         
         .search-toolbar .search-wrapper .search-icon {
@@ -757,32 +792,26 @@ include_once '../../components/pharmacy_sidebar.php';
             outline: none;
             color: white;
             font-size: 0.85rem;
-            padding: 0;
             font-weight: 500;
         }
         
-        .search-toolbar .search-wrapper input::placeholder {
-            color: rgba(255,255,255,0.6);
-        }
+        .search-toolbar .search-wrapper input::placeholder { color: rgba(255,255,255,0.6); }
         
         .search-toolbar .search-wrapper .search-clear {
             background: rgba(255,255,255,0.2);
             border: none;
             color: white;
-            width: 22px;
-            height: 22px;
+            width: 22px; height: 22px;
             border-radius: 50%;
             cursor: pointer;
             display: none;
             align-items: center;
             justify-content: center;
             font-size: 0.7rem;
-            transition: all 0.2s ease;
             margin-left: 8px;
         }
         
         .search-toolbar .search-wrapper .search-clear.visible { display: flex; }
-        .search-toolbar .search-wrapper .search-clear:hover { background: rgba(255,255,255,0.35); }
         
         .search-results-count {
             color: rgba(255,255,255,0.9);
@@ -792,7 +821,6 @@ include_once '../../components/pharmacy_sidebar.php';
             padding: 3px 12px;
             border-radius: 12px;
             margin-left: 8px;
-            white-space: nowrap;
             display: none;
         }
         
@@ -807,18 +835,14 @@ include_once '../../components/pharmacy_sidebar.php';
             align-items: center;
             gap: 16px;
             flex-wrap: wrap;
-            animation: slideDown 0.4s ease;
         }
         
-        [data-theme="dark"] .search-info-box {
-            background: linear-gradient(135deg, #1E3A5F, #16294A);
-        }
+        [data-theme="dark"] .search-info-box { background: linear-gradient(135deg, #1E3A5F, #16294A); }
         
         .search-info-box.show { display: flex; }
         
         .search-info-box .info-icon {
-            width: 50px;
-            height: 50px;
+            width: 50px; height: 50px;
             border-radius: 50%;
             background: var(--primary);
             color: white;
@@ -827,27 +851,21 @@ include_once '../../components/pharmacy_sidebar.php';
             justify-content: center;
             font-size: 1.3rem;
             flex-shrink: 0;
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
         }
         
-        .search-info-box .info-text {
-            flex: 1;
-            min-width: 180px;
-        }
+        .search-info-box .info-text { flex: 1; min-width: 180px; }
         
         .search-info-box .info-label {
             font-size: 0.65rem;
             color: var(--text-secondary);
             font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
         }
         
         .search-info-box .info-value {
             font-size: 1.6rem;
             font-weight: 800;
             color: var(--primary);
-            line-height: 1.1;
         }
         
         .search-info-box .info-value small {
@@ -863,17 +881,6 @@ include_once '../../components/pharmacy_sidebar.php';
             background: var(--border-color);
         }
         
-        .search-info-box .info-search-term {
-            font-size: 0.9rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .search-info-box .info-search-term strong {
-            color: var(--primary);
-            font-weight: 700;
-        }
-        
         /* PATIENT CARD */
         .patient-card {
             background: var(--bg-card);
@@ -885,10 +892,7 @@ include_once '../../components/pharmacy_sidebar.php';
             transition: all 0.3s ease;
         }
         
-        .patient-card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-        }
+        .patient-card:hover { border-color: var(--primary); box-shadow: var(--shadow-md); }
         
         .patient-header {
             background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
@@ -900,12 +904,9 @@ include_once '../../components/pharmacy_sidebar.php';
             flex-wrap: wrap;
             gap: 12px;
             cursor: pointer;
-            transition: all 0.3s ease;
         }
         
-        .patient-header:hover {
-            background: linear-gradient(135deg, #0A4CA8, #083C8A);
-        }
+        .patient-header:hover { background: linear-gradient(135deg, #0A4CA8, #083C8A); }
         
         .patient-header .patient-info {
             display: flex;
@@ -916,8 +917,7 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .patient-header .patient-avatar {
-            width: 48px;
-            height: 48px;
+            width: 48px; height: 48px;
             border-radius: 50%;
             background: rgba(255,255,255,0.25);
             display: flex;
@@ -926,9 +926,8 @@ include_once '../../components/pharmacy_sidebar.php';
             font-weight: 700;
             font-size: 1.3rem;
             color: white;
-            flex-shrink: 0;
             border: 2px solid rgba(255,255,255,0.4);
-            backdrop-filter: blur(4px);
+            font-family: var(--font-mono);
         }
         
         .patient-header .patient-name {
@@ -949,11 +948,7 @@ include_once '../../components/pharmacy_sidebar.php';
             margin-top: 3px;
         }
         
-        .patient-header .patient-meta span {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
+        .patient-header .patient-meta span { display: flex; align-items: center; gap: 4px; }
         
         .patient-header .patient-stats {
             display: flex;
@@ -971,99 +966,194 @@ include_once '../../components/pharmacy_sidebar.php';
             display: inline-flex;
             align-items: center;
             gap: 5px;
-            backdrop-filter: blur(4px);
             border: 1px solid rgba(255,255,255,0.15);
         }
         
-        /* DATE PILL IN HEADER */
         .patient-header .stat-pill.date-pill {
             background: rgba(255,255,255,0.3);
             border: 1px solid rgba(255,255,255,0.4);
-            font-size: 0.65rem;
         }
         
-        .patient-header .chevron {
-            font-size: 0.9rem;
-            transition: transform 0.3s ease;
-        }
-        
-        .patient-header .chevron.rotated {
-            transform: rotate(180deg);
-        }
+        .patient-header .chevron { font-size: 0.9rem; transition: transform 0.3s ease; }
+        .patient-header .chevron.rotated { transform: rotate(180deg); }
         
         .patient-body {
             max-height: 0;
             overflow: hidden;
             transition: max-height 0.4s ease, padding 0.3s ease;
-            background: var(--bg-card);
         }
         
-        .patient-body.open {
-            max-height: 5000px;
-            padding: 16px 22px 20px;
+        .patient-body.open { max-height: 20000px; padding: 16px 22px 20px; }
+        
+        /* VISIT SUB-SECTION */
+        .visit-section {
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            margin-bottom: 16px;
+            overflow: hidden;
+            transition: all 0.3s ease;
         }
         
-        /* PATIENT ACTIONS */
-        .patient-actions {
+        .visit-section:last-child { margin-bottom: 0; }
+        
+        .visit-section:hover {
+            border-color: var(--primary);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.1);
+        }
+        
+        .visit-section-header {
+            background: linear-gradient(135deg, #E8F0FE, #D6E4FF);
+            padding: 12px 18px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            gap: 12px;
-            padding-bottom: 14px;
-            border-bottom: 2px dashed var(--border-color);
-            margin-bottom: 14px;
             flex-wrap: wrap;
+            gap: 12px;
+            border-bottom: 2px solid var(--primary-light);
         }
         
-        .patient-actions .patient-actions-info {
-            font-size: 0.8rem;
-            color: var(--text-secondary);
+        [data-theme="dark"] .visit-section-header {
+            background: linear-gradient(135deg, #1E3A5F, #16294A);
+        }
+        
+        .visit-section-header .visit-info-left {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 12px;
             flex-wrap: wrap;
         }
         
-        /* VIEW BUTTON */
-        .btn-view-patient {
+        .visit-section-header .visit-icon-badge {
+            width: 40px; height: 40px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #FCD34D, #F59E0B);
+            color: #78350F;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            box-shadow: 0 3px 10px rgba(245, 158, 11, 0.3);
+            flex-shrink: 0;
+        }
+        
+        .visit-section-header .visit-number-display {
+            font-family: var(--font-mono);
+            font-weight: 800;
+            font-size: 0.95rem;
+            color: #78350F;
+            background: rgba(255,255,255,0.5);
+            padding: 3px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+        
+        [data-theme="dark"] .visit-section-header .visit-number-display {
+            background: rgba(255,255,255,0.1);
+            color: #FCD34D;
+        }
+        
+        .visit-section-header .visit-date-display {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-weight: 600;
+        }
+        
+        .visit-section-header .visit-doctor-display {
+            font-size: 0.78rem;
+            color: var(--primary);
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            background: rgba(255,255,255,0.6);
+            padding: 3px 12px;
+            border-radius: 20px;
+            border: 1px solid var(--primary-light);
+        }
+        
+        [data-theme="dark"] .visit-section-header .visit-doctor-display {
+            background: rgba(255,255,255,0.1);
+            color: #93C5FD;
+            border-color: #3B82F6;
+        }
+        
+        .visit-section-header .visit-stats-right {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .visit-section-header .visit-mini-stat {
+            background: rgba(255,255,255,0.7);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            color: var(--text-primary);
+            border: 1px solid rgba(255,255,255,0.5);
+        }
+        
+        [data-theme="dark"] .visit-section-header .visit-mini-stat {
+            background: rgba(255,255,255,0.1);
+            color: var(--text-primary);
+            border-color: rgba(255,255,255,0.15);
+        }
+        
+        .visit-section-header .visit-mini-stat .stat-value {
+            font-family: var(--font-mono);
+            font-weight: 800;
+            color: var(--primary);
+        }
+        
+        [data-theme="dark"] .visit-section-header .visit-mini-stat .stat-value { color: var(--primary-light); }
+        
+        /* ✅ VIEW BUTTON - DYNAMIC COLORS */
+        .btn-view-visit {
             display: inline-flex;
             align-items: center;
             justify-content: center;
             gap: 6px;
-            padding: 7px 18px;
+            padding: 7px 16px;
             border-radius: 8px;
             font-weight: 700;
             font-size: 0.72rem;
-            background: linear-gradient(135deg, #059669, #047857);
             color: white;
             border: none;
             cursor: pointer;
-            transition: all 0.3s ease;
-            box-shadow: 0 3px 10px rgba(5, 150, 105, 0.3);
             text-decoration: none;
-            width: auto;
             min-width: 80px;
+            transition: all 0.3s ease;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.15);
         }
         
-        .btn-view-patient:hover {
+        .btn-view-visit:hover {
             transform: translateY(-2px);
-            box-shadow: 0 5px 16px rgba(5, 150, 105, 0.5);
+            box-shadow: 0 5px 16px rgba(0, 0, 0, 0.3);
+        }
+        
+        .visit-section-body {
+            padding: 14px 18px 16px;
+            background: var(--bg-card);
         }
         
         /* TABLE */
         .table-scroll { overflow-x: auto; border-radius: 10px; }
         
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.82rem;
-        }
+        .data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
         
         .data-table thead th {
             text-align: left;
-            padding: 10px 14px;
+            padding: 9px 14px;
             font-weight: 700;
-            font-size: 0.65rem;
+            font-size: 0.62rem;
             text-transform: uppercase;
             letter-spacing: 0.06em;
             color: #ffffff;
@@ -1075,7 +1165,7 @@ include_once '../../components/pharmacy_sidebar.php';
         .data-table thead th i { margin-right: 5px; opacity: 0.7; }
         
         .data-table tbody td {
-            padding: 10px 14px;
+            padding: 9px 14px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
@@ -1088,40 +1178,17 @@ include_once '../../components/pharmacy_sidebar.php';
         [data-theme="dark"] .data-table tbody tr:nth-child(even) td { background: #1A1A2E; }
         [data-theme="dark"] .data-table tbody tr:hover td { background: #1E3A5F; }
         
-        /* DATE CELL STYLING */
-        .date-cell {
-            font-size: 0.7rem;
-            white-space: nowrap;
-        }
+        .date-cell { font-size: 0.7rem; white-space: nowrap; }
+        .date-cell .date-main { font-weight: 600; color: var(--text-primary); display: block; font-family: var(--font-mono); }
+        .date-cell .date-time { font-size: 0.65rem; color: var(--text-secondary); display: block; font-family: var(--font-mono); }
+        .date-cell .date-ago { font-size: 0.6rem; color: var(--primary); display: block; font-weight: 600; }
         
-        .date-cell .date-main {
-            font-weight: 600;
-            color: var(--text-primary);
-            display: block;
-        }
-        
-        .date-cell .date-time {
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-            display: block;
-            margin-top: 1px;
-        }
-        
-        .date-cell .date-ago {
-            font-size: 0.6rem;
-            color: var(--primary);
-            display: block;
-            margin-top: 1px;
-            font-weight: 600;
-        }
-        
-        /* BADGES */
         .badge-status {
             display: inline-block;
-            padding: 3px 14px;
+            padding: 3px 12px;
             border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
+            font-size: 0.62rem;
+            font-weight: 700;
             white-space: nowrap;
         }
         
@@ -1135,7 +1202,6 @@ include_once '../../components/pharmacy_sidebar.php';
         [data-theme="dark"] .badge-success { background: #1A3A2A; color: #34D399; border-color: #059669; }
         [data-theme="dark"] .badge-danger { background: #3A1A1A; color: #F87171; border-color: #DC2626; }
         
-        /* QTY BADGE */
         .qty-badge {
             display: inline-flex;
             align-items: center;
@@ -1144,40 +1210,93 @@ include_once '../../components/pharmacy_sidebar.php';
             color: var(--primary);
             padding: 3px 10px;
             border-radius: 12px;
-            font-size: 0.75rem;
+            font-size: 0.72rem;
             font-weight: 700;
             border: 1px solid var(--primary);
+            font-family: var(--font-mono);
         }
         
-        [data-theme="dark"] .qty-badge {
-            background: #1E3A5F;
-            color: #93C5FD;
-            border-color: #3B82F6;
+        [data-theme="dark"] .qty-badge { background: #1E3A5F; color: #93C5FD; border-color: #3B82F6; }
+        
+        .rx-number {
+            font-family: var(--font-mono);
+            font-size: 0.68rem;
+            background: var(--primary-bg);
+            color: var(--primary);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 600;
         }
         
-        /* SEARCH HIGHLIGHT */
+        [data-theme="dark"] .rx-number { background: #1E3A5F; color: #93C5FD; }
+        
+        .row-number {
+            font-family: var(--font-mono);
+            text-align: center;
+            font-weight: 700;
+            color: var(--text-secondary);
+            font-size: 0.72rem;
+        }
+        
         mark.search-highlight {
             background: #FEF08A;
             color: #713F12;
             padding: 0 2px;
             border-radius: 3px;
             font-weight: 700;
-            box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.3);
-            animation: highlight-pulse 0.6s ease;
         }
         
-        [data-theme="dark"] mark.search-highlight {
-            background: #FCD34D;
-            color: #422006;
+        [data-theme="dark"] mark.search-highlight { background: #FCD34D; color: #422006; }
+        
+        /* PATIENT VIEW BUTTON */
+        .btn-view-patient {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 7px 18px;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 0.72rem;
+            background: linear-gradient(135deg, #059669, #047857);
+            color: white;
+            border: none;
+            cursor: pointer;
+            text-decoration: none;
+            min-width: 80px;
         }
         
-        @keyframes highlight-pulse {
-            0% { background-color: #FDE047; transform: scale(1.05); }
-            50% { background-color: #FCD34D; transform: scale(1.1); }
-            100% { background-color: #FEF08A; transform: scale(1); }
+        .btn-view-patient:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 16px rgba(5, 150, 105, 0.5);
         }
         
-        /* EMPTY STATE */
+        .patient-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding-bottom: 14px;
+            border-bottom: 2px dashed var(--border-color);
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+        
+        .patient-actions .patient-actions-info {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .patient-actions .patient-actions-info strong {
+            font-family: var(--font-mono);
+            font-weight: 800;
+            color: var(--text-primary);
+        }
+        
         .empty-state {
             text-align: center;
             padding: 60px 20px;
@@ -1196,35 +1315,7 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .empty-state p { font-size: 1rem; font-weight: 600; color: var(--text-primary); }
         .empty-state .sub { font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; font-weight: 400; }
-        .empty-state.no-results i { color: var(--primary); }
         
-        /* TOAST */
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 14px 20px;
-            border-radius: 12px;
-            z-index: 9999;
-            max-width: 400px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: white;
-            box-shadow: var(--shadow-lg);
-            font-size: 0.85rem;
-        }
-        
-        .toast-custom.show { transform: translateY(0); opacity: 1; }
-        .toast-custom.success { background: linear-gradient(135deg, #059669, #047857); }
-        .toast-custom.error { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-        .toast-custom.info { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .toast-custom.warning { background: linear-gradient(135deg, #D97706, #B45309); }
-        
-        /* FOOTER */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -1236,23 +1327,14 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* ANIMATIONS */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
         }
         
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
         .animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
         
-        /* RESPONSIVE */
-        @media (max-width: 1024px) {
-            .main-content { margin-left: 0; padding: 16px; }
-        }
+        @media (max-width: 1024px) { .main-content { margin-left: 0; padding: 16px; } }
         
         @media (max-width: 768px) {
             .page-header { padding: 16px 18px; }
@@ -1263,15 +1345,9 @@ include_once '../../components/pharmacy_sidebar.php';
             .search-toolbar { flex-direction: column; align-items: stretch; }
             .search-toolbar .search-wrapper { min-width: 100%; }
             .patient-header { flex-direction: column; align-items: stretch; }
-            .patient-actions { flex-direction: column; align-items: stretch; }
-            .btn-view-patient { width: 100%; justify-content: center; }
-        }
-        
-        @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .page-header .page-title { font-size: 1.1rem; }
-            .data-table td { padding: 6px 8px; font-size: 0.7rem; }
-            .filter-tab { font-size: 0.7rem; padding: 6px 12px; }
+            .visit-section-header { flex-direction: column; align-items: stretch; }
+            .btn-view-visit { width: 100%; }
+            .btn-view-patient { width: 100%; }
         }
     </style>
 </head>
@@ -1291,14 +1367,14 @@ include_once '../../components/pharmacy_sidebar.php';
                 </span>
             </h1>
             <p class="page-subtitle">
-                All prescriptions (Grouped by Patient)
+                All prescriptions grouped by Patient → Visit
                 <span class="branch-tag">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
-                <span class="branch-tag" style="background:rgba(255,255,255,0.15);">
+                <span class="branch-tag">
                     <i class="fas fa-users"></i> <?= count($grouped_prescriptions) ?> Patients
                 </span>
-                <span class="branch-tag" style="background:rgba(255,255,255,0.15);">
+                <span class="branch-tag">
                     <i class="fas fa-calendar-alt"></i> <?= date('d M Y') ?>
                 </span>
             </p>
@@ -1313,46 +1389,39 @@ include_once '../../components/pharmacy_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- 1. FILTER TABS -->
-    <!-- ================================================================ -->
+    <!-- FILTER TABS -->
     <div class="filter-tabs animate-fade-in-up">
         <a href="?status=all<?= !empty($date_from) ? '&date_from=' . urlencode($date_from) : '' ?><?= !empty($date_to) ? '&date_to=' . urlencode($date_to) : '' ?>" 
            class="filter-tab all <?= $filter_status === 'all' ? 'active' : '' ?>">
-            <span class="tab-icon">📋</span>
-            All
+            <span class="tab-icon">📋</span> All
             <span class="tab-count"><?= $total_all ?></span>
         </a>
         
         <a href="?status=pending<?= !empty($date_from) ? '&date_from=' . urlencode($date_from) : '' ?><?= !empty($date_to) ? '&date_to=' . urlencode($date_to) : '' ?>" 
            class="filter-tab pending <?= $filter_status === 'pending' ? 'active' : '' ?>">
-            <span class="tab-icon">⏳</span>
-            Pending
+            <span class="tab-icon">⏳</span> Pending
             <span class="tab-count"><?= $pending_count ?></span>
         </a>
         
         <a href="?status=confirmed<?= !empty($date_from) ? '&date_from=' . urlencode($date_from) : '' ?><?= !empty($date_to) ? '&date_to=' . urlencode($date_to) : '' ?>" 
            class="filter-tab confirmed <?= $filter_status === 'confirmed' ? 'active' : '' ?>">
-            <span class="tab-icon">✅</span>
-            Confirmed
+            <span class="tab-icon">✅</span> Confirmed
             <span class="tab-count"><?= $confirmed_count ?></span>
         </a>
         
         <a href="?status=dispensed<?= !empty($date_from) ? '&date_from=' . urlencode($date_from) : '' ?><?= !empty($date_to) ? '&date_to=' . urlencode($date_to) : '' ?>" 
            class="filter-tab dispensed <?= $filter_status === 'dispensed' ? 'active' : '' ?>">
-            <span class="tab-icon">💊</span>
-            Dispensed
+            <span class="tab-icon">💊</span> Dispensed
             <span class="tab-count"><?= $dispensed_count ?></span>
         </a>
         
         <a href="?status=cancelled<?= !empty($date_from) ? '&date_from=' . urlencode($date_from) : '' ?><?= !empty($date_to) ? '&date_to=' . urlencode($date_to) : '' ?>" 
            class="filter-tab cancelled <?= $filter_status === 'cancelled' ? 'active' : '' ?>">
-            <span class="tab-icon">❌</span>
-            Cancelled
+            <span class="tab-icon">❌</span> Cancelled
             <span class="tab-count"><?= $cancelled_count ?></span>
         </a>
         
-        <!-- DATE RANGE FILTERS -->
+        <!-- DATE FILTERS -->
         <form method="GET" class="date-filters">
             <input type="hidden" name="status" value="<?= htmlspecialchars($filter_status) ?>">
             <input type="date" name="date_from" class="date-input" value="<?= htmlspecialchars($date_from) ?>" title="From Date">
@@ -1368,13 +1437,10 @@ include_once '../../components/pharmacy_sidebar.php';
         </form>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- 2. SEARCH TOOLBAR -->
-    <!-- ================================================================ -->
+    <!-- SEARCH TOOLBAR -->
     <div class="search-toolbar animate-fade-in-up">
         <div class="toolbar-title">
-            <i class="fas fa-search"></i>
-            Search Medicines
+            <i class="fas fa-search"></i> Search Medicines
             <span style="background:rgba(255,255,255,0.2);padding:2px 10px;border-radius:12px;font-size:0.65rem;font-weight:600;" id="headerCount">
                 <?= count($grouped_prescriptions) ?> Patients
             </span>
@@ -1382,11 +1448,7 @@ include_once '../../components/pharmacy_sidebar.php';
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
             <div class="search-wrapper">
                 <i class="fas fa-search search-icon"></i>
-                <input type="text" 
-                       id="tableSearch" 
-                       placeholder="Search medicine name to see total qty..." 
-                       autocomplete="off"
-                       value="<?= htmlspecialchars($search) ?>">
+                <input type="text" id="tableSearch" placeholder="Search medicine name..." autocomplete="off" value="<?= htmlspecialchars($search) ?>">
                 <button type="button" class="search-clear" id="searchClear" title="Clear search">
                     <i class="fas fa-times"></i>
                 </button>
@@ -1397,14 +1459,10 @@ include_once '../../components/pharmacy_sidebar.php';
 
     <!-- SEARCH INFO BOX -->
     <div class="search-info-box" id="searchInfoBox">
-        <div class="info-icon">
-            <i class="fas fa-pills"></i>
-        </div>
+        <div class="info-icon"><i class="fas fa-pills"></i></div>
         <div class="info-text">
             <div class="info-label">Total Quantity for Search</div>
-            <div class="info-search-term">
-                "<strong id="searchTermDisplay"></strong>"
-            </div>
+            <div class="info-search-term">"<strong id="searchTermDisplay"></strong>"</div>
         </div>
         <div class="info-divider"></div>
         <div class="info-text" style="text-align:center;min-width:120px;">
@@ -1418,32 +1476,41 @@ include_once '../../components/pharmacy_sidebar.php';
         </div>
         <div class="info-divider"></div>
         <div class="info-text" style="text-align:center;min-width:100px;">
-            <div class="info-label">Prescriptions</div>
-            <div class="info-value" id="totalPrescriptionsDisplay">0 <small>items</small></div>
+            <div class="info-label">Visits</div>
+            <div class="info-value" id="totalVisitsDisplay">0 <small>visits</small></div>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- 3. PATIENTS LIST -->
-    <!-- ================================================================ -->
+    <!-- PATIENTS LIST -->
     <div id="patientsContainer">
         <?php if (count($grouped_prescriptions) > 0): ?>
             <?php foreach ($grouped_prescriptions as $patient): 
                 $patient_id = $patient['patient_id'];
-                $status = $patient['overall_status'] ?? 'pending';
-                $status_class = getStatusBadgeClass($status);
-                $status_label = getStatusLabel($status);
+                
+                // Overall status
+                $overall_status = 'pending';
+                $all_statuses = [];
+                foreach ($patient['visits'] as $visit) {
+                    $all_statuses[] = $visit['overall_status'];
+                }
+                if (in_array('pending', $all_statuses)) $overall_status = 'pending';
+                elseif (in_array('confirmed', $all_statuses)) $overall_status = 'confirmed';
+                elseif (in_array('dispensed', $all_statuses)) $overall_status = 'dispensed';
+                elseif (in_array('cancelled', $all_statuses)) $overall_status = 'cancelled';
+                
+                $status_class = getStatusBadgeClass($overall_status);
+                $status_label = getStatusLabel($overall_status);
                 $age = calculateAge($patient['date_of_birth'] ?? '');
                 $total_qty = $patient['total_qty'] ?? 0;
                 $medication_count = $patient['medication_count'] ?? 0;
-                $doctor_names = implode(', ', array_slice($patient['doctor_names_array'] ?? [], 0, 2));
+                $visit_count = count($patient['visits']);
                 $prescription_count = $patient['prescription_count'] ?? 0;
                 $bill_total = $patient['total_amount'] ?? 0;
-                $items = $patient['items'] ?? [];
                 $last_date = $patient['last_prescription_date'] ?? null;
-                $first_date = $patient['first_prescription_date'] ?? null;
+                $doctor_names = implode(', ', array_slice($patient['doctor_names_array'] ?? [], 0, 2));
             ?>
                 <div class="patient-card animate-fade-in-up" data-patient-id="<?= $patient_id ?>">
+                    
                     <!-- PATIENT HEADER -->
                     <div class="patient-header" onclick="togglePatient(<?= $patient_id ?>)">
                         <div class="patient-info">
@@ -1455,6 +1522,9 @@ include_once '../../components/pharmacy_sidebar.php';
                                     <?= htmlspecialchars($patient['patient_name']) ?>
                                     <span style="background:rgba(255,255,255,0.25);padding:2px 10px;border-radius:12px;font-size:0.6rem;font-weight:600;">
                                         <i class="fas fa-pills"></i> <?= $medication_count ?> Item(s)
+                                    </span>
+                                    <span style="background:rgba(255,255,255,0.25);padding:2px 10px;border-radius:12px;font-size:0.6rem;font-weight:600;">
+                                        <i class="fas fa-calendar-check"></i> <?= $visit_count ?> Visit(s)
                                     </span>
                                     <span class="badge-status <?= $status_class ?>" style="font-size:0.55rem;padding:2px 8px;">
                                         <?= $status_label ?>
@@ -1469,9 +1539,6 @@ include_once '../../components/pharmacy_sidebar.php';
                                         <span><i class="fas fa-<?= $patient['patient_gender'] === 'Female' ? 'venus' : 'mars' ?>"></i> <?= htmlspecialchars($patient['patient_gender']) ?> • <?= $age ?> yrs</span>
                                     <?php endif; ?>
                                     <span><i class="fas fa-prescription"></i> <?= $prescription_count ?> Rx</span>
-                                    <?php if (!empty($last_date)): ?>
-                                        <span><i class="fas fa-calendar-alt"></i> <?= formatDateShort($last_date) ?></span>
-                                    <?php endif; ?>
                                 </div>
                             </div>
                         </div>
@@ -1482,10 +1549,10 @@ include_once '../../components/pharmacy_sidebar.php';
                                 </span>
                             <?php endif; ?>
                             <span class="stat-pill" style="background:rgba(255,255,255,0.3);">
-                                <i class="fas fa-pills"></i> Qty: <?= $total_qty ?>
+                                <i class="fas fa-pills"></i> Qty: <span class="mono"><?= $total_qty ?></span>
                             </span>
                             <span class="stat-pill" style="background:rgba(255,255,255,0.3);">
-                                <i class="fas fa-money-bill-wave"></i> <?= $currency ?> <?= number_format($bill_total, 0) ?>
+                                <i class="fas fa-money-bill-wave"></i> <span class="mono"><?= $currency ?> <?= number_format($bill_total, 0) ?></span>
                             </span>
                             <?php if (!empty($last_date)): ?>
                                 <span class="stat-pill date-pill">
@@ -1504,87 +1571,151 @@ include_once '../../components/pharmacy_sidebar.php';
                             <div class="patient-actions-info">
                                 <i class="fas fa-info-circle" style="color:var(--primary);"></i>
                                 <strong><?= $medication_count ?></strong> medication(s) • Total Qty: <strong><?= $total_qty ?></strong>
-                                • <strong><?= $prescription_count ?></strong> prescription(s)
-                                <?php if (!empty($first_date) && !empty($last_date)): ?>
-                                    • <i class="fas fa-calendar-alt"></i> From: <strong><?= formatDate($first_date, false) ?></strong> 
-                                    To: <strong><?= formatDate($last_date, false) ?></strong>
-                                <?php endif; ?>
+                                • <strong><?= $visit_count ?></strong> visit(s) • <strong><?= $prescription_count ?></strong> prescription(s)
                             </div>
-                            <!-- VIEW BUTTON -->
-                            <a href="view_patient_prescriptions.php?patient_id=<?= $patient_id ?>" class="btn-view-patient">
-                                <i class="fas fa-eye"></i> VIEW
-                            </a>
                         </div>
                         
-                        <!-- PATIENT MEDICATIONS TABLE -->
-                        <div class="table-scroll">
-                            <table class="data-table">
-                                <thead>
-                                    <tr>
-                                        <th style="width:50px;">#</th>
-                                        <th><i class="fas fa-pills"></i> Medication</th>
-                                        <th><i class="fas fa-sort-numeric-up"></i> Qty</th>
-                                        <th><i class="fas fa-prescription"></i> Dosage</th>
-                                        <th><i class="fas fa-clock"></i> Frequency</th>
-                                        <th><i class="fas fa-route"></i> Route</th>
-                                        <th><i class="fas fa-prescription"></i> Rx #</th>
-                                        <th><i class="fas fa-calendar-alt"></i> Date</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php $i = 1; foreach ($items as $item): 
-                                        $med_name = $item['medication_name'] ?? 'N/A';
-                                        $med_qty = $item['quantity'] ?? 0;
-                                        $pres_num = $item['prescription_number'] ?? 'N/A';
-                                        $item_date = $item['prescription_date'] ?? ($item['created_at'] ?? null);
-                                    ?>
-                                        <tr class="med-row"
-                                            data-search="<?= htmlspecialchars(strtolower($med_name . ' ' . $patient['patient_name'] . ' ' . $patient['patient_number'] . ' ' . $pres_num . ' ' . $patient['patient_phone'] . ' ' . ($item_date ? date('d M Y', strtotime($item_date)) : '') . ' ' . ($item_date ? date('d/m/Y', strtotime($item_date)) : ''))) ?>"
-                                            data-med-name="<?= htmlspecialchars(strtolower($med_name)) ?>"
-                                            data-qty="<?= $med_qty ?>"
-                                            data-date="<?= $item_date ?>">
-                                            <td class="row-number"><?= $i++ ?></td>
-                                            <td>
-                                                <div style="font-weight:600;font-size:0.85rem;" data-searchable>
-                                                    <?= htmlspecialchars($med_name) ?>
-                                                </div>
-                                            </td>
-                                            <td>
-                                                <span class="qty-badge" data-searchable>
-                                                    <i class="fas fa-pills"></i> <?= number_format($med_qty) ?>
-                                                </span>
-                                            </td>
-                                            <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['dosage'] ?? '—') ?></td>
-                                            <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['frequency'] ?? '—') ?></td>
-                                            <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['route'] ?? '—') ?></td>
-                                            <td>
-                                                <span style="font-family:'Courier New',monospace;font-size:0.7rem;background:var(--primary-bg);color:var(--primary);padding:2px 8px;border-radius:4px;font-weight:600;" data-searchable>
-                                                    <?= htmlspecialchars($pres_num) ?>
-                                                </span>
-                                            </td>
-                                            <!-- DATE COLUMN -->
-                                            <td class="date-cell" data-searchable>
-                                                <?php if (!empty($item_date)): ?>
-                                                    <span class="date-main"><?= date('d M Y', strtotime($item_date)) ?></span>
-                                                    <span class="date-time"><?= date('H:i', strtotime($item_date)) ?></span>
-                                                    <span class="date-ago"><?= timeAgo($item_date) ?></span>
-                                                <?php else: ?>
-                                                    <span style="color:var(--text-secondary);">N/A</span>
-                                                <?php endif; ?>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
+                        <!-- ✅ VISITS LIST - KILA VISIT NI SUB-SECTION -->
+                        <?php if (!empty($patient['visits'])): ?>
+                            <?php foreach ($patient['visits'] as $visit): 
+                                $visit_id = $visit['visit_id'];
+                                $visit_number = $visit['visit_number'];
+                                $visit_date = $visit['visit_date'];
+                                $visit_doctor = !empty($visit['doctor_names']) ? implode(', ', $visit['doctor_names']) : 'N/A';
+                                $visit_status = $visit['overall_status'];
+                                $visit_status_class = getStatusBadgeClass($visit_status);
+                                $visit_status_label = getStatusLabel($visit_status);
+                                $visit_qty = $visit['total_qty'];
+                                $visit_meds = $visit['medication_count'];
+                                $visit_amount = $visit['total_amount'];
+                                $visit_items = $visit['items'];
+                                
+                                // ✅ DYNAMIC VIEW URL
+                                $view_url = getViewUrl($visit_status, $patient_id, $visit_id);
+                                $view_icon = getViewIcon($visit_status);
+                                $view_title = getViewTitle($visit_status);
+                                $view_style = getViewButtonStyle($visit_status);
+                                $is_cancelled = ($visit_status === 'cancelled');
+                            ?>
+                                <div class="visit-section">
+                                    <!-- VISIT HEADER -->
+                                    <div class="visit-section-header">
+                                        <div class="visit-info-left">
+                                            <div class="visit-icon-badge">
+                                                <i class="fas fa-calendar-check"></i>
+                                            </div>
+                                            <span class="visit-number-display">
+                                                <?= htmlspecialchars($visit_number) ?>
+                                            </span>
+                                            <span class="visit-date-display">
+                                                <i class="fas fa-calendar-day"></i>
+                                                <?= !empty($visit_date) ? date('d M Y', strtotime($visit_date)) : 'N/A' ?>
+                                            </span>
+                                            <span class="visit-doctor-display">
+                                                <i class="fas fa-user-md"></i>
+                                                Dr. <?= htmlspecialchars($visit_doctor) ?>
+                                            </span>
+                                            <span class="badge-status <?= $visit_status_class ?>" style="font-size:0.6rem;padding:3px 10px;">
+                                                <?= $visit_status_label ?>
+                                            </span>
+                                        </div>
+                                        <div class="visit-stats-right">
+                                            <span class="visit-mini-stat">
+                                                <i class="fas fa-pills"></i>
+                                                Meds: <span class="stat-value"><?= $visit_meds ?></span>
+                                            </span>
+                                            <span class="visit-mini-stat">
+                                                <i class="fas fa-sort-numeric-up"></i>
+                                                Qty: <span class="stat-value"><?= $visit_qty ?></span>
+                                            </span>
+                                            <span class="visit-mini-stat">
+                                                <i class="fas fa-money-bill-wave"></i>
+                                                <span class="stat-value"><?= $currency ?> <?= number_format($visit_amount, 0) ?></span>
+                                            </span>
+                                            
+                                            <!-- ✅ DYNAMIC VIEW BUTTON -->
+                                            <a href="<?= $is_cancelled ? '#' : $view_url ?>" 
+                                               class="btn-view-visit" 
+                                               title="<?= $view_title ?>"
+                                               style="<?= $view_style ?>"
+                                               <?= $is_cancelled ? 'onclick="alert(\'This visit is cancelled. No view available.\'); return false;"' : '' ?>>
+                                                <i class="fas <?= $view_icon ?>"></i> VIEW
+                                            </a>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- VISIT BODY - MEDICATIONS TABLE -->
+                                    <div class="visit-section-body">
+                                        <div class="table-scroll">
+                                            <table class="data-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th style="width:50px;">#</th>
+                                                        <th><i class="fas fa-pills"></i> Medication</th>
+                                                        <th><i class="fas fa-sort-numeric-up"></i> Qty</th>
+                                                        <th><i class="fas fa-prescription"></i> Dosage</th>
+                                                        <th><i class="fas fa-clock"></i> Frequency</th>
+                                                        <th><i class="fas fa-route"></i> Route</th>
+                                                        <th><i class="fas fa-prescription"></i> Rx #</th>
+                                                        <th><i class="fas fa-calendar-alt"></i> Date</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <?php $i = 1; foreach ($visit_items as $item): 
+                                                        $med_name = $item['medication_name'] ?? 'N/A';
+                                                        $med_qty = $item['quantity'] ?? 0;
+                                                        $pres_num = $item['prescription_number'] ?? 'N/A';
+                                                        $item_date = $item['prescription_date'] ?? ($item['created_at'] ?? null);
+                                                    ?>
+                                                        <tr class="med-row"
+                                                            data-search="<?= htmlspecialchars(strtolower($med_name . ' ' . $patient['patient_name'] . ' ' . $patient['patient_number'] . ' ' . $pres_num . ' ' . $patient['patient_phone'] . ' ' . $visit_number . ' ' . $visit_doctor . ' ' . ($item_date ? date('d M Y', strtotime($item_date)) : ''))) ?>"
+                                                            data-med-name="<?= htmlspecialchars(strtolower($med_name)) ?>"
+                                                            data-qty="<?= $med_qty ?>"
+                                                            data-visit-id="<?= $visit_id ?>"
+                                                            data-patient-id="<?= $patient_id ?>">
+                                                            <td class="row-number"><?= $i++ ?></td>
+                                                            <td>
+                                                                <div style="font-weight:600;font-size:0.82rem;" data-searchable>
+                                                                    <?= htmlspecialchars($med_name) ?>
+                                                                </div>
+                                                            </td>
+                                                            <td>
+                                                                <span class="qty-badge" data-searchable>
+                                                                    <i class="fas fa-pills"></i> <?= number_format($med_qty) ?>
+                                                                </span>
+                                                            </td>
+                                                            <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['dosage'] ?? '—') ?></td>
+                                                            <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['frequency'] ?? '—') ?></td>
+                                                            <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['route'] ?? '—') ?></td>
+                                                            <td>
+                                                                <span class="rx-number" data-searchable><?= htmlspecialchars($pres_num) ?></span>
+                                                            </td>
+                                                            <td class="date-cell" data-searchable>
+                                                                <?php if (!empty($item_date)): ?>
+                                                                    <span class="date-main"><?= date('d M Y', strtotime($item_date)) ?></span>
+                                                                    <span class="date-time"><?= date('H:i', strtotime($item_date)) ?></span>
+                                                                    <span class="date-ago"><?= timeAgo($item_date) ?></span>
+                                                                <?php else: ?>
+                                                                    <span style="color:var(--text-secondary);">N/A</span>
+                                                                <?php endif; ?>
+                                                            </td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                        
                     </div>
                 </div>
             <?php endforeach; ?>
             
-            <!-- NO SEARCH RESULTS -->
             <div id="noSearchResults" style="display:none;">
-                <div class="empty-state no-results">
-                    <i class="fas fa-search"></i>
+                <div class="empty-state">
+                    <i class="fas fa-search" style="color: var(--primary);"></i>
                     <p>No patients match your search</p>
                     <p class="sub">Try a different keyword</p>
                 </div>
@@ -1609,53 +1740,34 @@ include_once '../../components/pharmacy_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- FOOTER -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Prescription History (Grouped by Patient)
+            Prescription History (Grouped by Visit)
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
 
 </main>
 
-<!-- TOAST -->
-<div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.8rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.7rem;opacity:0.9;margin:0;" id="toastMessage"></p>
-    </div>
-</div>
-
 <script>
     // DARK MODE
     var htmlElement = document.documentElement;
     var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-    } else if (savedDarkMode === 'false') {
-        htmlElement.removeAttribute('data-theme');
-    } else {
+    if (savedDarkMode === 'true') htmlElement.setAttribute('data-theme', 'dark');
+    else if (savedDarkMode === 'false') htmlElement.removeAttribute('data-theme');
+    else {
         var cookieDark = document.cookie.match(/dark_mode=([^;]+)/);
-        if (cookieDark && cookieDark[1] === 'true') {
-            htmlElement.setAttribute('data-theme', 'dark');
-        }
+        if (cookieDark && cookieDark[1] === 'true') htmlElement.setAttribute('data-theme', 'dark');
     }
-
+    
     // SIDEBAR
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-    
     if (sidebarToggle && sidebar) {
-        sidebarToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('open');
-        });
+        sidebarToggle.addEventListener('click', function() { sidebar.classList.toggle('open'); });
     }
     
     document.addEventListener('click', function(e) {
@@ -1665,21 +1777,16 @@ include_once '../../components/pharmacy_sidebar.php';
             }
         }
     });
-
+    
     // TOGGLE PATIENT CARD
     function togglePatient(patientId) {
         var body = document.getElementById('body-' + patientId);
         var chevron = document.getElementById('chevron-' + patientId);
-        
-        if (body) {
-            body.classList.toggle('open');
-        }
-        if (chevron) {
-            chevron.classList.toggle('rotated');
-        }
+        if (body) body.classList.toggle('open');
+        if (chevron) chevron.classList.toggle('rotated');
     }
     
-    // Auto-open first patient card
+    // Auto-open first patient
     document.addEventListener('DOMContentLoaded', function() {
         var firstBody = document.querySelector('.patient-body');
         var firstChevron = document.querySelector('.chevron');
@@ -1690,10 +1797,8 @@ include_once '../../components/pharmacy_sidebar.php';
             }, 300);
         }
     });
-
-    // ================================================================
-    // LIVE SEARCH WITH TOTAL QTY FOR SPECIFIC MEDICINE
-    // ================================================================
+    
+    // LIVE SEARCH
     var tableSearch = document.getElementById('tableSearch');
     var searchClear = document.getElementById('searchClear');
     var searchResultsCount = document.getElementById('searchResultsCount');
@@ -1701,13 +1806,12 @@ include_once '../../components/pharmacy_sidebar.php';
     var searchTermDisplay = document.getElementById('searchTermDisplay');
     var totalQtyDisplay = document.getElementById('totalQtyDisplay');
     var totalPatientsDisplay = document.getElementById('totalPatientsDisplay');
-    var totalPrescriptionsDisplay = document.getElementById('totalPrescriptionsDisplay');
+    var totalVisitsDisplay = document.getElementById('totalVisitsDisplay');
     var patientCards = document.querySelectorAll('.patient-card');
     var noSearchResults = document.getElementById('noSearchResults');
     var headerCount = document.getElementById('headerCount');
     
-    var totalPatients = patientCards.length;
-    if (headerCount) headerCount.textContent = totalPatients + ' Patients';
+    if (headerCount) headerCount.textContent = patientCards.length + ' Patients';
     
     var originalHTMLMap = new WeakMap();
     
@@ -1717,113 +1821,75 @@ include_once '../../components/pharmacy_sidebar.php';
         return div.innerHTML;
     }
     
-    function escapeRegex(text) {
-        return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    }
-    
-    function numberFormat(num) {
-        return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    }
+    function escapeRegex(text) { return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+    function numberFormat(num) { return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
     
     function highlightText(element, query) {
-        if (!element) return 0;
-        
-        if (!originalHTMLMap.has(element)) {
-            originalHTMLMap.set(element, element.innerHTML);
-        }
-        
+        if (!element) return;
+        if (!originalHTMLMap.has(element)) originalHTMLMap.set(element, element.innerHTML);
         var originalHTML = originalHTMLMap.get(element);
         
-        if (!query || query.trim() === '') {
-            element.innerHTML = originalHTML;
-            return 0;
-        }
+        if (!query || query.trim() === '') { element.innerHTML = originalHTML; return; }
         
         var tempDiv = document.createElement('div');
         tempDiv.innerHTML = originalHTML;
         var textContent = tempDiv.textContent || tempDiv.innerText || '';
+        if (!textContent.trim()) { element.innerHTML = originalHTML; return; }
         
-        if (!textContent.trim()) {
-            element.innerHTML = originalHTML;
-            return 0;
-        }
+        var regex = new RegExp('(' + escapeRegex(query) + ')', 'gi');
+        if (!textContent.match(regex)) { element.innerHTML = originalHTML; return; }
         
-        var escapedQuery = escapeRegex(query);
-        var regex = new RegExp('(' + escapedQuery + ')', 'gi');
-        
-        var matches = textContent.match(regex);
-        var matchCount = matches ? matches.length : 0;
-        
-        if (matchCount === 0) {
-            element.innerHTML = originalHTML;
-            return 0;
-        }
-        
-        var escapedText = escapeHtml(textContent);
-        var highlightedHTML = escapedText.replace(regex, '<mark class="search-highlight">$1</mark>');
-        
-        element.innerHTML = highlightedHTML;
-        return matchCount;
+        element.innerHTML = escapeHtml(textContent).replace(regex, '<mark class="search-highlight">$1</mark>');
     }
     
     function removeAllHighlights() {
         document.querySelectorAll('[data-searchable]').forEach(function(el) {
-            if (originalHTMLMap.has(el)) {
-                el.innerHTML = originalHTMLMap.get(el);
-            }
+            if (originalHTMLMap.has(el)) el.innerHTML = originalHTMLMap.get(el);
         });
     }
     
     function calculateSearchTotals(query) {
         if (!query || query.trim() === '') {
             if (searchInfoBox) searchInfoBox.classList.remove('show');
-            return { totalQty: 0, totalPatients: 0, totalPrescriptions: 0 };
+            return;
         }
         
         var lowerQuery = query.toLowerCase().trim();
         var allRows = document.querySelectorAll('.med-row');
         var totalQty = 0;
         var totalPatientsSet = new Set();
-        var totalPrescriptions = 0;
+        var totalVisitsSet = new Set();
         
         allRows.forEach(function(row) {
             var medName = row.dataset.medName || '';
             var qty = parseInt(row.dataset.qty) || 0;
+            var visitId = row.dataset.visitId || '';
+            var patientId = row.dataset.patientId || '';
             
             if (medName.indexOf(lowerQuery) !== -1) {
                 totalQty += qty;
-                totalPrescriptions++;
-                
-                var patientCard = row.closest('.patient-card');
-                if (patientCard) {
-                    totalPatientsSet.add(patientCard.dataset.patientId);
-                }
+                if (patientId) totalPatientsSet.add(patientId);
+                if (visitId && patientId) totalVisitsSet.add(patientId + '-' + visitId);
             }
         });
         
         var totalPatients = totalPatientsSet.size;
+        var totalVisits = totalVisitsSet.size;
         
-        if (searchInfoBox && totalPrescriptions > 0) {
+        if (searchInfoBox && (totalPatients > 0 || totalQty > 0)) {
             searchTermDisplay.textContent = query;
             totalQtyDisplay.innerHTML = numberFormat(totalQty) + ' <small>units</small>';
             totalPatientsDisplay.innerHTML = numberFormat(totalPatients) + ' <small>patients</small>';
-            totalPrescriptionsDisplay.innerHTML = numberFormat(totalPrescriptions) + ' <small>items</small>';
+            totalVisitsDisplay.innerHTML = numberFormat(totalVisits) + ' <small>visits</small>';
             searchInfoBox.classList.add('show');
-        } else if (searchInfoBox) {
-            searchInfoBox.classList.remove('show');
-        }
-        
-        return { totalQty: totalQty, totalPatients: totalPatients, totalPrescriptions: totalPrescriptions };
+        } else if (searchInfoBox) searchInfoBox.classList.remove('show');
     }
     
     function performLiveSearch() {
         var query = tableSearch.value.toLowerCase().trim();
         
-        if (query.length > 0) {
-            searchClear.classList.add('visible');
-        } else {
-            searchClear.classList.remove('visible');
-        }
+        if (query.length > 0) searchClear.classList.add('visible');
+        else searchClear.classList.remove('visible');
         
         removeAllHighlights();
         
@@ -1835,9 +1901,7 @@ include_once '../../components/pharmacy_sidebar.php';
             
             medRows.forEach(function(row) {
                 var searchData = row.getAttribute('data-search') || '';
-                if (query === '' || searchData.includes(query)) {
-                    hasMatch = true;
-                }
+                if (query === '' || searchData.includes(query)) hasMatch = true;
             });
             
             if (hasMatch) {
@@ -1853,23 +1917,36 @@ include_once '../../components/pharmacy_sidebar.php';
                     }
                 }
                 
-                var visibleRows = 0;
-                medRows.forEach(function(row) {
-                    var searchData = row.getAttribute('data-search') || '';
-                    if (query === '' || searchData.includes(query)) {
-                        row.style.display = '';
-                        visibleRows++;
-                        var rowNum = row.querySelector('.row-number');
-                        if (rowNum) rowNum.textContent = visibleRows;
-                        
-                        if (query !== '') {
-                            var searchableElements = row.querySelectorAll('[data-searchable]');
-                            searchableElements.forEach(function(el) {
-                                highlightText(el, query);
-                            });
-                        }
+                card.querySelectorAll('.visit-section').forEach(function(vs) {
+                    var vsRows = vs.querySelectorAll('.med-row');
+                    var vsHasMatch = false;
+                    
+                    vsRows.forEach(function(row) {
+                        var searchData = row.getAttribute('data-search') || '';
+                        if (query === '' || searchData.includes(query)) vsHasMatch = true;
+                    });
+                    
+                    if (vsHasMatch || query === '') {
+                        vs.style.display = '';
+                        var visibleRows = 0;
+                        vsRows.forEach(function(row) {
+                            var searchData = row.getAttribute('data-search') || '';
+                            if (query === '' || searchData.includes(query)) {
+                                row.style.display = '';
+                                visibleRows++;
+                                var rowNum = row.querySelector('.row-number');
+                                if (rowNum) rowNum.textContent = visibleRows;
+                                if (query !== '') {
+                                    row.querySelectorAll('[data-searchable]').forEach(function(el) {
+                                        highlightText(el, query);
+                                    });
+                                }
+                            } else {
+                                row.style.display = 'none';
+                            }
+                        });
                     } else {
-                        row.style.display = 'none';
+                        vs.style.display = 'none';
                     }
                 });
             } else {
@@ -1879,11 +1956,8 @@ include_once '../../components/pharmacy_sidebar.php';
         
         calculateSearchTotals(query);
         
-        if (visiblePatients === 0 && query !== '') {
-            noSearchResults.style.display = '';
-        } else {
-            noSearchResults.style.display = 'none';
-        }
+        if (visiblePatients === 0 && query !== '') noSearchResults.style.display = '';
+        else noSearchResults.style.display = 'none';
         
         if (headerCount) headerCount.textContent = visiblePatients + ' Patients';
         
@@ -1914,62 +1988,30 @@ include_once '../../components/pharmacy_sidebar.php';
         });
     }
     
-    if (tableSearch && tableSearch.value.trim() !== '') {
-        performLiveSearch();
-    }
+    if (tableSearch && tableSearch.value.trim() !== '') performLiveSearch();
     
     document.addEventListener('keydown', function(e) {
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
             e.preventDefault();
-            if (tableSearch) {
-                tableSearch.focus();
-                tableSearch.select();
-            }
+            if (tableSearch) { tableSearch.focus(); tableSearch.select(); }
         }
     });
-
+    
     // DATE & TIME
     function updateDateTime() {
         var now = new Date();
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        
+        var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
         var footerTimestamp = document.getElementById('footerTimestamp');
         if (footerTimestamp) footerTimestamp.textContent = 'Last updated: ' + timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
-
-    // TOAST
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
-        if (!toast) return;
-        
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
-    }
-
-    console.log('%c📋 Braick - Prescription History (Grouped by Patient)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ 1. Filters (All, Pending, Confirmed, Dispensed, Cancelled)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ 2. Search bar - inatafuta dawa na total qty', 'font-size:13px; color:#FCD34D;');
-    console.log('%c✅ 3. Patient tables with DATE display', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ VIEW button - small width', 'font-size:13px; color:#34D399;');
-    console.log('%c📊 Total Patients: <?= count($grouped_prescriptions) ?>', 'font-size:13px; color:#64748B;');
+    
+    console.log('%c📋 Braick - Prescription History V3 (Dynamic VIEW)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Pending → view_patient_prescriptions.php', 'font-size:13px; color:#D97706; font-weight:bold;');
+    console.log('%c✅ Confirmed → view_confirmed_prescriptions.php', 'font-size:13px; color:#3B82F6; font-weight:bold;');
+    console.log('%c✅ Dispensed → view_dispensed_prescriptions.php', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ Cancelled → disabled', 'font-size:13px; color:#DC2626; font-weight:bold;');
 </script>
 
 </body>

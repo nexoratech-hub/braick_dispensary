@@ -1,27 +1,20 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/otc_history.php
-// PHARMACY - OTC SALE HISTORY
-// ✅ BLUE THEME
-// ✅ Search bar shows TOTAL DISPENSED for SPECIFIC medicine
-// ✅ Removed Pending Payments & Today's Sales cards
-// ✅ Dispensed Items focus (no revenue)
-// BRAICK DISPENSARY
+// PHARMACY - OTC SALE HISTORY V3 (SCROLL BUTTONS + QUICK FILTERS)
+// ✅ ADDED: < > scroll buttons kwenye table header
+// ✅ ADDED: Quick date filters (Today, 1W, 1M, 3M, 6M, 1Y, All, Custom)
+// ✅ ADDED: Medication column (jina la dawa + qty)
+// ✅ Search highlight works on medicine names
 // ================================================================
 
 session_start();
 
-// ================================================================
-// CHECK SESSION
-// ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// GET USER DATA
-// ================================================================
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
@@ -29,9 +22,6 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
 $user_username = $_SESSION['username'] ?? 'pharmacy';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// DATABASE CONNECTION
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
@@ -40,9 +30,6 @@ try {
     die("Database connection failed: " . $e->getMessage());
 }
 
-// ================================================================
-// SESSION MESSAGES
-// ================================================================
 $message = '';
 $message_type = '';
 $show_message = false;
@@ -62,12 +49,48 @@ if (isset($_SESSION['otc_sale_message'])) {
 }
 
 // ================================================================
-// FILTERS
+// ✅ FILTERS - Quick Date Filter
 // ================================================================
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
+$payment_status = isset($_GET['payment_status']) ? trim($_GET['payment_status']) : '';
+$quick_filter = isset($_GET['quick']) ? $_GET['quick'] : 'all';
 $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
-$payment_status = isset($_GET['payment_status']) ? trim($_GET['payment_status']) : '';
+
+// ✅ Determine date range based on quick filter
+$quick_date_from = '';
+$quick_date_to = date('Y-m-d');
+
+switch ($quick_filter) {
+    case 'today':
+        $quick_date_from = date('Y-m-d');
+        $quick_date_to = date('Y-m-d');
+        break;
+    case '1w':
+        $quick_date_from = date('Y-m-d', strtotime('-7 days'));
+        break;
+    case '1m':
+        $quick_date_from = date('Y-m-d', strtotime('-1 month'));
+        break;
+    case '3m':
+        $quick_date_from = date('Y-m-d', strtotime('-3 months'));
+        break;
+    case '6m':
+        $quick_date_from = date('Y-m-d', strtotime('-6 months'));
+        break;
+    case '1y':
+        $quick_date_from = date('Y-m-d', strtotime('-1 year'));
+        break;
+    case 'custom':
+        $quick_date_from = $date_from;
+        $quick_date_to = $date_to;
+        break;
+    case 'all':
+    default:
+        $quick_date_from = '';
+        $quick_date_to = '';
+        break;
+}
 
 // ================================================================
 // GET OTC SALES
@@ -123,14 +146,15 @@ if (!empty($search)) {
     $params[] = $search_param;
 }
 
-if (!empty($date_from)) {
+// ✅ Apply date filter based on quick filter
+if (!empty($quick_date_from)) {
     $query .= " AND DATE(os.created_at) >= ?";
-    $params[] = $date_from;
+    $params[] = $quick_date_from;
 }
 
-if (!empty($date_to)) {
+if (!empty($quick_date_to)) {
     $query .= " AND DATE(os.created_at) <= ?";
-    $params[] = $date_to;
+    $params[] = $quick_date_to;
 }
 
 if (!empty($payment_status)) {
@@ -145,7 +169,7 @@ $stmt->execute($params);
 $sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// ✅ GET ALL ITEMS FOR EACH SALE (kwa ajili ya search ya dawa specific)
+// GET ALL ITEMS FOR EACH SALE
 // ================================================================
 $sale_ids = array_column($sales, 'sale_id');
 $sale_items_map = [];
@@ -169,13 +193,10 @@ if (!empty($sale_ids)) {
 // ================================================================
 // STATISTICS
 // ================================================================
-
-// Total Sales
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ?");
 $stmt->execute([$user_branch_id]);
 $total_sales = $stmt->fetch()['count'] ?? 0;
 
-// ✅ TOTAL ITEMS DISPENSED
 $stmt = $db->prepare("
     SELECT COALESCE(SUM(oi.quantity), 0) as total_dispensed 
     FROM otc_sale_items oi 
@@ -185,7 +206,6 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $total_dispensed_items = $stmt->fetch()['total_dispensed'] ?? 0;
 
-// ✅ TOTAL UNIQUE MEDICINES
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT oi.item_name) as unique_medicines 
     FROM otc_sale_items oi 
@@ -195,7 +215,6 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $unique_medicines = $stmt->fetch()['unique_medicines'] ?? 0;
 
-// Today's Sales & Today's Dispensed Items
 $stmt = $db->prepare("
     SELECT 
         COUNT(DISTINCT os.id) as count,
@@ -211,9 +230,7 @@ $today_data = $stmt->fetch(PDO::FETCH_ASSOC);
 $today_count = $today_data['count'] ?? 0;
 $today_dispensed_items = $today_data['total_dispensed'] ?? 0;
 
-// ================================================================
 // SIDEBAR STATS
-// ================================================================
 $low_stock_count = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM medications_inventory WHERE branch_id = ? AND quantity <= reorder_level AND quantity > 0 AND status = 'active'");
@@ -243,6 +260,19 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
 
 $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light';
 
+// Helper function to build URL with current filters
+function buildFilterUrl($params_to_update = []) {
+    $current = $_GET;
+    foreach ($params_to_update as $key => $value) {
+        if ($value === null || $value === '') {
+            unset($current[$key]);
+        } else {
+            $current[$key] = $value;
+        }
+    }
+    return '?' . http_build_query($current);
+}
+
 include_once __DIR__ . '/../../components/pharmacy_header.php';
 include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 ?>
@@ -265,7 +295,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             --primary-dark: #0A3D8A;
             --primary-light: #E8F0FE;
             --success: #059669;
-            --success-dark: #047857;
             --success-light: #D1FAE5;
             --warning: #D97706;
             --warning-light: #FEF3C7;
@@ -274,7 +303,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             --purple: #7C3AED;
             --purple-light: #EDE9FE;
             --gold: #F59E0B;
-            --gold-light: #FEF3C7;
             --highlight-bg: #FEF08A;
             --highlight-text: #713F12;
             
@@ -297,7 +325,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             --success-light: #1A3A2A;
             --warning-light: #3D2E0A;
             --danger-light: #3A1A1A;
-            --purple-light: #2A1A3A;
             --highlight-bg: #FCD34D;
             --highlight-text: #422006;
         }
@@ -318,7 +345,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ✅ PAGE HEADER - BLUE THEME */
         .page-header {
             background: linear-gradient(135deg, #0B5ED7, #0A3D8A);
             border-radius: 16px;
@@ -384,7 +410,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            backdrop-filter: blur(4px);
         }
         
         .page-header .btn-outline-light {
@@ -395,12 +420,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             border-radius: 10px;
             font-weight: 500;
             font-size: 0.82rem;
-            transition: all 0.3s;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            backdrop-filter: blur(4px);
             position: relative;
             z-index: 1;
         }
@@ -410,7 +433,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             transform: translateY(-2px);
         }
         
-        /* STATS - 4 CARDS ONLY */
+        /* STATS */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -427,30 +450,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             min-height: 75px;
         }
         
-        .stat-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-        }
+        .stat-card:hover { transform: translateY(-4px); box-shadow: 0 8px 25px rgba(0,0,0,0.15); }
         
-        .stat-card .stat-number {
-            font-size: 1.5rem;
-            font-weight: 700;
-            line-height: 1.2;
-        }
-        
-        .stat-card .stat-label {
-            font-size: 0.6rem;
-            color: rgba(255,255,255,0.85);
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.03em;
-        }
-        
-        .stat-card .stat-icon {
-            font-size: 1.2rem;
-            opacity: 0.8;
-            float: right;
-        }
+        .stat-card .stat-number { font-size: 1.5rem; font-weight: 700; line-height: 1.2; }
+        .stat-card .stat-label { font-size: 0.6rem; color: rgba(255,255,255,0.85); font-weight: 500; text-transform: uppercase; letter-spacing: 0.03em; }
+        .stat-card .stat-icon { font-size: 1.2rem; opacity: 0.8; float: right; }
         
         .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
         .stat-card.blue-dark { background: linear-gradient(135deg, #0A4CA8, #083A80); }
@@ -474,18 +478,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             to { opacity: 1; transform: translateY(0); }
         }
         
-        .message-box.success {
-            background: var(--success-light);
-            color: #065F46;
-            border: 2px solid #6EE7B7;
-        }
-        
-        .message-box.error {
-            background: var(--danger-light);
-            color: #991B1B;
-            border: 2px solid #FCA5A5;
-        }
-        
+        .message-box.success { background: var(--success-light); color: #065F46; border: 2px solid #6EE7B7; }
+        .message-box.error { background: var(--danger-light); color: #991B1B; border: 2px solid #FCA5A5; }
         .message-box i { font-size: 1.3rem; }
         
         .message-box .message-close {
@@ -496,15 +490,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             opacity: 0.6;
         }
         
-        .message-box .message-close:hover { opacity: 1; }
-        
-        .message-box .message-timer {
-            font-size: 0.6rem;
-            opacity: 0.6;
-            margin-left: 8px;
-        }
-        
-        /* CARD */
         .card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -514,12 +499,73 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             margin-bottom: 20px;
         }
         
-        .card:hover {
-            border-color: var(--primary);
-            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06);
+        .card:hover { border-color: var(--primary); box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06); }
+        
+        /* ✅ QUICK DATE FILTERS */
+        .quick-filters {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            align-items: center;
+            padding-bottom: 14px;
+            border-bottom: 2px solid var(--border-color);
+            margin-bottom: 14px;
         }
         
-        /* TABLE HEADER WITH SEARCH */
+        .quick-filters .filter-label {
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            margin-right: 6px;
+        }
+        
+        .quick-filter-btn {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            border: 2px solid var(--border-color);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            white-space: nowrap;
+            transition: all 0.25s ease;
+        }
+        
+        .quick-filter-btn:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: var(--primary-light);
+            transform: translateY(-1px);
+        }
+        
+        .quick-filter-btn.active {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            border-color: var(--primary);
+            color: white;
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.35);
+        }
+        
+        .quick-filter-btn.today.active {
+            background: linear-gradient(135deg, #059669, #047857);
+            border-color: #059669;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+        }
+        
+        .quick-filter-btn.custom.active {
+            background: linear-gradient(135deg, #D97706, #B45309);
+            border-color: #D97706;
+            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.35);
+        }
+        
+        /* TABLE HEADER BAR */
         .table-header-bar {
             display: flex;
             justify-content: space-between;
@@ -540,15 +586,48 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             min-width: 0;
         }
         
-        .table-header-right {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-shrink: 0;
-            flex-wrap: wrap;
+        .table-header-right { 
+            display: flex; 
+            align-items: center; 
+            gap: 8px; 
+            flex-shrink: 0; 
+            flex-wrap: wrap; 
         }
         
-        /* Search box with icon */
+        /* ✅ SCROLL BUTTONS */
+        .scroll-buttons {
+            display: inline-flex;
+            gap: 6px;
+            align-items: center;
+        }
+        
+        .scroll-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+            border: none;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            font-weight: 700;
+            transition: all 0.25s ease;
+            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.25);
+        }
+        
+        .scroll-btn:hover {
+            transform: translateY(-2px) scale(1.05);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.4);
+            background: linear-gradient(135deg, #1E88E5, var(--primary));
+        }
+        
+        .scroll-btn:active {
+            transform: translateY(0) scale(0.95);
+        }
+        
         .table-search-box {
             position: relative;
             min-width: 280px;
@@ -577,17 +656,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             outline: none;
             font-weight: 500;
             height: 42px;
-            transition: all 0.3s ease;
         }
         
-        .table-search-box input::placeholder {
-            color: rgba(255,255,255,0.85);
-        }
-        
-        .table-search-box input:focus {
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.2);
-            transform: translateY(-1px);
-        }
+        .table-search-box input::placeholder { color: rgba(255,255,255,0.85); }
+        .table-search-box input:focus { box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.2); }
         
         .table-search-box .clear-search-inline {
             position: absolute;
@@ -599,17 +671,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             cursor: pointer;
             padding: 4px 8px;
             border-radius: 50%;
-            transition: all 0.2s ease;
             display: none;
         }
         
         .table-search-box .clear-search-inline.show { display: block; }
-        .table-search-box .clear-search-inline:hover {
-            background: rgba(255,255,255,0.2);
-            transform: translateY(-50%) scale(1.1);
-        }
         
-        /* ✅ TOTAL DISPENSED INFO BOX */
         .dispensed-info-box {
             display: none;
             margin-bottom: 14px;
@@ -620,18 +686,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             align-items: center;
             gap: 16px;
             flex-wrap: wrap;
-            animation: slideDown 0.4s ease;
         }
         
-        [data-theme="dark"] .dispensed-info-box {
-            background: linear-gradient(135deg, #1E3A5F, #16294A);
-        }
+        [data-theme="dark"] .dispensed-info-box { background: linear-gradient(135deg, #1E3A5F, #16294A); }
         
         .dispensed-info-box.show { display: flex; }
         
         .dispensed-info-box .info-icon {
-            width: 50px;
-            height: 50px;
+            width: 50px; height: 50px;
             border-radius: 50%;
             background: var(--primary);
             color: white;
@@ -640,20 +702,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             justify-content: center;
             font-size: 1.3rem;
             flex-shrink: 0;
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
         }
         
-        .dispensed-info-box .info-text {
-            flex: 1;
-            min-width: 180px;
-        }
+        .dispensed-info-box .info-text { flex: 1; min-width: 180px; }
         
         .dispensed-info-box .info-label {
             font-size: 0.65rem;
             color: var(--text-secondary);
             font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
         }
         
         .dispensed-info-box .info-value {
@@ -670,24 +727,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             margin-left: 6px;
         }
         
-        .dispensed-info-box .info-divider {
-            width: 2px;
-            height: 45px;
-            background: var(--border-color);
-        }
+        .dispensed-info-box .info-divider { width: 2px; height: 45px; background: var(--border-color); }
+        .dispensed-info-box .info-search-term { font-size: 0.9rem; color: var(--text-secondary); font-weight: 500; }
+        .dispensed-info-box .info-search-term strong { color: var(--primary); font-weight: 700; }
         
-        .dispensed-info-box .info-search-term {
-            font-size: 0.9rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .dispensed-info-box .info-search-term strong {
-            color: var(--primary);
-            font-weight: 700;
-        }
-        
-        /* ✅ Matched items badges */
         .matched-items-list {
             display: flex;
             flex-wrap: wrap;
@@ -716,13 +759,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             font-size: 0.6rem;
         }
         
-        /* Filter chips */
-        .filter-chips {
-            display: flex;
-            gap: 6px;
-            flex-wrap: wrap;
-            align-items: center;
-        }
+        .filter-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
         
         .filter-chip {
             padding: 6px 14px;
@@ -733,7 +770,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             background: var(--bg-card);
             color: var(--text-secondary);
             cursor: pointer;
-            transition: all 0.3s ease;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
@@ -741,39 +777,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             white-space: nowrap;
         }
         
-        .filter-chip:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-            background: var(--primary-light);
-            transform: translateY(-1px);
-        }
+        .filter-chip:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-light); }
+        .filter-chip.active { background: var(--primary); border-color: var(--primary); color: white; }
+        .filter-chip.paid.active { background: var(--success); border-color: var(--success); }
+        .filter-chip.pending.active { background: var(--warning); border-color: var(--warning); }
+        .filter-chip.danger.active { background: var(--danger); border-color: var(--danger); }
         
-        .filter-chip.active {
-            background: var(--primary);
-            border-color: var(--primary);
-            color: white;
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .filter-chip.paid.active {
-            background: var(--success);
-            border-color: var(--success);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        .filter-chip.pending.active {
-            background: var(--warning);
-            border-color: var(--warning);
-            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
-        }
-        
-        .filter-chip.danger.active {
-            background: var(--danger);
-            border-color: var(--danger);
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-        }
-        
-        /* Result count */
         .result-count {
             font-size: 0.75rem;
             color: var(--text-secondary);
@@ -789,32 +798,34 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         .result-count strong { color: var(--primary); }
         
-        /* Advanced filters */
-        .advanced-filters {
+        /* ✅ CUSTOM DATE FILTER ROW */
+        .custom-date-row {
             display: none;
-            padding: 12px 0;
-            border-bottom: 1px solid var(--border-color);
+            padding: 12px 16px;
+            background: var(--bg-body);
+            border-radius: 10px;
             margin-bottom: 14px;
             gap: 10px;
             flex-wrap: wrap;
+            align-items: end;
         }
         
-        .advanced-filters.show { display: flex; }
+        .custom-date-row.show { display: flex; }
         
-        .advanced-filters .form-group {
+        .custom-date-row .form-group {
             flex: 1;
             min-width: 140px;
         }
         
-        .advanced-filters .form-group label {
+        .custom-date-row .form-group label {
             font-size: 0.7rem;
             font-weight: 600;
             color: var(--text-secondary);
             display: block;
-            margin-bottom: 2px;
+            margin-bottom: 4px;
         }
         
-        .advanced-filters .form-control {
+        .custom-date-row .form-control {
             width: 100%;
             padding: 8px 12px;
             border: 2px solid var(--border-color);
@@ -823,40 +834,30 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             background: var(--bg-card);
             color: var(--text-primary);
             outline: none;
-            transition: all 0.3s ease;
-        }
-        
-        .advanced-filters .form-control:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
         }
         
         .btn-apply-filters {
             padding: 8px 20px;
             border-radius: 8px;
-            font-weight: 600;
+            font-weight: 700;
             font-size: 0.8rem;
             border: none;
-            background: var(--primary);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             color: white;
             cursor: pointer;
-            height: 42px;
+            height: 40px;
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            align-self: flex-end;
         }
         
-        .btn-apply-filters:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-        }
+        .btn-apply-filters:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
         
         .btn-toggle-filters {
-            padding: 6px 12px;
+            padding: 8px 14px;
             border-radius: 8px;
-            font-size: 0.7rem;
-            font-weight: 600;
+            font-size: 0.75rem;
+            font-weight: 700;
             border: 2px solid var(--border-color);
             background: transparent;
             color: var(--text-secondary);
@@ -864,30 +865,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             display: inline-flex;
             align-items: center;
             gap: 5px;
-            transition: all 0.3s;
+            height: 36px;
         }
         
-        .btn-toggle-filters:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .btn-toggle-filters.active {
-            background: var(--primary-light);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
+        .btn-toggle-filters:hover { border-color: var(--primary); color: var(--primary); }
         
         /* TABLE */
-        .table-wrap { overflow-x: auto; }
+        .table-wrap { 
+            overflow-x: auto; 
+            scroll-behavior: smooth;
+            border-radius: 10px;
+        }
         
-        .table-wrap::-webkit-scrollbar { height: 6px; width: 6px; }
+        .table-wrap::-webkit-scrollbar { height: 8px; width: 8px; }
         .table-wrap::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
         .table-wrap::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
+        .table-wrap::-webkit-scrollbar-thumb:hover { background: var(--primary-dark); }
         
         .data-table {
             width: 100%;
-            min-width: 850px;
+            min-width: 1100px;
             border-collapse: separate;
             border-spacing: 0;
             font-size: 0.75rem;
@@ -910,35 +907,87 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         .data-table thead th:first-child { border-radius: 8px 0 0 0; }
         .data-table thead th:last-child { border-radius: 0 8px 0 0; }
-        
         .data-table thead th.center { text-align: center; }
         .data-table thead th.right { text-align: right; }
         
         .data-table tbody tr:nth-child(even) { background: var(--primary-light); }
-        
         .data-table tbody tr:hover td { background: var(--success-light); }
         
         .data-table td {
             padding: 8px 10px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
-            vertical-align: middle;
+            vertical-align: top;
         }
         
         .data-table td.center { text-align: center; }
         .data-table td.right { text-align: right; }
         
-        /* Column widths */
         .col-sno { width: 30px; text-align: center; }
         .col-sale { width: 110px; }
-        .col-customer { width: 140px; }
-        .col-items { width: 160px; }
+        .col-customer { width: 130px; }
+        .col-medication { width: 240px; }
         .col-qty { width: 70px; text-align: center; }
         .col-total { width: 90px; text-align: right; }
         .col-payment { width: 85px; }
         .col-status { width: 85px; text-align: center; }
         .col-date { width: 100px; }
         .col-actions { width: 80px; text-align: center; }
+        
+        /* MEDICATION CELL */
+        .med-list {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+        
+        .med-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 0;
+            border-bottom: 1px dashed var(--border-color);
+            font-size: 0.7rem;
+            line-height: 1.3;
+        }
+        
+        .med-item:last-child { border-bottom: none; }
+        
+        .med-item .med-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--primary);
+            flex-shrink: 0;
+        }
+        
+        .med-item .med-name {
+            font-weight: 700;
+            color: var(--primary);
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 130px;
+        }
+        
+        .med-item .med-qty {
+            background: var(--primary);
+            color: white;
+            padding: 1px 7px;
+            border-radius: 8px;
+            font-size: 0.6rem;
+            font-weight: 700;
+            white-space: nowrap;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .med-more {
+            font-size: 0.6rem;
+            color: var(--text-muted);
+            padding: 2px 0;
+            font-style: italic;
+        }
         
         /* BADGES */
         .badge-status {
@@ -953,9 +1002,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .badge-success { background: var(--success-light); color: var(--success); border: 1px solid var(--success); }
         .badge-warning { background: var(--warning-light); color: var(--warning); border: 1px solid var(--warning); }
         .badge-danger { background: var(--danger-light); color: var(--danger); border: 1px solid var(--danger); }
-        .badge-info { background: var(--primary-light); color: var(--primary); border: 1px solid var(--primary); }
         
-        /* BATCH NUMBER */
         .batch-number {
             font-family: 'Courier New', monospace;
             font-size: 0.7rem;
@@ -967,22 +1014,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             display: inline-block;
         }
         
-        /* ITEMS LIST */
-        .items-list-compact {
-            font-size: 0.6rem;
-            color: var(--text-secondary);
-            max-width: 150px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        
-        .items-list-compact .item-count {
-            font-weight: 600;
-            color: var(--primary);
-        }
-        
-        /* QTY BADGE */
         .qty-badge {
             display: inline-flex;
             align-items: center;
@@ -996,7 +1027,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             border: 1px solid var(--primary);
         }
         
-        /* ACTION BUTTONS */
         .action-btn {
             padding: 4px 10px;
             border-radius: 6px;
@@ -1004,7 +1034,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             font-weight: 600;
             border: none;
             cursor: pointer;
-            transition: all 0.3s ease;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
@@ -1012,71 +1041,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             margin: 2px;
         }
         
-        .action-btn.view {
-            background: var(--primary);
-            color: white;
-        }
+        .action-btn.view { background: var(--primary); color: white; }
+        .action-btn.view:hover { background: var(--primary-dark); transform: scale(1.05); }
+        .action-btn.print { background: #0A3D8A; color: white; }
+        .action-btn.print:hover { background: #083A80; transform: scale(1.05); }
         
-        .action-btn.view:hover {
-            background: var(--primary-dark);
-            transform: scale(1.05);
-        }
-        
-        .action-btn.print {
-            background: #0A3D8A;
-            color: white;
-        }
-        
-        .action-btn.print:hover {
-            background: #083A80;
-            transform: scale(1.05);
-        }
-        
-        /* HIGHLIGHT STYLES */
         mark.search-highlight {
             background: var(--highlight-bg);
             color: var(--highlight-text);
             padding: 0 2px;
             border-radius: 3px;
             font-weight: 700;
-            box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.3);
-            animation: highlight-pulse 0.6s ease;
         }
         
-        [data-theme="dark"] mark.search-highlight {
-            background: var(--highlight-bg);
-            color: var(--highlight-text);
-            box-shadow: 0 0 0 1px rgba(252, 211, 77, 0.5);
-        }
+        [data-theme="dark"] mark.search-highlight { background: var(--highlight-bg); color: var(--highlight-text); }
         
-        @keyframes highlight-pulse {
-            0% { background-color: #FDE047; transform: scale(1.05); }
-            50% { background-color: #FCD34D; transform: scale(1.1); }
-            100% { background-color: var(--highlight-bg); transform: scale(1); }
-        }
-        
-        .data-table td mark.search-highlight {
-            display: inline-block;
-        }
-        
-        /* EMPTY STATE */
-        .empty-state {
-            text-align: center;
-            padding: 40px 20px;
-            color: var(--text-secondary);
-        }
-        
-        .empty-state i {
-            font-size: 2.5rem;
-            color: var(--border-color);
-            display: block;
-            margin-bottom: 10px;
-        }
-        
+        .empty-state { text-align: center; padding: 40px 20px; color: var(--text-secondary); }
+        .empty-state i { font-size: 2.5rem; color: var(--border-color); display: block; margin-bottom: 10px; }
         .empty-state p { font-size: 0.9rem; }
         .empty-state .sub { font-size: 0.75rem; color: var(--text-muted); }
         
-        /* FOOTER */
         .footer {
             padding: 14px 0;
             border-top: 2px solid var(--border-color);
@@ -1085,9 +1069,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             font-size: 0.7rem;
             color: var(--text-secondary);
         }
+        
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* TOAST */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1098,20 +1082,19 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             max-width: 400px;
             transform: translateY(100px);
             opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: all 0.4s ease;
             display: flex;
             align-items: center;
             gap: 12px;
             color: white;
             box-shadow: 0 10px 40px rgba(0,0,0,0.15);
         }
+        
         .toast-custom.show { transform: translateY(0); opacity: 1; }
         .toast-custom.success { background: var(--success); }
         .toast-custom.error { background: var(--danger); }
         .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
         
-        /* Highlight count badge */
         .highlight-count {
             display: inline-flex;
             align-items: center;
@@ -1125,7 +1108,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             margin-left: 6px;
         }
         
-        /* RESPONSIVE */
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
@@ -1138,11 +1120,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             .card { padding: 12px 14px; }
             .table-header-bar { flex-direction: column; align-items: stretch; }
             .table-header-left { flex-direction: column; align-items: stretch; }
-            .table-header-right { justify-content: stretch; }
             .table-search-box { min-width: 100%; max-width: 100%; }
-            .filter-chips { justify-content: center; }
-            .data-table { min-width: 700px; font-size: 0.65rem; }
-            .data-table th, .data-table td { padding: 5px 6px; }
+            .quick-filters { justify-content: center; }
             .dispensed-info-box { flex-direction: column; text-align: center; }
             .dispensed-info-box .info-divider { display: none; }
         }
@@ -1152,7 +1131,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             .stat-card { padding: 8px 10px; min-height: 55px; }
             .stat-card .stat-number { font-size: 1rem; }
             .filter-chip { font-size: 0.6rem; padding: 4px 10px; }
-            .data-table { min-width: 600px; font-size: 0.55rem; }
+            .quick-filter-btn { font-size: 0.6rem; padding: 4px 10px; }
         }
     </style>
 </head>
@@ -1160,7 +1139,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
 <main class="main-content">
 
-    <!-- ✅ PAGE HEADER - BLUE THEME -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1188,40 +1166,31 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     </div>
 
-    <!-- MESSAGE -->
     <?php if ($show_message): ?>
         <div class="message-box <?= $message_type ?>" id="messageBox">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle') ?>"></i>
             <?= htmlspecialchars($message) ?>
-            <span class="message-timer">(auto-dismiss in 5s)</span>
             <span class="message-close" onclick="dismissMessage()">&times;</span>
         </div>
     <?php endif; ?>
 
-    <!-- ✅ STATS - 4 CARDS ONLY (BLUE THEME) -->
+    <!-- STATS -->
     <div class="stats-grid">
-        <!-- Total Sales -->
         <div class="stat-card blue">
             <span class="stat-icon"><i class="fas fa-shopping-cart"></i></span>
             <div class="stat-number"><?= number_format($total_sales) ?></div>
             <div class="stat-label">Total Sales</div>
         </div>
-        
-        <!-- Items Dispensed -->
         <div class="stat-card blue-dark">
             <span class="stat-icon"><i class="fas fa-pills"></i></span>
             <div class="stat-number"><?= number_format($total_dispensed_items) ?></div>
             <div class="stat-label">Items Dispensed</div>
         </div>
-        
-        <!-- Unique Medicines -->
         <div class="stat-card blue-light">
             <span class="stat-icon"><i class="fas fa-capsules"></i></span>
             <div class="stat-number"><?= number_format($unique_medicines) ?></div>
             <div class="stat-label">Unique Medicines</div>
         </div>
-        
-        <!-- Today's Dispensed -->
         <div class="stat-card sky">
             <span class="stat-icon"><i class="fas fa-calendar-day"></i></span>
             <div class="stat-number"><?= number_format($today_dispensed_items) ?></div>
@@ -1229,13 +1198,78 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     </div>
 
-    <!-- SALES TABLE WITH SEARCH & HIGHLIGHT -->
     <div class="card">
         
-        <!-- TABLE HEADER WITH SEARCH BAR -->
+        <!-- ✅ QUICK DATE FILTERS -->
+        <div class="quick-filters">
+            <span class="filter-label"><i class="fas fa-bolt"></i> Quick:</span>
+            
+            <a href="<?= buildFilterUrl(['quick' => 'all', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === 'all' ? 'active' : '' ?>">
+                <i class="fas fa-infinity"></i> All
+            </a>
+            
+            <a href="<?= buildFilterUrl(['quick' => 'today', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn today <?= $quick_filter === 'today' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-day"></i> Today
+            </a>
+            
+            <a href="<?= buildFilterUrl(['quick' => '1w', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1w' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-week"></i> 1 Week
+            </a>
+            
+            <a href="<?= buildFilterUrl(['quick' => '1m', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1m' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 1 Month
+            </a>
+            
+            <a href="<?= buildFilterUrl(['quick' => '3m', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '3m' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 3 Months
+            </a>
+            
+            <a href="<?= buildFilterUrl(['quick' => '6m', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '6m' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 6 Months
+            </a>
+            
+            <a href="<?= buildFilterUrl(['quick' => '1y', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1y' ? 'active' : '' ?>">
+                <i class="fas fa-calendar"></i> 1 Year
+            </a>
+            
+            <a href="javascript:void(0)" 
+               onclick="toggleCustomDate()" 
+               class="quick-filter-btn custom <?= $quick_filter === 'custom' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-check"></i> Custom
+            </a>
+        </div>
+        
+        <!-- ✅ CUSTOM DATE FILTER ROW -->
+        <div class="custom-date-row <?= $quick_filter === 'custom' ? 'show' : '' ?>" id="customDateRow">
+            <form method="GET" style="display:contents;">
+                <input type="hidden" name="quick" value="custom">
+                <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
+                <input type="hidden" name="payment_status" value="<?= htmlspecialchars($payment_status) ?>">
+                
+                <div class="form-group">
+                    <label><i class="fas fa-calendar-alt"></i> Date From</label>
+                    <input type="date" name="date_from" class="form-control" value="<?= htmlspecialchars($date_from) ?>" required>
+                </div>
+                <div class="form-group">
+                    <label><i class="fas fa-calendar-alt"></i> Date To</label>
+                    <input type="date" name="date_to" class="form-control" value="<?= htmlspecialchars($date_to) ?>" required>
+                </div>
+                <button type="submit" class="btn-apply-filters">
+                    <i class="fas fa-check"></i> Apply
+                </button>
+            </form>
+        </div>
+        
+        <!-- TABLE HEADER WITH SEARCH AND SCROLL BUTTONS -->
         <div class="table-header-bar">
             <div class="table-header-left">
-                <!-- Search Box -->
                 <div class="table-search-box">
                     <i class="fas fa-search"></i>
                     <input type="text" 
@@ -1246,23 +1280,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                     <span class="clear-search-inline" id="clearSearchBtn" onclick="clearTableSearch()">&times;</span>
                 </div>
                 
-                <!-- Result count -->
                 <span class="result-count" id="resultCount">
                     <i class="fas fa-list"></i>
                     <strong><?= count($sales) ?></strong> records
                     <span class="highlight-count" id="highlightCount" style="display:none;">
-                        <i class="fas fa-highlighter"></i> <span id="highlightNum">0</span> highlights
+                        <i class="fas fa-highlighter"></i> <span id="highlightNum">0</span>
                     </span>
                 </span>
             </div>
             
             <div class="table-header-right">
-                <!-- Advanced filter toggle -->
-                <button type="button" class="btn-toggle-filters" id="toggleFiltersBtn" onclick="toggleAdvancedFilters()">
-                    <i class="fas fa-filter"></i> Filters
-                </button>
+                <!-- ✅ SCROLL BUTTONS -->
+                <div class="scroll-buttons">
+                    <button type="button" class="scroll-btn" onclick="scrollTable('left')" title="Scroll Left">
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                    <button type="button" class="scroll-btn" onclick="scrollTable('right')" title="Scroll Right">
+                        <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
                 
-                <!-- Export button -->
                 <button type="button" class="btn-toggle-filters" onclick="exportToCSV()">
                     <i class="fas fa-download"></i> Export
                 </button>
@@ -1271,15 +1308,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         <!-- ✅ DISPENSED INFO BOX -->
         <div class="dispensed-info-box" id="dispensedInfoBox">
-            <div class="info-icon">
-                <i class="fas fa-pills"></i>
-            </div>
+            <div class="info-icon"><i class="fas fa-pills"></i></div>
             <div class="info-text">
                 <div class="info-label">Total Dispensed for Search</div>
-                <div class="info-search-term">
-                    "<strong id="searchTermDisplay"></strong>"
-                </div>
-                <!-- ✅ Matched items badges -->
+                <div class="info-search-term">"<strong id="searchTermDisplay"></strong>"</div>
                 <div class="matched-items-list" id="matchedItemsList"></div>
             </div>
             <div class="info-divider"></div>
@@ -1294,66 +1326,45 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </div>
         </div>
         
-        <!-- FILTER CHIPS -->
+        <!-- PAYMENT STATUS FILTERS -->
         <div class="filter-chips" style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border-color);">
-            <a href="?<?= http_build_query(array_merge($_GET, ['payment_status' => ''])) ?>" 
+            <a href="<?= buildFilterUrl(['payment_status' => null]) ?>" 
                class="filter-chip <?= empty($payment_status) ? 'active' : '' ?>">
                 <i class="fas fa-list"></i> All
             </a>
-            <a href="?<?= http_build_query(array_merge($_GET, ['payment_status' => 'paid'])) ?>" 
+            <a href="<?= buildFilterUrl(['payment_status' => 'paid']) ?>" 
                class="filter-chip paid <?= $payment_status === 'paid' ? 'active' : '' ?>">
                 <i class="fas fa-check-circle"></i> Paid
             </a>
-            <a href="?<?= http_build_query(array_merge($_GET, ['payment_status' => 'pending'])) ?>" 
+            <a href="<?= buildFilterUrl(['payment_status' => 'pending']) ?>" 
                class="filter-chip pending <?= $payment_status === 'pending' ? 'active' : '' ?>">
                 <i class="fas fa-clock"></i> Pending
             </a>
-            <a href="?<?= http_build_query(array_merge($_GET, ['payment_status' => 'partial'])) ?>" 
+            <a href="<?= buildFilterUrl(['payment_status' => 'partial']) ?>" 
                class="filter-chip <?= $payment_status === 'partial' ? 'active' : '' ?>">
                 <i class="fas fa-hourglass-half"></i> Partial
             </a>
-            <a href="?<?= http_build_query(array_merge($_GET, ['payment_status' => 'cancelled'])) ?>" 
+            <a href="<?= buildFilterUrl(['payment_status' => 'cancelled']) ?>" 
                class="filter-chip danger <?= $payment_status === 'cancelled' ? 'active' : '' ?>">
                 <i class="fas fa-times-circle"></i> Cancelled
             </a>
             
-            <?php if (!empty($search) || !empty($date_from) || !empty($date_to) || !empty($payment_status)): ?>
+            <?php if (!empty($search) || $quick_filter !== 'all' || !empty($payment_status)): ?>
                 <a href="otc_history.php" class="filter-chip" style="border-color:var(--danger);color:var(--danger);margin-left:auto;">
                     <i class="fas fa-times"></i> Clear All
                 </a>
             <?php endif; ?>
         </div>
         
-        <!-- ADVANCED FILTERS -->
-        <div class="advanced-filters <?= (!empty($date_from) || !empty($date_to)) ? 'show' : '' ?>" id="advancedFilters">
-            <form method="GET" action="" style="display:contents;">
-                <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
-                <input type="hidden" name="payment_status" value="<?= htmlspecialchars($payment_status) ?>">
-                
-                <div class="form-group">
-                    <label><i class="fas fa-calendar-alt"></i> Date From</label>
-                    <input type="date" name="date_from" class="form-control" value="<?= htmlspecialchars($date_from) ?>">
-                </div>
-                <div class="form-group">
-                    <label><i class="fas fa-calendar-alt"></i> Date To</label>
-                    <input type="date" name="date_to" class="form-control" value="<?= htmlspecialchars($date_to) ?>">
-                </div>
-                <button type="submit" class="btn-apply-filters">
-                    <i class="fas fa-check"></i> Apply Date Filter
-                </button>
-            </form>
-        </div>
-        
-        <!-- TABLE -->
         <?php if (count($sales) > 0): ?>
-            <div class="table-wrap">
+            <div class="table-wrap" id="tableWrapper">
                 <table class="data-table" id="salesTable">
                     <thead>
                         <tr>
                             <th class="col-sno">#</th>
                             <th class="col-sale">Sale #</th>
                             <th class="col-customer">Customer</th>
-                            <th class="col-items">Items</th>
+                            <th class="col-medication"><i class="fas fa-pills"></i> Medication</th>
                             <th class="col-qty center">Qty</th>
                             <th class="col-total right">Total</th>
                             <th class="col-payment">Payment</th>
@@ -1373,20 +1384,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     $status_class = 'badge-danger';
                                 }
                                 
-                                $items_count = $sale['items_count'] ?? 0;
-                                $items_list = $sale['items_list'] ?? '';
                                 $grand_total = $sale['grand_total'] ?? 0;
                                 $total_qty = $sale['total_items_quantity'] ?? 0;
                                 
-                                $short_items = $items_list;
-                                if (strlen($short_items) > 60) {
-                                    $short_items = substr($short_items, 0, 60) . '...';
-                                }
-                                
-                                // ✅ Pata items za sale hii kwa ajili ya search
                                 $sale_items = $sale_items_map[$sale['sale_id']] ?? [];
                                 
-                                // ✅ Tengeneza JSON ya items (name + qty)
                                 $items_json = [];
                                 foreach ($sale_items as $item) {
                                     $items_json[] = [
@@ -1396,14 +1398,36 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 }
                                 $items_json_str = htmlspecialchars(json_encode($items_json), ENT_QUOTES, 'UTF-8');
                                 
-                                // Search data
+                                $meds_html = '';
+                                $max_show = 3;
+                                $display_items = array_slice($sale_items, 0, $max_show);
+                                $remaining = count($sale_items) - $max_show;
+                                
+                                if (count($sale_items) > 0) {
+                                    $meds_html .= '<div class="med-list">';
+                                    foreach ($display_items as $item) {
+                                        $meds_html .= '<div class="med-item">';
+                                        $meds_html .= '<span class="med-dot"></span>';
+                                        $meds_html .= '<span class="med-name" data-searchable title="' . htmlspecialchars($item['item_name']) . '">' 
+                                                   . htmlspecialchars($item['item_name']) . '</span>';
+                                        $meds_html .= '<span class="med-qty">×' . $item['quantity'] . '</span>';
+                                        $meds_html .= '</div>';
+                                    }
+                                    if ($remaining > 0) {
+                                        $meds_html .= '<div class="med-more">+' . $remaining . ' more item(s)</div>';
+                                    }
+                                    $meds_html .= '</div>';
+                                } else {
+                                    $meds_html = '<span style="font-size:0.7rem;color:var(--text-muted);">No items</span>';
+                                }
+                                
                                 $search_data = strtolower(
                                     ($sale['sale_number'] ?? '') . ' ' .
                                     ($sale['customer_name'] ?? '') . ' ' .
                                     ($sale['customer_phone'] ?? '') . ' ' .
                                     ($sale['payment_method'] ?? '') . ' ' .
                                     ($sale['payment_status'] ?? '') . ' ' .
-                                    ($items_list ?? '')
+                                    ($sale['items_list'] ?? '')
                                 );
                             ?>
                             <tr class="sale-row" 
@@ -1424,19 +1448,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                         </div>
                                     <?php endif; ?>
                                 </td>
-                                <td class="col-items">
-                                    <div class="items-list-compact">
-                                        <span class="item-count"><?= $items_count ?></span> item(s)
-                                        <?php if (!empty($items_list)): ?>
-                                            <div style="font-size:0.55rem;color:var(--text-muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" 
-                                                 title="<?= htmlspecialchars($items_list) ?>"
-                                                 data-searchable>
-                                                <?= htmlspecialchars($short_items) ?>
-                                            </div>
-                                        <?php endif; ?>
-                                    </div>
+                                <td class="col-medication">
+                                    <?= $meds_html ?>
                                 </td>
-                                <!-- QTY COLUMN -->
                                 <td class="col-qty center">
                                     <span class="qty-badge" data-searchable>
                                         <i class="fas fa-pills"></i> <?= number_format($total_qty) ?>
@@ -1474,7 +1488,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                             </tr>
                         <?php endforeach; ?>
                         
-                        <!-- No results row -->
                         <tr id="noResultsRow" style="display:none;">
                             <td colspan="10">
                                 <div class="empty-state">
@@ -1491,12 +1504,17 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <div class="empty-state">
                 <i class="fas fa-shopping-cart"></i>
                 <p>No OTC sales found</p>
-                <p class="sub">Start selling by clicking "New OTC Sale"</p>
+                <p class="sub">
+                    <?php if ($quick_filter !== 'all'): ?>
+                        No sales in this date range. Try changing the filter.
+                    <?php else: ?>
+                        Start selling by clicking "New OTC Sale"
+                    <?php endif; ?>
+                </p>
             </div>
         <?php endif; ?>
     </div>
 
-    <!-- FOOTER -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1509,7 +1527,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
 </main>
 
-<!-- TOAST -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle"></i>
     <div>
@@ -1519,9 +1536,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 </div>
 
 <script>
-    // ================================================================
-    // VARIABLES
-    // ================================================================
     var searchInput = document.getElementById('tableSearchInput');
     var clearBtn = document.getElementById('clearSearchBtn');
     var resultCountEl = document.getElementById('resultCount');
@@ -1533,12 +1547,51 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     var totalDispensedDisplay = document.getElementById('totalDispensedDisplay');
     var totalTransactionsDisplay = document.getElementById('totalTransactionsDisplay');
     var matchedItemsList = document.getElementById('matchedItemsList');
+    var tableWrapper = document.getElementById('tableWrapper');
     var totalRows = <?= count($sales) ?>;
     
     var originalHTMLMap = new WeakMap();
     
     // ================================================================
-    // ESCAPE FUNCTIONS
+    // ✅ SCROLL TABLE
+    // ================================================================
+    function scrollTable(direction) {
+        if (!tableWrapper) return;
+        
+        var scrollAmount = 300;
+        var currentScroll = tableWrapper.scrollLeft;
+        
+        if (direction === 'left') {
+            tableWrapper.scrollTo({
+                left: currentScroll - scrollAmount,
+                behavior: 'smooth'
+            });
+        } else if (direction === 'right') {
+            tableWrapper.scrollTo({
+                left: currentScroll + scrollAmount,
+                behavior: 'smooth'
+            });
+        }
+    }
+    
+    // ================================================================
+    // TOGGLE CUSTOM DATE
+    // ================================================================
+    function toggleCustomDate() {
+        var row = document.getElementById('customDateRow');
+        if (!row) return;
+        
+        if (row.classList.contains('show')) {
+            if (!<?= $quick_filter === 'custom' ? 'true' : 'false' ?>) {
+                row.classList.remove('show');
+            }
+        } else {
+            row.classList.add('show');
+        }
+    }
+    
+    // ================================================================
+    // HELPER FUNCTIONS
     // ================================================================
     function escapeHtml(text) {
         var div = document.createElement('div');
@@ -1550,15 +1603,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
     
-    // ================================================================
-    // NUMBER FORMAT HELPER
-    // ================================================================
     function numberFormat(num) {
         return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     }
     
     // ================================================================
-    // HIGHLIGHT TEXT
+    // HIGHLIGHT
     // ================================================================
     function highlightText(element, query) {
         if (!element) return 0;
@@ -1601,9 +1651,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         return matchCount;
     }
     
-    // ================================================================
-    // REMOVE ALL HIGHLIGHTS
-    // ================================================================
     function removeAllHighlights() {
         document.querySelectorAll('[data-searchable]').forEach(function(el) {
             if (originalHTMLMap.has(el)) {
@@ -1616,12 +1663,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     // ================================================================
-    // ✅ CALCULATE TOTAL DISPENSED FOR SPECIFIC MEDICINE
+    // CALCULATE DISPENSED TOTALS
     // ================================================================
     function calculateDispensedTotals(query) {
         if (!query || query.trim() === '') {
             if (dispensedInfoBox) dispensedInfoBox.classList.remove('show');
-            return { totalQty: 0, totalTransactions: 0 };
+            return;
         }
         
         var lowerQuery = query.toLowerCase().trim();
@@ -1641,17 +1688,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 return;
             }
             
-            // ✅ Hesabu qty ya dawa iliyotafutwa TU
             var matchedQty = 0;
             var hasMatch = false;
             
             items.forEach(function(item) {
-                // Angalia kama jina la dawa lina match na search query
                 if (item.name.indexOf(lowerQuery) !== -1) {
                     matchedQty += item.qty;
                     hasMatch = true;
                     
-                    // Track kwa item name
                     if (!matchedItemsMap[item.name]) {
                         matchedItemsMap[item.name] = 0;
                     }
@@ -1659,20 +1703,17 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 }
             });
             
-            // ✅ Kama dawa imepatikana kwenye sale hii, ongeza qty
             if (hasMatch) {
                 totalQty += matchedQty;
                 totalTransactions++;
             }
         });
         
-        // ✅ Show the info box
         if (dispensedInfoBox && totalTransactions > 0) {
             searchTermDisplay.textContent = query;
             totalDispensedDisplay.innerHTML = numberFormat(totalQty) + ' <small>items</small>';
             totalTransactionsDisplay.innerHTML = numberFormat(totalTransactions) + ' <small>sales</small>';
             
-            // ✅ Onyesha matched items badges
             var badgesHtml = '';
             Object.keys(matchedItemsMap).forEach(function(name) {
                 badgesHtml += '<span class="matched-item-badge">' 
@@ -1686,12 +1727,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             dispensedInfoBox.classList.remove('show');
             matchedItemsList.innerHTML = '';
         }
-        
-        return { totalQty: totalQty, totalTransactions: totalTransactions };
     }
     
     // ================================================================
-    // ✅ MAIN FILTER FUNCTION
+    // FILTER
     // ================================================================
     function filterTable() {
         var query = (searchInput.value || '').trim();
@@ -1700,17 +1739,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         var visibleCount = 0;
         var totalHighlights = 0;
         
-        // Show/hide clear button
-        if (query.length > 0) {
-            clearBtn.classList.add('show');
-        } else {
-            clearBtn.classList.remove('show');
-        }
+        if (query.length > 0) clearBtn.classList.add('show');
+        else clearBtn.classList.remove('show');
         
-        // Remove existing highlights first
         removeAllHighlights();
         
-        // Filter rows
         rows.forEach(function(row) {
             var searchData = (row.dataset.search || '').toLowerCase();
             var matches = lowerQuery === '' || searchData.indexOf(lowerQuery) !== -1;
@@ -1719,7 +1752,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 row.style.display = '';
                 visibleCount++;
                 
-                // Apply highlight
                 if (query !== '') {
                     var searchableElements = row.querySelectorAll('[data-searchable]');
                     searchableElements.forEach(function(el) {
@@ -1732,7 +1764,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             }
         });
         
-        // Update result count
         if (resultCountEl) {
             if (query === '') {
                 resultCountEl.innerHTML = '<i class="fas fa-list"></i> <strong>' + totalRows + '</strong> records';
@@ -1741,15 +1772,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             }
         }
         
-        // ✅ Calculate and show total dispensed (SPECIFIC MEDICINE)
         calculateDispensedTotals(query);
         
-        // Show highlight count
         if (highlightCountEl && highlightNumEl) {
             if (query !== '' && totalHighlights > 0) {
                 highlightCountEl.style.display = 'inline-flex';
                 highlightNumEl.textContent = totalHighlights;
-                
                 if (!resultCountEl.contains(highlightCountEl)) {
                     resultCountEl.appendChild(highlightCountEl);
                 }
@@ -1758,7 +1786,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             }
         }
         
-        // Show/hide no results row
         if (noResultsRow) {
             noResultsRow.style.display = (visibleCount === 0 && query !== '' && totalRows > 0) ? '' : 'none';
         }
@@ -1782,9 +1809,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     if (searchInput) {
         searchInput.addEventListener('input', debounce(filterTable, 150));
         searchInput.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') {
-                clearTableSearch();
-            }
+            if (e.key === 'Escape') clearTableSearch();
         });
     }
     
@@ -1798,23 +1823,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     // ================================================================
-    // TOGGLE ADVANCED FILTERS
-    // ================================================================
-    function toggleAdvancedFilters() {
-        var filters = document.getElementById('advancedFilters');
-        var btn = document.getElementById('toggleFiltersBtn');
-        
-        if (filters.classList.contains('show')) {
-            filters.classList.remove('show');
-            btn.classList.remove('active');
-        } else {
-            filters.classList.add('show');
-            btn.classList.add('active');
-        }
-    }
-    
-    // ================================================================
-    // MESSAGE AUTO-DISMISS
+    // MESSAGE
     // ================================================================
     function dismissMessage() {
         var messageBox = document.getElementById('messageBox');
@@ -1832,33 +1841,34 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         var messageBox = document.getElementById('messageBox');
         if (messageBox) {
             var dismissTimer = setTimeout(dismissMessage, 5000);
-            
             messageBox.addEventListener('click', function(e) {
                 if (e.target.classList.contains('message-close') || e.target === this) {
                     clearTimeout(dismissTimer);
                     dismissMessage();
                 }
             });
-            
-            messageBox.addEventListener('mouseenter', function() {
-                clearTimeout(dismissTimer);
-            });
-            
-            messageBox.addEventListener('mouseleave', function() {
-                dismissTimer = setTimeout(dismissMessage, 3000);
-            });
         }
         
-        // ✅ Apply search on page load
         <?php if (!empty($search)): ?>
             if (searchInput && searchInput.value.trim() !== '') {
                 setTimeout(function() {
                     filterTable();
-                    searchInput.focus();
-                    searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length);
                 }, 200);
             }
         <?php endif; ?>
+        
+        // Keyboard arrow for horizontal scroll
+        document.addEventListener('keydown', function(e) {
+            if (e.target.tagName === 'INPUT') return;
+            
+            if (e.key === 'ArrowLeft' && e.ctrlKey) {
+                e.preventDefault();
+                scrollTable('left');
+            } else if (e.key === 'ArrowRight' && e.ctrlKey) {
+                e.preventDefault();
+                scrollTable('right');
+            }
+        });
     });
     
     // ================================================================
@@ -1886,26 +1896,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-            e.preventDefault();
-            if (searchInput) {
-                searchInput.focus();
-                searchInput.select();
-            }
-        }
-    });
-    
-    // ================================================================
-    // EXPORT TO CSV
+    // EXPORT
     // ================================================================
     function exportToCSV() {
         var rows = document.querySelectorAll('.sale-row');
         var csv = [];
         
-        csv.push('Sale #,Customer,Phone,Items,Qty,Total,Payment Method,Status,Date');
+        csv.push('Sale #,Customer,Phone,Medication,Qty,Total,Payment Method,Status,Date');
         
         rows.forEach(function(row) {
             if (row.style.display !== 'none') {
@@ -1929,12 +1926,24 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         showToast('Success', 'Exported ' + (csv.length - 1) + ' records', 'success');
     }
     
-    console.log('%c💊 Braick - OTC Sale History (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Blue theme applied', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Search shows SPECIFIC medicine qty', 'font-size:13px; color:#FCD34D;');
-    console.log('%c✅ Matched items badges shown', 'font-size:13px; color:#FCD34D;');
-    console.log('%c✅ Live search with YELLOW HIGHLIGHT', 'font-size:13px; color:#FCD34D;');
-    console.log('%c✅ Dark Mode support', 'font-size:13px; color:#34D399;');
+    // ================================================================
+    // CTRL+K SEARCH
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            e.preventDefault();
+            if (searchInput) {
+                searchInput.focus();
+                searchInput.select();
+            }
+        }
+    });
+    
+    console.log('%c💊 Braick - OTC Sale History V3', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Scroll buttons (< >) added', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ Quick date filters: Today, 1W, 1M, 3M, 6M, 1Y, All, Custom', 'font-size:13px; color:#FCD34D;');
+    console.log('%c✅ Medication column with medicine names', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Ctrl+← / Ctrl+→ kwa scroll', 'font-size:13px; color:#94A3B8;');
 </script>
 
 </body>
