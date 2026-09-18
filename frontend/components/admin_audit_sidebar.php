@@ -1,12 +1,14 @@
 <?php
 // ================================================================
 // FILE: frontend/components/admin_audit_sidebar.php
-// ADMIN AUDIT - SIDEBAR (COMPACT + GREEN HOVER + JETBRAINS MONO) - V6
-// ✅ Size imepunguzwa (280px → 260px)
-// ✅ Hover = GREEN (#059669)
-// ✅ Font: JetBrains Mono (sawa na pages)
-// ✅ Icons nzuri zaidi
-// ✅ BLUE THEME: #0B5ED7 (base)
+// ADMIN AUDIT - SIDEBAR (V9 - REVENUE BADGE FIXED)
+// ✅ Rangi: #0B4EA8 → #0A3D7A (Deep Blue)
+// ✅ Hover: GREEN (#0AA84F)
+// ✅ Size: 270px
+// ✅ Branch Selector
+// ✅ Admin role only
+// ✅ FIXED: Toggle button INAFANYA KAZI kwenye mobile NA desktop
+// ✅ FIXED: Revenue badge = Bills + OTC (leo)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -43,7 +45,9 @@ $user_is_online = $_SESSION['is_online'] ?? 1;
 
 $selected_branch_id = $_GET['branch'] ?? 'all';
 
+// ================================================================
 // DATABASE CONNECTION
+// ================================================================
 if (!isset($db) || $db === null) {
     require_once __DIR__ . '/../../backend/config/database.php';
     try {
@@ -54,7 +58,9 @@ if (!isset($db) || $db === null) {
     }
 }
 
+// ================================================================
 // BUILD BRANCH CONDITION
+// ================================================================
 $branch_cond = "";
 $branch_params = [];
 if ($selected_branch_id !== 'all') {
@@ -62,22 +68,65 @@ if ($selected_branch_id !== 'all') {
     $branch_params[] = (int)$selected_branch_id;
 }
 
+// ================================================================
 // GET BADGE DATA
-$total_revenue_today = 0;
+// ================================================================
+$total_revenue_today = 0;        // ✅ Bills + OTC (leo)
+$bills_today = 0;
+$otc_today = 0;
 $total_patients = 0;
+$today_patients = 0;
 $total_employees = 0;
+$total_doctors = 0;
 $total_inventory_items = 0;
 $low_stock_count = 0;
 $total_audit_logs = 0;
 $today_audit_logs = 0;
+$total_branches = 0;
 
 if ($db !== null) {
+    
+    // ============================================================
+    // ✅ REVENUE BADGE: Bills (leo, paid) + OTC (leo, paid)
+    // ============================================================
     try {
-        $sql = "SELECT COALESCE(SUM(total_amount), 0) as total FROM bills WHERE status = 'paid' AND DATE(updated_at) = CURDATE()" . $branch_cond;
-        $stmt = $db->prepare($sql); $stmt->execute($branch_params);
-        $total_revenue_today = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+        // Patient Bills (paid, today)
+        $sql = "SELECT COALESCE(SUM(total_amount), 0) as total 
+                FROM bills 
+                WHERE status = 'paid' 
+                AND DATE(updated_at) = CURDATE()
+                AND patient_id IS NOT NULL
+                AND visit_id IS NOT NULL
+                AND bill_number NOT LIKE 'BILL-OTC-%'" . $branch_cond;
+        $stmt = $db->prepare($sql);
+        $stmt->execute($branch_params);
+        $bills_today = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
     } catch (Exception $e) {}
     
+    try {
+        // OTC Sales (paid, today)
+        $otc_cond = "";
+        $otc_params = [];
+        if ($selected_branch_id !== 'all') {
+            $otc_cond = " AND branch_id = ?";
+            $otc_params = [(int)$selected_branch_id];
+        }
+        
+        $sql = "SELECT COALESCE(SUM(total_amount), 0) as total 
+                FROM otc_sales 
+                WHERE payment_status = 'paid' 
+                AND DATE(updated_at) = CURDATE()" . $otc_cond;
+        $stmt = $db->prepare($sql);
+        $stmt->execute($otc_params);
+        $otc_today = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+    } catch (Exception $e) {}
+    
+    // ✅ TOTAL REVENUE = Bills + OTC
+    $total_revenue_today = $bills_today + $otc_today;
+    
+    // ============================================================
+    // PATIENTS
+    // ============================================================
     try {
         $sql = "SELECT COUNT(*) as count FROM patients WHERE 1=1" . $branch_cond;
         $stmt = $db->prepare($sql); $stmt->execute($branch_params);
@@ -85,11 +134,29 @@ if ($db !== null) {
     } catch (Exception $e) {}
     
     try {
+        $sql = "SELECT COUNT(*) as count FROM patients WHERE DATE(created_at) = CURDATE()" . $branch_cond;
+        $stmt = $db->prepare($sql); $stmt->execute($branch_params);
+        $today_patients = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    } catch (Exception $e) {}
+    
+    // ============================================================
+    // EMPLOYEES
+    // ============================================================
+    try {
         $sql = "SELECT COUNT(*) as count FROM users WHERE role NOT IN ('admin', 'audit') AND status = 'active'" . $branch_cond;
         $stmt = $db->prepare($sql); $stmt->execute($branch_params);
         $total_employees = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     } catch (Exception $e) {}
     
+    try {
+        $sql = "SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'" . $branch_cond;
+        $stmt = $db->prepare($sql); $stmt->execute($branch_params);
+        $total_doctors = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    } catch (Exception $e) {}
+    
+    // ============================================================
+    // INVENTORY
+    // ============================================================
     try {
         $sql = "SELECT COUNT(*) as count FROM medications_inventory WHERE status = 'active'" . $branch_cond;
         $stmt = $db->prepare($sql); $stmt->execute($branch_params);
@@ -102,6 +169,9 @@ if ($db !== null) {
         $low_stock_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     } catch (Exception $e) {}
     
+    // ============================================================
+    // AUDIT LOGS
+    // ============================================================
     try {
         $sql = "SELECT COUNT(*) as count FROM activity_logs WHERE 1=1" . $branch_cond;
         $stmt = $db->prepare($sql); $stmt->execute($branch_params);
@@ -112,6 +182,14 @@ if ($db !== null) {
         $sql = "SELECT COUNT(*) as count FROM activity_logs WHERE DATE(created_at) = CURDATE()" . $branch_cond;
         $stmt = $db->prepare($sql); $stmt->execute($branch_params);
         $today_audit_logs = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    } catch (Exception $e) {}
+    
+    // ============================================================
+    // BRANCHES
+    // ============================================================
+    try {
+        $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
+        $total_branches = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     } catch (Exception $e) {}
 }
 
@@ -130,76 +208,30 @@ function isAdminAuditPage($pages) {
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 ?>
 
-<!-- ✅ FONT AWESOME ICONS -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-
-<!-- ✅ FONT: JETBRAINS MONO + INTER FALLBACK -->
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
 <style>
 /* ================================================================
-   ✅ FONT: JETBRAINS MONO (SAWA NA PAGES) + INTER FALLBACK
+   ✅ ADMIN AUDIT SIDEBAR STYLES
    ================================================================ */
-.sidebar,
-.sidebar *:not(i):not(.fas):not(.far):not(.fab):not(.fa-solid):not(.fa-regular):not(.fa-brands),
-.sidebar *::before:not(i),
-.sidebar *::after:not(i) {
-    font-family: 'JetBrains Mono', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace !important;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    font-feature-settings: 'tnum';
-    font-variant-numeric: tabular-nums;
-}
 
-/* ✅ FONT AWESOME ICONS */
-.sidebar i,
-.sidebar i::before,
-.sidebar .fas,
-.sidebar .fas::before,
-.sidebar .far,
-.sidebar .far::before,
-.sidebar .fab,
-.sidebar .fab::before {
-    font-family: "Font Awesome 6 Free", "Font Awesome 6 Brands", "Font Awesome 5 Free" !important;
-    font-weight: 900 !important;
-    -webkit-font-smoothing: antialiased;
-    display: inline-block;
-    font-style: normal;
-    font-variant: normal;
-    text-rendering: auto;
-    line-height: 1;
-}
-
-.sidebar .far, .sidebar .far::before { font-weight: 400 !important; }
-.sidebar .fab, .sidebar .fab::before {
-    font-family: "Font Awesome 6 Brands" !important;
-    font-weight: 400 !important;
-}
-
-/* ================================================================
-   ✅ SIDEBAR - COMPACT SIZE (260px)
-   ================================================================ */
 .sidebar {
     position: fixed; 
     top: 0; left: 0; bottom: 0;
-    width: 260px; /* ✅ Imepunguzwa kutoka 280px */
-    
-    background: linear-gradient(180deg, #0B5ED7 0%, #0A4CA8 100%);
-    
+    width: 270px; 
+    background: linear-gradient(180deg, #0B4EA8 0%, #0A3D7A 100%);
     color: white;
-    z-index: 99999; 
+    z-index: 50; 
     overflow-y: auto;
     overflow-x: hidden;
     transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
     transform: translateX(-100%);
-    box-shadow: 4px 0 20px rgba(11, 94, 215, 0.25);
+    box-shadow: 4px 0 20px rgba(0,0,0,0.15);
     scroll-behavior: smooth;
 }
 
 [data-theme="dark"] .sidebar {
-    background: linear-gradient(180deg, #0A4CA8 0%, #083A7F 100%);
+    background: linear-gradient(180deg, #0A3D7A 0%, #082F5E 100%);
     box-shadow: 4px 0 30px rgba(0,0,0,0.5);
 }
 
@@ -207,15 +239,13 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 
 .sidebar::-webkit-scrollbar { width: 5px; }
 .sidebar::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
-.sidebar::-webkit-scrollbar-thumb { background: #60A5FA; border-radius: 10px; }
-.sidebar::-webkit-scrollbar-thumb:hover { background: #93C5FD; }
+.sidebar::-webkit-scrollbar-thumb { background: #0AA84F; border-radius: 10px; }
+.sidebar::-webkit-scrollbar-thumb:hover { background: #34D399; }
 
-/* ================================================================
-   BRAND SECTION - COMPACT
-   ================================================================ */
+/* BRAND */
 .sidebar-brand {
-    padding: 14px 14px 12px; /* ✅ Imepunguzwa */
-    border-bottom: 1.5px solid rgba(255,255,255,0.1);
+    padding: 18px 16px 14px;
+    border-bottom: 2px solid rgba(255,255,255,0.08);
     background: rgba(0,0,0,0.1);
     position: sticky;
     top: 0;
@@ -224,42 +254,37 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 }
 
 .sidebar-brand .logo {
-    width: 40px; /* ✅ Imepunguzwa kutoka 48px */
-    height: 40px;
+    width: 42px; 
+    height: 42px; 
     border-radius: 10px;
     object-fit: cover; 
     background: white; 
-    padding: 3px;
-    border: 1.5px solid rgba(255,255,255,0.25);
+    padding: 4px;
+    border: 2px solid rgba(255,255,255,0.15);
     transition: transform 0.3s ease;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
 
-.sidebar-brand .logo:hover { 
-    transform: rotate(-5deg) scale(1.08); 
-    box-shadow: 0 6px 16px rgba(96, 165, 250, 0.5);
-}
+.sidebar-brand .logo:hover { transform: rotate(-5deg) scale(1.05); }
 
 .sidebar-brand .brand-text { 
     color: white; 
-    font-weight: 800;
-    font-size: 0.88rem; /* ✅ Imepunguzwa */
+    font-weight: 700; 
+    font-size: 0.95rem; 
     line-height: 1.2; 
-    letter-spacing: 0.02em;
+    letter-spacing: 0.5px;
 }
 
 .sidebar-brand .brand-sub { 
-    color: #BFDBFE; 
-    font-size: 0.65rem; /* ✅ Imepunguzwa */
-    font-weight: 600;
-    letter-spacing: 0.03em;
+    color: #9EC5FE; 
+    font-size: 0.65rem; 
+    font-weight: 500;
+    letter-spacing: 0.3px;
     display: flex;
     align-items: center;
     gap: 4px;
     margin-top: 2px;
 }
 
-/* ROLE BADGE */
 .audit-role-badge {
     display: inline-flex;
     align-items: center;
@@ -269,35 +294,29 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     padding: 3px 10px;
     border-radius: 6px;
     font-size: 0.58rem;
-    font-weight: 800;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    box-shadow: 0 2px 8px rgba(245, 158, 11, 0.5);
-    margin-top: 5px;
+    box-shadow: 0 2px 8px rgba(245, 158, 11, 0.4);
 }
 
-.audit-role-badge i {
-    font-size: 0.65rem;
-}
+.audit-role-badge i { font-size: 0.62rem; }
 
-/* ================================================================
-   BRANCH SELECTOR - COMPACT
-   ================================================================ */
+/* BRANCH SELECTOR */
 .sidebar-branch-selector {
-    padding: 10px 14px; /* ✅ Imepunguzwa */
-    border-bottom: 1.5px solid rgba(255,255,255,0.08);
+    padding: 10px 14px;
+    border-bottom: 2px solid rgba(255,255,255,0.06);
     background: rgba(0,0,0,0.05);
 }
 
 .sidebar-branch-selector select {
     width: 100%; 
-    padding: 7px 10px; /* ✅ Imepunguzwa */
+    padding: 7px 10px;
     border-radius: 8px; 
     border: none;
-    background: rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.12);
     color: white; 
-    font-size: 0.75rem; /* ✅ Imepunguzwa */
-    font-weight: 600;
+    font-size: 0.75rem;
     cursor: pointer; 
     outline: none;
     transition: all 0.3s ease;
@@ -308,141 +327,84 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     background-position: right 10px center;
 }
 
-.sidebar-branch-selector select:hover { 
-    background-color: rgba(255,255,255,0.25); 
-}
+.sidebar-branch-selector select:hover { background-color: rgba(255,255,255,0.2); }
+.sidebar-branch-selector select:focus { box-shadow: 0 0 0 2px rgba(10, 168, 79, 0.5); }
+.sidebar-branch-selector select option { background: #0B4EA8; color: white; padding: 8px; }
 
-.sidebar-branch-selector select:focus { 
-    box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.6); 
-}
-
-.sidebar-branch-selector select option { 
-    background: #0B5ED7; 
-    color: white; 
-    padding: 8px; 
-}
-
-/* ================================================================
-   NAVIGATION - COMPACT + GREEN HOVER
-   ================================================================ */
-.sidebar-nav { padding: 8px 8px 20px; } /* ✅ Imepunguzwa */
+/* NAVIGATION */
+.sidebar-nav { padding: 10px 8px 20px; }
 
 .sidebar-nav .nav-label {
-    font-size: 0.55rem; /* ✅ Imepunguzwa */
+    font-size: 0.5rem; 
     text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: #BFDBFE;
-    padding: 8px 10px 4px; /* ✅ Imepunguzwa */
-    margin: 8px 0 3px;
-    font-weight: 800;
-    opacity: 0.9;
-    display: flex;
-    align-items: center;
-    gap: 5px;
+    letter-spacing: 0.08em; 
+    color: #6EA8FE;
+    padding: 8px 10px 4px; 
+    margin: 8px 0 2px; 
+    font-weight: 700; 
+    opacity: 0.8;
 }
 
 .sidebar-nav .nav-label:first-of-type { margin-top: 0; }
+.sidebar-nav .nav-label .label-icon { margin-right: 4px; }
 
-.sidebar-nav .nav-label .label-icon { 
-    font-size: 0.65rem;
-    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3));
-}
-
-/* ================================================================
-   ✅ SIDEBAR LINK - COMPACT + GREEN HOVER
-   ================================================================ */
 .sidebar-link {
     display: flex; 
     align-items: center; 
-    gap: 10px; /* ✅ Imepunguzwa */
-    padding: 8px 12px; /* ✅ Imepunguzwa */
+    gap: 10px;
+    padding: 8px 12px; 
     border-radius: 8px;
-    color: #DBEAFE; 
+    color: #D2E3FC; 
     text-decoration: none;
     transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-    font-size: 0.8rem; /* ✅ Imepunguzwa */
-    font-weight: 600;
-    margin: 1px 0;
+    font-size: 0.8rem; 
+    font-weight: 500;
+    margin: 1px 0; 
     background: transparent;
     cursor: pointer; 
     border: none;
     width: 100%; 
     text-align: left;
     position: relative;
-    letter-spacing: 0.01em;
 }
 
-/* ✅ GREEN HOVER */
 .sidebar-link:hover {
-    background: linear-gradient(90deg, rgba(5, 150, 105, 0.35), rgba(16, 185, 129, 0.2));
+    background: rgba(10, 168, 79, 0.4);
     color: white;
-    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+    box-shadow: 0 4px 12px rgba(10, 168, 79, 0.2);
     transform: translateX(4px);
-    border-left: 3px solid #10B981;
 }
 
-/* ACTIVE - kama blue inabaki */
 .sidebar-link.active {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(10, 168, 79, 0.5);
     color: white;
-    box-shadow: 0 4px 12px rgba(96, 165, 250, 0.4);
+    box-shadow: 0 4px 12px rgba(10, 168, 79, 0.3);
 }
 
 .sidebar-link.active::before {
     content: '';
     position: absolute;
-    left: 0; top: 15%; bottom: 15%;
-    width: 3px; 
-    background: #BFDBFE;
-    border-radius: 0 3px 3px 0;
-    box-shadow: 0 0 12px rgba(191, 219, 254, 0.8);
+    left: 0; 
+    top: 15%; 
+    bottom: 15%;
+    width: 4px; 
+    background: #0AA84F;
+    border-radius: 0 4px 4px 0;
+    box-shadow: 0 0 12px rgba(10, 168, 79, 0.5);
 }
 
-/* ================================================================
-   ✅ ICONS - NZURI ZAIDI + COLORED
-   ================================================================ */
 .sidebar-link i { 
-    width: 22px; /* ✅ Imepunguzwa */
-    height: 22px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.85rem; /* ✅ Imepunguzwa */
+    width: 20px; 
+    text-align: center; 
+    font-size: 0.9rem; 
     flex-shrink: 0; 
-    opacity: 0.95;
-    transition: all 0.3s ease;
-    border-radius: 5px;
-    
+    opacity: 0.8;
     font-family: "Font Awesome 6 Free" !important;
     font-weight: 900 !important;
 }
 
 .sidebar-link:hover i,
-.sidebar-link.active i { 
-    opacity: 1; 
-    transform: scale(1.15);
-}
-
-/* ✅ Colored icons kwa kila link */
-.sidebar-link .fa-arrow-left { color: #FCD34D; }
-.sidebar-link .fa-shield-alt { color: #93C5FD; }
-.sidebar-link .fa-chart-line { color: #34D399; }
-.sidebar-link .fa-pills { color: #C4B5FD; }
-.sidebar-link .fa-user-injured { color: #FBBF24; }
-.sidebar-link .fa-users { color: #93C5FD; }
-.sidebar-link .fa-clipboard-list { color: #F9A8D4; }
-.sidebar-link .fa-user-circle { color: #7DD3FC; }
-.sidebar-link .fa-sign-out-alt { color: #FCA5A5; }
-
-/* ✅ Hover: Icons zinakuwa GREEN */
-.sidebar-link:hover i {
-    color: #34D399 !important;
-    filter: drop-shadow(0 2px 6px rgba(52, 211, 153, 0.6));
-}
-
-.sidebar-link.active i {
-    color: white !important;
-}
+.sidebar-link.active i { opacity: 1; }
 
 .sidebar-link .link-text {
     flex: 1; 
@@ -451,40 +413,42 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     text-overflow: ellipsis;
 }
 
-/* ================================================================
-   BADGES - COMPACT
-   ================================================================ */
+/* BADGES */
 .sidebar-link .badge {
     margin-left: auto;
-    background: #3B82F6 !important;
-    padding: 2px 9px; /* ✅ Imepunguzwa */
+    background: #0B5ED7 !important;
+    padding: 2px 10px;
     border-radius: 20px;
-    font-size: 0.62rem; /* ✅ Imepunguzwa */
-    font-weight: 800;
+    font-size: 0.65rem;
+    font-weight: 700;
     color: #FFFFFF !important;
-    transition: all 0.3s ease;
     flex-shrink: 0;
     min-width: 24px;
     text-align: center;
-    border: 1.5px solid rgba(255,255,255,0.35);
-    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.5);
+    border: 1.5px solid rgba(255,255,255,0.25);
+    box-shadow: 0 2px 6px rgba(11, 94, 215, 0.4);
     line-height: 1.4;
 }
 
 .sidebar-link .badge.badge-new {
     background: #10B981 !important;
     color: #FFFFFF !important;
-    border-color: rgba(255,255,255,0.45) !important;
-    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.7);
+    border-color: rgba(255,255,255,0.4) !important;
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.6);
     animation: pulse-new 2s infinite;
     font-size: 0.55rem;
-    padding: 2px 8px;
+    letter-spacing: 0.05em;
+    font-weight: 800;
+}
+
+@keyframes pulse-new {
+    0%, 100% { transform: scale(1); box-shadow: 0 2px 8px rgba(16, 185, 129, 0.6); }
+    50% { transform: scale(1.08); box-shadow: 0 3px 14px rgba(16, 185, 129, 0.9); }
 }
 
 .sidebar-link .badge.badge-warning {
     background: #F59E0B !important;
     box-shadow: 0 2px 8px rgba(245, 158, 11, 0.6);
-    animation: pulse-badge 2s infinite;
 }
 
 .sidebar-link .badge.badge-revenue {
@@ -495,148 +459,103 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     font-weight: 700;
 }
 
-@keyframes pulse-new {
-    0%, 100% { transform: scale(1); box-shadow: 0 2px 8px rgba(16, 185, 129, 0.7); }
-    50% { transform: scale(1.08); box-shadow: 0 3px 14px rgba(16, 185, 129, 1); }
-}
-
-@keyframes pulse-badge {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.1); }
-}
-
-/* ✅ Hover: Badges zinakuwa GREEN */
 .sidebar-link:hover .badge {
-    background: #059669 !important;
-    transform: scale(1.1);
-    box-shadow: 0 3px 10px rgba(5, 150, 105, 0.7);
+    background: #1A73E8 !important;
+    transform: scale(1.08);
 }
 
-/* ================================================================
-   LOGOUT LINK - COMPACT + GREEN HOVER INABaki RED
-   ================================================================ */
+/* LOGOUT */
 .sidebar-link.logout-link {
-    border-top: 1.5px solid rgba(255,255,255,0.1);
-    padding-top: 10px;
-    margin-top: 6px;
+    border-top: 2px solid rgba(255,255,255,0.06);
+    padding-top: 10px; 
+    margin-top: 4px;
     color: #FCA5A5;
-    font-weight: 700;
 }
 
 .sidebar-link.logout-link:hover {
-    background: linear-gradient(90deg, rgba(220, 38, 38, 0.5), rgba(220, 38, 38, 0.3));
+    background: #DC2626; 
     color: white;
-    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.5);
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
     transform: translateX(4px);
-    border-left: 3px solid #DC2626;
 }
 
-.sidebar-link.logout-link i { 
-    opacity: 1; 
-    color: #FCA5A5;
-}
+.sidebar-link.logout-link i { opacity: 1; }
 
-.sidebar-link.logout-link:hover i {
-    color: white !important;
-}
-
-/* ================================================================
-   BACK TO ADMIN - COMPACT
-   ================================================================ */
+/* BACK TO ADMIN */
 .sidebar-link.back-admin {
-    background: linear-gradient(135deg, rgba(245, 158, 11, 0.25), rgba(251, 191, 36, 0.2));
-    border: 1px solid rgba(245, 158, 11, 0.4);
+    background: rgba(245, 158, 11, 0.2);
+    border: 1px solid rgba(245, 158, 11, 0.3);
     color: #FCD34D;
-    font-weight: 800;
-    margin-top: 6px;
-    padding: 9px 12px;
+    font-weight: 600;
+    margin-top: 4px;
+    padding: 8px 12px;
 }
 
 .sidebar-link.back-admin:hover {
-    background: linear-gradient(135deg, #FCD34D, #F59E0B);
-    color: #78350F;
-    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.5);
+    background: rgba(10, 168, 79, 0.4);
+    color: white;
+    box-shadow: 0 4px 12px rgba(10, 168, 79, 0.2);
+    border: 1px solid transparent;
     transform: translateX(4px);
-    border-left: 3px solid #F59E0B;
 }
 
-.sidebar-link.back-admin i { 
-    opacity: 1; 
-    color: #FCD34D;
-    font-size: 0.9rem;
-}
+.sidebar-link.back-admin i { opacity: 1; color: #FCD34D; }
+.sidebar-link.back-admin:hover i { color: white !important; }
 
-.sidebar-link.back-admin:hover i {
-    color: #78350F !important;
-    filter: none;
-}
-
-/* ================================================================
-   STATUS FOOTER - COMPACT
-   ================================================================ */
+/* STATUS FOOTER */
 .sidebar-status {
-    padding: 9px 14px; /* ✅ Imepunguzwa */
-    border-top: 1.5px solid rgba(255,255,255,0.1);
+    padding: 10px 16px;
+    border-top: 2px solid rgba(255,255,255,0.06);
     display: flex; 
     align-items: center; 
     gap: 10px;
-    background: rgba(0,0,0,0.15);
+    background: rgba(0,0,0,0.1);
     position: sticky; 
     bottom: 0;
     backdrop-filter: blur(10px);
 }
 
 .sidebar-status .status-dot {
-    width: 8px; /* ✅ Imepunguzwa */
-    height: 8px;
+    width: 8px; 
+    height: 8px; 
     border-radius: 50%;
-    display: inline-block; 
-    transition: all 0.3s ease;
+    display: inline-block;
 }
 
 .sidebar-status .status-dot.online {
     background: #34D399;
-    box-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
+    box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
     animation: pulse-dot 1.5s infinite;
 }
 
-.sidebar-status .status-dot.offline { 
-    background: #94A3B8; 
-}
+.sidebar-status .status-dot.offline { background: #94A3B8; }
 
 .sidebar-status .status-text {
-    font-size: 0.68rem; /* ✅ Imepunguzwa */
-    color: #DBEAFE; 
-    font-weight: 700;
-    letter-spacing: 0.02em;
+    font-size: 0.65rem; 
+    color: #D2E3FC; 
+    font-weight: 500;
 }
 
 .sidebar-status .update-time {
-    font-size: 0.55rem;
-    color: #BFDBFE;
+    font-size: 0.5rem; 
+    color: #6EA8FE;
     margin-left: auto; 
-    display: flex; 
-    align-items: center; 
-    gap: 5px;
 }
 
 .sidebar-live-indicator {
     display: inline-flex; 
     align-items: center; 
     gap: 4px;
-    font-size: 0.55rem; 
-    color: #93C5FD;
-    margin-left: auto; 
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    font-size: 0.5rem; 
+    color: #34D399;
+    font-weight: 500;
 }
 
 .sidebar-live-indicator .dot {
     width: 6px; 
-    height: 6px;
+    height: 6px; 
     border-radius: 50%;
-    background: #93C5FD; 
+    background: #34D399; 
     animation: pulse-dot 1.5s infinite;
     display: inline-block;
 }
@@ -646,14 +565,12 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     50% { opacity: 0.3; transform: scale(0.8); }
 }
 
-/* ================================================================
-   OVERLAY
-   ================================================================ */
+/* OVERLAY */
 #sidebarOverlay {
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.6);
-    z-index: 99998;
+    background: rgba(0,0,0,0.5);
+    z-index: 45; 
     display: none;
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
@@ -663,123 +580,74 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 #sidebarOverlay.active { display: block !important; }
 
 /* ================================================================
-   CLOSE BUTTON
+   ✅ TOGGLE BUTTON - FIXED (INAFANYA KAZI)
    ================================================================ */
-.sidebar-close-btn {
+#sidebarToggle {
     display: none;
-    position: absolute;
-    top: 14px;
-    right: 14px;
-    width: 36px; /* ✅ Imepunguzwa */
-    height: 36px;
-    border-radius: 8px;
-    background: rgba(255,255,255,0.2);
-    color: white;
-    border: 1px solid rgba(255,255,255,0.3);
-    cursor: pointer;
-    font-size: 1rem;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.3s ease;
-    z-index: 10;
-}
-
-.sidebar-close-btn:hover {
-    background: rgba(16, 185, 129, 0.6);
-    border-color: #10B981;
-    transform: rotate(90deg);
-}
-
-.sidebar-close-btn i {
-    font-family: "Font Awesome 6 Free" !important;
-    font-weight: 900 !important;
-}
-
-@media (max-width: 1024px) {
-    .sidebar-close-btn {
-        display: flex;
-    }
-}
-
-/* ================================================================
-   FLOATING TOGGLE BUTTON
-   ================================================================ */
-.floating-sidebar-toggle {
-    position: fixed;
-    top: 76px;
-    left: 16px;
-    z-index: 99997;
-    width: 46px; /* ✅ Imepunguzwa */
-    height: 46px;
+    position: fixed !important;
+    top: 16px !important;
+    left: 16px !important;
+    z-index: 2147483647 !important;
+    width: 48px !important;
+    height: 48px !important;
     border-radius: 12px;
-    
-    background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
-    
+    background: linear-gradient(135deg, #0B4EA8 0%, #0A3D7A 100%);
     color: white;
-    border: 2px solid rgba(96, 165, 250, 0.5);
+    border: 2px solid rgba(255,255,255,0.4);
     cursor: pointer;
-    box-shadow: 0 6px 20px rgba(11, 94, 215, 0.5);
-    display: none;
+    box-shadow: 0 4px 16px rgba(11, 78, 168, 0.6);
+    transition: all 0.3s ease;
     align-items: center;
     justify-content: center;
-    font-size: 1.2rem;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    font-size: 1.3rem;
+    padding: 0;
+    margin: 0;
+    outline: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    pointer-events: auto !important;
+    visibility: visible !important;
+    opacity: 1 !important;
 }
 
-.floating-sidebar-toggle i {
+#sidebarToggle:hover {
+    transform: scale(1.05);
+    box-shadow: 0 6px 20px rgba(11, 78, 168, 0.8);
+    background: linear-gradient(135deg, #0AA84F 0%, #0B4EA8 100%);
+}
+
+#sidebarToggle:active { transform: scale(0.92); }
+
+[data-theme="dark"] #sidebarToggle {
+    background: linear-gradient(135deg, #0A3D7A 0%, #082F5E 100%);
+    border-color: rgba(255,255,255,0.5);
+}
+
+#sidebarToggle i {
     font-family: "Font Awesome 6 Free" !important;
     font-weight: 900 !important;
-}
-
-/* ✅ GREEN HOVER */
-.floating-sidebar-toggle:hover {
-    transform: scale(1.1) rotate(-5deg);
-    box-shadow: 0 8px 28px rgba(16, 185, 129, 0.6);
-    background: linear-gradient(135deg, #059669 0%, #10B981 100%);
-    border-color: #34D399;
-}
-
-.floating-sidebar-toggle:active {
-    transform: scale(0.95);
-}
-
-.floating-sidebar-toggle .badge-dot {
-    position: absolute;
-    top: 7px;
-    right: 7px;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: #10B981;
-    border: 2px solid #0B5ED7;
-    animation: pulse-dot 1.5s infinite;
+    pointer-events: none !important;
+    font-size: 1.3rem;
+    line-height: 1;
+    color: white;
 }
 
 @media (max-width: 1024px) {
-    .floating-sidebar-toggle { display: flex; }
-}
-
-@media (min-width: 1025px) {
-    .floating-sidebar-toggle { display: none !important; }
-}
-
-/* ================================================================
-   RESPONSIVE
-   ================================================================ */
-@media (min-width: 1025px) {
-    .sidebar {
-        transform: translateX(0) !important;
-        z-index: 50;
-        box-shadow: 4px 0 20px rgba(11, 94, 215, 0.15);
+    #sidebarToggle { 
+        display: flex !important; 
     }
-    #sidebarOverlay { display: none !important; }
-    .sidebar-close-btn { display: none !important; }
-    .floating-sidebar-toggle { display: none !important; }
 }
 
+@media (min-width: 1025px) {
+    #sidebarToggle { 
+        display: none !important; 
+    }
+}
+
+/* RESPONSIVE */
 @media (max-width: 1024px) {
     .sidebar {
-        width: 270px; /* ✅ Imepunguzwa */
+        width: 280px;
         transform: translateX(-100%);
         z-index: 99999 !important;
         border-radius: 0 12px 12px 0;
@@ -793,48 +661,57 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         box-shadow: 4px 0 20px rgba(0,0,0,0.25);
     }
     
+    #sidebarOverlay {
+        display: none;
+        z-index: 99998 !important;
+    }
+    
+    #sidebarOverlay.active { display: block !important; }
+    
+    .top-nav { z-index: 40 !important; }
+    
     .sidebar.open, .sidebar.open * { pointer-events: auto !important; }
     .sidebar-link { pointer-events: auto !important; cursor: pointer !important; }
     
-    .sidebar-brand { padding: 12px 12px 10px; }
+    .sidebar-brand { padding: 14px 14px 10px; }
     .sidebar-brand .logo { width: 36px; height: 36px; }
-    .sidebar-brand .brand-text { font-size: 0.82rem; }
+    .sidebar-brand .brand-text { font-size: 0.85rem; }
     .sidebar-link { padding: 7px 10px; font-size: 0.75rem; gap: 8px; }
-    .sidebar-link i { width: 20px; font-size: 0.8rem; }
-    .sidebar-link .badge { font-size: 0.58rem; padding: 2px 8px; }
-    .sidebar-nav .nav-label { font-size: 0.5rem; }
-    .sidebar-status { padding: 8px 12px; }
+    .sidebar-link i { width: 18px; font-size: 0.8rem; }
+    .sidebar-link .badge { font-size: 0.55rem; padding: 1px 7px; }
+    .sidebar-nav .nav-label { font-size: 0.45rem; }
+    .sidebar-status { padding: 8px 14px; }
+}
+
+@media (min-width: 1025px) {
+    .sidebar {
+        transform: translateX(0) !important;
+        z-index: 50;
+        box-shadow: 4px 0 20px rgba(0,0,0,0.08);
+    }
+    #sidebarOverlay { display: none !important; }
 }
 
 @media (max-width: 768px) {
-    .sidebar { width: 290px; border-radius: 0 16px 16px 0; }
-    .sidebar-link { padding: 6px 9px; font-size: 0.72rem; gap: 8px; }
-    .sidebar-link i { width: 18px; font-size: 0.75rem; }
-    .floating-sidebar-toggle {
-        top: 70px;
-        left: 12px;
-        width: 44px;
-        height: 44px;
-        font-size: 1.1rem;
-    }
+    .sidebar { width: 300px; border-radius: 0 16px 16px 0; }
+    .sidebar-link { padding: 6px 10px; font-size: 0.7rem; gap: 8px; }
+    .sidebar-link i { width: 16px; font-size: 0.75rem; }
+    .sidebar-link .badge { font-size: 0.5rem; padding: 1px 6px; }
+    .sidebar-nav .nav-label { font-size: 0.4rem; }
+    #sidebarToggle { width: 46px !important; height: 46px !important; font-size: 1.2rem; top: 14px !important; left: 14px !important; }
 }
 
 @media (max-width: 480px) {
     .sidebar {
-        width: 100%; max-width: 310px;
+        width: 100%; 
+        max-width: 320px;
         border-radius: 0 20px 20px 0;
     }
-    .sidebar-link { padding: 6px 9px; font-size: 0.7rem; gap: 7px; }
-    .sidebar-link i { width: 17px; font-size: 0.72rem; }
-    .sidebar-link .badge { font-size: 0.55rem; padding: 1px 7px; min-width: 22px; }
-    .sidebar-nav .nav-label { font-size: 0.48rem; padding: 0 8px; }
-    .floating-sidebar-toggle {
-        top: 66px;
-        left: 10px;
-        width: 42px;
-        height: 42px;
-        font-size: 1.05rem;
-    }
+    .sidebar-link { padding: 5px 8px; font-size: 0.65rem; gap: 6px; }
+    .sidebar-link i { width: 14px; font-size: 0.7rem; }
+    .sidebar-link .badge { font-size: 0.45rem; padding: 1px 5px; min-width: 16px; }
+    .sidebar-nav .nav-label { font-size: 0.4rem; padding: 0 8px; }
+    #sidebarToggle { width: 44px !important; height: 44px !important; font-size: 1.15rem; top: 12px !important; left: 12px !important; }
 }
 
 @media (max-width: 1024px) {
@@ -849,30 +726,29 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 @media print {
     .sidebar { display: none !important; }
     #sidebarOverlay { display: none !important; }
-    .floating-sidebar-toggle { display: none !important; }
+    #sidebarToggle { display: none !important; }
 }
 
 .flex { display: flex; }
 .items-center { align-items: center; }
-.gap-2 { gap: 8px; }
-.gap-3 { gap: 10px; }
+.gap-3 { gap: 12px; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 
 <div id="sidebarOverlay"></div>
 
+<!-- TOGGLE BUTTON -->
+<button id="sidebarToggle" type="button" aria-label="Toggle Sidebar" title="Toggle Sidebar" onclick="window.__toggleSidebar && window.__toggleSidebar(event)">
+    <i class="fas fa-bars"></i>
+</button>
+
 <aside class="sidebar" id="sidebar" role="navigation" aria-label="Admin Audit Sidebar">
-    
-    <!-- CLOSE BUTTON -->
-    <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close Sidebar">
-        <i class="fas fa-times"></i>
-    </button>
     
     <!-- BRAND -->
     <div class="sidebar-brand">
         <div class="flex items-center gap-3">
             <img src="<?= $logo_url ?>" alt="Braick Logo" class="logo"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B5ED7%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
             <div class="truncate">
                 <p class="brand-text">Braick Dispensary</p>
                 <p class="brand-sub">
@@ -909,7 +785,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     <!-- NAVIGATION -->
     <nav class="sidebar-nav">
         
-        <!-- MAIN MENU -->
         <div class="nav-label">
             <span class="label-icon">📋</span> Main Menu
         </div>
@@ -926,11 +801,11 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <span class="link-text">Audit Dashboard</span>
         </a>
         
-        <!-- REPORTS -->
         <div class="nav-label">
             <span class="label-icon">📊</span> Reports
         </div>
         
+        <!-- ✅ REVENUE BADGE: Bills + OTC (leo) -->
         <a href="/dispensary_system/frontend/pages/admin/audit/revenue.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('revenue.php') || isAdminAuditPage(['revenue_details.php', 'view_bill.php', 'edit_bill.php']) ? 'active' : '' ?>">
             <i class="fas fa-chart-line"></i>
@@ -953,9 +828,11 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <i class="fas fa-user-injured"></i>
             <span class="link-text">Patients</span>
             <span class="badge" id="badgePatients"><?= $total_patients ?></span>
+            <?php if ($today_patients > 0): ?>
+                <span class="badge badge-new" id="badgePatientsToday">+<?= $today_patients ?></span>
+            <?php endif; ?>
         </a>
         
-        <!-- PERFORMANCE -->
         <div class="nav-label">
             <span class="label-icon">👥</span> Performance
         </div>
@@ -967,7 +844,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <span class="badge" id="badgeEmployees"><?= $total_employees ?></span>
         </a>
         
-        <!-- AUDIT -->
         <div class="nav-label">
             <span class="label-icon">🔍</span> Audit
         </div>
@@ -982,7 +858,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <?php endif; ?>
         </a>
         
-        <!-- ACCOUNT -->
         <div class="nav-label">
             <span class="label-icon">👤</span> Account
         </div>
@@ -1013,12 +888,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     </div>
 </aside>
 
-<!-- FLOATING TOGGLE BUTTON -->
-<button class="floating-sidebar-toggle" id="floatingSidebarToggle" aria-label="Toggle Sidebar">
-    <i class="fas fa-bars"></i>
-    <span class="badge-dot"></span>
-</button>
-
 <script>
 // ================================================================
 // BRANCH SWITCHER
@@ -1033,211 +902,164 @@ function switchBranch(branchId) {
 }
 
 // ================================================================
-// SIDEBAR TOGGLE - INAFANYA KAZI 100%
+// ✅ SIDEBAR TOGGLE V8 - GUARANTEED TO WORK
 // ================================================================
 (function() {
     'use strict';
     
-    var sidebar, overlay, closeBtn, floatingBtn, headerToggle;
-    var isInitialized = false;
-    
-    function initSidebar() {
-        if (isInitialized) return;
+    window.__toggleSidebar = function(e) {
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
         
-        sidebar = document.getElementById('sidebar');
-        overlay = document.getElementById('sidebarOverlay');
-        closeBtn = document.getElementById('sidebarCloseBtn');
-        floatingBtn = document.getElementById('floatingSidebarToggle');
-        headerToggle = document.getElementById('sidebarToggle');
+        var sidebar = document.getElementById('sidebar');
+        var overlay = document.getElementById('sidebarOverlay');
+        var toggle = document.getElementById('sidebarToggle');
         
         if (!sidebar) {
-            console.warn('❌ Sidebar not found');
-            return;
+            console.warn('⚠️ Sidebar not found');
+            return false;
         }
         
-        if (!overlay) {
-            overlay = document.createElement('div');
-            overlay.id = 'sidebarOverlay';
-            document.body.appendChild(overlay);
-        }
+        var isOpen = sidebar.classList.contains('open');
         
-        function openSidebar() {
-            sidebar.classList.add('open');
-            overlay.classList.add('active');
-            overlay.style.display = 'block';
-            document.body.classList.add('sidebar-open');
-            document.body.style.overflow = 'hidden';
-            document.body.style.position = 'fixed';
-            document.body.style.width = '100%';
-            document.body.style.height = '100%';
-            sidebar.style.zIndex = '99999';
-            overlay.style.zIndex = '99998';
-            
-            if (floatingBtn) {
-                var icon = floatingBtn.querySelector('i');
-                if (icon) icon.className = 'fas fa-times';
-            }
-            
-            if (headerToggle) {
-                var hIcon = headerToggle.querySelector('i');
-                if (hIcon) hIcon.className = 'fas fa-times';
-            }
-        }
-        
-        function closeSidebar() {
+        if (isOpen) {
             sidebar.classList.remove('open');
-            overlay.classList.remove('active');
-            overlay.style.display = 'none';
+            if (overlay) {
+                overlay.classList.remove('active');
+                overlay.style.display = 'none';
+            }
             document.body.classList.remove('sidebar-open');
             document.body.style.overflow = '';
-            document.body.style.position = '';
-            document.body.style.width = '';
-            document.body.style.height = '';
-            sidebar.style.zIndex = '';
-            overlay.style.zIndex = '';
             
-            if (floatingBtn) {
-                var icon = floatingBtn.querySelector('i');
+            if (toggle) {
+                var icon = toggle.querySelector('i');
                 if (icon) icon.className = 'fas fa-bars';
             }
-            
-            if (headerToggle) {
-                var hIcon = headerToggle.querySelector('i');
-                if (hIcon) hIcon.className = 'fas fa-bars';
+            console.log('%c❌ Sidebar CLOSED', 'color:#DC2626; font-weight:bold;');
+        } else {
+            sidebar.classList.add('open');
+            if (overlay) {
+                overlay.classList.add('active');
+                overlay.style.display = 'block';
             }
-        }
-        
-        function toggleSidebar() {
-            if (sidebar.classList.contains('open')) {
-                closeSidebar();
-            } else {
-                openSidebar();
+            document.body.classList.add('sidebar-open');
+            document.body.style.overflow = 'hidden';
+            
+            if (toggle) {
+                var icon = toggle.querySelector('i');
+                if (icon) icon.className = 'fas fa-times';
             }
+            console.log('%c✅ Sidebar OPENED', 'color:#10B981; font-weight:bold;');
         }
         
-        window.toggleSidebar = toggleSidebar;
-        window.openSidebar = openSidebar;
-        window.closeSidebar = closeSidebar;
+        return false;
+    };
+    
+    window.toggleSidebar = window.__toggleSidebar;
+    window.openSidebar = function() {
+        var sidebar = document.getElementById('sidebar');
+        if (sidebar && !sidebar.classList.contains('open')) {
+            window.__toggleSidebar();
+        }
+    };
+    window.closeSidebar = function() {
+        var sidebar = document.getElementById('sidebar');
+        if (sidebar && sidebar.classList.contains('open')) {
+            window.__toggleSidebar();
+        }
+    };
+    
+    function attachListeners() {
+        var sidebar = document.getElementById('sidebar');
+        var overlay = document.getElementById('sidebarOverlay');
+        var toggle = document.getElementById('sidebarToggle');
         
-        // FLOATING BUTTON
-        if (floatingBtn) {
-            var newFloatBtn = floatingBtn.cloneNode(true);
-            floatingBtn.parentNode.replaceChild(newFloatBtn, floatingBtn);
-            floatingBtn = newFloatBtn;
-            
-            floatingBtn.addEventListener('click', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                toggleSidebar();
-            });
-            
-            floatingBtn.addEventListener('touchend', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                toggleSidebar();
-            }, { passive: false });
+        if (!sidebar || !toggle) {
+            console.warn('⚠️ Missing elements, retrying...');
+            return false;
         }
         
-        // HEADER TOGGLE
-        if (headerToggle) {
-            var newHeaderToggle = headerToggle.cloneNode(true);
-            headerToggle.parentNode.replaceChild(newHeaderToggle, headerToggle);
-            headerToggle = newHeaderToggle;
-            
-            headerToggle.addEventListener('click', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                toggleSidebar();
-            });
-        }
+        toggle.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.__toggleSidebar(e);
+            return false;
+        };
         
-        // CLOSE BUTTON
-        if (closeBtn) {
-            closeBtn.addEventListener('click', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                closeSidebar();
-            });
-            
-            closeBtn.addEventListener('touchend', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                closeSidebar();
-            }, { passive: false });
-        }
-        
-        // OVERLAY CLICK
-        overlay.addEventListener('click', function(e) {
-            if (e.target === overlay) closeSidebar();
-        });
-        
-        // ESC KEY
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape' && sidebar.classList.contains('open')) {
-                closeSidebar();
-            }
-        });
-        
-        // RESIZE
-        var resizeTimer;
-        window.addEventListener('resize', function() {
-            clearTimeout(resizeTimer);
-            resizeTimer = setTimeout(function() {
-                if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
-                    closeSidebar();
+        if (overlay) {
+            overlay.onclick = function(e) {
+                if (e.target === overlay) {
+                    window.closeSidebar();
                 }
-            }, 200);
-        });
+            };
+        }
         
-        // CLOSE ON LINK CLICK (mobile)
+        console.log('%c✅ Listeners attached', 'color:#10B981;');
+        return true;
+    }
+    
+    document.addEventListener('click', function(e) {
+        var target = e.target;
+        while (target && target !== document) {
+            if (target.id === 'sidebarToggle') {
+                e.preventDefault();
+                e.stopPropagation();
+                window.__toggleSidebar(e);
+                return false;
+            }
+            target = target.parentNode;
+        }
+    }, true);
+    
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            var sidebar = document.getElementById('sidebar');
+            if (sidebar && sidebar.classList.contains('open')) {
+                window.closeSidebar();
+            }
+        }
+    });
+    
+    var resizeTimer;
+    window.addEventListener('resize', function() {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function() {
+            if (window.innerWidth > 1024) {
+                var sidebar = document.getElementById('sidebar');
+                if (sidebar && sidebar.classList.contains('open')) {
+                    window.closeSidebar();
+                }
+            }
+        }, 200);
+    });
+    
+    function init() {
+        attachListeners();
         document.querySelectorAll('.sidebar-link').forEach(function(link) {
             link.addEventListener('click', function() {
-                if (window.innerWidth <= 1024 && sidebar.classList.contains('open')) {
-                    setTimeout(closeSidebar, 200);
+                if (window.innerWidth <= 1024) {
+                    setTimeout(window.closeSidebar, 150);
                 }
             });
         });
-        
-        // SWIPE TO CLOSE
-        var touchStartX = 0;
-        var touchEndX = 0;
-        
-        sidebar.addEventListener('touchstart', function(e) {
-            touchStartX = e.changedTouches[0].screenX;
-        }, { passive: true });
-        
-        sidebar.addEventListener('touchend', function(e) {
-            touchEndX = e.changedTouches[0].screenX;
-            handleSwipe();
-        }, { passive: true });
-        
-        function handleSwipe() {
-            var swipeDistance = touchEndX - touchStartX;
-            if (swipeDistance < -80 && sidebar.classList.contains('open')) {
-                closeSidebar();
-            }
-        }
-        
-        isInitialized = true;
-        console.log('%c✅ Sidebar V6 initialized', 'color:#10B981; font-weight:bold;');
     }
     
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initSidebar);
+        document.addEventListener('DOMContentLoaded', init);
     } else {
-        setTimeout(initSidebar, 50);
+        init();
     }
     
-    window.addEventListener('load', function() {
-        if (!isInitialized) initSidebar();
-    });
+    window.addEventListener('load', init);
+    setTimeout(init, 500);
     
-    window.initAdminAuditSidebar = initSidebar;
 })();
 
-console.log('%c👑 Braick - Admin Audit Sidebar V6', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ SIZE: Imepunguzwa (260px)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ HOVER: GREEN (#10B981)', 'font-size:13px; color:#10B981; font-weight:bold;');
-console.log('%c✅ FONT: JetBrains Mono', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ ICONS: NZURI ZAIDI', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c👑 Admin Audit Sidebar V9 - REVENUE BADGE FIXED', 'font-size:16px; font-weight:bold; color:#0B4EA8;');
+console.log('%c✅ Revenue badge = Bills + OTC (leo)', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c💰 Bills Today: TSh <?= number_format($bills_today, 0) ?>', 'font-size:13px; color:#0B5ED7;');
+console.log('%c💊 OTC Today: TSh <?= number_format($otc_today, 0) ?>', 'font-size:13px; color:#0891B2;');
+console.log('%c📊 Total: TSh <?= number_format($total_revenue_today, 0) ?>', 'font-size:13px; color:#10B981; font-weight:bold;');
 </script>

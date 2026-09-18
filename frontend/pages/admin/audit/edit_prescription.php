@@ -1,11 +1,12 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/admin/edit_prescription.php
-// ADMIN - EDIT PRESCRIPTION (V2 - Searchable Medication Dropdown)
-// ✅ Search filter kwenye kila medication dropdown
-// ✅ Branch ya mgonjwa TU
-// ✅ Scroll buttons <>
-// ✅ BLUE THEME
+// FILE: frontend/pages/admin/audit/edit_prescription.php
+// ADMIN AUDIT - EDIT PRESCRIPTION (V3 - Show 10 Rows on Open)
+// ✅ Search filter kwenye kila dropdown
+// ✅ Dropdown inafunguka na rows 10 za kwanza zinaonekana
+// ✅ Branch ya mgonjwa kutoka visits table
+// ✅ Load ALL prescriptions za visit_id husika
+// ✅ Blue theme + dark mode
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -13,7 +14,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
-    header('Location: ../../auth/login.php');
+    header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
 
@@ -29,7 +30,6 @@ if ($_SESSION['role'] !== 'admin') {
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
@@ -43,8 +43,7 @@ if ($prescription_id <= 0 && $visit_id <= 0) {
     exit;
 }
 
-require_once __DIR__ . '/../../../backend/config/database.php';
-require_once __DIR__ . '/../../../backend/helpers/functions.php';
+require_once __DIR__ . '/../../../../backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
@@ -52,26 +51,7 @@ try {
     die("Database connection error: " . $e->getMessage());
 }
 
-if ($visit_id <= 0 && $prescription_id > 0) {
-    try {
-        $stmt = $db->prepare("SELECT visit_id, patient_id, branch_id FROM prescriptions WHERE id = ?");
-        $stmt->execute([$prescription_id]);
-        $presc_info = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($presc_info) {
-            $visit_id = (int)$presc_info['visit_id'];
-            if ($patient_id <= 0) $patient_id = (int)$presc_info['patient_id'];
-            if ($selected_branch_id === 'all' && !empty($presc_info['branch_id'])) {
-                $selected_branch_id = (int)$presc_info['branch_id'];
-            }
-        }
-    } catch (Exception $e) {}
-}
-
-if ($visit_id <= 0) {
-    header('Location: inventory.php?branch=' . urlencode($selected_branch_id));
-    exit;
-}
-
+// CURRENCY
 $currency = 'TSh';
 try {
     $stmt = $db->query("SELECT setting_value FROM system_settings WHERE setting_key = 'currency'");
@@ -98,7 +78,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $status = $_POST['status'] ?? 'pending';
             $notes = trim($_POST['notes'] ?? '');
             
-            $sql = "UPDATE prescriptions SET doctor_id = ?, status = ?, notes = ?, updated_at = NOW() WHERE id = ?";
+            $sql = "UPDATE prescriptions SET 
+                doctor_id = ?, status = ?, notes = ?, updated_at = NOW()
+                WHERE id = ?";
             $db->prepare($sql)->execute([$doctor_id, $status, $notes, $prescription_id]);
         }
         
@@ -143,26 +125,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $duration, $route, $instructions, $price, $total_price, $item_id
                 ]);
             } else {
-                $target_prescription_id = $item_prescription_id;
-                if ($target_prescription_id <= 0) {
-                    $stmt = $db->prepare("SELECT id FROM prescriptions WHERE visit_id = ? ORDER BY id ASC LIMIT 1");
-                    $stmt->execute([$visit_id]);
-                    $first_rx = $stmt->fetch(PDO::FETCH_ASSOC);
-                    $target_prescription_id = $first_rx ? (int)$first_rx['id'] : 0;
-                }
-                
-                if ($target_prescription_id > 0) {
-                    $sql = "INSERT INTO prescription_items 
-                        (prescription_id, patient_id, inventory_id, medication_name, 
-                         dosage, frequency, quantity, duration, route, instructions,
-                         unit_price, total_price, branch_id, created_at) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())";
-                    $db->prepare($sql)->execute([
-                        $target_prescription_id, $patient_id, $medication_id, $name,
-                        $dosage, $frequency, $qty, $duration, $route, $instructions,
-                        $price, $total_price, $selected_branch_id !== 'all' ? (int)$selected_branch_id : 1
-                    ]);
-                }
+                $sql = "INSERT INTO prescription_items 
+                    (prescription_id, patient_id, inventory_id, medication_name, 
+                     dosage, frequency, quantity, duration, route, instructions,
+                     unit_price, total_price, branch_id, created_at) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())";
+                $db->prepare($sql)->execute([
+                    $item_prescription_id, $patient_id, $medication_id, $name,
+                    $dosage, $frequency, $qty, $duration, $route, $instructions,
+                    $price, $total_price, $selected_branch_id !== 'all' ? (int)$selected_branch_id : 1
+                ]);
             }
         }
         
@@ -174,14 +146,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $db->prepare("DELETE FROM prescription_items WHERE id IN ($placeholders)")->execute($del_ids);
             }
         }
-        
-        try {
-            $db->prepare("
-                DELETE p FROM prescriptions p
-                WHERE p.visit_id = ?
-                AND NOT EXISTS (SELECT 1 FROM prescription_items pi WHERE pi.prescription_id = p.id AND pi.quantity > 0)
-            ")->execute([$visit_id]);
-        } catch (Exception $e) {}
         
         try {
             $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, ip_address, created_at) 
@@ -212,14 +176,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 $prescription = null;
 try {
     $sql = "SELECT 
-        v.id as id, v.visit_number, v.visit_date, v.diagnosis, v.patient_id,
-        v.doctor_id, v.branch_id,
-        pat.full_name as patient_name, pat.patient_id as patient_number,
-        pat.phone as patient_phone, pat.date_of_birth as patient_dob,
-        pat.gender as patient_gender, pat.blood_group as patient_blood,
+        v.id as id,
+        v.visit_number,
+        v.visit_date,
+        v.diagnosis,
+        v.patient_id,
+        v.doctor_id,
+        v.branch_id,
+        pat.full_name as patient_name,
+        pat.patient_id as patient_number,
+        pat.phone as patient_phone,
+        pat.date_of_birth as patient_dob,
+        pat.gender as patient_gender,
+        pat.blood_group as patient_blood,
         pat.allergies as patient_allergies,
         u_doctor.full_name as doctor_name,
-        b.name as branch_name, v.created_at
+        b.name as branch_name,
+        v.created_at
     FROM visits v
     LEFT JOIN patients pat ON v.patient_id = pat.id
     LEFT JOIN users u_doctor ON v.doctor_id = u_doctor.id
@@ -236,7 +209,24 @@ if (!$prescription) {
     exit;
 }
 
-$patient_branch_id = (int)($prescription['branch_id'] ?? 1);
+// ✅ GET PATIENT BRANCH FROM VISITS TABLE
+$patient_branch_id = (int)($prescription['branch_id'] ?? 0);
+
+if ($patient_branch_id <= 0 && $patient_id > 0) {
+    try {
+        $stmt = $db->prepare("SELECT branch_id FROM patients WHERE id = ?");
+        $stmt->execute([$patient_id]);
+        $pat_branch = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($pat_branch && (int)$pat_branch['branch_id'] > 0) {
+            $patient_branch_id = (int)$pat_branch['branch_id'];
+        }
+    } catch (Exception $e) {}
+}
+
+if ($patient_branch_id <= 0) {
+    $patient_branch_id = (int)($_SESSION['branch_id'] ?? 1);
+}
+
 $patient_branch_name = $prescription['branch_name'] ?? $user_branch_name;
 
 if ($prescription_id <= 0) {
@@ -257,6 +247,7 @@ try {
     LEFT JOIN users u ON p.doctor_id = u.id
     WHERE p.visit_id = ?
     ORDER BY p.id ASC";
+    
     $stmt = $db->prepare($sql);
     $stmt->execute([$visit_id]);
     $visit_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -269,11 +260,13 @@ try {
         pi.id, pi.prescription_id, pi.inventory_id as medication_id,
         pi.medication_name, pi.dosage, pi.frequency, pi.quantity,
         pi.duration, pi.route, pi.instructions, pi.unit_price, pi.total_price,
-        pi.branch_id, pi.created_at, p.prescription_number, p.status as rx_status, p.visit_id
+        pi.branch_id, pi.created_at, p.prescription_number,
+        p.status as rx_status, p.visit_id
     FROM prescription_items pi
     INNER JOIN prescriptions p ON pi.prescription_id = p.id
     WHERE p.visit_id = ?
     ORDER BY pi.id ASC";
+    
     $stmt = $db->prepare($sql);
     $stmt->execute([$visit_id]);
     $prescription_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -286,17 +279,16 @@ try {
     $doctors_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-// ✅ GET MEDICATIONS
+// ✅ GET MEDICATIONS - KUTOKA BRANCH YA MGONJWA
 $medications_list = [];
 try {
     $sql = "SELECT 
-        MIN(id) as id, medication_name, category, unit,
+        MIN(id) as id,
+        medication_name,
+        category,
+        unit,
         MIN(selling_price) as selling_price,
-        SUM(CASE 
-            WHEN status = 'active' 
-            AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') 
-            THEN quantity ELSE 0 
-        END) as total_quantity
+        SUM(CASE WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') THEN quantity ELSE 0 END) as total_quantity
     FROM medications_inventory 
     WHERE status = 'active'
     AND branch_id = ?
@@ -307,7 +299,28 @@ try {
     $stmt = $db->prepare($sql);
     $stmt->execute([$patient_branch_id]);
     $medications_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+    
+    // Fallback if empty
+    if (empty($medications_list)) {
+        $sql = "SELECT 
+            MIN(id) as id,
+            medication_name,
+            category,
+            unit,
+            MIN(selling_price) as selling_price,
+            SUM(CASE WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') THEN quantity ELSE 0 END) as total_quantity
+        FROM medications_inventory 
+        WHERE status = 'active'
+        GROUP BY medication_name, category, unit
+        HAVING total_quantity > 0
+        ORDER BY medication_name ASC
+        LIMIT 1000";
+        $stmt = $db->query($sql);
+        $medications_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (Exception $e) {
+    error_log("Medications fetch error: " . $e->getMessage());
+}
 
 function calculateAge($dob) {
     if (!$dob) return 'N/A';
@@ -320,8 +333,8 @@ $profile_pic_url = !empty($profile_pic)
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-include_once __DIR__ . '/../../components/admin_header.php';
-include_once __DIR__ . '/../../components/admin_sidebar.php';
+include_once __DIR__ . '/../../../components/admin_audit_header.php';
+include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
 ?>
 
 <!DOCTYPE html>
@@ -444,49 +457,51 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 [data-theme="dark"] .rx-badge { background: #1E3A5F; color: #93C5FD; }
 
 .btn-remove-item { width: 30px; height: 30px; border-radius: 8px; background: rgba(220, 38, 38, 0.12); color: #DC2626; border: 2px solid transparent; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 0.78rem; transition: all 0.2s ease; }
-.btn-remove-item:hover { background: #DC2626; color: white; transform: scale(1.1); }
+.btn-remove-item:hover { background: #DC2626; color: white; transform: scale(1.1); box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4); }
 
 /* ================================================================
-   ✅ SEARCHABLE MEDICATION DROPDOWN
+   ✅ SEARCHABLE MEDICATION DROPDOWN (SHOW 10 ROWS ON OPEN)
    ================================================================ */
 .med-search-dropdown {
     position: relative;
     width: 100%;
-    min-width: 220px;
+    min-width: 240px;
 }
 
-.med-search-dropdown .med-search-input {
+.med-selected-display {
     width: 100%;
     padding: 6px 32px 6px 9px;
     border-radius: 6px;
-    border: 2px solid var(--border-color);
-    background: var(--primary-bg) !important;
-    color: var(--primary) !important;
+    border: 2px solid var(--primary-light);
+    background: var(--bg-card);
+    color: var(--text-primary);
     font-size: 0.78rem;
     font-weight: 700;
-    outline: none;
-    transition: all 0.2s ease;
     cursor: pointer;
-    font-family: var(--font-primary);
     text-overflow: ellipsis;
     white-space: nowrap;
     overflow: hidden;
+    min-height: 32px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s ease;
+    position: relative;
 }
 
-.med-search-dropdown .med-search-input::placeholder {
-    color: var(--primary);
-    opacity: 0.6;
-}
-
-.med-search-dropdown .med-search-input:focus,
-.med-search-dropdown.open .med-search-input {
+.med-selected-display:hover {
     border-color: var(--primary);
-    background: var(--bg-card) !important;
-    color: var(--text-primary) !important;
-    box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+    background: var(--primary-bg);
 }
 
-.med-search-dropdown .med-arrow {
+.med-selected-display .med-display-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.med-selected-display .med-arrow {
     position: absolute;
     right: 10px;
     top: 50%;
@@ -501,6 +516,15 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     transform: translateY(-50%) rotate(180deg);
 }
 
+.med-selected-display.placeholder {
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-style: italic;
+    background: var(--primary-bg);
+    border-color: var(--primary-light);
+}
+
+/* ✅ PANEL - max-height inaonyesha rows ~10 */
 .med-dropdown-panel {
     position: fixed;
     z-index: 99999;
@@ -508,7 +532,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     border: 2px solid var(--primary);
     border-radius: 12px;
     box-shadow: 0 12px 40px rgba(0,0,0,0.25);
-    max-height: 400px;
     display: none;
     flex-direction: column;
     overflow: hidden;
@@ -560,18 +583,30 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
 }
 
+/* ✅ LIST - inaonyesha rows 10 (kila row = 42px) */
 .med-dropdown-list {
     overflow-y: auto;
-    max-height: 320px;
+    max-height: 420px; /* ✅ 10 rows × 42px = 420px */
     flex: 1;
 }
 
-.med-dropdown-list::-webkit-scrollbar { width: 8px; }
-.med-dropdown-list::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 10px; }
-.med-dropdown-list::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+.med-dropdown-list::-webkit-scrollbar { width: 10px; }
+.med-dropdown-list::-webkit-scrollbar-track { 
+    background: var(--bg-body); 
+    border-radius: 10px; 
+}
+.med-dropdown-list::-webkit-scrollbar-thumb { 
+    background: linear-gradient(180deg, var(--primary), var(--primary-dark)); 
+    border-radius: 10px; 
+    border: 2px solid var(--bg-body);
+}
+.med-dropdown-list::-webkit-scrollbar-thumb:hover { 
+    background: var(--primary-dark); 
+}
 
+/* ✅ OPTION - kila row ina fixed height */
 .med-option {
-    padding: 10px 14px;
+    padding: 8px 14px;
     cursor: pointer;
     transition: all 0.15s ease;
     border-bottom: 1px solid var(--border-color);
@@ -580,6 +615,10 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     align-items: center;
     gap: 10px;
     font-size: 0.8rem;
+    min-height: 42px;
+    height: 42px;
+    box-sizing: border-box;
+    overflow: hidden;
 }
 
 .med-option:last-child { border-bottom: none; }
@@ -588,12 +627,13 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .med-option.selected {
     background: var(--primary-bg);
     padding-left: 18px;
-    border-left: 3px solid var(--primary);
+    border-left: 4px solid var(--primary);
 }
 
 .med-option.current {
     background: var(--success-bg);
     font-weight: 700;
+    border-left: 4px solid var(--success);
 }
 
 .med-option .med-opt-name {
@@ -604,19 +644,23 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.82rem;
 }
 
 .med-option .med-opt-name i {
     color: var(--primary);
-    font-size: 0.72rem;
-    margin-right: 4px;
+    font-size: 0.75rem;
+    flex-shrink: 0;
 }
 
 .med-option .med-opt-info {
-    font-size: 0.68rem;
+    font-size: 0.7rem;
     color: var(--text-secondary);
     display: flex;
-    gap: 8px;
+    gap: 10px;
     flex-shrink: 0;
     align-items: center;
 }
@@ -624,6 +668,10 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .med-option .med-opt-stock {
     font-weight: 800;
     font-family: var(--font-mono);
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.72rem;
 }
 
 .med-option .med-opt-stock.ok { color: var(--success); }
@@ -635,6 +683,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     font-family: var(--font-mono);
     color: var(--primary);
     white-space: nowrap;
+    font-size: 0.78rem;
 }
 
 .med-option.empty {
@@ -642,6 +691,8 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     text-align: center;
     color: var(--text-secondary);
     cursor: default;
+    height: auto;
+    min-height: auto;
 }
 
 .med-option.empty:hover {
@@ -658,7 +709,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     padding: 8px 14px;
     background: var(--primary-bg);
     border-top: 1px solid var(--primary-light);
-    font-size: 0.65rem;
+    font-size: 0.68rem;
     font-weight: 700;
     color: var(--primary);
     display: flex;
@@ -670,49 +721,16 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .med-dropdown-footer .count {
     background: var(--primary);
     color: white;
-    padding: 1px 8px;
+    padding: 2px 10px;
     border-radius: 10px;
     font-family: var(--font-mono);
+    font-size: 0.65rem;
 }
 
-/* Selected display */
-.med-selected-display {
-    width: 100%;
-    padding: 6px 32px 6px 9px;
-    border-radius: 6px;
-    border: 2px solid var(--primary-light);
-    background: var(--bg-card);
-    color: var(--text-primary);
-    font-size: 0.78rem;
-    font-weight: 700;
-    cursor: pointer;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    overflow: hidden;
-    min-height: 32px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.2s ease;
-}
-
-.med-selected-display:hover {
-    border-color: var(--primary);
-    background: var(--primary-bg);
-}
-
-.med-selected-display .med-display-name {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.med-selected-display.placeholder {
+.med-dropdown-footer .scroll-hint-mini {
+    font-size: 0.6rem;
     color: var(--text-secondary);
     font-weight: 500;
-    font-style: italic;
-    background: var(--bg-body);
 }
 
 .scroll-hint { padding: 8px 16px; background: var(--primary-bg); border-top: 1px solid var(--border-color); text-align: center; font-size: 0.68rem; color: var(--text-secondary); font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
@@ -822,10 +840,11 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
         </div>
     </div>
 
+    <!-- ✅ BRANCH INFO BANNER -->
     <div class="branch-banner">
         <i class="fas fa-store-alt"></i>
         <div>
-            <strong>Branch ya Mgonjwa: <?= htmlspecialchars($patient_branch_name) ?></strong>
+            <strong>Branch ya Mgonjwa: <?= htmlspecialchars($patient_branch_name) ?> (ID: <?= $patient_branch_id ?>)</strong>
             <span style="font-weight:500;opacity:0.85;margin-left:8px;">
                 • Dawa zote zinazoonyeshwa hapa ni za branch hii TU (<?= count($medications_list) ?> available)
             </span>
@@ -893,10 +912,10 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                 </span>
                 <div class="header-actions">
                     <div class="scroll-buttons" title="Scroll left / right">
-                        <button type="button" class="btn-scroll" onclick="scrollItems('left')">
+                        <button type="button" class="btn-scroll" onclick="scrollItems('left')" title="Scroll Left (Alt+←)">
                             <i class="fas fa-chevron-left"></i>
                         </button>
-                        <button type="button" class="btn-scroll" onclick="scrollItems('right')">
+                        <button type="button" class="btn-scroll" onclick="scrollItems('right')" title="Scroll Right (Alt+→)">
                             <i class="fas fa-chevron-right"></i>
                         </button>
                     </div>
@@ -912,7 +931,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                         <tr>
                             <th style="width:40px;">#</th>
                             <th style="width:150px;">Rx #</th>
-                            <th style="width:280px;">💊 Medication (Change)</th>
+                            <th style="width:280px;">💊 Medication (Search & Change)</th>
                             <th style="width:80px;text-align:center;">Qty</th>
                             <th style="width:120px;text-align:right;">Unit Price</th>
                             <th style="width:120px;text-align:right;">Discount</th>
@@ -947,7 +966,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                         <input type="hidden" name="item_name[]" class="item-name-hidden" value="<?= htmlspecialchars($current_med_name) ?>">
                                         <input type="hidden" name="item_medication_id[]" class="item-medication-id-hidden" value="<?= $current_med_id ?>">
                                         
-                                        <!-- ✅ SEARCHABLE DROPDOWN -->
                                         <div class="med-search-dropdown" data-current-id="<?= $current_med_id ?>" data-current-name="<?= htmlspecialchars($current_med_name) ?>">
                                             <div class="med-selected-display <?= $current_med_name ? '' : 'placeholder' ?>">
                                                 <span class="med-display-name"><?= $current_med_name ?: '-- Select Medication --' ?></span>
@@ -1114,7 +1132,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     </tr>
 </template>
 
-<!-- ✅ MEDICATION DATA (JSON) -->
+<!-- ✅ MEDICATIONS DATA -->
 <script id="medicationsDataScript" type="application/json">
 <?= json_encode(array_map(function($med) {
     return [
@@ -1135,6 +1153,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 var currency = '<?= $currency ?>';
 var deletedItems = [];
 var MEDICATIONS = [];
+var PATIENT_BRANCH_ID = <?= (int)$patient_branch_id ?>;
 
 try {
     var script = document.getElementById('medicationsDataScript');
@@ -1144,19 +1163,17 @@ try {
     MEDICATIONS = [];
 }
 
-console.log('%c💊 Medications loaded: ' + MEDICATIONS.length, 'color:#0B5ED7;font-weight:bold;');
+console.log('%c💊 Medications loaded: ' + MEDICATIONS.length + ' (Branch ID: ' + PATIENT_BRANCH_ID + ')', 'color:#0B5ED7;font-weight:bold;');
 
 // ================================================================
-// ✅ SEARCHABLE DROPDOWN - OPEN
+// ✅ OPEN MEDICATION DROPDOWN - Shows 10 rows
 // ================================================================
 function openMedDropdown(dropdown) {
-    // Close any existing open dropdowns
     closeAllMedDropdowns();
     
     var display = dropdown.querySelector('.med-selected-display');
     var rect = display.getBoundingClientRect();
     
-    // Build panel
     var panel = document.createElement('div');
     panel.className = 'med-dropdown-panel';
     panel.dataset.owner = 'med-dropdown-' + Math.random().toString(36).substring(2, 10);
@@ -1165,17 +1182,17 @@ function openMedDropdown(dropdown) {
     // Position panel
     panel.style.left = rect.left + 'px';
     panel.style.top = (rect.bottom + 4) + 'px';
-    panel.style.width = Math.max(rect.width, 340) + 'px';
+    panel.style.width = Math.max(rect.width, 360) + 'px';
     
-    // Search input
+    // Search
     var searchHtml = `
         <div class="med-dropdown-search">
             <i class="fas fa-search"></i>
-            <input type="text" class="med-dropdown-search-input" placeholder="Search medication..." autocomplete="off">
+            <input type="text" class="med-dropdown-search-input" placeholder="Search medication by name, category..." autocomplete="off">
         </div>
     `;
     
-    // List container
+    // List
     var listHtml = '<div class="med-dropdown-list" data-list="' + panel.dataset.owner + '">';
     
     if (MEDICATIONS.length === 0) {
@@ -1215,7 +1232,9 @@ function openMedDropdown(dropdown) {
     var footerHtml = `
         <div class="med-dropdown-footer">
             <span><i class="fas fa-list"></i> <span class="med-visible-count">${MEDICATIONS.length}</span> / ${MEDICATIONS.length} meds</span>
-            <span class="count">${currency}</span>
+            <span class="scroll-hint-mini">
+                <i class="fas fa-mouse"></i> Scroll for more
+            </span>
         </div>
     `;
     
@@ -1223,7 +1242,6 @@ function openMedDropdown(dropdown) {
     document.body.appendChild(panel);
     panel.classList.add('show');
     
-    // Add open class to dropdown
     dropdown.classList.add('open');
     
     // Auto focus on search
@@ -1232,7 +1250,7 @@ function openMedDropdown(dropdown) {
         if (searchInput) searchInput.focus();
     }, 50);
     
-    // Bind search event
+    // Search events
     var searchInput = panel.querySelector('.med-dropdown-search-input');
     if (searchInput) {
         searchInput.addEventListener('input', function() {
@@ -1240,16 +1258,15 @@ function openMedDropdown(dropdown) {
         });
         
         searchInput.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') {
-                closeMedDropdown(panel);
-            } else if (e.key === 'Enter') {
+            if (e.key === 'Escape') closeMedDropdown(panel);
+            else if (e.key === 'Enter') {
                 var firstVisible = panel.querySelector('.med-option:not(.hidden):not(.empty)');
                 if (firstVisible) firstVisible.click();
             }
         });
     }
     
-    // Bind click on options
+    // Option click
     panel.querySelectorAll('.med-option:not(.empty)').forEach(function(opt) {
         opt.addEventListener('click', function() {
             selectMedication(dropdown, this);
@@ -1257,41 +1274,34 @@ function openMedDropdown(dropdown) {
         });
     });
     
-    // Adjust position if panel goes off screen
+    // Adjust position if off-screen
     var panelRect = panel.getBoundingClientRect();
     if (panelRect.bottom > window.innerHeight - 20) {
         panel.style.maxHeight = (window.innerHeight - rect.bottom - 30) + 'px';
     }
     
-    // Store panel reference
     window.currentMedPanel = panel;
 }
 
 // ================================================================
-// ✅ SEARCHABLE DROPDOWN - CLOSE
+// CLOSE DROPDOWN
 // ================================================================
 function closeMedDropdown(panel) {
-    if (panel) {
-        panel.remove();
-    }
-    document.querySelectorAll('.med-search-dropdown.open').forEach(function(d) {
-        d.classList.remove('open');
-    });
-    if (window.currentMedPanel) window.currentMedPanel = null;
-}
-
-function closeAllMedDropdowns() {
-    document.querySelectorAll('.med-dropdown-panel').forEach(function(p) {
-        p.remove();
-    });
+    if (panel) panel.remove();
     document.querySelectorAll('.med-search-dropdown.open').forEach(function(d) {
         d.classList.remove('open');
     });
     window.currentMedPanel = null;
 }
 
+function closeAllMedDropdowns() {
+    document.querySelectorAll('.med-dropdown-panel').forEach(function(p) { p.remove(); });
+    document.querySelectorAll('.med-search-dropdown.open').forEach(function(d) { d.classList.remove('open'); });
+    window.currentMedPanel = null;
+}
+
 // ================================================================
-// ✅ FILTER MEDICATION OPTIONS
+// FILTER MEDS
 // ================================================================
 function filterMedOptions(panel, query) {
     var term = (query || '').toLowerCase().trim();
@@ -1315,7 +1325,7 @@ function filterMedOptions(panel, query) {
 }
 
 // ================================================================
-// ✅ SELECT MEDICATION
+// SELECT MEDICATION
 // ================================================================
 function selectMedication(dropdown, option) {
     var medId = option.getAttribute('data-med-id') || '';
@@ -1323,7 +1333,6 @@ function selectMedication(dropdown, option) {
     var medPrice = parseFloat(option.getAttribute('data-med-price')) || 0;
     var medQty = parseInt(option.getAttribute('data-med-qty')) || 0;
     
-    // Update dropdown display
     dropdown.dataset.currentId = medId;
     dropdown.dataset.currentName = medName;
     
@@ -1332,7 +1341,6 @@ function selectMedication(dropdown, option) {
     if (nameEl) nameEl.textContent = medName;
     display.classList.remove('placeholder');
     
-    // Update hidden inputs
     var row = dropdown.closest('tr');
     var nameHidden = row.querySelector('.item-name-hidden');
     var idHidden = row.querySelector('.item-medication-id-hidden');
@@ -1340,11 +1348,9 @@ function selectMedication(dropdown, option) {
     if (nameHidden) nameHidden.value = medName;
     if (idHidden) idHidden.value = medId;
     
-    // Auto-fill price
     var priceInput = row.querySelector('.item-price-input');
     if (priceInput) priceInput.value = formatMoney(medPrice);
     
-    // Highlight stock issue
     if (medQty <= 0) {
         display.style.borderColor = '#DC2626';
         display.style.background = '#FEE2E2';
@@ -1359,7 +1365,7 @@ function selectMedication(dropdown, option) {
 }
 
 // ================================================================
-// MONEY FORMAT
+// UTILITIES
 // ================================================================
 function formatMoney(value) {
     var cleaned = String(value).replace(/[^0-9.]/g, '');
@@ -1429,9 +1435,6 @@ function initMoneyInputs() {
     });
 }
 
-// ================================================================
-// SCROLL
-// ================================================================
 function scrollItems(direction) {
     var wrapper = document.getElementById('itemsWrapper');
     if (!wrapper) return;
@@ -1453,9 +1456,6 @@ function scrollItems(direction) {
     });
 }
 
-// ================================================================
-// RECALCULATE
-// ================================================================
 function recalculate() {
     var rows = document.querySelectorAll('#itemsTableBody tr.item-row');
     var subtotal = 0;
@@ -1512,9 +1512,6 @@ function recalculate() {
     });
 }
 
-// ================================================================
-// ADD NEW ITEM
-// ================================================================
 function addNewItem() {
     var tbody = document.getElementById('itemsTableBody');
     var template = document.getElementById('newItemTemplate');
@@ -1531,7 +1528,6 @@ function addNewItem() {
         attachMoneyFormat(input);
     });
     
-    // Auto-open dropdown for new item
     var dropdown = newRow.querySelector('.med-search-dropdown');
     if (dropdown) {
         setTimeout(function() {
@@ -1546,9 +1542,6 @@ function addNewItem() {
     recalculate();
 }
 
-// ================================================================
-// REMOVE ITEM
-// ================================================================
 function removeItem(btn) {
     var row = btn.closest('tr.item-row');
     var itemId = row.querySelector('input[name="item_id[]"]').value;
@@ -1582,10 +1575,9 @@ function removeItem(btn) {
 }
 
 // ================================================================
-// EVENT DELEGATION - Dropdown clicks
+// EVENT LISTENERS
 // ================================================================
 document.addEventListener('click', function(e) {
-    // Close dropdown if clicked outside
     if (!e.target.closest('.med-search-dropdown') && !e.target.closest('.med-dropdown-panel')) {
         closeAllMedDropdowns();
     }
@@ -1607,16 +1599,12 @@ document.addEventListener('click', function(e) {
     }
 });
 
-// ESCAPE key to close dropdown
 document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') {
-        closeAllMedDropdowns();
-    }
+    if (e.key === 'Escape') closeAllMedDropdowns();
     if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); scrollItems('left'); }
     if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); scrollItems('right'); }
 });
 
-// Reposition on scroll/resize
 window.addEventListener('scroll', function() {
     if (window.currentMedPanel) {
         var dropdown = document.querySelector('.med-search-dropdown.open');
@@ -1629,9 +1617,6 @@ window.addEventListener('scroll', function() {
     }
 }, true);
 
-// ================================================================
-// FORM VALIDATION
-// ================================================================
 document.getElementById('editPrescriptionForm').addEventListener('submit', function(e) {
     var visibleItems = document.querySelectorAll('#itemsTableBody tr.item-row:not(.removing)');
     var hasValidItem = false;
@@ -1659,10 +1644,10 @@ document.addEventListener('DOMContentLoaded', function() {
     recalculate();
 });
 
-console.log('%c✏️ Edit Prescription V2 - Searchable Medication Dropdown', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Search filter kwenye kila dropdown', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Branch ya Mgonjwa: <?= htmlspecialchars($patient_branch_name) ?>', 'font-size:13px; color:#F59E0B; font-weight:bold;');
-console.log('%c✅ Loaded ' + <?= count($prescription_items) ?> + ' items', 'font-size:13px; color:#34D399;');
+console.log('%c✏️ Edit Prescription V3 - Show 10 Rows on Open', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ Dropdown inafunguka na rows 10 za kwanza', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Search filter kwenye kila dropdown', 'font-size:13px; color:#34D399;');
+console.log('%c✅ Branch ya Mgonjwa: <?= htmlspecialchars($patient_branch_name) ?> (ID: <?= $patient_branch_id ?>)', 'font-size:13px; color:#F59E0B; font-weight:bold;');
 console.log('%c💊 Meds: ' + MEDICATIONS.length, 'font-size:13px; color:#60A5FA;');
 </script>
 

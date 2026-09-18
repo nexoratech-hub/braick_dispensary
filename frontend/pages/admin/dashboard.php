@@ -8,6 +8,7 @@
 // ✅ BLUE THEME (Revenue, Patient, OTC, Consultation, Stock, Equipment)
 // ✅ RED THEME (Expenses, Expiry)
 // ✅ GREEN THEME (Profit)
+// ✅ FIXED: query() → prepare() + execute() kwa branch filter
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -27,6 +28,7 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
@@ -147,9 +149,13 @@ try {
                 FROM prescription_items pi
                 INNER JOIN prescriptions p ON pi.prescription_id = p.id
                 WHERE p.status = 'dispensed'";
-        if ($selected_branch_id !== 'all') $sql .= " AND p.branch_id = ?";
+        $fb_params = [];
+        if ($selected_branch_id !== 'all') {
+            $sql .= " AND p.branch_id = ?";
+            $fb_params[] = (int)$selected_branch_id;
+        }
         $stmt = $db->prepare($sql);
-        $stmt->execute($selected_branch_id !== 'all' ? [(int)$selected_branch_id] : []);
+        $stmt->execute($fb_params);
         $data = $stmt->fetch(PDO::FETCH_ASSOC);
         $prescription_revenue = $data['total'] ?? 0;
         $prescription_count = $data['count'] ?? 0;
@@ -290,97 +296,125 @@ $net_profit = $total_revenue - $total_expenses;
 $profit_percentage = ($total_revenue > 0) ? round(($net_profit / $total_revenue) * 100, 1) : 0;
 
 // ================================================================
-// 11. MEDICATION STOCK
+// 11. MEDICATION STOCK ✅ FIXED: prepare() + execute()
 // ================================================================
-$stmt = $db->query("
-    SELECT 
-        COUNT(DISTINCT CONCAT(medication_name, '-', branch_id)) as total_items,
-        COALESCE(SUM(quantity), 0) as total_quantity,
-        COUNT(DISTINCT CASE 
-            WHEN quantity > 0 AND quantity <= reorder_level 
-            AND status = 'active' 
-            AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
-            THEN CONCAT(medication_name, '-', branch_id)
-        END) as low_stock_items,
-        COUNT(DISTINCT CASE 
-            WHEN quantity <= 0 AND status = 'active'
-            THEN CONCAT(medication_name, '-', branch_id)
-        END) as out_of_stock_items
-    FROM medications_inventory 
-    WHERE status = 'active' 
-    $branch_filter
-");
-$stock_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$med_total_items = $stock_data['total_items'] ?? 0;
-$med_total_quantity = $stock_data['total_quantity'] ?? 0;
-$med_low_stock = $stock_data['low_stock_items'] ?? 0;
-$med_out_of_stock = $stock_data['out_of_stock_items'] ?? 0;
+$med_total_items = 0;
+$med_total_quantity = 0;
+$med_low_stock = 0;
+$med_out_of_stock = 0;
+try {
+    $sql = "
+        SELECT 
+            COUNT(DISTINCT CONCAT(medication_name, '-', branch_id)) as total_items,
+            COALESCE(SUM(quantity), 0) as total_quantity,
+            COUNT(DISTINCT CASE 
+                WHEN quantity > 0 AND quantity <= reorder_level 
+                AND status = 'active' 
+                AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
+                THEN CONCAT(medication_name, '-', branch_id)
+            END) as low_stock_items,
+            COUNT(DISTINCT CASE 
+                WHEN quantity <= 0 AND status = 'active'
+                THEN CONCAT(medication_name, '-', branch_id)
+            END) as out_of_stock_items
+        FROM medications_inventory 
+        WHERE status = 'active'" . $branch_filter;
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params);
+    $stock_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $med_total_items = $stock_data['total_items'] ?? 0;
+    $med_total_quantity = $stock_data['total_quantity'] ?? 0;
+    $med_low_stock = $stock_data['low_stock_items'] ?? 0;
+    $med_out_of_stock = $stock_data['out_of_stock_items'] ?? 0;
+} catch (Exception $e) {}
 
 // ================================================================
-// 12. MEDICATION EXPIRY
+// 12. MEDICATION EXPIRY ✅ FIXED
 // ================================================================
 $today_date = date('Y-m-d');
-$stmt = $db->query("
-    SELECT 
-        COALESCE(SUM(CASE 
-            WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
-            AND expiry_date < '$today_date' THEN quantity ELSE 0 END), 0) as expired_quantity,
-        COALESCE(SUM(CASE 
-            WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
-            AND expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) 
-            THEN quantity ELSE 0 END), 0) as expiring_soon_quantity,
-        COUNT(DISTINCT CASE 
-            WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
-            AND expiry_date < '$today_date' THEN CONCAT(medication_name, '-', branch_id) END) as expired_items,
-        COUNT(DISTINCT CASE 
-            WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
-            AND expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) 
-            THEN CONCAT(medication_name, '-', branch_id) END) as expiring_soon_items
-    FROM medications_inventory 
-    WHERE status = 'active' 
-    $branch_filter
-");
-$expiry_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$med_expired_quantity = $expiry_data['expired_quantity'] ?? 0;
-$med_expiring_quantity = $expiry_data['expiring_soon_quantity'] ?? 0;
-$med_expired_items = $expiry_data['expired_items'] ?? 0;
-$med_expiring_items = $expiry_data['expiring_soon_items'] ?? 0;
+$med_expired_quantity = 0;
+$med_expiring_quantity = 0;
+$med_expired_items = 0;
+$med_expiring_items = 0;
+try {
+    $sql = "
+        SELECT 
+            COALESCE(SUM(CASE 
+                WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
+                AND expiry_date < ? THEN quantity ELSE 0 END), 0) as expired_quantity,
+            COALESCE(SUM(CASE 
+                WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
+                AND expiry_date BETWEEN ? AND DATE_ADD(?, INTERVAL 30 DAY) 
+                THEN quantity ELSE 0 END), 0) as expiring_soon_quantity,
+            COUNT(DISTINCT CASE 
+                WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
+                AND expiry_date < ? THEN CONCAT(medication_name, '-', branch_id) END) as expired_items,
+            COUNT(DISTINCT CASE 
+                WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
+                AND expiry_date BETWEEN ? AND DATE_ADD(?, INTERVAL 30 DAY) 
+                THEN CONCAT(medication_name, '-', branch_id) END) as expiring_soon_items
+        FROM medications_inventory 
+        WHERE status = 'active'" . $branch_filter;
+    
+    $expiry_params = [$today_date, $today_date, $today_date, $today_date, $today_date, $today_date];
+    $expiry_params = array_merge($expiry_params, $branch_params);
+    
+    $stmt = $db->prepare($sql);
+    $stmt->execute($expiry_params);
+    $expiry_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $med_expired_quantity = $expiry_data['expired_quantity'] ?? 0;
+    $med_expiring_quantity = $expiry_data['expiring_soon_quantity'] ?? 0;
+    $med_expired_items = $expiry_data['expired_items'] ?? 0;
+    $med_expiring_items = $expiry_data['expiring_soon_items'] ?? 0;
+} catch (Exception $e) {}
 
 // ================================================================
-// 13. MEDICAL EQUIPMENT
+// 13. MEDICAL EQUIPMENT ✅ FIXED
 // ================================================================
-$stmt = $db->query("
-    SELECT 
-        COUNT(DISTINCT CONCAT(equipment_name, '-', branch_id)) as total_items,
-        COALESCE(SUM(quantity), 0) as total_quantity,
-        COUNT(DISTINCT CASE 
-            WHEN quantity > 0 AND quantity <= reorder_level AND status = 'active' 
-            AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
-            THEN CONCAT(equipment_name, '-', branch_id) END) as low_stock_items,
-        COUNT(DISTINCT CASE 
-            WHEN quantity <= 0 AND status = 'active'
-            THEN CONCAT(equipment_name, '-', branch_id) END) as out_of_stock_items,
-        COUNT(DISTINCT CASE 
-            WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
-            AND expiry_date < '$today_date' THEN CONCAT(equipment_name, '-', branch_id) END) as expired_items,
-        COUNT(DISTINCT CASE 
-            WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
-            AND expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) 
-            THEN CONCAT(equipment_name, '-', branch_id) END) as expiring_soon_items
-    FROM medical_equipment 
-    WHERE status = 'active' 
-    $branch_filter
-");
-$equipment_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$equip_total_items = $equipment_data['total_items'] ?? 0;
-$equip_total_quantity = $equipment_data['total_quantity'] ?? 0;
-$equip_low_stock = $equipment_data['low_stock_items'] ?? 0;
-$equip_out_of_stock = $equipment_data['out_of_stock_items'] ?? 0;
-$equip_expired_items = $equipment_data['expired_items'] ?? 0;
-$equip_expiring_items = $equipment_data['expiring_soon_items'] ?? 0;
+$equip_total_items = 0;
+$equip_total_quantity = 0;
+$equip_low_stock = 0;
+$equip_out_of_stock = 0;
+$equip_expired_items = 0;
+$equip_expiring_items = 0;
+try {
+    $sql = "
+        SELECT 
+            COUNT(DISTINCT CONCAT(equipment_name, '-', branch_id)) as total_items,
+            COALESCE(SUM(quantity), 0) as total_quantity,
+            COUNT(DISTINCT CASE 
+                WHEN quantity > 0 AND quantity <= reorder_level AND status = 'active' 
+                AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
+                THEN CONCAT(equipment_name, '-', branch_id) END) as low_stock_items,
+            COUNT(DISTINCT CASE 
+                WHEN quantity <= 0 AND status = 'active'
+                THEN CONCAT(equipment_name, '-', branch_id) END) as out_of_stock_items,
+            COUNT(DISTINCT CASE 
+                WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
+                AND expiry_date < ? THEN CONCAT(equipment_name, '-', branch_id) END) as expired_items,
+            COUNT(DISTINCT CASE 
+                WHEN expiry_date IS NOT NULL AND expiry_date != '0000-00-00' 
+                AND expiry_date BETWEEN ? AND DATE_ADD(?, INTERVAL 30 DAY) 
+                THEN CONCAT(equipment_name, '-', branch_id) END) as expiring_soon_items
+        FROM medical_equipment 
+        WHERE status = 'active'" . $branch_filter;
+    
+    $equip_params = [$today_date, $today_date, $today_date];
+    $equip_params = array_merge($equip_params, $branch_params);
+    
+    $stmt = $db->prepare($sql);
+    $stmt->execute($equip_params);
+    $equipment_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $equip_total_items = $equipment_data['total_items'] ?? 0;
+    $equip_total_quantity = $equipment_data['total_quantity'] ?? 0;
+    $equip_low_stock = $equipment_data['low_stock_items'] ?? 0;
+    $equip_out_of_stock = $equipment_data['out_of_stock_items'] ?? 0;
+    $equip_expired_items = $equipment_data['expired_items'] ?? 0;
+    $equip_expiring_items = $equipment_data['expiring_soon_items'] ?? 0;
+} catch (Exception $e) {}
 
 // ================================================================
-// CHART DATA (Last 7 days)
+// CHART DATA (Last 7 days) ✅ FIXED
 // ================================================================
 $chart_labels = [];
 $chart_values = [];
@@ -391,34 +425,40 @@ for ($i = 6; $i >= 0; $i--) {
     
     $daily_total = 0;
     
-    $params_b = [$date];
-    if ($selected_branch_id !== 'all') $params_b[] = (int)$selected_branch_id;
+    // Bills
+    try {
+        $sql = "SELECT COALESCE(SUM(b.paid_amount), 0) as total 
+                FROM bills b
+                WHERE DATE(b.created_at) = ? 
+                AND b.status = 'paid'
+                AND b.patient_id IS NOT NULL
+                AND b.visit_id IS NOT NULL
+                AND b.bill_number NOT LIKE 'BILL-OTC-%'";
+        $params_b = [$date];
+        if ($selected_branch_id !== 'all') {
+            $sql .= " AND b.branch_id = ?";
+            $params_b[] = (int)$selected_branch_id;
+        }
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params_b);
+        $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    } catch (Exception $e) {}
     
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(b.paid_amount), 0) as total 
-        FROM bills b
-        WHERE DATE(b.created_at) = ? 
-        AND b.status = 'paid'
-        AND b.patient_id IS NOT NULL
-        AND b.visit_id IS NOT NULL
-        AND b.bill_number NOT LIKE 'BILL-OTC-%'
-        " . ($selected_branch_id !== 'all' ? " AND b.branch_id = ?" : "") . "
-    ");
-    $stmt->execute($params_b);
-    $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-    
-    $params = [$date];
-    if ($selected_branch_id !== 'all') $params[] = (int)$selected_branch_id;
-    
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(total_amount), 0) as total 
-        FROM otc_sales 
-        WHERE DATE(created_at) = ? 
-        AND payment_status = 'paid'
-        " . ($selected_branch_id !== 'all' ? " AND branch_id = ?" : "") . "
-    ");
-    $stmt->execute($params);
-    $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    // OTC
+    try {
+        $sql = "SELECT COALESCE(SUM(total_amount), 0) as total 
+                FROM otc_sales 
+                WHERE DATE(created_at) = ? 
+                AND payment_status = 'paid'";
+        $params = [$date];
+        if ($selected_branch_id !== 'all') {
+            $sql .= " AND branch_id = ?";
+            $params[] = (int)$selected_branch_id;
+        }
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    } catch (Exception $e) {}
     
     $chart_values[] = (float)$daily_total;
 }
@@ -427,8 +467,10 @@ for ($i = 6; $i >= 0; $i--) {
 // BRANCHES + RECENT ACTIVITIES
 // ================================================================
 $branches = [];
-$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {}
 
 $recent_activities = [];
 try {

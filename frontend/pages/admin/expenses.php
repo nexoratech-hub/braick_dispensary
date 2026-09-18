@@ -7,6 +7,7 @@
 // ✅ 4 Cards: All, Pending, Paid, Cancelled
 // ✅ View, Edit, Delete, Pay buttons
 // ✅ PDF Export
+// ✅ FIXED: Date filters (Daily, Week, Monthly, 3M, 6M, 1Y, All, Custom)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -271,16 +272,25 @@ $date_filter = isset($_GET['date_filter']) ? $_GET['date_filter'] : 'all';
 $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
+// ================================================================
+// ✅ FIXED: DATE CONDITION (HAKUNA "AND" MWANZO)
+// ================================================================
 $date_condition = "";
 $date_params = [];
-if ($date_filter === 'daily') $date_condition = " AND e.payment_date = CURDATE()";
-elseif ($date_filter === 'week') $date_condition = " AND YEARWEEK(e.payment_date, 1) = YEARWEEK(CURDATE(), 1)";
-elseif ($date_filter === 'monthly') $date_condition = " AND MONTH(e.payment_date) = MONTH(CURDATE()) AND YEAR(e.payment_date) = YEAR(CURDATE())";
-elseif ($date_filter === '3months') $date_condition = " AND e.payment_date >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)";
-elseif ($date_filter === '6months') $date_condition = " AND e.payment_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)";
-elseif ($date_filter === '1year') $date_condition = " AND e.payment_date >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)";
-elseif ($date_filter === 'custom' && !empty($date_from) && !empty($date_to)) {
-    $date_condition = " AND e.payment_date BETWEEN ? AND ?";
+if ($date_filter === 'daily') {
+    $date_condition = "e.payment_date = CURDATE()";
+} elseif ($date_filter === 'week') {
+    $date_condition = "YEARWEEK(e.payment_date, 1) = YEARWEEK(CURDATE(), 1)";
+} elseif ($date_filter === 'monthly') {
+    $date_condition = "(MONTH(e.payment_date) = MONTH(CURDATE()) AND YEAR(e.payment_date) = YEAR(CURDATE()))";
+} elseif ($date_filter === '3months') {
+    $date_condition = "e.payment_date >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)";
+} elseif ($date_filter === '6months') {
+    $date_condition = "e.payment_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)";
+} elseif ($date_filter === '1year') {
+    $date_condition = "e.payment_date >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)";
+} elseif ($date_filter === 'custom' && !empty($date_from) && !empty($date_to)) {
+    $date_condition = "e.payment_date BETWEEN ? AND ?";
     $date_params = [$date_from, $date_to];
 }
 
@@ -306,7 +316,7 @@ $sql = "SELECT e.*, u.full_name as created_by_name, b.name as branch_name
     FROM expenses e
     LEFT JOIN users u ON e.created_by = u.id
     LEFT JOIN branches b ON e.branch_id = b.id
-    WHERE $where_clause
+    WHERE " . $where_clause . "
     ORDER BY e.payment_date DESC, e.created_at DESC";
 
 $stmt = $db->prepare($sql);

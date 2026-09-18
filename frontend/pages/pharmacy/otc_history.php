@@ -1,11 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/otc_history.php
-// PHARMACY - OTC SALE HISTORY V3 (SCROLL BUTTONS + QUICK FILTERS)
+// PHARMACY - OTC SALE HISTORY V4 (FIXED EMPTY SALES)
+// ✅ FIXED: Sales zenye items 0 ZIMEONDOLWA
+// ✅ FIXED: Items zenye qty 0 ZIMEONDOLWA
 // ✅ ADDED: < > scroll buttons kwenye table header
 // ✅ ADDED: Quick date filters (Today, 1W, 1M, 3M, 6M, 1Y, All, Custom)
 // ✅ ADDED: Medication column (jina la dawa + qty)
-// ✅ Search highlight works on medicine names
 // ================================================================
 
 session_start();
@@ -49,7 +50,7 @@ if (isset($_SESSION['otc_sale_message'])) {
 }
 
 // ================================================================
-// ✅ FILTERS - Quick Date Filter
+// FILTERS
 // ================================================================
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $payment_status = isset($_GET['payment_status']) ? trim($_GET['payment_status']) : '';
@@ -57,7 +58,6 @@ $quick_filter = isset($_GET['quick']) ? $_GET['quick'] : 'all';
 $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
-// ✅ Determine date range based on quick filter
 $quick_date_from = '';
 $quick_date_to = date('Y-m-d');
 
@@ -93,7 +93,7 @@ switch ($quick_filter) {
 }
 
 // ================================================================
-// GET OTC SALES
+// ✅ GET OTC SALES - FIXED: Filter out sales with 0 items
 // ================================================================
 $query = "
     SELECT 
@@ -115,21 +115,12 @@ $query = "
         os.created_at,
         os.updated_at,
         os.bill_id,
-        GROUP_CONCAT(
-            CONCAT(
-                oi.item_name,
-                ' (Qty: ', oi.quantity,
-                ', TSh ', FORMAT(oi.unit_price, 0),
-                ', Total: TSh ', FORMAT(oi.total_price, 0)
-            )
-            SEPARATOR ' | '
-        ) as items_list,
         COUNT(oi.id) as items_count,
-        SUM(oi.quantity) as total_items_quantity,
+        COALESCE(SUM(oi.quantity), 0) as total_items_quantity,
         u.full_name as sold_by_name,
         b.status as bill_status
     FROM otc_sales os
-    LEFT JOIN otc_sale_items oi ON os.id = oi.sale_id
+    LEFT JOIN otc_sale_items oi ON os.id = oi.sale_id AND oi.quantity > 0
     LEFT JOIN users u ON os.sold_by = u.id
     LEFT JOIN bills b ON os.bill_id = b.id
     WHERE os.branch_id = ?
@@ -138,7 +129,7 @@ $query = "
 $params = [$user_branch_id];
 
 if (!empty($search)) {
-    $query .= " AND (os.sale_number LIKE ? OR os.customer_name LIKE ? OR os.customer_phone LIKE ? OR oi.item_name LIKE ?)";
+    $query .= " AND (os.sale_number LIKE ? OR os.customer_name LIKE ? OR os.customer_phone LIKE ? OR EXISTS (SELECT 1 FROM otc_sale_items oi2 WHERE oi2.sale_id = os.id AND oi2.item_name LIKE ? AND oi2.quantity > 0))";
     $search_param = "%$search%";
     $params[] = $search_param;
     $params[] = $search_param;
@@ -146,7 +137,6 @@ if (!empty($search)) {
     $params[] = $search_param;
 }
 
-// ✅ Apply date filter based on quick filter
 if (!empty($quick_date_from)) {
     $query .= " AND DATE(os.created_at) >= ?";
     $params[] = $quick_date_from;
@@ -162,14 +152,15 @@ if (!empty($payment_status)) {
     $params[] = $payment_status;
 }
 
-$query .= " GROUP BY os.id ORDER BY os.created_at DESC";
+// ✅ FIXED: Group by + HAVING to filter out sales with 0 items
+$query .= " GROUP BY os.id HAVING COUNT(oi.id) > 0 ORDER BY os.created_at DESC";
 
 $stmt = $db->prepare($query);
 $stmt->execute($params);
 $sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET ALL ITEMS FOR EACH SALE
+// ✅ GET ALL ITEMS FOR EACH SALE - FIXED: Only quantity > 0
 // ================================================================
 $sale_ids = array_column($sales, 'sale_id');
 $sale_items_map = [];
@@ -180,6 +171,7 @@ if (!empty($sale_ids)) {
         SELECT sale_id, item_name, quantity, unit_price, total_price
         FROM otc_sale_items
         WHERE sale_id IN ($placeholders)
+        AND quantity > 0
         ORDER BY sale_id, id
     ");
     $stmt->execute($sale_ids);
@@ -190,10 +182,22 @@ if (!empty($sale_ids)) {
     }
 }
 
+// ✅ FIXED: Final filter - remove sales with empty items_map
+$sales = array_filter($sales, function($sale) use ($sale_items_map) {
+    $sale_id = $sale['sale_id'];
+    return isset($sale_items_map[$sale_id]) && !empty($sale_items_map[$sale_id]);
+});
+$sales = array_values($sales);
+
 // ================================================================
-// STATISTICS
+// STATISTICS - FIXED: Only count sales with items > 0
 // ================================================================
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ?");
+$stmt = $db->prepare("
+    SELECT COUNT(DISTINCT os.id) as count 
+    FROM otc_sales os 
+    WHERE os.branch_id = ?
+    AND EXISTS (SELECT 1 FROM otc_sale_items oi WHERE oi.sale_id = os.id AND oi.quantity > 0)
+");
 $stmt->execute([$user_branch_id]);
 $total_sales = $stmt->fetch()['count'] ?? 0;
 
@@ -202,6 +206,7 @@ $stmt = $db->prepare("
     FROM otc_sale_items oi 
     INNER JOIN otc_sales os ON oi.sale_id = os.id 
     WHERE os.branch_id = ?
+    AND oi.quantity > 0
 ");
 $stmt->execute([$user_branch_id]);
 $total_dispensed_items = $stmt->fetch()['total_dispensed'] ?? 0;
@@ -211,6 +216,7 @@ $stmt = $db->prepare("
     FROM otc_sale_items oi 
     INNER JOIN otc_sales os ON oi.sale_id = os.id 
     WHERE os.branch_id = ?
+    AND oi.quantity > 0
 ");
 $stmt->execute([$user_branch_id]);
 $unique_medicines = $stmt->fetch()['unique_medicines'] ?? 0;
@@ -220,10 +226,11 @@ $stmt = $db->prepare("
         COUNT(DISTINCT os.id) as count,
         COALESCE(SUM(oi.quantity), 0) as total_dispensed
     FROM otc_sales os
-    LEFT JOIN otc_sale_items oi ON os.id = oi.sale_id
+    LEFT JOIN otc_sale_items oi ON os.id = oi.sale_id AND oi.quantity > 0
     WHERE os.branch_id = ? 
     AND DATE(os.created_at) = CURDATE() 
     AND os.payment_status = 'paid'
+    HAVING COUNT(oi.id) > 0
 ");
 $stmt->execute([$user_branch_id]);
 $today_data = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -260,7 +267,6 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
 
 $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light';
 
-// Helper function to build URL with current filters
 function buildFilterUrl($params_to_update = []) {
     $current = $_GET;
     foreach ($params_to_update as $key => $value) {
@@ -433,7 +439,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             transform: translateY(-2px);
         }
         
-        /* STATS */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -461,7 +466,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .stat-card.blue-light { background: linear-gradient(135deg, #1E88E5, #1565C0); }
         .stat-card.sky { background: linear-gradient(135deg, #0288D1, #01579B); }
         
-        /* MESSAGE BOX */
         .message-box {
             padding: 14px 20px;
             border-radius: 12px;
@@ -501,7 +505,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         .card:hover { border-color: var(--primary); box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06); }
         
-        /* ✅ QUICK DATE FILTERS */
         .quick-filters {
             display: flex;
             gap: 6px;
@@ -565,7 +568,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             box-shadow: 0 4px 12px rgba(217, 119, 6, 0.35);
         }
         
-        /* TABLE HEADER BAR */
         .table-header-bar {
             display: flex;
             justify-content: space-between;
@@ -594,7 +596,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             flex-wrap: wrap; 
         }
         
-        /* ✅ SCROLL BUTTONS */
         .scroll-buttons {
             display: inline-flex;
             gap: 6px;
@@ -798,7 +799,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         .result-count strong { color: var(--primary); }
         
-        /* ✅ CUSTOM DATE FILTER ROW */
         .custom-date-row {
             display: none;
             padding: 12px 16px;
@@ -870,7 +870,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         .btn-toggle-filters:hover { border-color: var(--primary); color: var(--primary); }
         
-        /* TABLE */
         .table-wrap { 
             overflow-x: auto; 
             scroll-behavior: smooth;
@@ -934,7 +933,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .col-date { width: 100px; }
         .col-actions { width: 80px; text-align: center; }
         
-        /* MEDICATION CELL */
         .med-list {
             display: flex;
             flex-direction: column;
@@ -989,7 +987,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             font-style: italic;
         }
         
-        /* BADGES */
         .badge-status {
             display: inline-block;
             padding: 2px 10px;
@@ -1200,7 +1197,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
     <div class="card">
         
-        <!-- ✅ QUICK DATE FILTERS -->
+        <!-- QUICK DATE FILTERS -->
         <div class="quick-filters">
             <span class="filter-label"><i class="fas fa-bolt"></i> Quick:</span>
             
@@ -1246,7 +1243,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </a>
         </div>
         
-        <!-- ✅ CUSTOM DATE FILTER ROW -->
+        <!-- CUSTOM DATE FILTER ROW -->
         <div class="custom-date-row <?= $quick_filter === 'custom' ? 'show' : '' ?>" id="customDateRow">
             <form method="GET" style="display:contents;">
                 <input type="hidden" name="quick" value="custom">
@@ -1290,7 +1287,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </div>
             
             <div class="table-header-right">
-                <!-- ✅ SCROLL BUTTONS -->
                 <div class="scroll-buttons">
                     <button type="button" class="scroll-btn" onclick="scrollTable('left')" title="Scroll Left">
                         <i class="fas fa-chevron-left"></i>
@@ -1306,7 +1302,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </div>
         </div>
         
-        <!-- ✅ DISPENSED INFO BOX -->
+        <!-- DISPENSED INFO BOX -->
         <div class="dispensed-info-box" id="dispensedInfoBox">
             <div class="info-icon"><i class="fas fa-pills"></i></div>
             <div class="info-text">
@@ -1426,8 +1422,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     ($sale['customer_name'] ?? '') . ' ' .
                                     ($sale['customer_phone'] ?? '') . ' ' .
                                     ($sale['payment_method'] ?? '') . ' ' .
-                                    ($sale['payment_status'] ?? '') . ' ' .
-                                    ($sale['items_list'] ?? '')
+                                    ($sale['payment_status'] ?? '')
                                 );
                             ?>
                             <tr class="sale-row" 
@@ -1552,9 +1547,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     
     var originalHTMLMap = new WeakMap();
     
-    // ================================================================
-    // ✅ SCROLL TABLE
-    // ================================================================
     function scrollTable(direction) {
         if (!tableWrapper) return;
         
@@ -1574,9 +1566,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     }
     
-    // ================================================================
-    // TOGGLE CUSTOM DATE
-    // ================================================================
     function toggleCustomDate() {
         var row = document.getElementById('customDateRow');
         if (!row) return;
@@ -1590,9 +1579,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     }
     
-    // ================================================================
-    // HELPER FUNCTIONS
-    // ================================================================
     function escapeHtml(text) {
         var div = document.createElement('div');
         div.textContent = text;
@@ -1607,9 +1593,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     }
     
-    // ================================================================
-    // HIGHLIGHT
-    // ================================================================
     function highlightText(element, query) {
         if (!element) return 0;
         
@@ -1662,9 +1645,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         if (highlightNumEl) highlightNumEl.textContent = '0';
     }
     
-    // ================================================================
-    // CALCULATE DISPENSED TOTALS
-    // ================================================================
     function calculateDispensedTotals(query) {
         if (!query || query.trim() === '') {
             if (dispensedInfoBox) dispensedInfoBox.classList.remove('show');
@@ -1729,9 +1709,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     }
     
-    // ================================================================
-    // FILTER
-    // ================================================================
     function filterTable() {
         var query = (searchInput.value || '').trim();
         var lowerQuery = query.toLowerCase();
@@ -1791,9 +1768,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     }
     
-    // ================================================================
-    // DEBOUNCE
-    // ================================================================
     function debounce(func, wait) {
         var timeout;
         return function() {
@@ -1822,9 +1796,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     }
     
-    // ================================================================
-    // MESSAGE
-    // ================================================================
     function dismissMessage() {
         var messageBox = document.getElementById('messageBox');
         if (messageBox) {
@@ -1857,7 +1828,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             }
         <?php endif; ?>
         
-        // Keyboard arrow for horizontal scroll
         document.addEventListener('keydown', function(e) {
             if (e.target.tagName === 'INPUT') return;
             
@@ -1871,9 +1841,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         });
     });
     
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1895,9 +1862,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }, 3500);
     }
     
-    // ================================================================
-    // EXPORT
-    // ================================================================
     function exportToCSV() {
         var rows = document.querySelectorAll('.sale-row');
         var csv = [];
@@ -1926,9 +1890,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         showToast('Success', 'Exported ' + (csv.length - 1) + ' records', 'success');
     }
     
-    // ================================================================
-    // CTRL+K SEARCH
-    // ================================================================
     document.addEventListener('keydown', function(e) {
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
             e.preventDefault();
@@ -1939,11 +1900,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
     
-    console.log('%c💊 Braick - OTC Sale History V3', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Scroll buttons (< >) added', 'font-size:13px; color:#34D399; font-weight:bold;');
-    console.log('%c✅ Quick date filters: Today, 1W, 1M, 3M, 6M, 1Y, All, Custom', 'font-size:13px; color:#FCD34D;');
-    console.log('%c✅ Medication column with medicine names', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Ctrl+← / Ctrl+→ kwa scroll', 'font-size:13px; color:#94A3B8;');
+    console.log('%c💊 Braick - OTC Sale History V4 (FIXED EMPTY)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Sales zenye items 0 ZIMEONDOLWA', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ Items zenye qty 0 ZIMEONDOLWA', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ Scroll buttons (< >)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Quick date filters', 'font-size:13px; color:#FCD34D;');
 </script>
 
 </body>

@@ -1,10 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/pending_prescriptions.php
-// PHARMACY - PRESCRIPTIONS V5 (FIXED ERROR + DYNAMIC VIEW)
+// PHARMACY - PRESCRIPTIONS V6 (FIXED EMPTY PRESCRIPTIONS)
 // ✅ FIXED: PHP parse error karibu na if ($message)
 // ✅ FIXED: Tab "Pending" inaonyesha PENDING TU
 // ✅ FIXED: VIEW button inaenda kwa page tofauti kulingana na status
+// ✅ FIXED: HAIONYESHI prescriptions zenye items 0 (empty/empty after delete)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -274,6 +275,7 @@ try {
     
     // ================================================================
     // MAIN QUERY - GROUP BY VISIT
+    // ✅ FIXED: Only include visits with at least 1 prescription_item
     // ================================================================
     $conditions = ["p.branch_id = ?"];
     $params = [$user_branch_id];
@@ -294,6 +296,7 @@ try {
     
     $where_clause = implode(" AND ", $conditions);
     
+    // ✅ FIXED: Add EXISTS check to ensure at least one prescription_item exists
     $sql = "
         SELECT 
             p.visit_id, p.patient_id,
@@ -304,6 +307,11 @@ try {
         JOIN patients pat ON p.patient_id = pat.id
         LEFT JOIN visits v ON p.visit_id = v.id
         WHERE $where_clause
+        AND EXISTS (
+            SELECT 1 FROM prescription_items pi 
+            WHERE pi.prescription_id = p.id 
+            AND pi.quantity > 0
+        )
         GROUP BY p.visit_id, p.patient_id
         ORDER BY v.visit_date DESC, p.patient_id ASC
     ";
@@ -346,7 +354,7 @@ try {
         
         if (empty($prescriptions)) continue;
         
-        $item_conditions = ["pi.patient_id = ?", "p.branch_id = ?", "p.visit_id = ?"];
+        $item_conditions = ["pi.patient_id = ?", "p.branch_id = ?", "p.visit_id = ?", "pi.quantity > 0"];
         $item_params = [$patient_id, $user_branch_id, $visit_id];
         
         if ($filter_status === 'all') {
@@ -370,6 +378,9 @@ try {
         $stmt_items->execute($item_params);
         $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
         
+        // ✅ FIXED: Skip visits with NO items
+        if (empty($items)) continue;
+        
         $total_quantity = 0;
         $medication_count = 0;
         $prescription_numbers = [];
@@ -382,6 +393,9 @@ try {
             $medication_count++;
             if (!empty($item['prescription_created_at'])) $prescription_dates[] = $item['prescription_created_at'];
         }
+        
+        // ✅ FIXED: Skip if total_quantity is 0
+        if ($total_quantity <= 0 || $medication_count <= 0) continue;
         
         foreach ($prescriptions as $pres) {
             if (!empty($pres['prescription_number'])) $prescription_numbers[] = $pres['prescription_number'];
@@ -498,7 +512,17 @@ try {
         }
         
         $count_where = implode(" AND ", $count_conditions);
-        $stmt_count = $db->prepare("SELECT COUNT(DISTINCT CONCAT(p.visit_id, '-', p.patient_id)) as count FROM prescriptions p JOIN patients pat ON p.patient_id = pat.id WHERE $count_where");
+        $stmt_count = $db->prepare("
+            SELECT COUNT(DISTINCT CONCAT(p.visit_id, '-', p.patient_id)) as count 
+            FROM prescriptions p 
+            JOIN patients pat ON p.patient_id = pat.id 
+            WHERE $count_where
+            AND EXISTS (
+                SELECT 1 FROM prescription_items pi 
+                WHERE pi.prescription_id = p.id 
+                AND pi.quantity > 0
+            )
+        ");
         $stmt_count->execute($count_params);
         $status_counts[$cs] = (int)($stmt_count->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     }
@@ -514,7 +538,17 @@ try {
     }
     
     $all_where = implode(" AND ", $all_conditions);
-    $stmt_all = $db->prepare("SELECT COUNT(DISTINCT CONCAT(p.visit_id, '-', p.patient_id)) as count FROM prescriptions p JOIN patients pat ON p.patient_id = pat.id WHERE $all_where");
+    $stmt_all = $db->prepare("
+        SELECT COUNT(DISTINCT CONCAT(p.visit_id, '-', p.patient_id)) as count 
+        FROM prescriptions p 
+        JOIN patients pat ON p.patient_id = pat.id 
+        WHERE $all_where
+        AND EXISTS (
+            SELECT 1 FROM prescription_items pi 
+            WHERE pi.prescription_id = p.id 
+            AND pi.quantity > 0
+        )
+    ");
     $stmt_all->execute($all_params);
     $total_all_visits = (int)($stmt_all->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     
@@ -1471,7 +1505,7 @@ include_once '../../components/pharmacy_sidebar.php';
                 $visit_number = $visit['visit_number'] ?? 'N/A';
                 $visit_date = $visit['visit_date'] ?? null;
                 
-                // ✅ DYNAMIC VIEW URL BASED ON STATUS
+                // DYNAMIC VIEW URL BASED ON STATUS
                 $view_url = 'view_patient_prescriptions.php';
                 $view_label = 'VIEW';
                 $view_icon = 'fa-eye';
@@ -1943,7 +1977,8 @@ include_once '../../components/pharmacy_sidebar.php';
         }, 500);
     <?php endif; ?>
     
-    console.log('%c💊 Braick - Prescriptions V5 (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💊 Braick - Prescriptions V6 (FIXED EMPTY)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Empty prescriptions (qty 0) zimeondolewa', 'font-size:13px; color:#059669; font-weight:bold;');
     console.log('%c✅ Pending → view_patient_prescriptions.php', 'font-size:13px; color:#D97706; font-weight:bold;');
     console.log('%c✅ Confirmed → view_confirmed_prescriptions.php', 'font-size:13px; color:#3B82F6; font-weight:bold;');
     console.log('%c✅ Dispensed → view_dispensed_prescriptions.php', 'font-size:13px; color:#059669; font-weight:bold;');

@@ -1,17 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/prescription_history.php
-// PHARMACY - PRESCRIPTION HISTORY V3 (GROUPED BY VISIT + DYNAMIC VIEW)
-// ✅ FIXED: Kila visit inaonyeshwa tofauti ndani ya patient card
-// ✅ FIXED: Dawa za visit 1, visit 2, ... zinatenganishwa
-// ✅ FIXED: Doctor + Visit date + Visit number per visit
-// ✅ FIXED: VIEW button per visit - inaenda kwa page tofauti kulingana na status
-//   - Pending   → view_patient_prescriptions.php
-//   - Confirmed → view_confirmed_prescriptions.php
-//   - Dispensed → view_dispensed_prescriptions.php
-// ✅ FILTERS: All, Pending, Confirmed, Dispensed, Cancelled
-// ✅ SEARCH BAR - Inatafuta dawa na inaonyesha total qty
-// ✅ BLUE THEME
+// PHARMACY - PRESCRIPTION HISTORY V5 (TAB FILTER FIXED)
+// ✅ FIXED: Tab filter inafanya kazi (pending/confirmed/dispensed)
+// ✅ FIXED: Patient card inaonyesha visits za tab husika tu
+// ✅ FIXED: Visits zenye items 0 ZIMEONDOLWA
+// ✅ FIXED: Items zenye qty 0 ZIMEONDOLWA
+// ✅ DYNAMIC VIEW: Pending / Confirmed / Dispensed URLs
 // ================================================================
 
 session_start();
@@ -58,13 +53,6 @@ function formatDate($datetime, $showTime = true) {
     $timestamp = strtotime($datetime);
     if ($timestamp === false) return 'N/A';
     return $showTime ? date('d M Y, H:i', $timestamp) : date('d M Y', $timestamp);
-}
-
-function formatDateShort($datetime) {
-    if (empty($datetime) || $datetime === '0000-00-00 00:00:00') return 'N/A';
-    $timestamp = strtotime($datetime);
-    if ($timestamp === false) return 'N/A';
-    return date('d/m/Y', $timestamp);
 }
 
 function timeAgo($datetime) {
@@ -115,7 +103,6 @@ function getStatusLabel($status) {
     return $map[$status] ?? ucfirst($status);
 }
 
-// ✅ DYNAMIC VIEW URL BUILDER
 function getViewUrl($status, $patient_id, $visit_id) {
     $base_params = '?patient_id=' . urlencode($patient_id) . '&visit_id=' . urlencode($visit_id);
     
@@ -169,7 +156,7 @@ $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
 // ================================================================
-// BUILD QUERY
+// ✅ BUILD QUERY - Filter by STATUS
 // ================================================================
 $conditions = ["p.branch_id = ?"];
 $params = [$user_branch_id];
@@ -219,6 +206,11 @@ $sql = "
     FROM prescriptions p
     INNER JOIN patients pat ON p.patient_id = pat.id
     WHERE $where_clause
+    AND EXISTS (
+        SELECT 1 FROM prescription_items pi 
+        WHERE pi.prescription_id = p.id 
+        AND pi.quantity > 0
+    )
     GROUP BY pat.id, pat.full_name, pat.patient_id, pat.phone, pat.gender, pat.date_of_birth
     ORDER BY last_prescription_date DESC
 ";
@@ -229,6 +221,7 @@ $grouped_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // GET PRESCRIPTIONS GROUPED BY VISIT FOR EACH PATIENT
+// ✅ FIXED: Filter by STATUS pia
 // ================================================================
 $patient_ids = array_column($grouped_prescriptions, 'patient_id');
 $visits_map = [];
@@ -236,8 +229,18 @@ $visits_map = [];
 if (!empty($patient_ids)) {
     $placeholders = implode(',', array_fill(0, count($patient_ids), '?'));
     
-    // Get ALL prescriptions per patient with visit_id
-    $stmt = $db->prepare("
+    // ✅ Build status condition
+    $pres_status_cond = "";
+    $pres_status_params = [];
+    if ($filter_status === 'all') {
+        $pres_status_cond = "AND p.status IN ('pending', 'confirmed', 'dispensed', 'cancelled')";
+    } else {
+        $pres_status_cond = "AND p.status = ?";
+        $pres_status_params[] = $filter_status;
+    }
+    
+    // Get prescriptions - FILTER BY STATUS
+    $pres_sql = "
         SELECT 
             p.id as prescription_id,
             p.prescription_number,
@@ -256,15 +259,21 @@ if (!empty($patient_ids)) {
         LEFT JOIN visits v ON p.visit_id = v.id
         WHERE p.patient_id IN ($placeholders)
         AND p.branch_id = ?
-        AND p.status IN ('pending', 'confirmed', 'dispensed', 'cancelled')
+        $pres_status_cond
+        AND EXISTS (
+            SELECT 1 FROM prescription_items pi 
+            WHERE pi.prescription_id = p.id 
+            AND pi.quantity > 0
+        )
         ORDER BY p.visit_id DESC, p.created_at DESC
-    ");
-    $pres_params = array_merge($patient_ids, [$user_branch_id]);
+    ";
+    $pres_params = array_merge($patient_ids, [$user_branch_id], $pres_status_params);
+    $stmt = $db->prepare($pres_sql);
     $stmt->execute($pres_params);
     $all_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get ALL items per patient
-    $stmt = $db->prepare("
+    // Get items - ONLY quantity > 0 - FILTER BY STATUS
+    $items_sql = "
         SELECT 
             pi.*,
             p.prescription_number,
@@ -275,22 +284,25 @@ if (!empty($patient_ids)) {
         INNER JOIN prescriptions p ON pi.prescription_id = p.id
         WHERE pi.patient_id IN ($placeholders)
         AND p.branch_id = ?
-        AND p.status IN ('pending', 'confirmed', 'dispensed', 'cancelled')
+        $pres_status_cond
+        AND pi.quantity > 0
         ORDER BY p.visit_id DESC, p.created_at DESC, pi.id DESC
-    ");
+    ";
+    $stmt = $db->prepare($items_sql);
     $stmt->execute($pres_params);
     $all_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Build items map by prescription_id
+    // Build items map
     $items_by_prescription = [];
     foreach ($all_items as $item) {
         $items_by_prescription[$item['prescription_id']][] = $item;
     }
     
-    // Build visits map: patient_id => [ visit_id => { visit_info, prescriptions, items, statuses } ]
+    // Build visits map
     foreach ($all_prescriptions as $pres) {
         $pid = $pres['patient_id'];
         $vid = $pres['visit_id'] ?? 0;
+        $pres_status = $pres['prescription_status'] ?? 'pending';
         
         if (!isset($visits_map[$pid])) {
             $visits_map[$pid] = [];
@@ -318,7 +330,7 @@ if (!empty($patient_ids)) {
             $visits_map[$pid][$vid]['doctor_names'][] = $pres['doctor_name'];
         }
         
-        $visits_map[$pid][$vid]['statuses'][] = $pres['prescription_status'];
+        $visits_map[$pid][$vid]['statuses'][] = $pres_status;
         
         if (!empty($pres['prescription_date'])) {
             $visits_map[$pid][$vid]['dates'][] = $pres['prescription_date'];
@@ -334,9 +346,14 @@ if (!empty($patient_ids)) {
         }
     }
     
-    // Calculate overall_status per visit
+    // Calculate overall_status + remove empty visits
     foreach ($visits_map as $pid => &$patient_visits) {
         foreach ($patient_visits as $vid => &$visit) {
+            if (empty($visit['items']) || $visit['total_qty'] <= 0) {
+                unset($patient_visits[$vid]);
+                continue;
+            }
+            
             $statuses = $visit['statuses'];
             if (in_array('pending', $statuses)) {
                 $visit['overall_status'] = 'pending';
@@ -382,39 +399,81 @@ foreach ($grouped_prescriptions as &$group) {
         }
     }
     
-    $group['visits'] = $patient_visits;
+    // Sort visits by date DESC
+    $sorted_visits = $patient_visits;
+    uasort($sorted_visits, function($a, $b) {
+        $date_a = strtotime($a['latest_date'] ?? '1970-01-01');
+        $date_b = strtotime($b['latest_date'] ?? '1970-01-01');
+        return $date_b - $date_a;
+    });
+    
+    $group['visits'] = $sorted_visits;
     $group['total_qty'] = $total_qty;
     $group['medication_count'] = $medication_count;
     $group['total_amount'] = $total_amount;
     $group['doctor_names_array'] = $all_doctor_names;
+    $group['visit_count'] = count($sorted_visits);
+    $group['prescription_count'] = count($sorted_visits);
 }
 unset($group);
 
+// Filter out patients with no visits
+$grouped_prescriptions = array_filter($grouped_prescriptions, function($g) {
+    return !empty($g['visits']) && $g['total_qty'] > 0;
+});
+$grouped_prescriptions = array_values($grouped_prescriptions);
+
 // ================================================================
-// STATISTICS
+// STATISTICS (TAB COUNTS)
 // ================================================================
-$stats_where = " WHERE p.branch_id = ?";
-$stats_params = [$user_branch_id];
+function getStatusCount($db, $user_branch_id, $status = null, $search = '', $date_from = '', $date_to = '') {
+    $conditions = ["p.branch_id = ?"];
+    $params = [$user_branch_id];
+    
+    if ($status !== null && $status !== 'all') {
+        $conditions[] = "p.status = ?";
+        $params[] = $status;
+    } else {
+        $conditions[] = "p.status IN ('pending', 'confirmed', 'dispensed', 'cancelled')";
+    }
+    
+    if (!empty($search)) {
+        $conditions[] = "(pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.prescription_number LIKE ? OR EXISTS (SELECT 1 FROM prescription_items pi WHERE pi.prescription_id = p.id AND pi.medication_name LIKE ?))";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+    }
+    
+    if (!empty($date_from)) {
+        $conditions[] = "DATE(p.created_at) >= ?";
+        $params[] = $date_from;
+    }
+    
+    if (!empty($date_to)) {
+        $conditions[] = "DATE(p.created_at) <= ?";
+        $params[] = $date_to;
+    }
+    
+    $where = implode(" AND ", $conditions);
+    
+    $sql = "
+        SELECT COUNT(DISTINCT p.patient_id) as total 
+        FROM prescriptions p 
+        INNER JOIN patients pat ON p.patient_id = pat.id
+        WHERE $where
+        AND EXISTS (SELECT 1 FROM prescription_items pi WHERE pi.prescription_id = p.id AND pi.quantity > 0)
+    ";
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    return (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+}
 
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $stats_where");
-$stmt->execute($stats_params);
-$total_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $stats_where AND p.status = 'pending'");
-$stmt->execute($stats_params);
-$pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $stats_where AND p.status = 'confirmed'");
-$stmt->execute($stats_params);
-$confirmed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $stats_where AND p.status = 'dispensed'");
-$stmt->execute($stats_params);
-$dispensed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM prescriptions p $stats_where AND p.status = 'cancelled'");
-$stmt->execute($stats_params);
-$cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+$total_all = getStatusCount($db, $user_branch_id, 'all', $search, $date_from, $date_to);
+$pending_count = getStatusCount($db, $user_branch_id, 'pending', $search, $date_from, $date_to);
+$confirmed_count = getStatusCount($db, $user_branch_id, 'confirmed', $search, $date_from, $date_to);
+$dispensed_count = getStatusCount($db, $user_branch_id, 'dispensed', $search, $date_from, $date_to);
+$cancelled_count = getStatusCount($db, $user_branch_id, 'cancelled', $search, $date_from, $date_to);
 
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
@@ -507,6 +566,9 @@ include_once '../../components/pharmacy_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
+        /* ================================================================
+           PAGE HEADER
+           ================================================================ */
         .page-header {
             background: linear-gradient(135deg, #0B5ED7, #0A4CA8, #083C8A);
             border-radius: 16px;
@@ -615,7 +677,9 @@ include_once '../../components/pharmacy_sidebar.php';
             backdrop-filter: blur(4px);
         }
         
-        /* FILTER TABS */
+        /* ================================================================
+           FILTER TABS
+           ================================================================ */
         .filter-tabs {
             display: flex;
             gap: 8px;
@@ -659,6 +723,7 @@ include_once '../../components/pharmacy_sidebar.php';
             border-radius: 10px;
             font-size: 0.65rem;
             font-weight: 800;
+            font-family: var(--font-mono);
         }
         
         .filter-tab:hover .tab-count { background: var(--primary); color: white; }
@@ -739,7 +804,9 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .btn-clear-filter:hover { background: var(--danger); color: white; }
         
-        /* SEARCH TOOLBAR */
+        /* ================================================================
+           SEARCH TOOLBAR
+           ================================================================ */
         .search-toolbar {
             background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             border-radius: var(--radius-lg);
@@ -822,9 +889,12 @@ include_once '../../components/pharmacy_sidebar.php';
             border-radius: 12px;
             margin-left: 8px;
             display: none;
+            font-family: var(--font-mono);
         }
         
-        /* SEARCH INFO BOX */
+        /* ================================================================
+           SEARCH INFO BOX
+           ================================================================ */
         .search-info-box {
             display: none;
             margin-bottom: 16px;
@@ -866,6 +936,7 @@ include_once '../../components/pharmacy_sidebar.php';
             font-size: 1.6rem;
             font-weight: 800;
             color: var(--primary);
+            font-family: var(--font-mono);
         }
         
         .search-info-box .info-value small {
@@ -873,6 +944,7 @@ include_once '../../components/pharmacy_sidebar.php';
             font-weight: 500;
             color: var(--text-secondary);
             margin-left: 6px;
+            font-family: var(--font-primary);
         }
         
         .search-info-box .info-divider {
@@ -881,7 +953,9 @@ include_once '../../components/pharmacy_sidebar.php';
             background: var(--border-color);
         }
         
-        /* PATIENT CARD */
+        /* ================================================================
+           PATIENT CARD
+           ================================================================ */
         .patient-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -974,6 +1048,11 @@ include_once '../../components/pharmacy_sidebar.php';
             border: 1px solid rgba(255,255,255,0.4);
         }
         
+        .patient-header .stat-pill .mono {
+            font-family: var(--font-mono);
+            font-weight: 800;
+        }
+        
         .patient-header .chevron { font-size: 0.9rem; transition: transform 0.3s ease; }
         .patient-header .chevron.rotated { transform: rotate(180deg); }
         
@@ -985,7 +1064,9 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .patient-body.open { max-height: 20000px; padding: 16px 22px 20px; }
         
-        /* VISIT SUB-SECTION */
+        /* ================================================================
+           VISIT SECTION
+           ================================================================ */
         .visit-section {
             border: 2px solid var(--border-color);
             border-radius: 12px;
@@ -1115,7 +1196,6 @@ include_once '../../components/pharmacy_sidebar.php';
         
         [data-theme="dark"] .visit-section-header .visit-mini-stat .stat-value { color: var(--primary-light); }
         
-        /* ✅ VIEW BUTTON - DYNAMIC COLORS */
         .btn-view-visit {
             display: inline-flex;
             align-items: center;
@@ -1144,7 +1224,9 @@ include_once '../../components/pharmacy_sidebar.php';
             background: var(--bg-card);
         }
         
-        /* TABLE */
+        /* ================================================================
+           TABLE
+           ================================================================ */
         .table-scroll { overflow-x: auto; border-radius: 10px; }
         
         .data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
@@ -1248,29 +1330,9 @@ include_once '../../components/pharmacy_sidebar.php';
         
         [data-theme="dark"] mark.search-highlight { background: #FCD34D; color: #422006; }
         
-        /* PATIENT VIEW BUTTON */
-        .btn-view-patient {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            padding: 7px 18px;
-            border-radius: 8px;
-            font-weight: 700;
-            font-size: 0.72rem;
-            background: linear-gradient(135deg, #059669, #047857);
-            color: white;
-            border: none;
-            cursor: pointer;
-            text-decoration: none;
-            min-width: 80px;
-        }
-        
-        .btn-view-patient:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 16px rgba(5, 150, 105, 0.5);
-        }
-        
+        /* ================================================================
+           PATIENT ACTIONS
+           ================================================================ */
         .patient-actions {
             display: flex;
             justify-content: space-between;
@@ -1297,6 +1359,9 @@ include_once '../../components/pharmacy_sidebar.php';
             color: var(--text-primary);
         }
         
+        /* ================================================================
+           EMPTY STATE
+           ================================================================ */
         .empty-state {
             text-align: center;
             padding: 60px 20px;
@@ -1316,6 +1381,9 @@ include_once '../../components/pharmacy_sidebar.php';
         .empty-state p { font-size: 1rem; font-weight: 600; color: var(--text-primary); }
         .empty-state .sub { font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; font-weight: 400; }
         
+        /* ================================================================
+           FOOTER
+           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -1334,6 +1402,9 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
         
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
         @media (max-width: 1024px) { .main-content { margin-left: 0; padding: 16px; } }
         
         @media (max-width: 768px) {
@@ -1347,7 +1418,6 @@ include_once '../../components/pharmacy_sidebar.php';
             .patient-header { flex-direction: column; align-items: stretch; }
             .visit-section-header { flex-direction: column; align-items: stretch; }
             .btn-view-visit { width: 100%; }
-            .btn-view-patient { width: 100%; }
         }
     </style>
 </head>
@@ -1367,7 +1437,11 @@ include_once '../../components/pharmacy_sidebar.php';
                 </span>
             </h1>
             <p class="page-subtitle">
-                All prescriptions grouped by Patient → Visit
+                <?php if ($filter_status === 'all'): ?>
+                    All prescriptions
+                <?php else: ?>
+                    <?= getStatusLabel($filter_status) ?> prescriptions
+                <?php endif; ?>
                 <span class="branch-tag">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
@@ -1487,7 +1561,7 @@ include_once '../../components/pharmacy_sidebar.php';
             <?php foreach ($grouped_prescriptions as $patient): 
                 $patient_id = $patient['patient_id'];
                 
-                // Overall status
+                // Overall status (single status since filtered by tab)
                 $overall_status = 'pending';
                 $all_statuses = [];
                 foreach ($patient['visits'] as $visit) {
@@ -1571,143 +1645,137 @@ include_once '../../components/pharmacy_sidebar.php';
                             <div class="patient-actions-info">
                                 <i class="fas fa-info-circle" style="color:var(--primary);"></i>
                                 <strong><?= $medication_count ?></strong> medication(s) • Total Qty: <strong><?= $total_qty ?></strong>
-                                • <strong><?= $visit_count ?></strong> visit(s) • <strong><?= $prescription_count ?></strong> prescription(s)
+                                • <strong><?= $visit_count ?></strong> visit(s)
                             </div>
                         </div>
                         
-                        <!-- ✅ VISITS LIST - KILA VISIT NI SUB-SECTION -->
-                        <?php if (!empty($patient['visits'])): ?>
-                            <?php foreach ($patient['visits'] as $visit): 
-                                $visit_id = $visit['visit_id'];
-                                $visit_number = $visit['visit_number'];
-                                $visit_date = $visit['visit_date'];
-                                $visit_doctor = !empty($visit['doctor_names']) ? implode(', ', $visit['doctor_names']) : 'N/A';
-                                $visit_status = $visit['overall_status'];
-                                $visit_status_class = getStatusBadgeClass($visit_status);
-                                $visit_status_label = getStatusLabel($visit_status);
-                                $visit_qty = $visit['total_qty'];
-                                $visit_meds = $visit['medication_count'];
-                                $visit_amount = $visit['total_amount'];
-                                $visit_items = $visit['items'];
-                                
-                                // ✅ DYNAMIC VIEW URL
-                                $view_url = getViewUrl($visit_status, $patient_id, $visit_id);
-                                $view_icon = getViewIcon($visit_status);
-                                $view_title = getViewTitle($visit_status);
-                                $view_style = getViewButtonStyle($visit_status);
-                                $is_cancelled = ($visit_status === 'cancelled');
-                            ?>
-                                <div class="visit-section">
-                                    <!-- VISIT HEADER -->
-                                    <div class="visit-section-header">
-                                        <div class="visit-info-left">
-                                            <div class="visit-icon-badge">
-                                                <i class="fas fa-calendar-check"></i>
-                                            </div>
-                                            <span class="visit-number-display">
-                                                <?= htmlspecialchars($visit_number) ?>
-                                            </span>
-                                            <span class="visit-date-display">
-                                                <i class="fas fa-calendar-day"></i>
-                                                <?= !empty($visit_date) ? date('d M Y', strtotime($visit_date)) : 'N/A' ?>
-                                            </span>
-                                            <span class="visit-doctor-display">
-                                                <i class="fas fa-user-md"></i>
-                                                Dr. <?= htmlspecialchars($visit_doctor) ?>
-                                            </span>
-                                            <span class="badge-status <?= $visit_status_class ?>" style="font-size:0.6rem;padding:3px 10px;">
-                                                <?= $visit_status_label ?>
-                                            </span>
+                        <!-- ✅ VISITS - FILTERED BY TAB STATUS -->
+                        <?php foreach ($patient['visits'] as $visit): 
+                            $visit_id = $visit['visit_id'];
+                            $visit_number = $visit['visit_number'];
+                            $visit_date = $visit['visit_date'];
+                            $visit_doctor = !empty($visit['doctor_names']) ? implode(', ', $visit['doctor_names']) : 'N/A';
+                            $visit_status = $visit['overall_status'];
+                            $visit_status_class = getStatusBadgeClass($visit_status);
+                            $visit_status_label = getStatusLabel($visit_status);
+                            $visit_qty = $visit['total_qty'];
+                            $visit_meds = $visit['medication_count'];
+                            $visit_amount = $visit['total_amount'];
+                            $visit_items = $visit['items'];
+                            
+                            $view_url = getViewUrl($visit_status, $patient_id, $visit_id);
+                            $view_icon = getViewIcon($visit_status);
+                            $view_title = getViewTitle($visit_status);
+                            $view_style = getViewButtonStyle($visit_status);
+                            $is_cancelled = ($visit_status === 'cancelled');
+                        ?>
+                            <div class="visit-section">
+                                <div class="visit-section-header">
+                                    <div class="visit-info-left">
+                                        <div class="visit-icon-badge">
+                                            <i class="fas fa-calendar-check"></i>
                                         </div>
-                                        <div class="visit-stats-right">
-                                            <span class="visit-mini-stat">
-                                                <i class="fas fa-pills"></i>
-                                                Meds: <span class="stat-value"><?= $visit_meds ?></span>
-                                            </span>
-                                            <span class="visit-mini-stat">
-                                                <i class="fas fa-sort-numeric-up"></i>
-                                                Qty: <span class="stat-value"><?= $visit_qty ?></span>
-                                            </span>
-                                            <span class="visit-mini-stat">
-                                                <i class="fas fa-money-bill-wave"></i>
-                                                <span class="stat-value"><?= $currency ?> <?= number_format($visit_amount, 0) ?></span>
-                                            </span>
-                                            
-                                            <!-- ✅ DYNAMIC VIEW BUTTON -->
-                                            <a href="<?= $is_cancelled ? '#' : $view_url ?>" 
-                                               class="btn-view-visit" 
-                                               title="<?= $view_title ?>"
-                                               style="<?= $view_style ?>"
-                                               <?= $is_cancelled ? 'onclick="alert(\'This visit is cancelled. No view available.\'); return false;"' : '' ?>>
-                                                <i class="fas <?= $view_icon ?>"></i> VIEW
-                                            </a>
-                                        </div>
+                                        <span class="visit-number-display">
+                                            <?= htmlspecialchars($visit_number) ?>
+                                        </span>
+                                        <span class="visit-date-display">
+                                            <i class="fas fa-calendar-day"></i>
+                                            <?= !empty($visit_date) ? date('d M Y', strtotime($visit_date)) : 'N/A' ?>
+                                        </span>
+                                        <span class="visit-doctor-display">
+                                            <i class="fas fa-user-md"></i>
+                                            Dr. <?= htmlspecialchars($visit_doctor) ?>
+                                        </span>
+                                        <span class="badge-status <?= $visit_status_class ?>" style="font-size:0.6rem;padding:3px 10px;">
+                                            <?= $visit_status_label ?>
+                                        </span>
                                     </div>
-                                    
-                                    <!-- VISIT BODY - MEDICATIONS TABLE -->
-                                    <div class="visit-section-body">
-                                        <div class="table-scroll">
-                                            <table class="data-table">
-                                                <thead>
-                                                    <tr>
-                                                        <th style="width:50px;">#</th>
-                                                        <th><i class="fas fa-pills"></i> Medication</th>
-                                                        <th><i class="fas fa-sort-numeric-up"></i> Qty</th>
-                                                        <th><i class="fas fa-prescription"></i> Dosage</th>
-                                                        <th><i class="fas fa-clock"></i> Frequency</th>
-                                                        <th><i class="fas fa-route"></i> Route</th>
-                                                        <th><i class="fas fa-prescription"></i> Rx #</th>
-                                                        <th><i class="fas fa-calendar-alt"></i> Date</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    <?php $i = 1; foreach ($visit_items as $item): 
-                                                        $med_name = $item['medication_name'] ?? 'N/A';
-                                                        $med_qty = $item['quantity'] ?? 0;
-                                                        $pres_num = $item['prescription_number'] ?? 'N/A';
-                                                        $item_date = $item['prescription_date'] ?? ($item['created_at'] ?? null);
-                                                    ?>
-                                                        <tr class="med-row"
-                                                            data-search="<?= htmlspecialchars(strtolower($med_name . ' ' . $patient['patient_name'] . ' ' . $patient['patient_number'] . ' ' . $pres_num . ' ' . $patient['patient_phone'] . ' ' . $visit_number . ' ' . $visit_doctor . ' ' . ($item_date ? date('d M Y', strtotime($item_date)) : ''))) ?>"
-                                                            data-med-name="<?= htmlspecialchars(strtolower($med_name)) ?>"
-                                                            data-qty="<?= $med_qty ?>"
-                                                            data-visit-id="<?= $visit_id ?>"
-                                                            data-patient-id="<?= $patient_id ?>">
-                                                            <td class="row-number"><?= $i++ ?></td>
-                                                            <td>
-                                                                <div style="font-weight:600;font-size:0.82rem;" data-searchable>
-                                                                    <?= htmlspecialchars($med_name) ?>
-                                                                </div>
-                                                            </td>
-                                                            <td>
-                                                                <span class="qty-badge" data-searchable>
-                                                                    <i class="fas fa-pills"></i> <?= number_format($med_qty) ?>
-                                                                </span>
-                                                            </td>
-                                                            <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['dosage'] ?? '—') ?></td>
-                                                            <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['frequency'] ?? '—') ?></td>
-                                                            <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['route'] ?? '—') ?></td>
-                                                            <td>
-                                                                <span class="rx-number" data-searchable><?= htmlspecialchars($pres_num) ?></span>
-                                                            </td>
-                                                            <td class="date-cell" data-searchable>
-                                                                <?php if (!empty($item_date)): ?>
-                                                                    <span class="date-main"><?= date('d M Y', strtotime($item_date)) ?></span>
-                                                                    <span class="date-time"><?= date('H:i', strtotime($item_date)) ?></span>
-                                                                    <span class="date-ago"><?= timeAgo($item_date) ?></span>
-                                                                <?php else: ?>
-                                                                    <span style="color:var(--text-secondary);">N/A</span>
-                                                                <?php endif; ?>
-                                                            </td>
-                                                        </tr>
-                                                    <?php endforeach; ?>
-                                                </tbody>
-                                            </table>
-                                        </div>
+                                    <div class="visit-stats-right">
+                                        <span class="visit-mini-stat">
+                                            <i class="fas fa-pills"></i>
+                                            Meds: <span class="stat-value"><?= $visit_meds ?></span>
+                                        </span>
+                                        <span class="visit-mini-stat">
+                                            <i class="fas fa-sort-numeric-up"></i>
+                                            Qty: <span class="stat-value"><?= $visit_qty ?></span>
+                                        </span>
+                                        <span class="visit-mini-stat">
+                                            <i class="fas fa-money-bill-wave"></i>
+                                            <span class="stat-value"><?= $currency ?> <?= number_format($visit_amount, 0) ?></span>
+                                        </span>
+                                        
+                                        <a href="<?= $is_cancelled ? '#' : $view_url ?>" 
+                                           class="btn-view-visit" 
+                                           title="<?= $view_title ?>"
+                                           style="<?= $view_style ?>"
+                                           <?= $is_cancelled ? 'onclick="alert(\'This visit is cancelled. No view available.\'); return false;"' : '' ?>>
+                                            <i class="fas <?= $view_icon ?>"></i> VIEW
+                                        </a>
                                     </div>
                                 </div>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
+                                
+                                <div class="visit-section-body">
+                                    <div class="table-scroll">
+                                        <table class="data-table">
+                                            <thead>
+                                                <tr>
+                                                    <th style="width:50px;">#</th>
+                                                    <th><i class="fas fa-pills"></i> Medication</th>
+                                                    <th><i class="fas fa-sort-numeric-up"></i> Qty</th>
+                                                    <th><i class="fas fa-prescription"></i> Dosage</th>
+                                                    <th><i class="fas fa-clock"></i> Frequency</th>
+                                                    <th><i class="fas fa-route"></i> Route</th>
+                                                    <th><i class="fas fa-prescription"></i> Rx #</th>
+                                                    <th><i class="fas fa-calendar-alt"></i> Date</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php $i = 1; foreach ($visit_items as $item): 
+                                                    $med_name = $item['medication_name'] ?? 'N/A';
+                                                    $med_qty = $item['quantity'] ?? 0;
+                                                    $pres_num = $item['prescription_number'] ?? 'N/A';
+                                                    $item_date = $item['prescription_date'] ?? ($item['created_at'] ?? null);
+                                                ?>
+                                                    <tr class="med-row"
+                                                        data-search="<?= htmlspecialchars(strtolower($med_name . ' ' . $patient['patient_name'] . ' ' . $patient['patient_number'] . ' ' . $pres_num . ' ' . $patient['patient_phone'] . ' ' . $visit_number . ' ' . $visit_doctor . ' ' . ($item_date ? date('d M Y', strtotime($item_date)) : ''))) ?>"
+                                                        data-med-name="<?= htmlspecialchars(strtolower($med_name)) ?>"
+                                                        data-qty="<?= $med_qty ?>"
+                                                        data-visit-id="<?= $visit_id ?>"
+                                                        data-patient-id="<?= $patient_id ?>">
+                                                        <td class="row-number"><?= $i++ ?></td>
+                                                        <td>
+                                                            <div style="font-weight:600;font-size:0.82rem;" data-searchable>
+                                                                <?= htmlspecialchars($med_name) ?>
+                                                            </div>
+                                                        </td>
+                                                        <td>
+                                                            <span class="qty-badge" data-searchable>
+                                                                <i class="fas fa-pills"></i> <?= number_format($med_qty) ?>
+                                                            </span>
+                                                        </td>
+                                                        <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['dosage'] ?? '—') ?></td>
+                                                        <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['frequency'] ?? '—') ?></td>
+                                                        <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['route'] ?? '—') ?></td>
+                                                        <td>
+                                                            <span class="rx-number" data-searchable><?= htmlspecialchars($pres_num) ?></span>
+                                                        </td>
+                                                        <td class="date-cell" data-searchable>
+                                                            <?php if (!empty($item_date)): ?>
+                                                                <span class="date-main"><?= date('d M Y', strtotime($item_date)) ?></span>
+                                                                <span class="date-time"><?= date('H:i', strtotime($item_date)) ?></span>
+                                                                <span class="date-ago"><?= timeAgo($item_date) ?></span>
+                                                            <?php else: ?>
+                                                                <span style="color:var(--text-secondary);">N/A</span>
+                                                            <?php endif; ?>
+                                                        </td>
+                                                    </tr>
+                                                <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
                         
                     </div>
                 </div>
@@ -1724,14 +1792,18 @@ include_once '../../components/pharmacy_sidebar.php';
         <?php else: ?>
             <div class="empty-state">
                 <i class="fas fa-check-circle"></i>
-                <p>No prescriptions found</p>
+                <p>No <?= $filter_status === 'all' ? '' : getStatusLabel($filter_status) . ' ' ?>prescriptions found</p>
                 <p class="sub">
                     <?php if (!empty($search)): ?>
                         No results for "<strong><?= htmlspecialchars($search) ?></strong>"
                     <?php elseif (!empty($date_from) || !empty($date_to)): ?>
                         No prescriptions in this date range
-                    <?php elseif ($filter_status !== 'all'): ?>
-                        No <?= ucfirst($filter_status) ?> prescriptions
+                    <?php elseif ($filter_status === 'pending'): ?>
+                        Hakuna pending prescriptions ✅
+                    <?php elseif ($filter_status === 'confirmed'): ?>
+                        Hakuna confirmed prescriptions
+                    <?php elseif ($filter_status === 'dispensed'): ?>
+                        Hakuna dispensed prescriptions
                     <?php else: ?>
                         No prescriptions have been created yet
                     <?php endif; ?>
@@ -1744,7 +1816,7 @@ include_once '../../components/pharmacy_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Prescription History (Grouped by Visit)
+            Prescription History
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
         </p>
@@ -2007,11 +2079,12 @@ include_once '../../components/pharmacy_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
     
-    console.log('%c📋 Braick - Prescription History V3 (Dynamic VIEW)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Pending → view_patient_prescriptions.php', 'font-size:13px; color:#D97706; font-weight:bold;');
-    console.log('%c✅ Confirmed → view_confirmed_prescriptions.php', 'font-size:13px; color:#3B82F6; font-weight:bold;');
-    console.log('%c✅ Dispensed → view_dispensed_prescriptions.php', 'font-size:13px; color:#059669; font-weight:bold;');
-    console.log('%c✅ Cancelled → disabled', 'font-size:13px; color:#DC2626; font-weight:bold;');
+    console.log('%c📋 Braick - Prescription History V5 (TAB FILTER FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Tab filter INAFANYA KAZI sasa', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ Pending tab → pending visits only', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Confirmed tab → confirmed visits only', 'font-size:13px; color:#3B82F6;');
+    console.log('%c✅ Dispensed tab → dispensed visits only', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Cancelled tab → cancelled visits only', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>

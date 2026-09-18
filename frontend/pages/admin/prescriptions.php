@@ -1,13 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/prescriptions.php
-// ADMIN - PRESCRIPTIONS GROUPED BY PATIENT → VISIT
+// ADMIN - PRESCRIPTIONS GROUPED BY PATIENT → VISIT (V6)
+// ✅ FIXED: Prescriptions zenye quantity = 0 HAZIONEKANI
 // ✅ FONT: JetBrains Mono (kwa IDs, namba, code)
-// ✅ FIXED: Kila visit inaonyeshwa tofauti (dawa za visit husika)
-// ✅ ADDED: Quick date filters (Today, 1W, 1M, 3M, 6M, 1Y, All, Custom)
-// ✅ ADDED: < > scroll buttons kwenye kila visit table
-// ✅ FIXED: VIEW + DELETE moja kwa patient (sio kila row)
-// ✅ Medication Summary search inafanya kazi
+// ✅ Quick date filters (Today, 1W, 1M, 3M, 6M, 1Y, All, Custom)
+// ✅ Scroll buttons < > kwenye kila visit table
+// ✅ VIEW + DELETE moja kwa patient
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -149,10 +148,17 @@ if ($selected_branch_id !== 'all') {
 }
 
 // ================================================================
-// WHERE CLAUSE
+// ✅ WHERE CLAUSE - Only prescriptions with items > 0
 // ================================================================
 $where_clause = " WHERE 1=1";
 $params = [];
+
+// ✅ FIXED: Only prescriptions with items > 0
+$where_clause .= " AND EXISTS (
+    SELECT 1 FROM prescription_items pi_check 
+    WHERE pi_check.prescription_id = p.id 
+    AND pi_check.quantity > 0
+)";
 
 if (!empty($search)) {
     $where_clause .= " AND (
@@ -160,7 +166,7 @@ if (!empty($search)) {
         OR pat.full_name LIKE ? 
         OR pat.patient_id LIKE ? 
         OR p.diagnosis LIKE ?
-        OR EXISTS (SELECT 1 FROM prescription_items pi WHERE pi.prescription_id = p.id AND pi.medication_name LIKE ?)
+        OR EXISTS (SELECT 1 FROM prescription_items pi WHERE pi.prescription_id = p.id AND pi.medication_name LIKE ? AND pi.quantity > 0)
     )";
     $search_param = "%$search%";
     $params[] = $search_param;
@@ -207,8 +213,8 @@ $sql = "
         v.visit_number,
         v.visit_date,
         v.created_at as visit_created_at,
-        (SELECT COUNT(*) FROM prescription_items WHERE prescription_id = p.id) as item_count,
-        (SELECT COALESCE(SUM(total_price), 0) FROM prescription_items WHERE prescription_id = p.id) as total_amount
+        (SELECT COUNT(*) FROM prescription_items WHERE prescription_id = p.id AND quantity > 0) as item_count,
+        (SELECT COALESCE(SUM(total_price), 0) FROM prescription_items WHERE prescription_id = p.id AND quantity > 0) as total_amount
     FROM prescriptions p
     LEFT JOIN patients pat ON p.patient_id = pat.id
     LEFT JOIN users doc ON p.doctor_id = doc.id
@@ -222,11 +228,12 @@ $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $all_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// ✅ FIXED: Fetch only items with quantity > 0
 foreach ($all_prescriptions as &$presc) {
     $stmt = $db->prepare("
         SELECT medication_name, dosage, frequency, quantity, unit_price, total_price, duration
         FROM prescription_items 
-        WHERE prescription_id = ?
+        WHERE prescription_id = ? AND quantity > 0
         ORDER BY id ASC
     ");
     $stmt->execute([$presc['id']]);
@@ -240,6 +247,9 @@ unset($presc);
 $patients_data = [];
 
 foreach ($all_prescriptions as $presc) {
+    // ✅ FIXED: Skip kama medications hazina items (baada ya filter)
+    if (empty($presc['medications'])) continue;
+    
     $patient_id = $presc['patient_id'] ?? 0;
     $visit_id = $presc['visit_id'] ?? 0;
     
@@ -294,6 +304,11 @@ foreach ($patients_data as &$patient) {
 }
 unset($patient);
 
+// ✅ FIXED: Filter out patients with 0 visits (baada ya filter)
+$patients_data = array_filter($patients_data, function($p) {
+    return !empty($p['visits']) && $p['total_prescriptions'] > 0;
+});
+
 $patients_array = array_values($patients_data);
 foreach ($patients_array as &$p) {
     $p['visit_count'] = count($p['visits']);
@@ -314,7 +329,7 @@ try {
             SUM(pi.quantity) as total_quantity
         FROM prescription_items pi
         INNER JOIN prescriptions p ON pi.prescription_id = p.id
-        WHERE 1=1
+        WHERE pi.quantity > 0
     ";
     $med_params = [];
     if ($selected_branch_id !== 'all') {
@@ -370,9 +385,13 @@ try {
 }
 
 // ================================================================
-// STATS
+// STATS - ✅ Only prescriptions with items > 0
 // ================================================================
-$stats_where = " WHERE 1=1";
+$stats_where = " WHERE EXISTS (
+    SELECT 1 FROM prescription_items pi_check 
+    WHERE pi_check.prescription_id = p.id 
+    AND pi_check.quantity > 0
+)";
 $stats_params = [];
 if ($selected_branch_id !== 'all') {
     $stats_where .= " AND p.branch_id = ?";
@@ -407,19 +426,19 @@ $stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $stats_where
 $stmt->execute($stats_params);
 $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(pi.total_price), 0) as total FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'dispensed'");
+$stmt = $db->prepare("SELECT COALESCE(SUM(pi.total_price), 0) as total FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'dispensed' AND pi.quantity > 0");
 $stmt->execute($stats_params);
 $total_amount_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(pi.total_price), 0) as total FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'pending'");
+$stmt = $db->prepare("SELECT COALESCE(SUM(pi.total_price), 0) as total FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'pending' AND pi.quantity > 0");
 $stmt->execute($stats_params);
 $pending_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(pi.total_price), 0) as total FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'confirmed'");
+$stmt = $db->prepare("SELECT COALESCE(SUM(pi.total_price), 0) as total FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'confirmed' AND pi.quantity > 0");
 $stmt->execute($stats_params);
 $confirmed_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(pi.total_price), 0) as total FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'cancelled'");
+$stmt = $db->prepare("SELECT COALESCE(SUM(pi.total_price), 0) as total FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'cancelled' AND pi.quantity > 0");
 $stmt->execute($stats_params);
 $cancelled_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
@@ -2309,12 +2328,10 @@ function showToast(title, message, type) {
     });
 <?php endif; ?>
 
-console.log('%c💊 Braick - Prescriptions (JetBrains Mono)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ Font: JetBrains Mono for IDs, numbers, codes', 'font-size:12px;color:#34D399;');
-console.log('%c✅ Kila visit inaonyeshwa tofauti', 'font-size:12px;color:#34D399;');
-console.log('%c✅ Quick date filters', 'font-size:12px;color:#FCD34D;');
-console.log('%c✅ Scroll buttons < > kwa kila visit table', 'font-size:12px;color:#34D399;');
-console.log('%c✅ VIEW + DELETE moja kwa patient', 'font-size:12px;color:#34D399;');
+console.log('%c💊 Braick - Prescriptions V6 (Zero-Items Hidden)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ Prescriptions zenye quantity = 0 HAZIONEKANI', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c✅ Stats zinahesabu prescriptions zenye items > 0', 'font-size:12px;color:#34D399;');
+console.log('%c✅ JetBrains Mono font', 'font-size:12px;color:#0891B2;');
 </script>
 
 </body>

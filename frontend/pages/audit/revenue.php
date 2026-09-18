@@ -1,8 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/revenue.php
-// AUDIT ROLE - REVENUE REPORT (V13)
+// AUDIT ROLE - REVENUE REPORT (V14 - HOUR FILTER REMOVED)
 // ✅ AUDIT role only - VIEW ONLY
+// ✅ REMOVED: Hour filter (haifanyi kazi vizuri, imeondolewa)
 // ✅ Removed "Medications" card (same as Prescription)
 // ✅ Removed "Amount" column from Expenses table
 // ✅ Item Details column with multi-line wrap
@@ -74,11 +75,12 @@ try {
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-// FILTERS
+// ================================================================
+// FILTERS — HOUR FILTER IMETOLEWA
+// ================================================================
 $quick_filter = $_GET['quick'] ?? '1m';
 $date_from = $_GET['date_from'] ?? date('Y-m-d');
 $date_to = $_GET['date_to'] ?? date('Y-m-d');
-$hours_filter = isset($_GET['hours']) && $_GET['hours'] !== '' ? (int)$_GET['hours'] : 0;
 $payment_method = $_GET['payment_method'] ?? 'all';
 $search = trim($_GET['search'] ?? '');
 
@@ -134,17 +136,6 @@ switch ($quick_filter) {
         break;
     case 'all':
         $date_label = "All Time";
-        break;
-    case 'hours':
-        if ($hours_filter > 0) {
-            $date_cond_bills = " AND b.updated_at >= DATE_SUB(NOW(), INTERVAL ? HOUR)";
-            $date_cond_otc = " AND o.updated_at >= DATE_SUB(NOW(), INTERVAL ? HOUR)";
-            $date_cond_exp = " AND e.payment_date >= DATE_SUB(NOW(), INTERVAL ? HOUR)";
-            $date_params = [$hours_filter];
-            $date_label = "Last {$hours_filter} Hours";
-        } else {
-            $date_label = "Enter Hours";
-        }
         break;
     case 'custom':
         $date_cond_bills = " AND DATE(b.updated_at) BETWEEN ? AND ?";
@@ -301,7 +292,7 @@ try {
 $net_profit = $total_revenue - $total_expenses;
 $profit_percentage = ($total_revenue > 0) ? round(($net_profit / $total_revenue) * 100, 1) : 0;
 
-// TRANSACTIONS - With Item Details
+// TRANSACTIONS
 $transactions = [];
 try {
     $search_cond_bills = "";
@@ -621,10 +612,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     background: linear-gradient(135deg, var(--primary), var(--primary-dark));
     color: white; border-color: transparent;
     box-shadow: 0 4px 10px rgba(11, 94, 215, 0.3);
-}
-.quick-btn.hours-active {
-    background: linear-gradient(135deg, #10B981, #059669);
-    color: white; border-color: transparent;
 }
 .quick-btn.custom-active {
     background: linear-gradient(135deg, #F59E0B, #D97706);
@@ -1162,7 +1149,7 @@ mark.search-highlight {
         </div>
     </div>
 
-    <!-- FILTER CARD -->
+    <!-- FILTER CARD (HOUR FILTER REMOVED) -->
     <div class="filter-card">
         <div class="filter-section">
             <div class="filter-section-title">
@@ -1193,10 +1180,6 @@ mark.search-highlight {
                 <a href="?branch=<?= $selected_branch_id ?>&quick=all" class="quick-btn <?= $quick_filter === 'all' ? 'active' : '' ?>">
                     <i class="fas fa-infinity"></i> All
                 </a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=hours&hours=<?= $hours_filter > 0 ? $hours_filter : 24 ?>" 
-                   class="quick-btn <?= $quick_filter === 'hours' ? 'hours-active' : '' ?>">
-                    <i class="fas fa-hourglass-half"></i> Hours
-                </a>
                 <a href="?branch=<?= $selected_branch_id ?>&quick=custom&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" 
                    class="quick-btn <?= $quick_filter === 'custom' ? 'custom-active' : '' ?>">
                     <i class="fas fa-calendar-check"></i> Custom
@@ -1209,15 +1192,6 @@ mark.search-highlight {
             <input type="hidden" name="quick" value="<?= htmlspecialchars($quick_filter) ?>">
             
             <div class="filter-form">
-                <?php if ($quick_filter === 'hours'): ?>
-                    <div class="filter-group">
-                        <label><i class="fas fa-hourglass-half"></i> Hours Ago</label>
-                        <input type="number" name="hours" 
-                               value="<?= $hours_filter > 0 ? $hours_filter : '' ?>" 
-                               placeholder="e.g. 12, 24, 48..." min="1" max="8760">
-                    </div>
-                <?php endif; ?>
-                
                 <?php if ($quick_filter === 'custom'): ?>
                     <div class="filter-group">
                         <label><i class="fas fa-calendar"></i> From</label>
@@ -1256,7 +1230,7 @@ mark.search-highlight {
         </form>
     </div>
 
-    <!-- STATS GRID - 7 CARDS (MEDICATION REMOVED) -->
+    <!-- STATS GRID -->
     <div class="stats-grid">
         <div class="stat-card revenue">
             <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
@@ -2037,9 +2011,10 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-console.log('%c📊 Revenue Report V13 - AUDIT (VIEW ONLY)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c📊 Revenue Report V14 - AUDIT (VIEW ONLY)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
 console.log('%c✅ AUDIT ROLE', 'font-size:13px; color:#34D399; font-weight:bold;');
 console.log('%c✅ VIEW ONLY - No Edit/Delete', 'font-size:13px; color:#FCD34D; font-weight:bold;');
+console.log('%c✅ Hour filter REMOVED', 'font-size:13px; color:#DC2626; font-weight:bold;');
 console.log('%c✅ Removed "Medications" card', 'font-size:13px; color:#34D399;');
 console.log('%c✅ Removed "Amount" column from Expenses table', 'font-size:13px; color:#34D399;');
 console.log('%c💰 Total Revenue: <?= $currency ?> <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0B5ED7;');

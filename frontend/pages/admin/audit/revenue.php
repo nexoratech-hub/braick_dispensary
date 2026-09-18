@@ -1,10 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/revenue.php
-// ADMIN AUDIT - REVENUE REPORT (V10)
-// ✅ Removed "Medications" card (same as Prescription)
-// ✅ Added "Item Details" column to All Transactions
-// ✅ Added "Received By" tracking for payments
+// ADMIN AUDIT - REVENUE REPORT (V14 - HOUR FILTER REMOVED)
+// ✅ REMOVED: Hour filter (haifanyi kazi vizuri, imeondolewa)
 // ✅ Prescription: ONLY from PAID bills
 // ✅ Expenses table (RED THEME)
 // ================================================================
@@ -44,6 +42,9 @@ $selected_branch_id = $_GET['branch'] ?? 'all';
 
 require_once __DIR__ . '/../../../../backend/config/database.php';
 
+// ================================================================
+// DATABASE CONNECTION
+// ================================================================
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
@@ -166,15 +167,18 @@ try {
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-// FILTERS
+// ================================================================
+// FILTERS — HOUR FILTER IMETOLEWA
+// ================================================================
 $quick_filter = $_GET['quick'] ?? '1m';
 $date_from = $_GET['date_from'] ?? date('Y-m-d');
 $date_to = $_GET['date_to'] ?? date('Y-m-d');
-$hours_filter = isset($_GET['hours']) && $_GET['hours'] !== '' ? (int)$_GET['hours'] : 0;
 $payment_method = $_GET['payment_method'] ?? 'all';
 $search = trim($_GET['search'] ?? '');
 
+// ================================================================
 // DATE CONDITIONS
+// ================================================================
 $date_cond_bills = "";
 $date_cond_otc = "";
 $date_cond_exp = "";
@@ -226,17 +230,6 @@ switch ($quick_filter) {
         break;
     case 'all':
         $date_label = "All Time";
-        break;
-    case 'hours':
-        if ($hours_filter > 0) {
-            $date_cond_bills = " AND b.updated_at >= DATE_SUB(NOW(), INTERVAL ? HOUR)";
-            $date_cond_otc = " AND o.updated_at >= DATE_SUB(NOW(), INTERVAL ? HOUR)";
-            $date_cond_exp = " AND e.payment_date >= DATE_SUB(NOW(), INTERVAL ? HOUR)";
-            $date_params = [$hours_filter];
-            $date_label = "Last {$hours_filter} Hours";
-        } else {
-            $date_label = "Enter Hours";
-        }
         break;
     case 'custom':
         $date_cond_bills = " AND DATE(b.updated_at) BETWEEN ? AND ?";
@@ -334,9 +327,7 @@ try {
     $data = $stmt->fetch(PDO::FETCH_ASSOC);
     $prescription_revenue = (float)($data['total'] ?? 0);
     $prescription_count = (int)($data['count'] ?? 0);
-} catch (Exception $e) {
-    error_log("Prescription error: " . $e->getMessage());
-}
+} catch (Exception $e) {}
 
 // BREAKDOWN
 $breakdown_types = ['consultation', 'lab_test', 'procedure', 'medication', 'registration', 'equipment'];
@@ -398,7 +389,7 @@ $net_profit = $total_revenue - $total_expenses;
 $profit_percentage = ($total_revenue > 0) ? round(($net_profit / $total_revenue) * 100, 1) : 0;
 
 // ================================================================
-// TRANSACTIONS - With Item Details + Received By
+// TRANSACTIONS
 // ================================================================
 $transactions = [];
 try {
@@ -490,9 +481,7 @@ try {
     $stmt = $db->prepare($sql);
     $stmt->execute(array_merge($branch_params_e, $date_params));
     $expenses_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    error_log("Expenses error: " . $e->getMessage());
-}
+} catch (Exception $e) {}
 
 // MONTHLY CHART
 $monthly_labels = [];
@@ -617,7 +606,6 @@ include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
     --success-bg: #D1FAE5;
     --danger: #DC2626;
     --danger-bg: #FEE2E2;
-    --danger-dark: #B91C1C;
     --warning: #D97706;
     --warning-bg: #FEF3C7;
     --purple: #7C3AED;
@@ -644,7 +632,6 @@ include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
     --primary-soft: #1E40AF;
     --success-bg: #1A3A2A;
     --danger-bg: #3A1A1A;
-    --danger-dark: #7F1D1D;
     --warning-bg: #3A2A1A;
     --purple-bg: #2D1B4E;
     --cyan-bg: #0E3A47;
@@ -669,7 +656,6 @@ html, body {
     letter-spacing: -0.02em;
 }
 
-/* ALERT */
 .alert {
     padding: 12px 18px;
     border-radius: 12px;
@@ -689,9 +675,7 @@ html, body {
 
 .alert.success { background: var(--success-bg); color: var(--success); border-left: 4px solid var(--success); }
 .alert.error { background: var(--danger-bg); color: var(--danger); border-left: 4px solid var(--danger); }
-.alert i { font-size: 1.1rem; }
 
-/* PAGE HEADER */
 .page-header {
     background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
     border-radius: 16px;
@@ -788,7 +772,6 @@ html, body {
     transform: translateY(-2px);
 }
 
-/* FILTER CARD */
 .filter-card {
     background: var(--bg-card);
     border-radius: 14px;
@@ -846,12 +829,6 @@ html, body {
     color: white;
     border-color: transparent;
     box-shadow: 0 4px 10px rgba(11, 94, 215, 0.3);
-}
-
-.quick-btn.hours-active {
-    background: linear-gradient(135deg, #10B981, #059669);
-    color: white;
-    border-color: transparent;
 }
 
 .quick-btn.custom-active {
@@ -952,10 +929,9 @@ html, body {
     color: var(--danger);
 }
 
-/* STATS GRID */
 .stats-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 14px;
     margin-bottom: 18px;
 }
@@ -1096,7 +1072,6 @@ html, body {
     100% { background-position: -200% 0; }
 }
 
-/* CHART GRID */
 .chart-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -1146,7 +1121,6 @@ html, body {
     position: relative;
 }
 
-/* TABLE CARD */
 .table-card {
     background: var(--bg-card);
     border-radius: 14px;
@@ -1195,118 +1169,30 @@ html, body {
     backdrop-filter: blur(4px);
 }
 
-/* EXPENSES RED THEME */
-.table-card.expenses-red {
-    border-color: #DC2626;
-}
+.table-card.expenses-red { border-color: #DC2626; }
+.table-card.expenses-red:hover { border-color: #DC2626; box-shadow: 0 10px 30px rgba(220, 38, 38, 0.15); }
+.table-card.expenses-red .table-header { background: linear-gradient(135deg, #DC2626, #B91C1C) !important; }
+.table-card.expenses-red .table-header .title i { color: #FCA5A5 !important; }
+.table-card.expenses-red .table-toolbar { background: var(--danger-bg) !important; border-bottom-color: rgba(220, 38, 38, 0.2) !important; }
+[data-theme="dark"] .table-card.expenses-red .table-toolbar { background: #3A1A1A !important; }
+.table-card.expenses-red .search-box input:focus { border-color: #DC2626; box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15); }
+.table-card.expenses-red .search-count { background: #DC2626; }
+.table-card.expenses-red .search-count.has-results { background: #059669; }
+.table-card.expenses-red .search-count.no-results { background: #B91C1C; }
+.table-card.expenses-red .scroll-btn:hover { background: #DC2626; border-color: #DC2626; box-shadow: 0 4px 10px rgba(220, 38, 38, 0.3); }
+.table-card.expenses-red .data-table thead th { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+.table-card.expenses-red .data-table tbody tr:hover td { background: var(--danger-bg) !important; }
+[data-theme="dark"] .table-card.expenses-red .data-table tbody tr:hover td { background: #3A1A1A !important; }
 
-.table-card.expenses-red:hover {
-    border-color: #DC2626;
-    box-shadow: 0 10px 30px rgba(220, 38, 38, 0.15);
-}
+.expense-ref-badge { font-size: 0.68rem; color: #DC2626; font-weight: 800; background: var(--danger-bg); padding: 3px 7px; border-radius: 5px; display: inline-block; font-family: var(--font-mono); }
+[data-theme="dark"] .expense-ref-badge { background: #3A1A1A; color: #F87171; }
+.received-by-avatar.red { background: linear-gradient(135deg, #DC2626, #F87171) !important; }
+.expense-category-badge { font-size: 0.7rem; font-weight: 700; background: var(--warning-bg); color: var(--warning); padding: 3px 8px; border-radius: 6px; display: inline-block; }
+[data-theme="dark"] .expense-category-badge { background: #3A2A1A; color: #FBBF24; }
+.money-cell.red { color: #DC2626 !important; }
+.table-card.expenses-red .data-table tbody tr.total-row td { border-top-color: #DC2626; background: var(--danger-bg) !important; color: #DC2626; }
+[data-theme="dark"] .table-card.expenses-red .data-table tbody tr.total-row td { background: #3A1A1A !important; }
 
-.table-card.expenses-red .table-header {
-    background: linear-gradient(135deg, #DC2626, #B91C1C) !important;
-}
-
-.table-card.expenses-red .table-header .title i {
-    color: #FCA5A5 !important;
-}
-
-.table-card.expenses-red .table-toolbar {
-    background: var(--danger-bg) !important;
-    border-bottom-color: rgba(220, 38, 38, 0.2) !important;
-}
-
-[data-theme="dark"] .table-card.expenses-red .table-toolbar {
-    background: #3A1A1A !important;
-}
-
-.table-card.expenses-red .search-box input:focus {
-    border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15);
-}
-
-.table-card.expenses-red .search-count {
-    background: #DC2626;
-}
-
-.table-card.expenses-red .search-count.has-results {
-    background: #059669;
-}
-
-.table-card.expenses-red .search-count.no-results {
-    background: #B91C1C;
-}
-
-.table-card.expenses-red .scroll-btn:hover {
-    background: #DC2626;
-    border-color: #DC2626;
-    box-shadow: 0 4px 10px rgba(220, 38, 38, 0.3);
-}
-
-.table-card.expenses-red .data-table thead th {
-    background: linear-gradient(135deg, #DC2626, #B91C1C);
-}
-
-.table-card.expenses-red .data-table tbody tr:hover td {
-    background: var(--danger-bg) !important;
-}
-
-[data-theme="dark"] .table-card.expenses-red .data-table tbody tr:hover td {
-    background: #3A1A1A !important;
-}
-
-.expense-ref-badge {
-    font-size: 0.68rem;
-    color: #DC2626;
-    font-weight: 800;
-    background: var(--danger-bg);
-    padding: 3px 7px;
-    border-radius: 5px;
-    display: inline-block;
-    font-family: var(--font-mono);
-}
-
-[data-theme="dark"] .expense-ref-badge {
-    background: #3A1A1A;
-    color: #F87171;
-}
-
-.received-by-avatar.red {
-    background: linear-gradient(135deg, #DC2626, #F87171) !important;
-}
-
-.expense-category-badge {
-    font-size: 0.7rem;
-    font-weight: 700;
-    background: var(--warning-bg);
-    color: var(--warning);
-    padding: 3px 8px;
-    border-radius: 6px;
-    display: inline-block;
-}
-
-[data-theme="dark"] .expense-category-badge {
-    background: #3A2A1A;
-    color: #FBBF24;
-}
-
-.money-cell.red {
-    color: #DC2626 !important;
-}
-
-.table-card.expenses-red .data-table tbody tr.total-row td {
-    border-top-color: #DC2626;
-    background: var(--danger-bg) !important;
-    color: #DC2626;
-}
-
-[data-theme="dark"] .table-card.expenses-red .data-table tbody tr.total-row td {
-    background: #3A1A1A !important;
-}
-
-/* TABLE TOOLBAR */
 .table-toolbar {
     display: flex;
     justify-content: space-between;
@@ -1318,26 +1204,10 @@ html, body {
     border-bottom: 2px solid var(--border-color);
 }
 
-.table-toolbar-left {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex: 1;
-    min-width: 200px;
-}
+.table-toolbar-left { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 200px; }
+.table-toolbar-right { display: flex; align-items: center; gap: 6px; }
 
-.table-toolbar-right {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.search-box {
-    position: relative;
-    flex: 1;
-    max-width: 380px;
-}
-
+.search-box { position: relative; flex: 1; max-width: 380px; }
 .search-box input {
     width: 100%;
     padding: 8px 32px 8px 32px;
@@ -1351,12 +1221,7 @@ html, body {
     transition: all 0.3s ease;
     height: 36px;
 }
-
-.search-box input:focus {
-    border-color: var(--primary);
-    box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-}
-
+.search-box input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15); }
 .search-box .search-icon {
     position: absolute;
     left: 10px;
@@ -1366,7 +1231,6 @@ html, body {
     font-size: 0.75rem;
     pointer-events: none;
 }
-
 .search-box .search-clear {
     position: absolute;
     right: 6px;
@@ -1381,12 +1245,7 @@ html, body {
     border-radius: 5px;
     display: none;
 }
-
-.search-box .search-clear:hover {
-    background: var(--border-color);
-    color: var(--danger);
-}
-
+.search-box .search-clear:hover { background: var(--border-color); color: var(--danger); }
 .search-box.has-value .search-clear { display: block; }
 
 .search-count {
@@ -1402,7 +1261,6 @@ html, body {
     white-space: nowrap;
     height: 28px;
 }
-
 .search-count.has-results { background: var(--success); }
 .search-count.no-results { background: var(--danger); }
 
@@ -1422,19 +1280,9 @@ html, body {
     transition: all 0.25s ease;
     flex-shrink: 0;
 }
+.scroll-btn:hover { background: var(--primary); color: white; border-color: var(--primary); transform: translateY(-2px); }
 
-.scroll-btn:hover {
-    background: var(--primary);
-    color: white;
-    border-color: var(--primary);
-    transform: translateY(-2px);
-}
-
-.table-scroll-wrapper {
-    overflow-x: auto;
-    scroll-behavior: smooth;
-}
-
+.table-scroll-wrapper { overflow-x: auto; scroll-behavior: smooth; }
 .table-scroll-wrapper::-webkit-scrollbar { height: 6px; }
 .table-scroll-wrapper::-webkit-scrollbar-track { background: var(--border-color); border-radius: 10px; }
 .table-scroll-wrapper::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
@@ -1447,13 +1295,7 @@ mark.search-highlight {
     font-weight: 800;
 }
 
-/* DATA TABLE */
-.data-table { 
-    width: 100%; 
-    border-collapse: collapse; 
-    font-size: 0.78rem;
-}
-
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
 .data-table thead th {
     text-align: left;
     padding: 9px 12px;
@@ -1465,7 +1307,6 @@ mark.search-highlight {
     background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
     white-space: nowrap;
 }
-
 .data-table tbody td {
     padding: 9px 12px;
     border-bottom: 1px solid var(--border-color);
@@ -1473,12 +1314,10 @@ mark.search-highlight {
     vertical-align: middle;
     font-weight: 500;
 }
-
 .data-table tbody tr { transition: background 0.2s ease; }
 .data-table tbody tr:hover td { background: var(--primary-bg); }
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table tbody tr.hidden-row { display: none !important; }
-
 .data-table tbody tr.total-row td {
     border-top: 3px solid var(--primary);
     font-weight: 800;
@@ -1495,7 +1334,6 @@ mark.search-highlight {
     text-align: right;
     letter-spacing: -0.02em;
 }
-
 .money-cell .currency-prefix {
     font-size: 0.65rem;
     color: var(--text-secondary);
@@ -1515,19 +1353,8 @@ mark.search-highlight {
     text-transform: uppercase;
     white-space: nowrap;
 }
-
-.type-badge.bill {
-    background: #DBEAFE;
-    color: #1E40AF;
-    border: 1px solid #93C5FD;
-}
-
-.type-badge.otc {
-    background: #CFFAFE;
-    color: #0E7490;
-    border: 1px solid #67E8F9;
-}
-
+.type-badge.bill { background: #DBEAFE; color: #1E40AF; border: 1px solid #93C5FD; }
+.type-badge.otc { background: #CFFAFE; color: #0E7490; border: 1px solid #67E8F9; }
 [data-theme="dark"] .type-badge.bill { background: #1E3A8A; color: #93C5FD; border-color: #3B82F6; }
 [data-theme="dark"] .type-badge.otc { background: #0E3A47; color: #67E8F9; border-color: #06B6D4; }
 
@@ -1542,18 +1369,12 @@ mark.search-highlight {
     text-transform: uppercase;
     white-space: nowrap;
 }
-
 .status-badge.paid { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
 .status-badge.pending { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
 .status-badge.partial { background: var(--cyan-bg); color: var(--cyan); border: 1px solid var(--cyan); }
 .status-badge.cancelled { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
 
-.received-by {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
+.received-by { display: flex; align-items: center; gap: 8px; }
 .received-by-avatar {
     width: 28px;
     height: 28px;
@@ -1568,21 +1389,9 @@ mark.search-highlight {
     flex-shrink: 0;
     text-transform: uppercase;
 }
-
 .received-by-info { display: flex; flex-direction: column; gap: 1px; }
-
-.received-by-name {
-    font-size: 0.72rem;
-    font-weight: 700;
-    color: var(--text-primary);
-}
-
-.received-by-role {
-    font-size: 0.55rem;
-    font-weight: 800;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-}
+.received-by-name { font-size: 0.72rem; font-weight: 700; color: var(--text-primary); }
+.received-by-role { font-size: 0.55rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; }
 
 .role-tag {
     display: inline-block;
@@ -1592,7 +1401,6 @@ mark.search-highlight {
     font-weight: 800;
     text-transform: uppercase;
 }
-
 .role-tag.cashier { background: #FEF3C7; color: #D97706; }
 .role-tag.reception { background: #DBEAFE; color: #1E40AF; }
 .role-tag.pharmacy { background: #D1FAE5; color: #059669; }
@@ -1634,15 +1442,11 @@ mark.search-highlight {
     transition: all 0.25s ease;
     text-decoration: none;
 }
-
 .btn-action:hover { transform: translateY(-2px) scale(1.1); }
-
 .btn-action.view { background: rgba(11, 94, 215, 0.12); color: #0B5ED7; }
 .btn-action.view:hover { background: #0B5ED7; color: white; box-shadow: 0 4px 10px rgba(11, 94, 215, 0.4); }
-
 .btn-action.edit { background: rgba(245, 158, 11, 0.12); color: #D97706; }
 .btn-action.edit:hover { background: #F59E0B; color: white; box-shadow: 0 4px 10px rgba(245, 158, 11, 0.4); }
-
 .btn-action.delete { background: rgba(220, 38, 38, 0.12); color: #DC2626; }
 .btn-action.delete:hover { background: #DC2626; color: white; box-shadow: 0 4px 10px rgba(220, 38, 38, 0.4); }
 
@@ -1656,25 +1460,11 @@ mark.search-highlight {
     box-shadow: 0 2px 4px rgba(0,0,0,0.15);
 }
 
-/* ================================================================
-   ITEM DETAILS CELL - MULTI-LINE
-   ================================================================ */
-.item-details-cell {
-    max-width: 220px;
-    min-width: 160px;
-    padding: 8px 10px !important;
-}
-.item-list {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    max-height: 120px;
-    overflow-y: auto;
-}
+.item-details-cell { max-width: 220px; min-width: 160px; padding: 8px 10px !important; }
+.item-list { display: flex; flex-direction: column; gap: 3px; max-height: 120px; overflow-y: auto; }
 .item-list::-webkit-scrollbar { width: 4px; }
 .item-list::-webkit-scrollbar-track { background: var(--border-color); border-radius: 10px; }
 .item-list::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-
 .item-line {
     display: flex;
     align-items: flex-start;
@@ -1685,17 +1475,8 @@ mark.search-highlight {
     font-weight: 600;
     word-break: break-word;
 }
-.item-line .item-bullet {
-    color: var(--primary);
-    font-weight: 900;
-    flex-shrink: 0;
-    font-size: 0.7rem;
-    line-height: 1.3;
-}
-.item-line .item-name {
-    flex: 1;
-    word-break: break-word;
-}
+.item-line .item-bullet { color: var(--primary); font-weight: 900; flex-shrink: 0; font-size: 0.7rem; line-height: 1.3; }
+.item-line .item-name { flex: 1; word-break: break-word; }
 .item-line .item-qty {
     font-family: var(--font-mono);
     font-size: 0.6rem;
@@ -1726,14 +1507,7 @@ mark.search-highlight {
 .item-type-tag.procedure { background: #CCFBF1; color: #0D9488; }
 .item-type-tag.registration { background: #F1F5F9; color: #64748B; }
 .item-type-tag.equipment { background: #EDE9FE; color: #7C3AED; }
-[data-theme="dark"] .item-type-tag.medication { background: #78350F; color: #FDE68A; }
-[data-theme="dark"] .item-type-tag.lab_test { background: #1E3A8A; color: #93C5FD; }
-[data-theme="dark"] .item-type-tag.consultation { background: #1A3A2A; color: #34D399; }
-[data-theme="dark"] .item-type-tag.procedure { background: #134E4A; color: #5EEAD4; }
-[data-theme="dark"] .item-type-tag.registration { background: #334155; color: #94A3B8; }
-[data-theme="dark"] .item-type-tag.equipment { background: #2D1B4E; color: #A78BFA; }
 
-/* MODAL */
 .modal-overlay {
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
@@ -1745,9 +1519,7 @@ mark.search-highlight {
     justify-content: center;
     padding: 20px;
 }
-
 .modal-overlay.active { display: flex; }
-
 .modal-box {
     background: var(--bg-card);
     border-radius: 20px;
@@ -1758,12 +1530,10 @@ mark.search-highlight {
     animation: modalPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
     text-align: center;
 }
-
 @keyframes modalPop {
     0% { opacity: 0; transform: scale(0.8) translateY(20px); }
     100% { opacity: 1; transform: scale(1) translateY(0); }
 }
-
 .modal-icon {
     width: 68px;
     height: 68px;
@@ -1777,12 +1547,10 @@ mark.search-highlight {
     margin: 0 auto 16px;
     animation: iconPulse 1.5s infinite;
 }
-
 @keyframes iconPulse {
     0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4); }
     50% { transform: scale(1.05); box-shadow: 0 0 0 12px rgba(220, 38, 38, 0); }
 }
-
 .modal-title {
     font-size: 1.2rem;
     font-weight: 800;
@@ -1790,14 +1558,12 @@ mark.search-highlight {
     color: var(--text-primary);
     letter-spacing: -0.02em;
 }
-
 .modal-text {
     font-size: 0.85rem;
     color: var(--text-secondary);
     margin-bottom: 22px;
     line-height: 1.7;
 }
-
 .modal-text strong {
     color: var(--primary);
     background: var(--primary-bg);
@@ -1806,7 +1572,6 @@ mark.search-highlight {
     font-family: var(--font-mono);
     font-weight: 700;
 }
-
 .modal-warning {
     color: var(--danger);
     font-weight: 700;
@@ -1814,13 +1579,7 @@ mark.search-highlight {
     margin-top: 6px;
     font-size: 0.78rem;
 }
-
-.modal-actions {
-    display: flex;
-    gap: 10px;
-    justify-content: center;
-}
-
+.modal-actions { display: flex; gap: 10px; justify-content: center; }
 .modal-btn {
     padding: 10px 24px;
     border-radius: 11px;
@@ -1833,22 +1592,13 @@ mark.search-highlight {
     align-items: center;
     gap: 8px;
 }
-
 .modal-btn.cancel { background: var(--border-color); color: var(--text-primary); }
 .modal-btn.cancel:hover { background: #CBD5E1; transform: translateY(-2px); }
-
 .modal-btn.danger { background: linear-gradient(135deg, #DC2626, #B91C1C); color: white; }
 .modal-btn.danger:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(220, 38, 38, 0.5); }
 
-@media (max-width: 1200px) {
-    .stats-grid { grid-template-columns: repeat(3, 1fr); }
-}
-
-@media (max-width: 1024px) {
-    .chart-grid { grid-template-columns: 1fr; }
-    .stats-grid { grid-template-columns: repeat(2, 1fr); }
-}
-
+@media (max-width: 1200px) { .stats-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 1024px) { .chart-grid { grid-template-columns: 1fr; } .stats-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 768px) {
     .page-header { padding: 16px 18px; }
     .page-header .page-title { font-size: 1.15rem; }
@@ -1857,17 +1607,13 @@ mark.search-highlight {
     .stat-card .stat-icon { width: 32px; height: 32px; font-size: 0.9rem; }
     .stat-card .stat-value { font-size: 1.1rem; }
     .data-table { font-size: 0.7rem; }
-    .data-table thead th,
-    .data-table tbody td { padding: 7px 8px; }
+    .data-table thead th, .data-table tbody td { padding: 7px 8px; }
     .quick-btn { font-size: 0.65rem; padding: 5px 10px; }
     .table-toolbar { flex-direction: column; align-items: stretch; }
     .table-toolbar-right { justify-content: flex-end; }
     .item-details-cell { max-width: 180px; min-width: 140px; }
 }
-
-@media (max-width: 480px) {
-    .stats-grid { grid-template-columns: 1fr; }
-}
+@media (max-width: 480px) { .stats-grid { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
@@ -1920,7 +1666,7 @@ mark.search-highlight {
         </div>
     </div>
 
-    <!-- FILTER CARD -->
+    <!-- FILTER CARD (HOUR FILTER REMOVED) -->
     <div class="filter-card">
         <div class="filter-section">
             <div class="filter-section-title">
@@ -1951,10 +1697,6 @@ mark.search-highlight {
                 <a href="?branch=<?= $selected_branch_id ?>&quick=all" class="quick-btn <?= $quick_filter === 'all' ? 'active' : '' ?>">
                     <i class="fas fa-infinity"></i> All
                 </a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=hours&hours=<?= $hours_filter > 0 ? $hours_filter : 24 ?>" 
-                   class="quick-btn <?= $quick_filter === 'hours' ? 'hours-active' : '' ?>">
-                    <i class="fas fa-hourglass-half"></i> Hours
-                </a>
                 <a href="?branch=<?= $selected_branch_id ?>&quick=custom&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" 
                    class="quick-btn <?= $quick_filter === 'custom' ? 'custom-active' : '' ?>">
                     <i class="fas fa-calendar-check"></i> Custom
@@ -1967,15 +1709,6 @@ mark.search-highlight {
             <input type="hidden" name="quick" value="<?= htmlspecialchars($quick_filter) ?>">
             
             <div class="filter-form">
-                <?php if ($quick_filter === 'hours'): ?>
-                    <div class="filter-group">
-                        <label><i class="fas fa-hourglass-half"></i> Hours Ago</label>
-                        <input type="number" name="hours" 
-                               value="<?= $hours_filter > 0 ? $hours_filter : '' ?>" 
-                               placeholder="e.g. 12, 24, 48..." min="1" max="8760">
-                    </div>
-                <?php endif; ?>
-                
                 <?php if ($quick_filter === 'custom'): ?>
                     <div class="filter-group">
                         <label><i class="fas fa-calendar"></i> From</label>
@@ -2014,7 +1747,7 @@ mark.search-highlight {
         </form>
     </div>
 
-    <!-- STATS GRID - MEDICATION REMOVED -->
+    <!-- STATS GRID -->
     <div class="stats-grid">
         <div class="stat-card revenue">
             <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
@@ -2116,7 +1849,7 @@ mark.search-highlight {
         </div>
     </div>
 
-    <!-- ALL TRANSACTIONS TABLE - WITH ITEM DETAILS + RECEIVED BY -->
+    <!-- ALL TRANSACTIONS TABLE -->
     <div class="table-card">
         <div class="table-header">
             <span class="title"><i class="fas fa-list"></i> All Transactions</span>
@@ -2263,7 +1996,6 @@ mark.search-highlight {
                                         <?= htmlspecialchars(ucfirst(str_replace('_', ' ', $trans['payment_method'] ?? 'Cash'))) ?>
                                     </span>
                                 </td>
-                                <!-- ✅ RECEIVED BY COLUMN -->
                                 <td class="searchable-cell">
                                     <div class="received-by">
                                         <div class="received-by-avatar"><?= htmlspecialchars($initials) ?></div>
@@ -2911,10 +2643,10 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-console.log('%c📊 Revenue Report V10 - Admin Audit', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Removed "Medications" card', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Added "Item Details" column', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Added "Received By" for payments', 'font-size:13px; color:#34D399;');
+console.log('%c📊 Revenue Report V14 - Hour Filter REMOVED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ Hour filter imeondolewa kabisa', 'font-size:13px; color:#DC2626; font-weight:bold;');
+console.log('%c✅ Filters: Today, 1D, 1W, 1M, 3M, 6M, 1Y, All, Custom', 'font-size:13px; color:#34D399;');
+console.log('%c📅 Current filter: <?= htmlspecialchars($date_label) ?>', 'font-size:13px; color:#F59E0B; font-weight:bold;');
 </script>
 
 </body>
