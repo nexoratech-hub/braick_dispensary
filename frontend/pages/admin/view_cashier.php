@@ -1,12 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/view_cashier.php
-// ADMIN - VIEW CASHIER BRANCH DETAILS WITH REVENUE CARDS
-// ✅ Uses SHARED header & sidebar
-// ✅ Shows ALL cashiers + receptionists
-// ✅ Uses paid_amount from bills (includes discounts)
-// ✅ Excludes OTC bills
-// ✅ 6 CARDS: Total Revenue, Expenses, Net Profit, Patient Bills, OTC, Prescriptions
+// ADMIN - VIEW CASHIER BRANCH DETAILS (V13 - 8 CARDS MATCHING CASHIERS)
+// ✅ FIXED: Font Awesome forced with @font-face
+// ✅ FIXED: JetBrains Mono font
+// ✅ PAYMENTS-BASED: Patient Bills = payments.amount
+// ✅ 8 CARDS — SAME AS cashiers.php
+// ✅ Patient Payments shows Premium & Discount badges
+// ✅ ALL AMOUNTS ROUNDED TO NEAREST 50
 // ✅ Recent Bills with View, Edit, Cancel buttons
 // ================================================================
 
@@ -49,6 +50,13 @@ try {
 }
 
 // ================================================================
+// ✅ ROUND TO NEAREST 50 FUNCTION
+// ================================================================
+function round_to_50($value) {
+    return round($value / 50) * 50;
+}
+
+// ================================================================
 // GET BRANCH ID
 // ================================================================
 $cashier_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
@@ -74,17 +82,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([$bill_id]);
             $bill = $stmt->fetch(PDO::FETCH_ASSOC);
             
-            if (!$bill) {
-                throw new Exception('Bill not found');
-            }
-            
-            if ($bill['status'] === 'cancelled') {
-                throw new Exception('Bill is already cancelled');
-            }
-            
-            if ($bill['paid_amount'] > 0) {
-                throw new Exception('Cannot cancel a paid or partially paid bill. Please refund first.');
-            }
+            if (!$bill) throw new Exception('Bill not found');
+            if ($bill['status'] === 'cancelled') throw new Exception('Bill is already cancelled');
+            if ($bill['paid_amount'] > 0) throw new Exception('Cannot cancel a paid or partially paid bill. Please refund first.');
             
             $stmt = $db->prepare("
                 UPDATE bills 
@@ -140,7 +140,7 @@ try {
             (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception') as total_receptions,
             (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'pending' AND patient_id IS NOT NULL AND visit_id IS NOT NULL AND bill_number NOT LIKE 'BILL-OTC-%') as pending_bills,
             (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'partial' AND patient_id IS NOT NULL AND visit_id IS NOT NULL AND bill_number NOT LIKE 'BILL-OTC-%') as partial_bills,
-            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'paid' AND patient_id IS NOT NULL AND visit_id IS NOT NULL AND bill_number NOT LIKE 'BILL-OTC-%') as paid_bills,
+            (SELECT COUNT(DISTINCT p.bill_id) FROM payments p INNER JOIN bills pb ON p.bill_id = pb.id WHERE pb.branch_id = b.id AND pb.patient_id IS NOT NULL AND pb.visit_id IS NOT NULL AND pb.bill_number NOT LIKE 'BILL-OTC-%') as paid_bills,
             (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'cancelled' AND patient_id IS NOT NULL AND visit_id IS NOT NULL AND bill_number NOT LIKE 'BILL-OTC-%') as cancelled_bills,
             (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND patient_id IS NOT NULL AND visit_id IS NOT NULL AND bill_number NOT LIKE 'BILL-OTC-%') as total_bills,
             (SELECT COUNT(*) FROM payments WHERE branch_id = b.id) as total_payments,
@@ -162,44 +162,80 @@ try {
 }
 
 // ================================================================
-// REVENUE QUERIES
+// REVENUE QUERIES - PAYMENTS-BASED (SAME AS CASHIERS)
 // ================================================================
+
+// 1. Patient Payments (payments.amount)
+$patient_bills_revenue = 0;
+$payments_count = 0;
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(paid_amount), 0) as bills_revenue
-        FROM bills 
-        WHERE branch_id = ? 
-        AND status = 'paid'
-        AND patient_id IS NOT NULL
-        AND visit_id IS NOT NULL
-        AND bill_number NOT LIKE 'BILL-OTC-%'
+        SELECT COALESCE(SUM(p.amount), 0) as bills_revenue,
+               COUNT(DISTINCT p.id) as payments_count,
+               COUNT(DISTINCT p.bill_id) as bills_count
+        FROM payments p
+        INNER JOIN bills b ON p.bill_id = b.id
+        WHERE p.branch_id = ? 
+        AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
     ");
     $stmt->execute([$cashier_id]);
-    $patient_bills_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['bills_revenue'] ?? 0;
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $patient_bills_revenue = $row['bills_revenue'] ?? 0;
+    $payments_count = $row['payments_count'] ?? 0;
 } catch (Exception $e) {
     $patient_bills_revenue = 0;
+    $payments_count = 0;
 }
 
+// 2. OTC Revenue
+$otc_revenue = 0;
+$otc_count = 0;
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(total_amount), 0) as otc_revenue
+        SELECT COALESCE(SUM(total_amount), 0) as otc_revenue,
+               COUNT(*) as otc_count
         FROM otc_sales 
         WHERE branch_id = ? 
         AND payment_status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
-    $otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['otc_revenue'] ?? 0;
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $otc_revenue = $row['otc_revenue'] ?? 0;
+    $otc_count = $row['otc_count'] ?? 0;
 } catch (Exception $e) {
     $otc_revenue = 0;
+    $otc_count = 0;
 }
 
+// 3. Prescription Revenue (proportion from payments)
+$prescription_revenue = 0;
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(pi.total_price), 0) as prescription_revenue
-        FROM prescription_items pi
-        INNER JOIN prescriptions p ON pi.prescription_id = p.id
-        WHERE p.branch_id = ? 
-        AND p.status = 'dispensed'
+        SELECT COALESCE(SUM(
+            CASE 
+                WHEN bill_totals.items_total > 0 
+                THEN (bi.total_price / bill_totals.items_total) * p.amount
+                ELSE 0 
+            END
+        ), 0) as prescription_revenue
+        FROM bill_items bi
+        INNER JOIN bills b ON bi.bill_id = b.id
+        INNER JOIN payments p ON p.bill_id = b.id
+        INNER JOIN (
+            SELECT bill_id, SUM(total_price) as items_total 
+            FROM bill_items 
+            WHERE status != 'cancelled' 
+            GROUP BY bill_id
+        ) bill_totals ON bill_totals.bill_id = bi.bill_id
+        WHERE bi.reference_type = 'prescription'
+        AND bi.item_type = 'medication'
+        AND bi.status != 'cancelled'
+        AND b.patient_id IS NOT NULL 
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
+        AND p.branch_id = ?
     ");
     $stmt->execute([$cashier_id]);
     $prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['prescription_revenue'] ?? 0;
@@ -207,21 +243,135 @@ try {
     $prescription_revenue = 0;
 }
 
-$total_revenue = $patient_bills_revenue + $otc_revenue;
+// 4. Clinical Services = Consultation + Procedures + Equipment
+$clinical_revenue = 0;
+try {
+    foreach (['consultation', 'procedure', 'equipment'] as $type) {
+        $stmt = $db->prepare("
+            SELECT COALESCE(SUM(
+                CASE 
+                    WHEN bill_totals.items_total > 0 
+                    THEN (bi.total_price / bill_totals.items_total) * p.amount
+                    ELSE 0 
+                END
+            ), 0) as total
+            FROM bill_items bi
+            INNER JOIN bills b ON bi.bill_id = b.id
+            INNER JOIN payments p ON p.bill_id = b.id
+            INNER JOIN (
+                SELECT bill_id, SUM(total_price) as items_total 
+                FROM bill_items 
+                WHERE status != 'cancelled' 
+                GROUP BY bill_id
+            ) bill_totals ON bill_totals.bill_id = bi.bill_id
+            WHERE bi.item_type = ?
+            AND bi.status != 'cancelled'
+            AND b.patient_id IS NOT NULL 
+            AND b.visit_id IS NOT NULL
+            AND b.bill_number NOT LIKE 'BILL-OTC-%'
+            AND p.branch_id = ?
+        ");
+        $stmt->execute([$type, $cashier_id]);
+        $clinical_revenue += (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+    }
+} catch (Exception $e) {
+    $clinical_revenue = 0;
+}
 
+// 5. Lab Tests (proportion from payments)
+$lab_revenue = 0;
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(amount), 0) as total_expenses
+        SELECT COALESCE(SUM(
+            CASE 
+                WHEN bill_totals.items_total > 0 
+                THEN (bi.total_price / bill_totals.items_total) * p.amount
+                ELSE 0 
+            END
+        ), 0) as lab_revenue
+        FROM bill_items bi
+        INNER JOIN bills b ON bi.bill_id = b.id
+        INNER JOIN payments p ON p.bill_id = b.id
+        INNER JOIN (
+            SELECT bill_id, SUM(total_price) as items_total 
+            FROM bill_items 
+            WHERE status != 'cancelled' 
+            GROUP BY bill_id
+        ) bill_totals ON bill_totals.bill_id = bi.bill_id
+        WHERE bi.item_type = 'lab_test'
+        AND bi.status != 'cancelled'
+        AND b.patient_id IS NOT NULL 
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
+        AND p.branch_id = ?
+    ");
+    $stmt->execute([$cashier_id]);
+    $lab_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['lab_revenue'] ?? 0;
+} catch (Exception $e) {
+    $lab_revenue = 0;
+}
+
+// 6. Total Revenue
+$total_revenue = $patient_bills_revenue + $otc_revenue;
+
+// 7. Expenses
+$total_expenses = 0;
+$expenses_count = 0;
+try {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(amount), 0) as total_expenses,
+               COUNT(*) as expenses_count
         FROM expenses 
         WHERE branch_id = ? AND status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
-    $total_expenses = $stmt->fetch(PDO::FETCH_ASSOC)['total_expenses'] ?? 0;
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $total_expenses = $row['total_expenses'] ?? 0;
+    $expenses_count = $row['expenses_count'] ?? 0;
 } catch (Exception $e) {
     $total_expenses = 0;
+    $expenses_count = 0;
 }
 
+// 8. Net Profit
 $net_profit = $total_revenue - $total_expenses;
+
+// 9. Premium & Discount (from bills)
+$total_premium = 0;
+$total_discount = 0;
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            COALESCE(SUM(b.total_discount), 0) as total_discount,
+            COALESCE(SUM(b.premium_amount), 0) as total_premium
+        FROM bills b
+        WHERE b.branch_id = ?
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
+        AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
+    ");
+    $stmt->execute([$cashier_id]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $total_discount = $row['total_discount'] ?? 0;
+    $total_premium = $row['total_premium'] ?? 0;
+} catch (Exception $e) {
+    $total_premium = 0;
+    $total_discount = 0;
+}
+
+// ================================================================
+// ✅ ROUND ALL AMOUNTS TO NEAREST 50
+// ================================================================
+$total_revenue               = round_to_50($total_revenue);
+$patient_bills_revenue       = round_to_50($patient_bills_revenue);
+$otc_revenue                 = round_to_50($otc_revenue);
+$prescription_revenue        = round_to_50($prescription_revenue);
+$clinical_revenue            = round_to_50($clinical_revenue);
+$lab_revenue                 = round_to_50($lab_revenue);
+$total_expenses              = round_to_50($total_expenses);
+$net_profit                  = round_to_50($net_profit);
+$total_premium               = round_to_50($total_premium);
+$total_discount              = round_to_50($total_discount);
 
 // ================================================================
 // GET STAFF FOR THIS BRANCH
@@ -291,6 +441,7 @@ try {
             b.subtotal,
             b.discount_amount,
             b.total_discount,
+            b.premium_amount,
             b.total_amount,
             b.paid_amount,
             b.balance,
@@ -361,24 +512,55 @@ try {
     $unread_notifications = 0;
 }
 
-// Flash messages
 $flash_message = $_SESSION['flash_message'] ?? '';
 $flash_type = $_SESSION['flash_type'] ?? '';
 unset($_SESSION['flash_message']);
 unset($_SESSION['flash_type']);
 
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
-<!-- PAGE-SPECIFIC CSS -->
+<!-- FONT AWESOME 6 + JETBRAINS MONO -->
 <!-- ================================================================ -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<style>
+    @font-face {
+        font-family: 'Font Awesome 6 Free';
+        font-style: normal;
+        font-weight: 900;
+        font-display: block;
+        src: url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/webfonts/fa-solid-900.woff2") format("woff2"),
+             url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/webfonts/fa-solid-900.ttf") format("truetype");
+    }
+    
+    @font-face {
+        font-family: 'Font Awesome 6 Free';
+        font-style: normal;
+        font-weight: 400;
+        font-display: block;
+        src: url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/webfonts/fa-regular-400.woff2") format("woff2"),
+             url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/webfonts/fa-regular-400.ttf") format("truetype");
+    }
+    
+    @font-face {
+        font-family: 'Font Awesome 6 Brands';
+        font-style: normal;
+        font-weight: 400;
+        font-display: block;
+        src: url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/webfonts/fa-brands-400.woff2") format("woff2"),
+             url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/webfonts/fa-brands-400.ttf") format("truetype");
+    }
+</style>
+
 <style>
     :root {
+        --font-mono: 'JetBrains Mono', 'Courier New', monospace;
         --page-bg-body: #F0FDF4;
         --page-bg-card: #FFFFFF;
         --page-text-primary: #1E293B;
@@ -396,6 +578,37 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         --page-text-muted: #64748B;
         --page-border: #334155;
         --page-hover: #1A3A2A;
+    }
+
+    /* ✅ FORCE FONT AWESOME */
+    i.fas, i.far, i.fab, i.fa,
+    .fas, .far, .fab, .fa,
+    i[class*="fa-"], span[class*="fa-"] {
+        font-family: 'Font Awesome 6 Free', 'Font Awesome 6 Brands', 'FontAwesome' !important;
+        font-weight: 900 !important;
+        font-style: normal !important;
+        font-variant: normal !important;
+        text-rendering: auto !important;
+        -webkit-font-smoothing: antialiased !important;
+        -moz-osx-font-smoothing: grayscale !important;
+        display: inline-block !important;
+        line-height: 1 !important;
+        speak: never !important;
+    }
+    
+    i.far, .far { font-family: 'Font Awesome 6 Free' !important; font-weight: 400 !important; }
+    i.fab, .fab { font-family: 'Font Awesome 6 Brands' !important; font-weight: 400 !important; }
+
+    .stat-number, .stat-label, .stat-sub, .stat-card-8,
+    .stat-card-8 *, .header-badge, .badge-custom,
+    .data-table-custom, .data-table-custom *,
+    .status-badge-pending, .status-badge-paid, .status-badge-partial, .status-badge-cancelled,
+    .flash-message-custom, .bill-action-btn,
+    .revenue-card-custom, .revenue-card-custom *,
+    .stat-mini-custom, .stat-mini-custom * {
+        font-family: var(--font-mono) !important;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.02em;
     }
 
     body { background: var(--page-bg-body, #F0FDF4); }
@@ -441,6 +654,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         z-index: 1;
         margin: 0;
     }
+
+    .page-header-custom .page-title i { font-size: 2rem; opacity: 0.9; }
 
     .page-header-custom .page-subtitle {
         color: rgba(255,255,255,0.9);
@@ -501,6 +716,179 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         color: white;
     }
 
+    /* ================================================================
+       ✅ 8 CARDS GRID — SAME AS cashiers.php
+       ================================================================ */
+    .stats-grid-8 {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 24px;
+    }
+
+    .stat-card-8 {
+        border-radius: 16px;
+        border: none;
+        display: flex;
+        flex-direction: column;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+        color: white;
+        position: relative;
+        overflow: hidden;
+        cursor: default;
+        min-height: 140px;
+        padding: 18px 20px;
+    }
+
+    .stat-card-8::before {
+        content: '';
+        position: absolute;
+        top: -50%; right: -20%;
+        width: 160px; height: 160px;
+        background: rgba(255,255,255,0.06);
+        border-radius: 50%;
+        pointer-events: none;
+        transition: all 0.5s ease;
+    }
+
+    .stat-card-8::after {
+        content: '';
+        position: absolute;
+        bottom: -40%; left: -10%;
+        width: 120px; height: 120px;
+        background: rgba(255,255,255,0.04);
+        border-radius: 50%;
+        pointer-events: none;
+        transition: all 0.5s ease;
+    }
+
+    .stat-card-8:hover {
+        transform: translateY(-6px) scale(1.02);
+        box-shadow: 0 12px 36px rgba(0,0,0,0.2);
+    }
+
+    .stat-card-8:hover::before { transform: scale(1.3); right: -10%; }
+    .stat-card-8:hover::after { transform: scale(1.4); bottom: -30%; }
+
+    .stat-card-8 .stat-icon {
+        width: 46px; height: 46px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2rem;
+        flex-shrink: 0;
+        background: rgba(255,255,255,0.18);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.12);
+        backdrop-filter: blur(8px);
+        transition: all 0.3s ease;
+        margin-bottom: 10px;
+        position: relative;
+        z-index: 1;
+    }
+
+    .stat-card-8 .stat-icon i {
+        font-size: 1.2rem;
+        color: white;
+    }
+
+    .stat-card-8:hover .stat-icon {
+        transform: scale(1.1) rotate(-3deg);
+        background: rgba(255,255,255,0.3);
+    }
+
+    .stat-card-8 .stat-content {
+        position: relative;
+        z-index: 1;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+    }
+
+    .stat-card-8 .stat-label {
+        font-size: 0.62rem;
+        color: rgba(255,255,255,0.85);
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin: 0 0 4px 0;
+    }
+
+    .stat-card-8 .stat-number {
+        font-size: 1.65rem;
+        font-weight: 800;
+        color: white;
+        margin: 0;
+        line-height: 1.1;
+        letter-spacing: -0.03em;
+        word-break: break-word;
+    }
+
+    .stat-card-8 .stat-sub {
+        font-size: 0.6rem;
+        color: rgba(255,255,255,0.85);
+        margin-top: 4px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+
+    .stat-card-8 .stat-sub .premium-badge {
+        color: #FCD34D;
+        font-weight: 800;
+        text-shadow: 0 0 8px rgba(252, 211, 77, 0.5);
+    }
+
+    .stat-card-8 .stat-sub .discount-badge {
+        color: #FEF08A;
+        font-weight: 800;
+        text-shadow: 0 0 8px rgba(254, 240, 138, 0.5);
+    }
+
+    .stat-card-8 .stat-arrow {
+        position: absolute;
+        right: 14px;
+        bottom: 14px;
+        color: rgba(255,255,255,0.15);
+        font-size: 0.9rem;
+        transition: all 0.3s ease;
+        z-index: 1;
+    }
+
+    .stat-card-8:hover .stat-arrow {
+        transform: translateX(8px);
+        color: rgba(255,255,255,0.5);
+    }
+
+    /* Card Colors — SAME AS cashiers.php */
+    .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+    .card-blue:hover { box-shadow: 0 12px 36px rgba(11, 94, 215, 0.4); }
+
+    .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+    .card-red:hover { box-shadow: 0 12px 36px rgba(220, 38, 38, 0.4); }
+
+    .card-green { background: linear-gradient(135deg, #059669, #047857); }
+    .card-green:hover { box-shadow: 0 12px 36px rgba(5, 150, 105, 0.4); }
+
+    .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
+    .card-orange:hover { box-shadow: 0 12px 36px rgba(217, 119, 6, 0.4); }
+
+    .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+    .card-purple:hover { box-shadow: 0 12px 36px rgba(124, 58, 237, 0.4); }
+
+    .card-gold { background: linear-gradient(135deg, #F59E0B, #D97706); }
+    .card-gold:hover { box-shadow: 0 12px 36px rgba(245, 158, 11, 0.4); }
+
+    .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
+    .card-teal:hover { box-shadow: 0 12px 36px rgba(13, 148, 136, 0.4); }
+
+    .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
+    .card-cyan:hover { box-shadow: 0 12px 36px rgba(8, 145, 178, 0.4); }
+
     /* CASHIER INFO CARD */
     .detail-card-custom {
         background: var(--page-bg-card, #FFFFFF);
@@ -533,101 +921,55 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     html[data-theme="dark"] .detail-value-custom { color: #F1F5F9; }
 
-    /* REVENUE CARDS */
-    .revenue-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 16px;
-        margin-bottom: 24px;
-    }
+    /* BILLS SUMMARY CARDS */
+    .grid-5-cols { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px; }
 
-    .revenue-card-custom {
-        border-radius: 14px;
-        padding: 18px 20px;
-        border: 2px solid rgba(255,255,255,0.1);
+    .stat-mini-custom {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 12px;
+        padding: 14px 18px;
+        border: 2px solid var(--page-border, #D1FAE5);
         transition: all 0.3s ease;
-        box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-        position: relative;
-        overflow: hidden;
         text-decoration: none;
-        color: white;
+        color: var(--page-text-primary, #1E293B);
         display: block;
     }
 
-    .revenue-card-custom::before {
-        content: '';
-        position: absolute;
-        top: -50%; right: -20%;
-        width: 200px; height: 200px;
-        background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
-        border-radius: 50%;
-        pointer-events: none;
+    html[data-theme="dark"] .stat-mini-custom {
+        background: #1E293B;
+        border-color: #334155;
+        color: #F1F5F9;
     }
 
-    .revenue-card-custom:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 8px 25px rgba(0,0,0,0.2);
-        color: white;
+    .stat-mini-custom:hover {
+        border-color: #059669;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.15);
     }
 
-    .revenue-card-custom .card-icon-custom {
-        width: 44px;
-        height: 44px;
-        border-radius: 10px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.2rem;
-        margin-bottom: 8px;
-        background: rgba(255,255,255,0.15);
-        color: white;
-        border: 1px solid rgba(255,255,255,0.1);
-    }
-
-    .revenue-card-custom .card-amount-custom {
-        font-size: 1.4rem;
-        font-weight: 800;
-        color: white;
-        line-height: 1.2;
-    }
-
-    .revenue-card-custom .card-label-custom {
-        font-size: 0.6rem;
-        color: rgba(255,255,255,0.7);
-        font-weight: 700;
+    .stat-mini-custom .stat-label-mini {
+        font-size: 0.65rem;
+        color: var(--page-text-secondary, #64748B);
         text-transform: uppercase;
         letter-spacing: 0.04em;
-        margin: 0;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
     }
 
-    .revenue-card-custom .card-sub-custom {
-        font-size: 0.65rem;
-        color: rgba(255,255,255,0.6);
-        margin: 0;
-        opacity: 0.8;
+    .stat-mini-custom .stat-number-mini {
+        font-size: 1.5rem;
+        font-weight: 800;
+        font-family: var(--font-mono);
     }
 
-    .revenue-card-custom .card-nav-arrow {
-        position: absolute;
-        bottom: 10px; right: 14px;
-        font-size: 0.7rem;
-        color: rgba(255,255,255,0.4);
-        transition: all 0.3s ease;
-    }
-
-    .revenue-card-custom:hover .card-nav-arrow {
-        opacity: 1;
-        transform: translateX(4px);
-        color: rgba(255,255,255,0.9);
-    }
-
-    /* Card Colors */
-    .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-    .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-    .card-green { background: linear-gradient(135deg, #059669, #047857); }
-    .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
-    .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-    .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
+    .stat-mini-custom .text-green-600 { color: #059669; }
+    .stat-mini-custom .text-yellow-600 { color: #D97706; }
+    .stat-mini-custom .text-purple-600 { color: #7C3AED; }
+    .stat-mini-custom .text-teal-600 { color: #0D9488; }
+    .stat-mini-custom .text-red-600 { color: #DC2626; }
+    .stat-mini-custom .text-blue-600 { color: #0B5ED7; }
 
     /* TABLE CONTAINER */
     .table-container-custom {
@@ -690,7 +1032,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         color: var(--page-text-secondary, #64748B);
         font-weight: 700;
         padding: 10px 14px;
-        font-size: 0.6rem;
+        font-size: 0.65rem;
         text-transform: uppercase;
         letter-spacing: 0.05em;
         border-bottom: 2px solid var(--page-border, #D1FAE5);
@@ -729,71 +1071,42 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     /* STATUS BADGES */
     .status-badge-pending {
         background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-        color: white;
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-size: 0.62rem;
-        font-weight: 700;
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
+        color: white; padding: 4px 14px; border-radius: 20px;
+        font-size: 0.62rem; font-weight: 700;
+        display: inline-flex; align-items: center; gap: 5px;
         box-shadow: 0 2px 8px rgba(11, 94, 215, 0.3);
-        letter-spacing: 0.03em;
-        text-transform: uppercase;
+        letter-spacing: 0.03em; text-transform: uppercase;
     }
 
     .status-badge-paid {
         background: linear-gradient(135deg, #059669, #047857);
-        color: white;
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-size: 0.62rem;
-        font-weight: 700;
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
+        color: white; padding: 4px 14px; border-radius: 20px;
+        font-size: 0.62rem; font-weight: 700;
+        display: inline-flex; align-items: center; gap: 5px;
         box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
-        letter-spacing: 0.03em;
-        text-transform: uppercase;
+        letter-spacing: 0.03em; text-transform: uppercase;
     }
 
     .status-badge-partial {
         background: linear-gradient(135deg, #D97706, #B45309);
-        color: white;
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-size: 0.62rem;
-        font-weight: 700;
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
+        color: white; padding: 4px 14px; border-radius: 20px;
+        font-size: 0.62rem; font-weight: 700;
+        display: inline-flex; align-items: center; gap: 5px;
         box-shadow: 0 2px 8px rgba(217, 119, 6, 0.3);
-        letter-spacing: 0.03em;
-        text-transform: uppercase;
+        letter-spacing: 0.03em; text-transform: uppercase;
     }
 
     .status-badge-cancelled {
         background: linear-gradient(135deg, #DC2626, #B91C1C);
-        color: white;
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-size: 0.62rem;
-        font-weight: 700;
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
+        color: white; padding: 4px 14px; border-radius: 20px;
+        font-size: 0.62rem; font-weight: 700;
+        display: inline-flex; align-items: center; gap: 5px;
         box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
-        letter-spacing: 0.03em;
-        text-transform: uppercase;
+        letter-spacing: 0.03em; text-transform: uppercase;
     }
 
     /* BILL ACTIONS */
-    .bill-actions {
-        display: flex;
-        gap: 5px;
-        justify-content: center;
-        flex-wrap: wrap;
-    }
+    .bill-actions { display: flex; gap: 5px; justify-content: center; flex-wrap: wrap; }
 
     .bill-action-btn {
         display: inline-flex;
@@ -812,98 +1125,43 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     .bill-btn-view {
-        background: #E8F0FE;
-        color: #0B5ED7;
+        background: #E8F0FE; color: #0B5ED7;
         border: 1px solid rgba(11, 94, 215, 0.2);
     }
-
     .bill-btn-view:hover {
-        background: #0B5ED7;
-        color: white;
+        background: #0B5ED7; color: white;
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
     }
 
     .bill-btn-edit {
-        background: #FEF3C7;
-        color: #D97706;
+        background: #FEF3C7; color: #D97706;
         border: 1px solid rgba(217, 119, 6, 0.2);
     }
-
     .bill-btn-edit:hover {
-        background: #D97706;
-        color: white;
+        background: #D97706; color: white;
         transform: translateY(-2px);
     }
 
     .bill-btn-cancel {
-        background: #FEE2E2;
-        color: #DC2626;
+        background: #FEE2E2; color: #DC2626;
         border: 1px solid rgba(220, 38, 38, 0.2);
     }
-
     .bill-btn-cancel:hover {
-        background: #DC2626;
-        color: white;
+        background: #DC2626; color: white;
         transform: translateY(-2px);
     }
 
     .bill-btn-disabled {
-        background: #F1F5F9;
-        color: #94A3B8;
+        background: #F1F5F9; color: #94A3B8;
         border: 1px solid #E2E8F0;
-        cursor: not-allowed;
-        opacity: 0.5;
+        cursor: not-allowed; opacity: 0.5;
     }
 
     [data-theme="dark"] .bill-btn-view { background: #1E3A5F; color: #6EA8FE; }
     [data-theme="dark"] .bill-btn-edit { background: #3A2E1A; color: #FBBF24; }
     [data-theme="dark"] .bill-btn-cancel { background: #3A1A1A; color: #F87171; }
     [data-theme="dark"] .bill-btn-disabled { background: #1E293B; color: #64748B; }
-
-    /* STAT MINI */
-    .stat-mini-custom {
-        background: var(--page-bg-card, #FFFFFF);
-        border-radius: 12px;
-        padding: 14px 18px;
-        border: 2px solid var(--page-border, #D1FAE5);
-        transition: all 0.3s ease;
-        text-decoration: none;
-        color: var(--page-text-primary, #1E293B);
-        display: block;
-    }
-
-    html[data-theme="dark"] .stat-mini-custom {
-        background: #1E293B;
-        border-color: #334155;
-        color: #F1F5F9;
-    }
-
-    .stat-mini-custom:hover {
-        border-color: #059669;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.15);
-    }
-
-    .stat-mini-custom .stat-label-mini {
-        font-size: 0.6rem;
-        color: var(--page-text-secondary, #64748B);
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        font-weight: 700;
-    }
-
-    .stat-mini-custom .stat-number-mini {
-        font-size: 1.5rem;
-        font-weight: 800;
-    }
-
-    .stat-mini-custom .text-green-600 { color: #059669; }
-    .stat-mini-custom .text-yellow-600 { color: #D97706; }
-    .stat-mini-custom .text-purple-600 { color: #7C3AED; }
-    .stat-mini-custom .text-teal-600 { color: #0D9488; }
-    .stat-mini-custom .text-red-600 { color: #DC2626; }
-    .stat-mini-custom .text-blue-600 { color: #0B5ED7; }
 
     /* BADGES */
     .badge-custom {
@@ -938,26 +1196,17 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     .flash-message-custom.success {
-        background: #D1FAE5;
-        color: #065F46;
+        background: #D1FAE5; color: #065F46;
         border-left: 5px solid #059669;
     }
 
     .flash-message-custom.error {
-        background: #FEE2E2;
-        color: #991B1B;
+        background: #FEE2E2; color: #991B1B;
         border-left: 5px solid #DC2626;
     }
 
-    html[data-theme="dark"] .flash-message-custom.success {
-        background: #1A3A2A;
-        color: #34D399;
-    }
-
-    html[data-theme="dark"] .flash-message-custom.error {
-        background: #3A1A1A;
-        color: #F87171;
-    }
+    html[data-theme="dark"] .flash-message-custom.success { background: #1A3A2A; color: #34D399; }
+    html[data-theme="dark"] .flash-message-custom.error { background: #3A1A1A; color: #F87171; }
 
     @keyframes slideDown {
         from { opacity: 0; transform: translateY(-15px); }
@@ -1037,25 +1286,32 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         outline: none;
     }
 
-    /* GRID UTILITIES */
-    .grid-2-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-    .grid-3-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
-    .grid-5-cols { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px; }
+    /* RESPONSIVE */
+    @media (max-width: 1200px) {
+        .stats-grid-8 { grid-template-columns: repeat(4, 1fr); }
+    }
 
     @media (max-width: 1024px) {
-        .revenue-grid { grid-template-columns: repeat(2, 1fr); }
+        .stats-grid-8 { grid-template-columns: repeat(2, 1fr); }
         .grid-5-cols { grid-template-columns: repeat(2, 1fr); }
     }
 
     @media (max-width: 768px) {
         .page-header-custom { padding: 18px; }
         .page-header-custom .page-title { font-size: 1.15rem; }
-        .revenue-grid { grid-template-columns: 1fr; }
-        .grid-2-cols { grid-template-columns: 1fr; }
-        .grid-3-cols { grid-template-columns: 1fr; }
+        .stats-grid-8 { grid-template-columns: 1fr 1fr; gap: 12px; }
+        .stat-card-8 .stat-number { font-size: 1.25rem; }
+        .stat-card-8 .stat-icon { width: 38px; height: 38px; font-size: 1rem; }
         .grid-5-cols { grid-template-columns: 1fr 1fr; }
         .bill-actions { flex-direction: column; }
         .bill-action-btn { width: 100%; justify-content: center; }
+    }
+
+    @media (max-width: 480px) {
+        .stats-grid-8 { grid-template-columns: 1fr; gap: 12px; }
+        .stat-card-8 .stat-number { font-size: 1.2rem; }
+        .stat-card-8 { min-height: 120px; padding: 14px 16px; }
+        .grid-5-cols { grid-template-columns: 1fr; }
     }
 
     @media print {
@@ -1138,55 +1394,107 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- 6 REVENUE CARDS -->
-    <div class="revenue-grid">
-        <a href="revenue.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-blue">
-            <div class="card-icon-custom"><i class="fas fa-money-bill-wave"></i></div>
-            <p class="card-amount-custom"><?= formatCurrency($total_revenue) ?></p>
-            <p class="card-label-custom">Total Revenue</p>
-            <p class="card-sub-custom">Patient Bills + OTC Sales</p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <a href="expenses.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-red">
-            <div class="card-icon-custom"><i class="fas fa-arrow-up"></i></div>
-            <p class="card-amount-custom"><?= formatCurrency($total_expenses) ?></p>
-            <p class="card-label-custom">Total Expenses</p>
-            <p class="card-sub-custom">From expenses (paid)</p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <a href="profit.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-green">
-            <div class="card-icon-custom"><i class="fas fa-chart-line"></i></div>
-            <p class="card-amount-custom"><?= formatCurrency($net_profit) ?></p>
-            <p class="card-label-custom">Net Profit</p>
-            <p class="card-sub-custom">Revenue - Expenses</p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <a href="bills.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card-custom card-blue">
-            <div class="card-icon-custom"><i class="fas fa-file-invoice"></i></div>
-            <p class="card-amount-custom"><?= formatCurrency($patient_bills_revenue) ?></p>
-            <p class="card-label-custom">Patient Bills</p>
-            <p class="card-sub-custom">Includes prescriptions</p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <a href="otc_sales.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-teal">
-            <div class="card-icon-custom"><i class="fas fa-cash-register"></i></div>
-            <p class="card-amount-custom"><?= formatCurrency($otc_revenue) ?></p>
-            <p class="card-label-custom">OTC Sales</p>
-            <p class="card-sub-custom">Over-the-counter sales</p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <a href="prescriptions.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-purple">
-            <div class="card-icon-custom"><i class="fas fa-prescription"></i></div>
-            <p class="card-amount-custom"><?= formatCurrency($prescription_revenue) ?></p>
-            <p class="card-label-custom">Prescriptions</p>
-            <p class="card-sub-custom">Already included in bills</p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
+    <!-- ================================================================
+         ✅ 8 CARDS — SAME AS cashiers.php
+         ================================================================ -->
+    <div class="stats-grid-8">
+
+        <!-- 1. Total Revenue - BLUE -->
+        <div class="stat-card-8 card-blue">
+            <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Total Revenue</p>
+                <p class="stat-number"><?= formatCurrency($total_revenue) ?></p>
+                <p class="stat-sub"><i class="fas fa-chart-line"></i> Payments + OTC</p>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </div>
+
+        <!-- 2. Patient Payments + Premium + Discount - GREEN -->
+        <div class="stat-card-8 card-green">
+            <div class="stat-icon"><i class="fas fa-hand-holding-usd"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Patient Payments</p>
+                <p class="stat-number"><?= formatCurrency($patient_bills_revenue) ?></p>
+                <p class="stat-sub">
+                    <i class="fas fa-receipt"></i> <?= number_format($payments_count) ?> payments
+                    <?php if ($total_premium > 0): ?>
+                        <span class="premium-badge"> • ⭐ Prem: <?= number_format($total_premium, 0) ?></span>
+                    <?php endif; ?>
+                    <?php if ($total_discount > 0): ?>
+                        <span class="discount-badge"> • 🏷️ Disc: <?= number_format($total_discount, 0) ?></span>
+                    <?php endif; ?>
+                </p>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </div>
+
+        <!-- 3. OTC Sales - CYAN -->
+        <div class="stat-card-8 card-cyan">
+            <div class="stat-icon"><i class="fas fa-cash-register"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">OTC Sales</p>
+                <p class="stat-number"><?= formatCurrency($otc_revenue) ?></p>
+                <p class="stat-sub"><i class="fas fa-shopping-cart"></i> <?= number_format($otc_count) ?> transactions</p>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </div>
+
+        <!-- 4. Prescriptions - PURPLE -->
+        <div class="stat-card-8 card-purple">
+            <div class="stat-icon"><i class="fas fa-prescription"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Prescriptions</p>
+                <p class="stat-number"><?= formatCurrency($prescription_revenue) ?></p>
+                <p class="stat-sub"><i class="fas fa-pills"></i> From payments</p>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </div>
+
+        <!-- 5. Clinical Services - GREEN -->
+        <div class="stat-card-8 card-green">
+            <div class="stat-icon"><i class="fas fa-stethoscope"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Clinical Services</p>
+                <p class="stat-number"><?= formatCurrency($clinical_revenue) ?></p>
+                <p class="stat-sub"><i class="fas fa-notes-medical"></i> Cons + Proc + Equip</p>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </div>
+
+        <!-- 6. Lab Tests - PURPLE -->
+        <div class="stat-card-8 card-purple">
+            <div class="stat-icon"><i class="fas fa-flask"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Lab Tests</p>
+                <p class="stat-number"><?= formatCurrency($lab_revenue) ?></p>
+                <p class="stat-sub"><i class="fas fa-microscope"></i> From payments</p>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </div>
+
+        <!-- 7. Total Expenses - RED -->
+        <div class="stat-card-8 card-red">
+            <div class="stat-icon"><i class="fas fa-receipt"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Total Expenses</p>
+                <p class="stat-number"><?= formatCurrency($total_expenses) ?></p>
+                <p class="stat-sub"><i class="fas fa-list"></i> <?= number_format($expenses_count) ?> records</p>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </div>
+
+        <!-- 8. Net Profit - GREEN/RED -->
+        <div class="stat-card-8 <?= $net_profit >= 0 ? 'card-green' : 'card-red' ?>">
+            <div class="stat-icon"><i class="fas <?= $net_profit >= 0 ? 'fa-chart-line' : 'fa-exclamation-triangle' ?>"></i></div>
+            <div class="stat-content">
+                <p class="stat-label"><?= $net_profit >= 0 ? '💰 Net Profit' : '📉 Net Loss' ?></p>
+                <p class="stat-number"><?= formatCurrency(abs($net_profit)) ?></p>
+                <p class="stat-sub"><i class="fas fa-calculator"></i> Revenue - Expenses</p>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </div>
+
     </div>
 
     <!-- BILLS SUMMARY CARDS -->
@@ -1274,7 +1582,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             }
                         ?>
                             <tr>
-                                <td style="font-family:monospace;font-size:0.7rem;font-weight:700;color:#059669;">
+                                <td style="font-size:0.7rem;font-weight:700;color:#059669;">
                                     <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
                                 </td>
                                 <td>
@@ -1285,11 +1593,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                         </div>
                                     <?php } ?>
                                 </td>
-                                <td style="font-weight:700;"><?= formatCurrency($bill['total_amount'] ?? 0) ?></td>
-                                <td style="color:#059669;font-weight:700;"><?= formatCurrency($bill['paid_amount'] ?? 0) ?></td>
+                                <td style="font-weight:700;"><?= formatCurrency(round_to_50($bill['total_amount'] ?? 0)) ?></td>
+                                <td style="color:#059669;font-weight:700;"><?= formatCurrency(round_to_50($bill['paid_amount'] ?? 0)) ?></td>
                                 <td>
                                     <?php if ($balance > 0) { ?>
-                                        <span style="color:#DC2626;font-weight:700;"><?= formatCurrency($balance) ?></span>
+                                        <span style="color:#DC2626;font-weight:700;"><?= formatCurrency(round_to_50($balance)) ?></span>
                                     <?php } else { ?>
                                         <span style="color:#059669;font-weight:700;"><?= formatCurrency(0) ?></span>
                                     <?php } ?>
@@ -1323,10 +1631,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                             <button type="button" 
                                                     class="bill-action-btn bill-btn-cancel" 
                                                     onclick="openCancelModal(<?= $bill['id'] ?>, '<?= addslashes($bill['bill_number'] ?? 'N/A') ?>', '<?= addslashes($bill['patient_name'] ?? 'N/A') ?>')">
-                                                <i class="fas fa-ban"></i> Cancel
-                                            </button>
-                                        <?php } elseif ($bill_status === 'paid') { ?>
-                                            <button class="bill-action-btn bill-btn-disabled" disabled>
                                                 <i class="fas fa-ban"></i> Cancel
                                             </button>
                                         <?php } else { ?>
@@ -1376,10 +1680,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <tbody>
                         <?php foreach ($recent_payments as $payment) { ?>
                             <tr>
-                                <td style="font-family:monospace;font-size:0.7rem;"><?= htmlspecialchars($payment['receipt_number'] ?? 'N/A') ?></td>
-                                <td style="font-family:monospace;font-size:0.7rem;"><?= htmlspecialchars($payment['bill_number'] ?? 'N/A') ?></td>
+                                <td style="font-size:0.7rem;"><?= htmlspecialchars($payment['receipt_number'] ?? 'N/A') ?></td>
+                                <td style="font-size:0.7rem;"><?= htmlspecialchars($payment['bill_number'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($payment['patient_name'] ?? 'N/A') ?></td>
-                                <td style="font-weight:700;color:#059669;"><?= formatCurrency($payment['amount'] ?? 0) ?></td>
+                                <td style="font-weight:700;color:#059669;"><?= formatCurrency(round_to_50($payment['amount'] ?? 0)) ?></td>
                                 <td>
                                     <span class="badge-custom badge-blue">
                                         <?= ucfirst($payment['payment_method'] ?? 'N/A') ?>
@@ -1513,10 +1817,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </div>
             
             <div style="display:flex;gap:10px;padding-top:14px;border-top:2px solid var(--page-border);">
-                <button type="submit" style="flex:1;background:#DC2626;color:white;border:none;padding:10px 24px;border-radius:8px;font-weight:700;font-size:0.9rem;cursor:pointer;">
+                <button type="submit" style="flex:1;background:#DC2626;color:white;border:none;padding:10px 24px;border-radius:8px;font-weight:700;font-size:0.9rem;cursor:pointer;font-family:var(--font-mono);">
                     <i class="fas fa-ban"></i> Yes, Cancel Bill
                 </button>
-                <button type="button" onclick="closeCancelModal()" style="background:transparent;color:var(--page-text-secondary);border:2px solid var(--page-border);padding:10px 24px;border-radius:8px;font-weight:700;font-size:0.9rem;cursor:pointer;">
+                <button type="button" onclick="closeCancelModal()" style="background:transparent;color:var(--page-text-secondary);border:2px solid var(--page-border);padding:10px 24px;border-radius:8px;font-weight:700;font-size:0.9rem;cursor:pointer;font-family:var(--font-mono);">
                     <i class="fas fa-times"></i> No, Go Back
                 </button>
             </div>
@@ -1528,7 +1832,27 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // DARK MODE BACKGROUND ENFORCEMENT
+    (function() {
+        var testIcon = document.createElement('i');
+        testIcon.className = 'fas fa-check';
+        testIcon.style.position = 'absolute';
+        testIcon.style.left = '-9999px';
+        testIcon.style.fontSize = '24px';
+        document.body.appendChild(testIcon);
+        
+        setTimeout(function() {
+            var computed = window.getComputedStyle(testIcon, ':before');
+            var content = computed.getPropertyValue('content');
+            
+            if (content === 'none' || content === '""' || content === 'normal') {
+                console.warn('%c⚠️ Font Awesome HAIPO!', 'color:#F59E0B;font-weight:bold;font-size:14px;');
+            } else {
+                console.log('%c✅ Font Awesome imepakiwa vizuri', 'color:#10B981;font-weight:bold;');
+            }
+            document.body.removeChild(testIcon);
+        }, 1000);
+    })();
+
     function enforceDarkModeBackground() {
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var body = document.body;
@@ -1558,7 +1882,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     });
     observer.observe(document.documentElement, { attributes: true });
 
-    // CANCEL BILL MODAL
     function openCancelModal(billId, billNumber, patientName) {
         var modal = document.getElementById('cancelBillModal');
         if (!modal) return;
@@ -1592,11 +1915,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         if (e.key === 'Escape') closeCancelModal();
     });
 
-    console.log('%c💰 Braick - View Cashier', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#34D399;');
-    console.log('%c🌙 FULL DARK MODE inafanya kazi', 'font-size:13px; color:#7C3AED;');
-    console.log('%c💰 Recent Bills with View/Edit/Cancel buttons', 'font-size:13px; color:#34D399;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
+    console.log('%c💰 Braick - View Cashier V13 (8 CARDS MATCHING CASHIERS)', 'font-family: monospace; font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ 8 CARDS — SAME AS cashiers.php', 'font-family: monospace; font-size:13px; color:#10B981; font-weight:bold;');
+    console.log('%c✅ Patient Payments shows Premium & Discount badges', 'font-family: monospace; font-size:13px; color:#F59E0B; font-weight:bold;');
+    console.log('%c✅ ALL AMOUNTS ROUNDED TO NEAREST 50', 'font-family: monospace; font-size:13px; color:#F59E0B; font-weight:bold;');
+    console.log('%c✅ FONT: JetBrains Mono', 'font-family: monospace; font-size:13px; color:#34D399;');
 </script>
 
 </body>

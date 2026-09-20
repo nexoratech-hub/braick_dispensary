@@ -1,12 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/components/audit_sidebar.php
-// AUDIT - SIDEBAR (V5 - TOGGLE BUTTON FIXED)
-// ✅ Rangi: #0B4EA8 → #0A3D7A (Deep Blue)
-// ✅ Hover: GREEN (#0AA84F)
-// ✅ Size: 270px
-// ✅ Branch selector: IMEONDOLWA (iko kwenye header pekee)
-// ✅ FIXED: Toggle button INAFANYA KAZI (mobile + desktop)
+// AUDIT - SIDEBAR (V10 - OTHER SERVICES = "All" BADGE)
+// ✅ Uses AUDIT links (/pages/audit/...) — NOT admin links
+// ✅ Revenue = Payments (received_at) + OTC (created_at) — TODAY ONLY
+// ✅ Other Services badge = "All" (static, haibadiliki)
+// ✅ Partial payments zinaonekana
+// ✅ Inareset 00:00 kila siku
+// ✅ Auto-refresh kila dakika 1
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -44,6 +45,17 @@ $user_is_online = $_SESSION['is_online'] ?? 1;
 $selected_branch_id = $_GET['branch'] ?? 'all';
 
 // ================================================================
+// SESSION-BASED DATE RESET
+// ================================================================
+$today_date = date('Y-m-d');
+if (!isset($_SESSION['audit_sidebar_last_date']) || $_SESSION['audit_sidebar_last_date'] !== $today_date) {
+    $_SESSION['audit_sidebar_last_date'] = $today_date;
+    unset($_SESSION['audit_cached_revenue_today']);
+    unset($_SESSION['audit_cached_bills_today']);
+    unset($_SESSION['audit_cached_otc_today']);
+}
+
+// ================================================================
 // DATABASE CONNECTION
 // ================================================================
 if (!isset($db) || $db === null) {
@@ -66,10 +78,28 @@ if ($selected_branch_id !== 'all') {
     $branch_params[] = (int)$selected_branch_id;
 }
 
+$branch_cond_p = "";
+$branch_params_p = [];
+if ($selected_branch_id !== 'all') {
+    $branch_cond_p = " AND p.branch_id = ?";
+    $branch_params_p[] = (int)$selected_branch_id;
+}
+
+$branch_cond_o = "";
+$branch_params_o = [];
+if ($selected_branch_id !== 'all') {
+    $branch_cond_o = " AND o.branch_id = ?";
+    $branch_params_o[] = (int)$selected_branch_id;
+}
+
 // ================================================================
 // GET BADGE DATA
 // ================================================================
 $total_revenue_today = 0;
+$bills_today = 0;
+$otc_today = 0;
+$payments_today_count = 0;
+$otc_today_count = 0;
 $total_patients = 0;
 $today_patients = 0;
 $total_employees = 0;
@@ -79,14 +109,55 @@ $low_stock_count = 0;
 $total_audit_logs = 0;
 $today_audit_logs = 0;
 $total_branches = 0;
+$total_lab_tests = 0;
 
 if ($db !== null) {
-    try {
-        $sql = "SELECT COALESCE(SUM(total_amount), 0) as total FROM bills WHERE status = 'paid' AND DATE(updated_at) = CURDATE()" . $branch_cond;
-        $stmt = $db->prepare($sql); $stmt->execute($branch_params);
-        $total_revenue_today = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-    } catch (Exception $e) {}
     
+    // ============================================================
+    // REVENUE: PAYMENTS (LEO TU) — payments.received_at
+    // ============================================================
+    try {
+        $sql = "SELECT COALESCE(SUM(p.amount), 0) as total, COUNT(*) as count 
+                FROM payments p
+                WHERE p.bill_id IS NOT NULL
+                AND DATE(p.received_at) = CURDATE()
+                $branch_cond_p";
+        $stmt = $db->prepare($sql);
+        $stmt->execute($branch_params_p);
+        $data = $stmt->fetch(PDO::FETCH_ASSOC);
+        $bills_today = (float)($data['total'] ?? 0);
+        $payments_today_count = (int)($data['count'] ?? 0);
+    } catch (Exception $e) {
+        error_log("Payments today error: " . $e->getMessage());
+        $bills_today = 0;
+        $payments_today_count = 0;
+    }
+    
+    // ============================================================
+    // OTC REVENUE (LEO TU) — otc_sales.created_at
+    // ============================================================
+    try {
+        $sql = "SELECT COALESCE(SUM(o.total_amount), 0) as total, COUNT(*) as count 
+                FROM otc_sales o
+                WHERE o.payment_status = 'paid' 
+                AND DATE(o.created_at) = CURDATE()
+                $branch_cond_o";
+        $stmt = $db->prepare($sql);
+        $stmt->execute($branch_params_o);
+        $data = $stmt->fetch(PDO::FETCH_ASSOC);
+        $otc_today = (float)($data['total'] ?? 0);
+        $otc_today_count = (int)($data['count'] ?? 0);
+    } catch (Exception $e) {
+        error_log("OTC today error: " . $e->getMessage());
+        $otc_today = 0;
+        $otc_today_count = 0;
+    }
+    
+    $total_revenue_today = $bills_today + $otc_today;
+    
+    // ============================================================
+    // PATIENTS
+    // ============================================================
     try {
         $sql = "SELECT COUNT(*) as count FROM patients WHERE 1=1" . $branch_cond;
         $stmt = $db->prepare($sql); $stmt->execute($branch_params);
@@ -99,6 +170,9 @@ if ($db !== null) {
         $today_patients = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     } catch (Exception $e) {}
     
+    // ============================================================
+    // EMPLOYEES
+    // ============================================================
     try {
         $sql = "SELECT COUNT(*) as count FROM users WHERE role NOT IN ('admin', 'audit') AND status = 'active'" . $branch_cond;
         $stmt = $db->prepare($sql); $stmt->execute($branch_params);
@@ -111,6 +185,9 @@ if ($db !== null) {
         $total_doctors = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     } catch (Exception $e) {}
     
+    // ============================================================
+    // INVENTORY
+    // ============================================================
     try {
         $sql = "SELECT COUNT(*) as count FROM medications_inventory WHERE status = 'active'" . $branch_cond;
         $stmt = $db->prepare($sql); $stmt->execute($branch_params);
@@ -123,6 +200,24 @@ if ($db !== null) {
         $low_stock_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     } catch (Exception $e) {}
     
+    // ============================================================
+    // LAB TESTS
+    // ============================================================
+    try {
+        $sql = "SELECT COUNT(*) as count FROM lab_tests WHERE status != 'cancelled'" . $branch_cond;
+        $stmt = $db->prepare($sql); $stmt->execute($branch_params);
+        $total_lab_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    } catch (Exception $e) {
+        try {
+            $sql = "SELECT COUNT(*) as count FROM bill_items WHERE item_type = 'lab_test'" . $branch_cond;
+            $stmt = $db->prepare($sql); $stmt->execute($branch_params);
+            $total_lab_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e2) {}
+    }
+    
+    // ============================================================
+    // AUDIT LOGS
+    // ============================================================
     try {
         $sql = "SELECT COUNT(*) as count FROM activity_logs WHERE 1=1" . $branch_cond;
         $stmt = $db->prepare($sql); $stmt->execute($branch_params);
@@ -135,6 +230,9 @@ if ($db !== null) {
         $today_audit_logs = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     } catch (Exception $e) {}
     
+    // ============================================================
+    // BRANCHES
+    // ============================================================
     try {
         $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
         $total_branches = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
@@ -160,7 +258,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 
 <style>
 /* ================================================================
-   AUDIT SIDEBAR STYLES
+   AUDIT SIDEBAR STYLES (V10)
    ================================================================ */
 
 .sidebar {
@@ -351,6 +449,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     border: 1.5px solid rgba(255,255,255,0.25);
     box-shadow: 0 2px 6px rgba(11, 94, 215, 0.4);
     line-height: 1.4;
+    font-family: 'JetBrains Mono', 'Courier New', monospace !important;
+    font-variant-numeric: tabular-nums;
 }
 
 .sidebar-link .badge.badge-new {
@@ -380,6 +480,26 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     font-size: 0.58rem;
     padding: 2px 8px;
     font-weight: 700;
+}
+
+.sidebar-link .badge.badge-lab {
+    background: linear-gradient(135deg, #7C3AED, #6D28D9) !important;
+    box-shadow: 0 2px 8px rgba(124, 58, 237, 0.6);
+    font-size: 0.58rem;
+    padding: 2px 8px;
+    font-weight: 700;
+}
+
+/* ✅ OTHER SERVICES BADGE = "All" (STATIC) */
+.sidebar-link .badge.badge-services {
+    background: linear-gradient(135deg, #0891B2, #0E7490) !important;
+    box-shadow: 0 2px 8px rgba(8, 145, 178, 0.6);
+    font-size: 0.58rem;
+    padding: 2px 8px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-family: 'Inter', sans-serif !important;
 }
 
 .sidebar-link:hover .badge {
@@ -491,15 +611,13 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 
 #sidebarOverlay.active { display: block !important; }
 
-/* ================================================================
-   ✅ TOGGLE BUTTON - FIXED V5 (INAFANYA KAZI 100%)
-   ================================================================ */
+/* TOGGLE BUTTON */
 #sidebarToggle {
     display: none;
     position: fixed !important;
     top: 16px !important;
     left: 16px !important;
-    z-index: 2147483647 !important;  /* ✅ MAX Z-INDEX */
+    z-index: 2147483647 !important;
     width: 48px !important;
     height: 48px !important;
     border-radius: 12px;
@@ -538,22 +656,18 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 #sidebarToggle i {
     font-family: "Font Awesome 6 Free" !important;
     font-weight: 900 !important;
-    pointer-events: none !important;  /* ✅ Icon haiwezi kuzuia click */
+    pointer-events: none !important;
     font-size: 1.3rem;
     line-height: 1;
     color: white;
 }
 
 @media (max-width: 1024px) {
-    #sidebarToggle { 
-        display: flex !important; 
-    }
+    #sidebarToggle { display: flex !important; }
 }
 
 @media (min-width: 1025px) {
-    #sidebarToggle { 
-        display: none !important; 
-    }
+    #sidebarToggle { display: none !important; }
 }
 
 /* RESPONSIVE */
@@ -649,7 +763,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 
 <div id="sidebarOverlay"></div>
 
-<!-- ✅ TOGGLE BUTTON with inline onclick for guaranteed function -->
 <button id="sidebarToggle" type="button" aria-label="Toggle Sidebar" title="Toggle Sidebar" onclick="window.__toggleAuditSidebar && window.__toggleAuditSidebar(event)">
     <i class="fas fa-bars"></i>
 </button>
@@ -692,13 +805,15 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         
         <div class="nav-label"><span class="label-icon">📊</span> Reports</div>
         
-        <a href="/dispensary_system/frontend/pages/audit/revenue.php?branch=<?= $selected_branch_id ?>" 
+        <!-- REVENUE BADGE: LEO TU -->
+        <a href="/dispensary_system/frontend/pages/audit/revenue.php?branch=<?= $selected_branch_id ?>&quick=today" 
            class="sidebar-link <?= isActive('revenue.php') || isAuditPage(['revenue_details.php']) ? 'active' : '' ?>">
             <i class="fas fa-chart-line"></i>
             <span class="link-text">Revenue</span>
             <span class="badge badge-revenue" id="badgeRevenue">TSh <?= number_format($total_revenue_today, 0) ?></span>
         </a>
         
+        <!-- INVENTORY -->
         <a href="/dispensary_system/frontend/pages/audit/inventory.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('inventory.php') || isAuditPage(['inventory_details.php']) ? 'active' : '' ?>">
             <i class="fas fa-pills"></i>
@@ -709,6 +824,23 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <?php endif; ?>
         </a>
         
+        <!-- LAB TESTS -->
+        <a href="/dispensary_system/frontend/pages/audit/lab_tests.php?branch=<?= $selected_branch_id ?>" 
+           class="sidebar-link <?= isActive('lab_tests.php') || isAuditPage(['lab_test_details.php', 'view_lab_test.php', 'edit_lab_test.php']) ? 'active' : '' ?>">
+            <i class="fas fa-flask"></i>
+            <span class="link-text">Lab Tests</span>
+            <span class="badge badge-lab" id="badgeLabTests"><?= number_format($total_lab_tests) ?></span>
+        </a>
+        
+        <!-- ✅ OTHER SERVICES - BADGE "All" (STATIC) -->
+        <a href="/dispensary_system/frontend/pages/audit/other_services.php?branch=<?= $selected_branch_id ?>" 
+           class="sidebar-link <?= isActive('other_services.php') || isAuditPage(['other_service_details.php', 'view_service.php', 'edit_service.php', 'consultations.php', 'procedures.php', 'equipment_services.php']) ? 'active' : '' ?>">
+            <i class="fas fa-concierge-bell"></i>
+            <span class="link-text">Other Services</span>
+            <span class="badge badge-services" id="badgeOtherServices">All</span>
+        </a>
+        
+        <!-- PATIENTS -->
         <a href="/dispensary_system/frontend/pages/audit/patients.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('patients.php') || isAuditPage(['patient_details.php']) ? 'active' : '' ?>">
             <i class="fas fa-user-injured"></i>
@@ -770,14 +902,11 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 
 <script>
 // ================================================================
-// ✅ SIDEBAR TOGGLE V5 - GUARANTEED TO WORK
+// SIDEBAR TOGGLE V5 - GUARANTEED TO WORK
 // ================================================================
 (function() {
     'use strict';
     
-    // ============================================================
-    // ✅ GLOBAL FUNCTION - Defined IMMEDIATELY
-    // ============================================================
     window.__toggleAuditSidebar = function(e) {
         if (e) {
             e.preventDefault();
@@ -788,15 +917,11 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         var overlay = document.getElementById('sidebarOverlay');
         var toggle = document.getElementById('sidebarToggle');
         
-        if (!sidebar) {
-            console.warn('⚠️ Sidebar not found');
-            return false;
-        }
+        if (!sidebar) return false;
         
         var isOpen = sidebar.classList.contains('open');
         
         if (isOpen) {
-            // CLOSE
             sidebar.classList.remove('open');
             if (overlay) {
                 overlay.classList.remove('active');
@@ -809,9 +934,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                 var icon = toggle.querySelector('i');
                 if (icon) icon.className = 'fas fa-bars';
             }
-            console.log('%c❌ Audit Sidebar CLOSED', 'color:#DC2626; font-weight:bold;');
         } else {
-            // OPEN
             sidebar.classList.add('open');
             if (overlay) {
                 overlay.classList.add('active');
@@ -824,13 +947,11 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                 var icon = toggle.querySelector('i');
                 if (icon) icon.className = 'fas fa-times';
             }
-            console.log('%c✅ Audit Sidebar OPENED', 'color:#10B981; font-weight:bold;');
         }
         
         return false;
     };
     
-    // Aliases
     window.toggleSidebar = window.__toggleAuditSidebar;
     window.openSidebar = function() {
         var sidebar = document.getElementById('sidebar');
@@ -845,54 +966,41 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }
     };
     
-    // ============================================================
-    // ✅ ATTACH DIRECT LISTENERS
-    // ============================================================
     function attachListeners() {
         var sidebar = document.getElementById('sidebar');
         var overlay = document.getElementById('sidebarOverlay');
         var toggle = document.getElementById('sidebarToggle');
         
-        if (!sidebar || !toggle) {
-            console.warn('⚠️ Missing elements, retrying...');
-            return false;
-        }
+        if (!sidebar || !toggle) return false;
         
-        // ✅ Clone and replace to remove old listeners
         var freshToggle = toggle.cloneNode(true);
         freshToggle.onclick = function(e) {
             e.preventDefault();
             e.stopPropagation();
-            console.log('🖱️ Click via onclick');
             window.__toggleAuditSidebar(e);
             return false;
         };
         toggle.parentNode.replaceChild(freshToggle, toggle);
         toggle = freshToggle;
         
-        // ✅ addEventListener as backup
         toggle.addEventListener('click', function(e) {
             e.preventDefault();
             e.stopPropagation();
-            console.log('🖱️ Click via addEventListener');
             if (this.__busy) return;
             this.__busy = true;
             setTimeout(() => { toggle.__busy = false; }, 250);
             window.__toggleAuditSidebar(e);
         }, false);
         
-        // ✅ touchend for mobile
         toggle.addEventListener('touchend', function(e) {
             e.preventDefault();
             e.stopPropagation();
-            console.log('👆 Touch end');
             if (this.__busy) return;
             this.__busy = true;
             setTimeout(() => { toggle.__busy = false; }, 250);
             window.__toggleAuditSidebar(e);
         }, { passive: false });
         
-        // ✅ OVERLAY click
         if (overlay) {
             overlay.onclick = function(e) {
                 if (e.target === overlay) {
@@ -901,20 +1009,15 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             };
         }
         
-        console.log('%c✅ Audit Sidebar listeners attached', 'color:#10B981; font-weight:bold;');
         return true;
     }
     
-    // ============================================================
-    // ✅ EVENT DELEGATION (in case button is replaced)
-    // ============================================================
     document.addEventListener('click', function(e) {
         var target = e.target;
         while (target && target !== document) {
             if (target.id === 'sidebarToggle') {
                 e.preventDefault();
                 e.stopPropagation();
-                console.log('🖱️ Click via delegation');
                 window.__toggleAuditSidebar(e);
                 return false;
             }
@@ -922,9 +1025,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }
     }, true);
     
-    // ============================================================
-    // ✅ ESC KEY
-    // ============================================================
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             var sidebar = document.getElementById('sidebar');
@@ -934,9 +1034,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }
     });
     
-    // ============================================================
-    // ✅ RESIZE
-    // ============================================================
     var resizeTimer;
     window.addEventListener('resize', function() {
         clearTimeout(resizeTimer);
@@ -950,9 +1047,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }, 200);
     });
     
-    // ============================================================
-    // ✅ CLOSE ON LINK CLICK
-    // ============================================================
     function attachLinkHandlers() {
         document.querySelectorAll('.sidebar-link').forEach(function(link) {
             link.addEventListener('click', function() {
@@ -963,18 +1057,12 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         });
     }
     
-    // ============================================================
-    // ✅ INIT
-    // ============================================================
     function init() {
-        console.log('%c🔧 Initializing Audit Sidebar...', 'color:#F59E0B;');
         var ok = attachListeners();
         attachLinkHandlers();
         
         if (!ok) {
             setTimeout(init, 200);
-        } else {
-            console.log('%c✅ Audit Sidebar V5 READY', 'color:#10B981; font-weight:bold; font-size:14px;');
         }
     }
     
@@ -984,22 +1072,92 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         init();
     }
     
-    // Multiple retries
     window.addEventListener('load', init);
     setTimeout(init, 500);
     setTimeout(init, 1500);
     
     window.initAuditSidebar = init;
-    
 })();
 
 // ================================================================
-// LOG
+// AUTO REFRESH SIDEBAR BADGE KILA DAKIKA 1
+// (Other Services badge = "All" - STATIC, haibadiliki)
 // ================================================================
-console.log('%c🔍 Audit Sidebar V5 - TOGGLE FIXED', 'font-size:16px; font-weight:bold; color:#0B4EA8;');
-console.log('%c✅ Toggle button INAFANYA KAZI (mobile + desktop)', 'font-size:13px; color:#10B981; font-weight:bold;');
-console.log('%c✅ Rangi: #0B4EA8 → #0A3D7A (Deep Blue)', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Hover: GREEN (#0AA84F)', 'font-size:13px; color:#0AA84F;');
-console.log('%c✅ Branch selector: Iko kwenye HEADER pekee', 'font-size:13px; color:#F59E0B;');
-console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= $user_role ?>)', 'font-size:13px; color:#3B82F6;');
+(function() {
+    var lastDate = new Date().toDateString();
+    var currentBranch = '<?= htmlspecialchars($selected_branch_id, ENT_QUOTES) ?>';
+    
+    function refreshBadges() {
+        var currentDate = new Date().toDateString();
+        if (currentDate !== lastDate) {
+            lastDate = currentDate;
+            window.location.reload();
+            return;
+        }
+        
+        var url = '/dispensary_system/frontend/api/get_sidebar_badges.php?branch=' + encodeURIComponent(currentBranch) + '&role=audit&_t=' + Date.now();
+        
+        fetch(url, { 
+            cache: 'no-store',
+            headers: { 
+                'X-Requested-With': 'XMLHttpRequest',
+                'Cache-Control': 'no-cache'
+            }
+        })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    var revBadge = document.getElementById('badgeRevenue');
+                    if (revBadge && data.total_revenue_today !== undefined) {
+                        revBadge.textContent = 'TSh ' + Number(data.total_revenue_today).toLocaleString();
+                    }
+                    
+                    var invBadge = document.getElementById('badgeInventory');
+                    if (invBadge && data.total_inventory_items !== undefined) {
+                        invBadge.textContent = data.total_inventory_items;
+                    }
+                    
+                    var labBadge = document.getElementById('badgeLabTests');
+                    if (labBadge && data.total_lab_tests !== undefined) {
+                        labBadge.textContent = Number(data.total_lab_tests).toLocaleString();
+                    }
+                    
+                    // ✅ OTHER SERVICES BADGE = "All" - STATIC
+                    // (HAIBADILIKI - imeachwa kama "All" daima)
+                    
+                    var patBadge = document.getElementById('badgePatients');
+                    if (patBadge && data.total_patients !== undefined) {
+                        patBadge.textContent = data.total_patients;
+                    }
+                    
+                    var empBadge = document.getElementById('badgeEmployees');
+                    if (empBadge && data.total_employees !== undefined) {
+                        empBadge.textContent = data.total_employees;
+                    }
+                    
+                    var logBadge = document.getElementById('badgeAuditLogs');
+                    if (logBadge && data.total_audit_logs !== undefined) {
+                        logBadge.textContent = data.total_audit_logs;
+                    }
+                }
+            })
+            .catch(function(err) {});
+    }
+    
+    setInterval(refreshBadges, 60000);
+    setTimeout(refreshBadges, 5000);
+    
+    console.log('%c🔄 Audit sidebar badge auto-refresh active', 'color:#10B981;font-size:12px;');
+    console.log('%c📌 Other Services badge ni STATIC "All" - haibadiliki', 'color:#0891B2;font-size:11px;');
+})();
+
+console.log('%c🔍 Audit Sidebar V10 - OTHER SERVICES = "All"', 'font-size:16px; font-weight:bold; color:#0B4EA8;');
+console.log('%c✅ Links: /pages/audit/... (SIO /pages/admin/audit/...)', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c✅ Revenue = Payments (received_at) + OTC (created_at) — LEO TU', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c✅ Other Services Badge = "All" (STATIC)', 'font-size:13px; color:#0891B2; font-weight:bold;');
+console.log('%c✅ Partial payments zinaonekana', 'font-size:13px; color:#F59E0B; font-weight:bold;');
+console.log('%c✅ Inareset 00:00 kila siku', 'font-size:13px; color:#7C3AED; font-weight:bold;');
+console.log('%c💰 Payments Today: TSh <?= number_format($bills_today, 0) ?> (<?= $payments_today_count ?> payments)', 'font-size:13px; color:#0B5ED7;');
+console.log('%c💊 OTC Today: TSh <?= number_format($otc_today, 0) ?> (<?= $otc_today_count ?> sales)', 'font-size:13px; color:#0891B2;');
+console.log('%c📊 TOTAL TODAY: TSh <?= number_format($total_revenue_today, 0) ?>', 'font-size:14px; color:#10B981; font-weight:bold;');
 </script>

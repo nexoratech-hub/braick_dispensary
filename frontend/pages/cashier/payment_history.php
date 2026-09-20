@@ -1,9 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/payment_history.php
-// CASHIER - PAYMENT HISTORY 
-// SHOWS: OTC Sales AND Regular Bills (with visit_id)
-// FIXED: Excludes bills without visit_id from regular bills
+// CASHIER - PAYMENT HISTORY (V2 - NO AMOUNT, NO VIEW)
+// ✅ REMOVED: View button (both OTC & Regular)
+// ✅ REMOVED: Amount column from table
+// ✅ REMOVED: Total Amount card from quick stats
+// ✅ REMOVED: Amount from PDF
+// ✅ KEPT: Print button, Receipt/Sale #, Bill #, Patient, Method, Date
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -160,9 +163,7 @@ if (!empty($search)) {
 try {
     $all_payments = [];
     
-    // ================================================================
-    // 1. GET OTC SALES (paid)
-    // ================================================================
+    // 1. GET OTC SALES
     $otc_params = [$user_branch_id];
     $otc_date_condition = str_replace('received_at', 'o.updated_at', $date_condition);
     $otc_search_condition = "";
@@ -212,9 +213,7 @@ try {
         $all_payments[] = $payment;
     }
     
-    // ================================================================
-    // 2. GET REGULAR BILL PAYMENTS (with visit_id)
-    // ================================================================
+    // 2. GET REGULAR BILL PAYMENTS
     $regular_params = [$user_branch_id];
     $regular_date_condition = str_replace('received_at', 'p.received_at', $date_condition);
     $regular_search_condition = "";
@@ -269,9 +268,7 @@ try {
         $all_payments[] = $payment;
     }
     
-    // ================================================================
     // SORT BY RECEIVED DATE (newest first)
-    // ================================================================
     usort($all_payments, function($a, $b) {
         return strtotime($b['received_at']) - strtotime($a['received_at']);
     });
@@ -1368,17 +1365,12 @@ include_once '../../components/cashier_sidebar.php';
         </form>
     </div>
 
-    <!-- QUICK STATS - 3 CARDS -->
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5" style="max-width:1200px;margin:0 auto;">
+    <!-- QUICK STATS - 2 CARDS (BILA Total Amount) -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5" style="max-width:1200px;margin:0 auto;">
         <div class="stat-card">
             <div class="stat-icon">💰</div>
             <p class="stat-number green"><?= $total_payments ?></p>
             <p class="stat-label">Total Payments</p>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon">💳</div>
-            <p class="stat-number green"><?= $currency ?> <?= number_format($total_amount, 0) ?></p>
-            <p class="stat-label">Total Amount</p>
         </div>
         <div class="stat-card">
             <div class="stat-icon">📅</div>
@@ -1398,7 +1390,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- PAYMENTS TABLE -->
+    <!-- PAYMENTS TABLE (BILA Amount Column, BILA View Button) -->
     <div class="card" style="max-width:1200px;margin:0 auto;">
         <div class="card-header">
             <h3 class="card-title">
@@ -1421,7 +1413,6 @@ include_once '../../components/cashier_sidebar.php';
                         <th>Receipt / Sale #</th>
                         <th>Bill / Sale #</th>
                         <th>Patient / Customer</th>
-                        <th>Amount</th>
                         <th>Method</th>
                         <th>Received By</th>
                         <th>Date</th>
@@ -1447,7 +1438,7 @@ include_once '../../components/cashier_sidebar.php';
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <span class="font-mono text-xs font-bold <?= $is_otc ? 'text-purple-600' : 'text-blue-600' ?>" style="color:<?= $is_otc ? '#6D28D9' : '#0B5ED7' ?>;">
+                                    <span class="font-mono text-xs font-bold" style="color:<?= $is_otc ? '#6D28D9' : '#0B5ED7' ?>;">
                                         <?= htmlspecialchars($payment['receipt_number'] ?? 'N/A') ?>
                                     </span>
                                 </td>
@@ -1472,11 +1463,6 @@ include_once '../../components/cashier_sidebar.php';
                                     </div>
                                 </td>
                                 <td>
-                                    <span class="font-semibold <?= $is_otc ? 'text-purple-600' : 'text-green-600' ?>" style="color:<?= $is_otc ? '#6D28D9' : '#059669' ?>;">
-                                        <?= $currency ?> <?= number_format($payment['amount'] ?? 0, 0) ?>
-                                    </span>
-                                </td>
-                                <td>
                                     <?php 
                                         $method = $payment['payment_method'] ?? 'cash';
                                         $methodClass = $method === 'cash' ? 'cash' : ($method === 'm-pesa' ? 'm-pesa' : ($method === 'card' ? 'card' : 'bank'));
@@ -1498,16 +1484,10 @@ include_once '../../components/cashier_sidebar.php';
                                 <td>
                                     <div class="flex flex-wrap gap-1">
                                         <?php if ($is_otc): ?>
-                                            <a href="receipt.php?sale_id=<?= $payment['payment_id'] ?>" class="btn btn-otc btn-sm" title="View OTC Receipt">
-                                                <i class="fas fa-receipt"></i>
-                                            </a>
-                                            <a href="print_receipt.php?type=otc&sale_id=<?= $payment['payment_id'] ?>&print=1" class="btn btn-primary btn-sm" title="Print OTC Receipt" target="_blank">
+                                            <a href="print_receipt.php?type=otc&sale_id=<?= $payment['payment_id'] ?>&print=1" class="btn btn-otc btn-sm" title="Print OTC Receipt" target="_blank">
                                                 <i class="fas fa-print"></i>
                                             </a>
                                         <?php else: ?>
-                                            <a href="view_bill.php?id=<?= $payment['bill_id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
-                                                <i class="fas fa-eye"></i>
-                                            </a>
                                             <a href="print_receipt.php?bill_id=<?= $payment['bill_id'] ?>&payment_id=<?= $payment['payment_id'] ?>&print=1" class="btn btn-primary btn-sm" title="Print Receipt" target="_blank">
                                                 <i class="fas fa-print"></i>
                                             </a>
@@ -1518,7 +1498,7 @@ include_once '../../components/cashier_sidebar.php';
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="10" class="text-center py-8 text-gray-400">
+                            <td colspan="9" class="text-center py-8 text-gray-400">
                                 <i class="fas fa-money-bill-wave text-3xl block mb-2 text-gray-300"></i>
                                 <p class="text-lg">No payments found</p>
                                 <p class="text-sm">
@@ -1603,7 +1583,7 @@ include_once '../../components/cashier_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // SIDEBAR TOGGLE
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
@@ -1716,19 +1696,17 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // PDF GENERATION
+    // PDF GENERATION (BILA AMOUNT)
     // ================================================================
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
         var content = document.getElementById('pdfContent');
         
         var adminPhones = '<?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?>';
-        var currency = '<?= $currency ?>';
         var branchName = '<?= htmlspecialchars($user_branch_name) ?>';
         var totalPayments = <?= $total_payments ?>;
         var filterLabel = '<?= $filter ?>';
         var filterDisplay = filterLabel === 'all' ? 'All Time' : filterLabel;
-        var totalAmount = <?= $total_amount ?>;
         
         var paymentsHtml = '';
         var counter = 1;
@@ -1742,8 +1720,7 @@ include_once '../../components/cashier_sidebar.php';
                     <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;font-weight:600;<?= $is_otc ? 'color:#6D28D9;' : 'color:#0B5ED7;' ?>"><?= htmlspecialchars($payment['receipt_number'] ?? 'N/A') ?></td>
                     <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= htmlspecialchars($payment['bill_number'] ?? 'N/A') ?></td>
                     <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><strong><?= htmlspecialchars($payment['patient_name'] ?? 'Unknown') ?></strong></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:right;font-weight:600;font-size:13px;<?= $is_otc ? 'color:#6D28D9;' : 'color:#059669;' ?>">${currency} <?= number_format($payment['amount'] ?? 0, 0) ?></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;text-transform:capitalize;"><?= strtoupper(str_replace('_', ' ', $payment['payment_method'] ?? 'Cash')) ?></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;text-transform:uppercase;"><?= strtoupper(str_replace('_', ' ', $payment['payment_method'] ?? 'Cash')) ?></td>
                     <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= htmlspecialchars($payment['received_by_name'] ?? 'N/A') ?></td>
                     <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= isset($payment['received_at']) ? date('d/m/Y h:i A', strtotime($payment['received_at'])) : 'N/A' ?></td>
                 </tr>
@@ -1752,7 +1729,7 @@ include_once '../../components/cashier_sidebar.php';
         <?php endforeach; ?>
         
         if (!paymentsHtml) {
-            paymentsHtml = `<tr><td colspan="9" style="text-align:center;padding:20px;font-size:14px;color:#64748B;">No payments found</td></tr>`;
+            paymentsHtml = `<tr><td colspan="8" style="text-align:center;padding:20px;font-size:14px;color:#64748B;">No payments found</td></tr>`;
         }
         
         var html = `
@@ -1773,17 +1750,13 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
             </div>
             
-            <!-- SUMMARY -->
+            <!-- SUMMARY (BILA TOTAL AMOUNT) -->
             <div style="margin-bottom:8px;">
                 <div class="pdf-section-title"><i class="fas fa-chart-bar"></i> Summary</div>
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:4px 0;">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:4px 0;">
                     <div style="background:#E8F0FE;padding:8px 12px;border-radius:8px;text-align:center;border:1px solid #6EA8FE;">
                         <div style="font-size:20px;font-weight:700;color:#0B5ED7;">${totalPayments}</div>
                         <div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:600;">📋 Total Payments</div>
-                    </div>
-                    <div style="background:#D1FAE5;padding:8px 12px;border-radius:8px;text-align:center;border:1px solid #059669;">
-                        <div style="font-size:20px;font-weight:700;color:#059669;">${currency} <?= number_format($total_amount, 0) ?></div>
-                        <div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:600;">💰 Total Amount</div>
                     </div>
                     <div style="background:#FEF3C7;padding:8px 12px;border-radius:8px;text-align:center;border:1px solid #D97706;">
                         <div style="font-size:20px;font-weight:700;color:#D97706;">${filterDisplay}</div>
@@ -1792,7 +1765,7 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
             </div>
             
-            <!-- PAYMENTS TABLE -->
+            <!-- PAYMENTS TABLE (BILA AMOUNT) -->
             <div style="margin-bottom:8px;">
                 <div class="pdf-section-title"><i class="fas fa-list"></i> Payments (${totalPayments})</div>
                 <div class="pdf-table-wrap">
@@ -1804,7 +1777,6 @@ include_once '../../components/cashier_sidebar.php';
                                 <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Receipt #</th>
                                 <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Bill #</th>
                                 <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Patient / Customer</th>
-                                <th style="background:#059669;color:white;padding:4px 8px;text-align:right;font-size:11px;">Amount</th>
                                 <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Method</th>
                                 <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Received By</th>
                                 <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Date</th>
@@ -1902,12 +1874,10 @@ include_once '../../components/cashier_sidebar.php';
     `;
     document.head.appendChild(style);
 
-    console.log('%c💳 Braick - Payment History', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c✅ Shows BOTH OTC Sales AND Regular Bills (with visit_id)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ OTC from otc_sales table (payment_status=paid)', 'font-size:13px; color:#8B5CF6;');
-    console.log('%c✅ Regular from payments + bills (visit_id IS NOT NULL)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💳 Braick - Payment History V2', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ REMOVED: View button, Amount column, Total Amount card', 'font-size:13px; color:#DC2626; font-weight:bold;');
+    console.log('%c✅ KEPT: Print button, Receipt/Sale #, Bill #, Patient, Method, Date', 'font-size:13px; color:#34D399;');
     console.log('%c📋 Total Payments: <?= $total_payments ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c💰 Total Amount: <?= $currency ?> <?= number_format($total_amount, 0) ?>', 'font-size:13px; color:#34D399;');
     console.log('%c📞 Admin Contacts: <?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?>', 'font-size:13px; color:#D97706;');
 </script>
 

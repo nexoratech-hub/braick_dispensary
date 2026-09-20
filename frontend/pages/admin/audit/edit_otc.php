@@ -1,11 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/edit_otc.php
-// ADMIN - EDIT OTC SALE (BLUE THEME) - V2
+// ADMIN - EDIT OTC SALE (BLUE THEME) - V4
 // ✅ Admin only
 // ✅ Edit sale + items
-// ✅ NO DELETE buttons (edit only)
-// ✅ Medications dropdown (all medicines)
+// ✅ 0 Quantity medications EXCLUDED
+// ✅ Row with 0 qty HIDDEN
+// ✅ CUSTOM DROPDOWN with SEARCH FILTER (built-in)
 // ✅ Add items
 // ✅ Live money format
 // ✅ Scroll buttons <>
@@ -75,12 +76,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     try {
         $db->beginTransaction();
         
-        // GET OLD DATA for audit log
         $stmt = $db->prepare("SELECT sale_number, total_amount, payment_status FROM otc_sales WHERE id = ?");
         $stmt->execute([$sale_id]);
         $old_sale = $stmt->fetch(PDO::FETCH_ASSOC);
         
-        // SALE HEADER DATA
         $customer_name = trim($_POST['customer_name'] ?? 'Walk-in Customer');
         $customer_phone = trim($_POST['customer_phone'] ?? '');
         $payment_method = $_POST['payment_method'] ?? 'cash';
@@ -90,7 +89,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $premium_note = trim($_POST['premium_note'] ?? '');
         $notes = trim($_POST['notes'] ?? '');
         
-        // ITEMS
         $item_ids = $_POST['item_id'] ?? [];
         $item_inventory_ids = $_POST['item_inventory_id'] ?? [];
         $item_names = $_POST['item_name'] ?? [];
@@ -119,7 +117,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $new_subtotal += $total_price;
             
             if ($item_id) {
-                // UPDATE
                 $sql = "UPDATE otc_sale_items SET 
                     inventory_id = ?, item_name = ?, medicine_name = ?, 
                     quantity = ?, unit_price = ?, total_price = ?, 
@@ -131,7 +128,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $item_id, $sale_id
                 ]);
             } else {
-                // INSERT
                 $sql = "INSERT INTO otc_sale_items 
                     (sale_id, inventory_id, item_name, medicine_name, quantity, 
                      unit_price, total_price, dosage, frequency, route, 
@@ -145,7 +141,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
         
-        // ✅ DELETE only items removed by user (via X button) - it's ok for editing
         $deleted_items = $_POST['deleted_items'] ?? '';
         if (!empty($deleted_items)) {
             $del_ids = array_filter(array_map('intval', explode(',', $deleted_items)));
@@ -156,11 +151,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
         
-        // CALCULATE NEW TOTAL
         $new_total = $new_subtotal - $discount_amount + $premium_amount;
         if ($new_total < 0) $new_total = 0;
         
-        // UPDATE SALE
         $sql = "UPDATE otc_sales SET 
             customer_name = ?, customer_phone = ?, payment_method = ?, 
             payment_status = ?, subtotal = ?, discount_amount = ?, 
@@ -174,7 +167,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $notes, $sale_id
         ]);
         
-        // AUDIT LOG
         try {
             $changes = [];
             if ($old_sale) {
@@ -238,7 +230,7 @@ if (!$sale) {
 }
 
 // ================================================================
-// GET SALE ITEMS
+// GET SALE ITEMS (SKIP ITEMS WITH 0 QTY)
 // ================================================================
 $sale_items = [];
 try {
@@ -247,6 +239,7 @@ try {
         COALESCE(osi.item_name, osi.medicine_name, '') as display_name
     FROM otc_sale_items osi
     WHERE osi.sale_id = ?
+    AND osi.quantity > 0
     ORDER BY osi.id ASC";
     
     $stmt = $db->prepare($sql);
@@ -257,7 +250,7 @@ try {
 }
 
 // ================================================================
-// GET MEDICATIONS (all)
+// GET MEDICATIONS (IN STOCK ONLY - NO 0 QUANTITY)
 // ================================================================
 $medications_list = [];
 try {
@@ -271,6 +264,7 @@ try {
     FROM medications_inventory 
     WHERE status = 'active'
     GROUP BY medication_name, category, unit
+    HAVING total_quantity > 0
     ORDER BY medication_name ASC
     LIMIT 1000";
     $stmt = $db->query($sql);
@@ -325,6 +319,7 @@ include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
     --cyan-bg: #CFFAFE;
     --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
     --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+    --shadow-lg: 0 10px 25px rgba(0,0,0,0.15);
 }
 [data-theme="dark"] {
     --bg-body: #0F172A;
@@ -385,9 +380,9 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .items-table-card .card-header .title i { color: #93C5FD; font-size: 1rem; }
 .items-table-card .card-header .header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
-.scroll-buttons { display: inline-flex; gap: 4px; background: rgba(255,255,255,0.15); border-radius: 10px; padding: 4px; border: 1px solid rgba(255,255,255,0.25); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.scroll-buttons { display: inline-flex; gap: 4px; background: rgba(255,255,255,0.15); border-radius: 10px; padding: 4px; border: 1px solid rgba(255,255,255,0.25); }
 .btn-scroll { width: 36px; height: 36px; border-radius: 8px; background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.15); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 0.9rem; font-weight: 800; transition: all 0.25s ease; }
-.btn-scroll:hover { background: rgba(255,255,255,0.35); transform: scale(1.1); border-color: rgba(255,255,255,0.5); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+.btn-scroll:hover { background: rgba(255,255,255,0.35); transform: scale(1.1); }
 .btn-scroll:active { transform: scale(0.92); }
 
 .btn-add-item { background: linear-gradient(135deg, #10B981, #059669); color: white; border: 2px solid rgba(255,255,255,0.3); padding: 8px 16px; border-radius: 10px; font-weight: 800; font-size: 0.75rem; cursor: pointer; transition: all 0.3s ease; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4); text-transform: uppercase; letter-spacing: 0.03em; }
@@ -405,19 +400,313 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .items-table tbody tr.item-row { transition: all 0.3s ease; }
 .items-table tbody tr.item-row.removing { opacity: 0.3; text-decoration: line-through; }
 
-.items-table input[type="text"], .items-table input[type="number"], .items-table select { width: 100%; padding: 6px 9px; border-radius: 6px; border: 2px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.78rem; font-weight: 600; outline: none; transition: all 0.2s ease; font-family: var(--font-primary); }
-.items-table input:focus, .items-table select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15); }
+.items-table input[type="text"], .items-table input[type="number"] { width: 100%; padding: 6px 9px; border-radius: 6px; border: 2px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.78rem; font-weight: 600; outline: none; transition: all 0.2s ease; font-family: var(--font-primary); }
+.items-table input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15); }
 
-.items-table .item-medication-select { min-width: 220px; background: var(--primary-bg) !important; color: var(--primary) !important; font-weight: 700 !important; border-color: var(--primary-light) !important; }
-.items-table .item-medication-select:focus { background: var(--bg-card) !important; color: var(--text-primary) !important; }
 .items-table .item-qty-input { width: 70px; text-align: center; }
 .items-table .item-price-input { width: 120px; text-align: right; font-family: var(--font-mono) !important; font-weight: 700; letter-spacing: 0.02em; }
 .items-table .item-total-cell { font-family: var(--font-mono); font-weight: 800; color: var(--primary); text-align: right; font-size: 0.82rem; letter-spacing: -0.02em; white-space: nowrap; }
 
-/* ✅ REMOVE ITEM BUTTON (only for editing current session) */
 .btn-remove-item { width: 30px; height: 30px; border-radius: 8px; background: rgba(220, 38, 38, 0.12); color: #DC2626; border: 2px solid transparent; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 0.78rem; transition: all 0.2s ease; }
 .btn-remove-item:hover { background: #DC2626; color: white; transform: scale(1.1); box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4); }
 
+/* ================================================================
+   ✅ CUSTOM MEDICATION DROPDOWN WITH SEARCH
+   ================================================================ */
+.med-dropdown-wrapper {
+    position: relative;
+    min-width: 240px;
+}
+
+.med-dropdown-trigger {
+    width: 100%;
+    padding: 7px 30px 7px 10px;
+    border-radius: 7px;
+    border: 2px solid var(--primary-light);
+    background: var(--primary-bg);
+    color: var(--primary);
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    transition: all 0.2s ease;
+    font-family: var(--font-primary);
+    min-height: 34px;
+}
+
+.med-dropdown-trigger:hover {
+    background: var(--bg-card);
+    border-color: var(--primary);
+}
+
+.med-dropdown-trigger .mdt-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.med-dropdown-trigger .mdt-text.placeholder {
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-style: italic;
+}
+
+.med-dropdown-trigger .mdt-caret {
+    font-size: 0.7rem;
+    color: var(--primary);
+    transition: transform 0.2s ease;
+    flex-shrink: 0;
+}
+
+.med-dropdown-wrapper.open .med-dropdown-trigger .mdt-caret {
+    transform: rotate(180deg);
+}
+
+/* ================================================================
+   ✅ DROPDOWN PANEL
+   ================================================================ */
+.med-dropdown-panel {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: var(--bg-card);
+    border: 2px solid var(--primary);
+    border-radius: 10px;
+    box-shadow: 0 15px 40px rgba(0, 0, 0, 0.25);
+    z-index: 9999;
+    display: none;
+    min-width: 380px;
+    max-width: 500px;
+}
+
+.med-dropdown-wrapper.open .med-dropdown-panel {
+    display: block;
+}
+
+/* ✅ SEARCH BAR INSIDE DROPDOWN */
+.med-dropdown-search {
+    padding: 8px;
+    border-bottom: 2px solid var(--border-color);
+    background: var(--primary-bg);
+    border-radius: 8px 8px 0 0;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+
+.med-dropdown-search .mds-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.med-dropdown-search .mds-icon {
+    position: absolute;
+    left: 10px;
+    color: var(--primary);
+    font-size: 0.75rem;
+    pointer-events: none;
+}
+
+.med-dropdown-search input {
+    width: 100%;
+    padding: 8px 32px 8px 32px;
+    border-radius: 7px;
+    border: 2px solid var(--primary-light);
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-size: 0.78rem;
+    font-weight: 600;
+    outline: none;
+    transition: all 0.2s ease;
+}
+
+.med-dropdown-search input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+}
+
+.med-dropdown-search input::placeholder {
+    color: var(--text-secondary);
+    font-weight: 400;
+}
+
+.med-dropdown-search .mds-clear {
+    position: absolute;
+    right: 6px;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.65rem;
+    transition: all 0.2s ease;
+}
+
+.med-dropdown-search .mds-clear:hover {
+    background: var(--danger-bg);
+    color: var(--danger);
+}
+
+.med-dropdown-search .mds-clear.visible {
+    display: flex;
+}
+
+/* ✅ RESULTS LIST */
+.med-dropdown-results {
+    max-height: 280px;
+    overflow-y: auto;
+    padding: 4px;
+}
+
+.med-dropdown-results::-webkit-scrollbar { width: 6px; }
+.med-dropdown-results::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 10px; }
+.med-dropdown-results::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+
+.med-category-label {
+    padding: 6px 10px 4px;
+    font-size: 0.6rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--primary);
+    background: var(--bg-body);
+    border-radius: 5px;
+    margin: 4px 4px 2px;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.med-option {
+    padding: 8px 10px;
+    border-radius: 7px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.15s ease;
+    margin-bottom: 2px;
+    border: 2px solid transparent;
+}
+
+.med-option:hover {
+    background: var(--primary-bg);
+    border-color: var(--primary-light);
+    transform: translateX(2px);
+}
+
+.med-option.selected {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary-dark);
+}
+
+.med-option.selected .mo-name,
+.med-option.selected .mo-stock,
+.med-option.selected .mo-price {
+    color: white;
+}
+
+.med-option.selected .mo-stock {
+    opacity: 0.9;
+}
+
+.med-option .mo-left {
+    flex: 1;
+    min-width: 0;
+}
+
+.med-option .mo-name {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.med-option .mo-stock {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+}
+
+.med-option .mo-price {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 800;
+    color: var(--success);
+    white-space: nowrap;
+    background: var(--success-bg);
+    padding: 3px 8px;
+    border-radius: 6px;
+    flex-shrink: 0;
+}
+
+.med-option.selected .mo-price {
+    background: rgba(255,255,255,0.25);
+}
+
+.med-option mark {
+    background: #FEF08A;
+    color: #854D0E;
+    padding: 1px 2px;
+    border-radius: 3px;
+    font-weight: 900;
+}
+
+.med-no-results {
+    padding: 30px 20px;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.med-no-results i {
+    display: block;
+    font-size: 2rem;
+    opacity: 0.3;
+    margin-bottom: 8px;
+    color: var(--primary);
+}
+
+.med-count-info {
+    padding: 6px 12px;
+    text-align: center;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    background: var(--bg-body);
+    border-top: 1px solid var(--border-color);
+    border-radius: 0 0 8px 8px;
+}
+
+/* Selected medication display */
+.med-selected-display {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--primary);
+    font-family: var(--font-mono);
+    letter-spacing: -0.02em;
+}
+
+/* Scroll hint */
 .scroll-hint { padding: 8px 16px; background: var(--primary-bg); border-top: 1px solid var(--border-color); text-align: center; font-size: 0.68rem; color: var(--text-secondary); font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
 .scroll-hint i { color: var(--primary); font-size: 0.75rem; }
 .scroll-hint kbd { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 4px; padding: 1px 6px; font-family: var(--font-mono); font-size: 0.65rem; color: var(--primary); font-weight: 800; }
@@ -433,7 +722,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .total-row .value { font-family: var(--font-mono); font-weight: 800; font-size: 0.9rem; color: var(--text-primary); letter-spacing: -0.02em; }
 .total-row .value.blue { color: var(--primary); }
 .total-row .value.red { color: var(--danger); }
-.total-row .value.green { color: var(--success); }
 .total-row .value.purple { color: var(--purple); }
 .total-row.grand { background: linear-gradient(135deg, var(--primary-bg), var(--primary-bg)); border-top: 3px solid var(--primary); border-bottom: 3px solid var(--primary); padding: 16px 20px; margin: 6px 0; }
 .total-row.grand .label { color: var(--primary); font-size: 1rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -463,6 +751,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     .action-bar { padding: 12px 14px; flex-direction: column; align-items: stretch; }
     .btn { padding: 8px 14px; font-size: 0.75rem; }
     .btn-scroll { width: 32px; height: 32px; font-size: 0.8rem; }
+    .med-dropdown-panel { min-width: 320px; }
 }
     </style>
 </head>
@@ -637,7 +926,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                     <thead>
                         <tr>
                             <th style="width:40px;">#</th>
-                            <th style="width:230px;">💊 Medication (Change)</th>
+                            <th style="width:260px;">💊 Medication</th>
                             <th style="width:80px;text-align:center;">Qty</th>
                             <th style="width:120px;text-align:right;">Unit Price</th>
                             <th style="width:110px;text-align:right;">Total</th>
@@ -662,28 +951,38 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                     <td>
                                         <input type="hidden" name="item_id[]" value="<?= $item['id'] ?>">
                                         <input type="hidden" name="item_name[]" class="item-name-hidden" value="<?= htmlspecialchars($current_med_name) ?>">
-                                        <select name="item_inventory_id[]" class="item-medication-select" onchange="onMedicationChange(this)">
-                                            <option value="">-- Select Medication --</option>
-                                            <?php foreach ($medications_list as $med): 
-                                                $med_id = (int)$med['id'];
-                                                $med_name = $med['medication_name'] ?? '';
-                                                $med_price = (float)($med['selling_price'] ?? 0);
-                                                $med_qty = (int)($med['total_quantity'] ?? 0);
-                                                $med_unit = $med['unit'] ?? '';
-                                                $is_selected = ($current_med_id == $med_id) || ($current_med_id == 0 && $current_med_name === $med_name);
-                                            ?>
-                                                <option value="<?= $med_id ?>" 
-                                                        data-name="<?= htmlspecialchars($med_name) ?>"
-                                                        data-price="<?= $med_price ?>"
-                                                        data-unit="<?= htmlspecialchars($med_unit) ?>"
-                                                        data-stock="<?= $med_qty ?>"
-                                                        <?= $is_selected ? 'selected' : '' ?>>
-                                                    <?= htmlspecialchars($med_name) ?> 
-                                                    (<?= number_format($med_qty) ?> <?= htmlspecialchars($med_unit) ?>) 
-                                                    - <?= $currency ?> <?= number_format($med_price, 0) ?>
-                                                </option>
-                                            <?php endforeach; ?>
-                                        </select>
+                                        <input type="hidden" name="item_inventory_id[]" class="item-inventory-hidden" value="<?= $current_med_id ?>">
+                                        
+                                        <!-- ✅ CUSTOM DROPDOWN -->
+                                        <div class="med-dropdown-wrapper" data-row-id="<?= $item['id'] ?>">
+                                            <button type="button" class="med-dropdown-trigger" onclick="toggleMedDropdown(this)">
+                                                <span class="mdt-text <?= empty($current_med_name) ? 'placeholder' : '' ?>">
+                                                    <?= !empty($current_med_name) ? htmlspecialchars($current_med_name) : 'Select Medication...' ?>
+                                                </span>
+                                                <i class="fas fa-chevron-down mdt-caret"></i>
+                                            </button>
+                                            
+                                            <div class="med-dropdown-panel">
+                                                <div class="med-dropdown-search">
+                                                    <div class="mds-wrapper">
+                                                        <i class="fas fa-search mds-icon"></i>
+                                                        <input type="text" 
+                                                               class="mds-input" 
+                                                               placeholder="Search medication..."
+                                                               autocomplete="off"
+                                                               oninput="filterMedOptions(this)"
+                                                               onkeydown="handleMedSearchKeydown(event, this)">
+                                                        <button type="button" class="mds-clear" onclick="clearMedOptionSearch(this)">
+                                                            <i class="fas fa-times"></i>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="med-dropdown-results" data-current-id="<?= $current_med_id ?>">
+                                                    <!-- Options rendered by JS -->
+                                                </div>
+                                                <div class="med-count-info">Loading...</div>
+                                            </div>
+                                        </div>
                                     </td>
                                     <td>
                                         <input type="number" name="item_quantity[]" class="item-qty-input" 
@@ -723,11 +1022,11 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             
             <div class="scroll-hint">
                 <i class="fas fa-arrows-alt-h"></i>
-                Tumia <kbd>‹</kbd> <kbd>›</kbd> buttons kuslide kushoto/kulia 
+                Use <kbd>‹</kbd> <kbd>›</kbd> buttons to scroll left/right
                 <span style="opacity:0.5;">•</span>
                 Keyboard: <kbd>Alt</kbd> + <kbd>←</kbd> / <kbd>→</kbd>
                 <span style="opacity:0.5;">•</span>
-                <strong>💊 Badilisha dawa kwenye dropdown</strong>
+                <strong>💊 Click dropdown to search medications</strong>
             </div>
         </div>
 
@@ -795,33 +1094,52 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 
 </main>
 
+<!-- ================================================================ -->
+<!-- MEDICATIONS DATA (JSON) -->
+<!-- ================================================================ -->
+<script id="medicationsDataScript" type="application/json">
+<?= json_encode($medications_list, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>
+</script>
+
+<!-- ================================================================ -->
 <!-- TEMPLATE FOR NEW ITEM -->
+<!-- ================================================================ -->
 <template id="newItemTemplate">
     <tr class="item-row">
         <td style="text-align:center;font-weight:700;color:var(--text-secondary);" class="row-num">-</td>
         <td>
             <input type="hidden" name="item_id[]" value="">
             <input type="hidden" name="item_name[]" class="item-name-hidden" value="">
-            <select name="item_inventory_id[]" class="item-medication-select" onchange="onMedicationChange(this)">
-                <option value="">-- Select Medication --</option>
-                <?php foreach ($medications_list as $med): 
-                    $med_id = (int)$med['id'];
-                    $med_name = $med['medication_name'] ?? '';
-                    $med_price = (float)($med['selling_price'] ?? 0);
-                    $med_qty = (int)($med['total_quantity'] ?? 0);
-                    $med_unit = $med['unit'] ?? '';
-                ?>
-                    <option value="<?= $med_id ?>" 
-                            data-name="<?= htmlspecialchars($med_name) ?>"
-                            data-price="<?= $med_price ?>"
-                            data-unit="<?= htmlspecialchars($med_unit) ?>"
-                            data-stock="<?= $med_qty ?>">
-                        <?= htmlspecialchars($med_name) ?> 
-                        (<?= number_format($med_qty) ?> <?= htmlspecialchars($med_unit) ?>) 
-                        - <?= $currency ?> <?= number_format($med_price, 0) ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
+            <input type="hidden" name="item_inventory_id[]" class="item-inventory-hidden" value="">
+            
+            <!-- ✅ CUSTOM DROPDOWN -->
+            <div class="med-dropdown-wrapper">
+                <button type="button" class="med-dropdown-trigger" onclick="toggleMedDropdown(this)">
+                    <span class="mdt-text placeholder">Select Medication...</span>
+                    <i class="fas fa-chevron-down mdt-caret"></i>
+                </button>
+                
+                <div class="med-dropdown-panel">
+                    <div class="med-dropdown-search">
+                        <div class="mds-wrapper">
+                            <i class="fas fa-search mds-icon"></i>
+                            <input type="text" 
+                                   class="mds-input" 
+                                   placeholder="Search medication..."
+                                   autocomplete="off"
+                                   oninput="filterMedOptions(this)"
+                                   onkeydown="handleMedSearchKeydown(event, this)">
+                            <button type="button" class="mds-clear" onclick="clearMedOptionSearch(this)">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="med-dropdown-results" data-current-id="0">
+                        <!-- Rendered by JS -->
+                    </div>
+                    <div class="med-count-info">Loading...</div>
+                </div>
+            </div>
         </td>
         <td><input type="number" name="item_quantity[]" class="item-qty-input" value="1" min="1" oninput="recalculate()"></td>
         <td><input type="text" name="item_price[]" class="item-price-input money-input" value="0" inputmode="numeric" autocomplete="off"></td>
@@ -842,36 +1160,244 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 var currency = '<?= $currency ?>';
 var deletedItems = [];
 
-function onMedicationChange(select) {
-    var row = select.closest('tr.item-row');
-    if (!row) return;
+var MEDICATIONS_DATA = [];
+try {
+    var medScript = document.getElementById('medicationsDataScript');
+    if (medScript) {
+        MEDICATIONS_DATA = JSON.parse(medScript.textContent);
+    }
+} catch (e) { console.error('Medications parse error:', e); }
+
+console.log('💊 Medications loaded:', MEDICATIONS_DATA.length);
+
+// ================================================================
+// ✅ CUSTOM DROPDOWN - TOGGLE
+// ================================================================
+function toggleMedDropdown(btn) {
+    var wrapper = btn.closest('.med-dropdown-wrapper');
+    var isOpen = wrapper.classList.contains('open');
     
-    var selectedOption = select.options[select.selectedIndex];
-    if (!selectedOption || !selectedOption.value) return;
+    // Close all other dropdowns
+    document.querySelectorAll('.med-dropdown-wrapper.open').forEach(function(w) {
+        if (w !== wrapper) w.classList.remove('open');
+    });
     
-    var medName = selectedOption.getAttribute('data-name') || '';
-    var medPrice = parseFloat(selectedOption.getAttribute('data-price')) || 0;
-    var medStock = parseInt(selectedOption.getAttribute('data-stock')) || 0;
+    if (isOpen) {
+        wrapper.classList.remove('open');
+    } else {
+        wrapper.classList.add('open');
+        
+        // Render options for this dropdown
+        var resultsContainer = wrapper.querySelector('.med-dropdown-results');
+        var currentId = resultsContainer.getAttribute('data-current-id') || 0;
+        renderMedOptions(resultsContainer, '', currentId);
+        
+        // Focus search input
+        setTimeout(function() {
+            var searchInput = wrapper.querySelector('.mds-input');
+            if (searchInput) {
+                searchInput.value = '';
+                searchInput.focus();
+            }
+        }, 50);
+    }
+}
+
+// Close dropdowns on outside click
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.med-dropdown-wrapper')) {
+        document.querySelectorAll('.med-dropdown-wrapper.open').forEach(function(w) {
+            w.classList.remove('open');
+        });
+    }
+});
+
+// Close on Escape
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        document.querySelectorAll('.med-dropdown-wrapper.open').forEach(function(w) {
+            w.classList.remove('open');
+        });
+    }
+});
+
+// ================================================================
+// ✅ RENDER MEDICATION OPTIONS
+// ================================================================
+function renderMedOptions(container, query, currentId) {
+    var filtered = MEDICATIONS_DATA.filter(function(med) {
+        if (!query) return true;
+        var name = (med.medication_name || '').toLowerCase();
+        var cat = (med.category || '').toLowerCase();
+        var q = query.toLowerCase();
+        return name.indexOf(q) !== -1 || cat.indexOf(q) !== -1;
+    });
     
+    // Group by category
+    var grouped = {};
+    filtered.forEach(function(med) {
+        var cat = med.category || 'Other';
+        if (!grouped[cat]) grouped[cat] = [];
+        grouped[cat].push(med);
+    });
+    
+    if (filtered.length === 0) {
+        container.innerHTML = '<div class="med-no-results">' +
+            '<i class="fas fa-search"></i>' +
+            '<div>No medications found</div>' +
+            '</div>';
+        updateMedCountInfo(container, 0);
+        return;
+    }
+    
+    var html = '';
+    Object.keys(grouped).sort().forEach(function(cat) {
+        html += '<div class="med-category-label">📁 ' + escapeHtml(cat) + ' (' + grouped[cat].length + ')</div>';
+        grouped[cat].forEach(function(med) {
+            var medId = med.id;
+            var medName = med.medication_name || '';
+            var medPrice = parseFloat(med.selling_price || 0);
+            var medQty = parseInt(med.total_quantity || 0);
+            var medUnit = med.unit || '';
+            var isSelected = (currentId && currentId == medId);
+            
+            var displayName = query ? highlightMatch(medName, query) : escapeHtml(medName);
+            
+            html += '<div class="med-option ' + (isSelected ? 'selected' : '') + '" ' +
+                    'onclick="selectMedOption(this)" ' +
+                    'data-id="' + medId + '" ' +
+                    'data-name="' + escapeHtml(medName) + '" ' +
+                    'data-price="' + medPrice + '" ' +
+                    'data-unit="' + escapeHtml(medUnit) + '" ' +
+                    'data-stock="' + medQty + '">' +
+                '<div class="mo-left">' +
+                    '<div class="mo-name">' + displayName + '</div>' +
+                    '<div class="mo-stock">' +
+                        '<i class="fas fa-boxes"></i> ' + medQty.toLocaleString() + ' ' + escapeHtml(medUnit) + ' in stock' +
+                    '</div>' +
+                '</div>' +
+                '<div class="mo-price">' + currency + ' ' + medPrice.toLocaleString('en-US', {maximumFractionDigits: 0}) + '</div>' +
+            '</div>';
+        });
+    });
+    
+    container.innerHTML = html;
+    updateMedCountInfo(container, filtered.length);
+}
+
+function updateMedCountInfo(container, count) {
+    var wrapper = container.closest('.med-dropdown-panel');
+    if (!wrapper) return;
+    var infoEl = wrapper.querySelector('.med-count-info');
+    if (infoEl) {
+        if (count === 0) {
+            infoEl.textContent = '❌ No medications found';
+        } else {
+            infoEl.textContent = '✅ ' + count + ' medication' + (count !== 1 ? 's' : '') + ' available';
+        }
+    }
+}
+
+// ================================================================
+// ✅ FILTER OPTIONS AS USER TYPES
+// ================================================================
+function filterMedOptions(input) {
+    var wrapper = input.closest('.med-dropdown-wrapper');
+    var resultsContainer = wrapper.querySelector('.med-dropdown-results');
+    var clearBtn = wrapper.querySelector('.mds-clear');
+    var query = input.value.trim();
+    var currentId = resultsContainer.getAttribute('data-current-id') || 0;
+    
+    if (query.length > 0) {
+        clearBtn.classList.add('visible');
+    } else {
+        clearBtn.classList.remove('visible');
+    }
+    
+    renderMedOptions(resultsContainer, query, currentId);
+}
+
+function clearMedOptionSearch(btn) {
+    var wrapper = btn.closest('.med-dropdown-wrapper');
+    var input = wrapper.querySelector('.mds-input');
+    var resultsContainer = wrapper.querySelector('.med-dropdown-results');
+    var currentId = resultsContainer.getAttribute('data-current-id') || 0;
+    
+    input.value = '';
+    btn.classList.remove('visible');
+    renderMedOptions(resultsContainer, '', currentId);
+    input.focus();
+}
+
+function handleMedSearchKeydown(e, input) {
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        input.closest('.med-dropdown-wrapper').classList.remove('open');
+    }
+}
+
+// ================================================================
+// ✅ SELECT MEDICATION
+// ================================================================
+function selectMedOption(optionEl) {
+    var medId = optionEl.getAttribute('data-id');
+    var medName = optionEl.getAttribute('data-name');
+    var medPrice = parseFloat(optionEl.getAttribute('data-price')) || 0;
+    
+    var wrapper = optionEl.closest('.med-dropdown-wrapper');
+    var row = wrapper.closest('tr.item-row');
+    var resultsContainer = wrapper.querySelector('.med-dropdown-results');
+    
+    // Update hidden inputs
     var nameHidden = row.querySelector('.item-name-hidden');
+    var invHidden = row.querySelector('.item-inventory-hidden');
     if (nameHidden) nameHidden.value = medName;
+    if (invHidden) invHidden.value = medId;
     
+    // Update price
     var priceInput = row.querySelector('.item-price-input');
     if (priceInput) priceInput.value = formatMoney(medPrice);
     
-    if (medStock <= 0) {
-        select.style.borderColor = '#DC2626';
-        select.style.background = '#FEE2E2';
-        select.style.color = '#DC2626';
-    } else {
-        select.style.borderColor = '';
-        select.style.background = '';
-        select.style.color = '';
+    // Update trigger text
+    var triggerText = wrapper.querySelector('.mdt-text');
+    if (triggerText) {
+        triggerText.textContent = medName;
+        triggerText.classList.remove('placeholder');
     }
+    
+    // Mark as selected
+    resultsContainer.setAttribute('data-current-id', medId);
+    
+    // Close dropdown
+    wrapper.classList.remove('open');
     
     recalculate();
 }
 
+// ================================================================
+// HIGHLIGHT MATCH
+// ================================================================
+function highlightMatch(text, query) {
+    if (!text || !query) return escapeHtml(text);
+    var escaped = escapeHtml(text);
+    var regex = new RegExp('(' + escapeRegex(query) + ')', 'gi');
+    return escaped.replace(regex, '<mark>$1</mark>');
+}
+
+function escapeRegex(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    var div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// ================================================================
+// MONEY FORMAT
+// ================================================================
 function formatMoney(value) {
     var cleaned = String(value).replace(/[^0-9.]/g, '');
     var parts = cleaned.split('.');
@@ -933,6 +1459,9 @@ function initMoneyInputs() {
     });
 }
 
+// ================================================================
+// SCROLL
+// ================================================================
 function scrollItems(direction) {
     var wrapper = document.getElementById('itemsWrapper');
     if (!wrapper) return;
@@ -955,6 +1484,9 @@ function scrollItems(direction) {
     });
 }
 
+// ================================================================
+// RECALCULATE
+// ================================================================
 function recalculate() {
     var rows = document.querySelectorAll('#itemsTableBody tr.item-row');
     var subtotal = 0;
@@ -1003,6 +1535,9 @@ function recalculate() {
     });
 }
 
+// ================================================================
+// ADD NEW ITEM
+// ================================================================
 function addNewItem() {
     var tbody = document.getElementById('itemsTableBody');
     var template = document.getElementById('newItemTemplate');
@@ -1016,8 +1551,11 @@ function addNewItem() {
         attachMoneyFormat(input);
     });
     
-    var medSelect = newRow.querySelector('.item-medication-select');
-    if (medSelect) medSelect.focus();
+    // Render empty state for new dropdown
+    var resultsContainer = newRow.querySelector('.med-dropdown-results');
+    if (resultsContainer) {
+        renderMedOptions(resultsContainer, '', 0);
+    }
     
     setTimeout(function() {
         newRow.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'start' });
@@ -1026,14 +1564,14 @@ function addNewItem() {
     recalculate();
 }
 
+// ================================================================
+// REMOVE ITEM
+// ================================================================
 function removeItem(btn) {
     var row = btn.closest('tr.item-row');
     var itemId = row.querySelector('input[name="item_id[]"]').value;
-    var medSelect = row.querySelector('.item-medication-select');
-    var itemName = 'this item';
-    if (medSelect && medSelect.selectedIndex > 0) {
-        itemName = medSelect.options[medSelect.selectedIndex].getAttribute('data-name') || itemName;
-    }
+    var nameHidden = row.querySelector('.item-name-hidden');
+    var itemName = nameHidden ? nameHidden.value : 'this item';
     
     if (itemId) {
         if (!confirm('Are you sure you want to remove "' + itemName + '" from this sale?')) return;
@@ -1042,7 +1580,7 @@ function removeItem(btn) {
         document.getElementById('deletedItems').value = deletedItems.join(',');
         row.classList.add('removing');
         
-        row.querySelectorAll('input, select').forEach(function(el) {
+        row.querySelectorAll('input, select, button').forEach(function(el) {
             el.disabled = true;
         });
         
@@ -1061,19 +1599,25 @@ function removeItem(btn) {
     }
 }
 
+// ================================================================
+// KEYBOARD SHORTCUTS
+// ================================================================
 document.addEventListener('keydown', function(e) {
     if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); scrollItems('left'); }
     if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); scrollItems('right'); }
 });
 
+// ================================================================
+// FORM SUBMIT
+// ================================================================
 document.getElementById('editOtcForm').addEventListener('submit', function(e) {
     var visibleItems = document.querySelectorAll('#itemsTableBody tr.item-row:not(.removing)');
     var hasValidItem = false;
     
     visibleItems.forEach(function(row) {
         if (row.style.display === 'none') return;
-        var medSelect = row.querySelector('.item-medication-select');
-        if (medSelect && medSelect.value) hasValidItem = true;
+        var nameHidden = row.querySelector('.item-name-hidden');
+        if (nameHidden && nameHidden.value) hasValidItem = true;
     });
     
     if (!hasValidItem) {
@@ -1088,17 +1632,26 @@ document.getElementById('editOtcForm').addEventListener('submit', function(e) {
     }
 });
 
+// ================================================================
+// INIT
+// ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     initMoneyInputs();
     recalculate();
+    
+    // Pre-render all dropdown results
+    document.querySelectorAll('.med-dropdown-results').forEach(function(container) {
+        var currentId = container.getAttribute('data-current-id') || 0;
+        renderMedOptions(container, '', currentId);
+    });
 });
 
-console.log('%c✏️ Edit OTC Sale V2 - BLUE THEME', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Edit only - NO delete buttons', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✏️ Edit OTC Sale V4 - BLUE THEME', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ 0 Quantity EXCLUDED', 'font-size:13px; color:#DC2626; font-weight:bold;');
+console.log('%c✅ Custom dropdown with SEARCH built-in', 'font-size:13px; color:#059669; font-weight:bold;');
 console.log('%c✅ Sale: <?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
 console.log('%c✅ Items: <?= count($sale_items) ?>', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Medications available: <?= count($medications_list) ?>', 'font-size:13px; color:#7C3AED;');
-console.log('%c✅ Scroll buttons: < >', 'font-size:13px; color:#3B82F6;');
+console.log('%c✅ Medications in stock: <?= count($medications_list) ?>', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>

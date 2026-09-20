@@ -1,8 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/patients.php
-// RECEPTION - PATIENT MANAGEMENT (V2 - 3 BUTTONS)
-// ✅ ADDED: Edit button kwa kila patient
+// RECEPTION - PATIENT MANAGEMENT (V3 - FIXED DOCTOR STATUS)
+// ✅ Doctor status inatokana na VISIT ACTIVE (sio patients.assigned_doctor_id)
+// ✅ Auto-sync: patients.assigned_doctor_id inasafishwa kama hakuna visit active
 // ✅ 3 Buttons: View, Edit, Assign/Change
 // ✅ AUTO-FILTER: Search & Filter work automatically
 // ✅ Scroll < > buttons on table header
@@ -51,6 +52,7 @@ $success = isset($_GET['success']) ? $_GET['success'] : '';
 try {
     $db = Database::getInstance()->getConnection();
     
+    // ✅ Ensure registered_by columns exist
     try {
         $stmt = $db->query("SHOW COLUMNS FROM patients LIKE 'registered_by'");
         if ($stmt->rowCount() == 0) {
@@ -59,13 +61,42 @@ try {
         }
     } catch (Exception $e) {}
     
+    // ============================================================
+    // ✅ CLEANUP: Safisha patients.assigned_doctor_id kama hakuna
+    //    visit active (inafanya kazi kila page load)
+    // ============================================================
+    try {
+        $db->exec("
+            UPDATE patients p
+            SET p.assigned_doctor_id = NULL
+            WHERE p.assigned_doctor_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM visits v 
+                  WHERE v.patient_id = p.id 
+                    AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test', 'waiting', 'prescribed')
+              )
+        ");
+    } catch (Exception $e) {}
+    
+    // ============================================================
+    // ✅ MAIN QUERY: Doctor status inatokana na VISIT ACTIVE
+    // ============================================================
     $sql = "
         SELECT DISTINCT p.*, 
                u.full_name as assigned_doctor_name,
-               COALESCE(p.registered_by_name, ru.full_name, 'System') as registered_by_display
+               COALESCE(p.registered_by_name, ru.full_name, 'System') as registered_by_display,
+               v.id as active_visit_id,
+               v.status as active_visit_status,
+               v.visit_number as active_visit_number,
+               v.doctor_id as active_visit_doctor_id,
+               vu.full_name as active_visit_doctor_name
         FROM patients p
         LEFT JOIN users u ON p.assigned_doctor_id = u.id
         LEFT JOIN users ru ON p.registered_by = ru.id
+        LEFT JOIN visits v ON v.patient_id = p.id 
+            AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test', 'waiting', 'prescribed')
+            AND v.branch_id = p.branch_id
+        LEFT JOIN users vu ON v.doctor_id = vu.id
         WHERE p.branch_id = ?
     ";
     $params = [$branch_id];
@@ -79,9 +110,9 @@ try {
     }
     
     if ($filter === 'with_doctor') {
-        $sql .= " AND p.assigned_doctor_id IS NOT NULL";
+        $sql .= " AND v.doctor_id IS NOT NULL";
     } elseif ($filter === 'without_doctor') {
-        $sql .= " AND p.assigned_doctor_id IS NULL";
+        $sql .= " AND (v.doctor_id IS NULL OR v.id IS NULL)";
     } elseif ($filter === 'new') {
         $sql .= " AND p.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
     } elseif ($filter === 'no_visit') {
@@ -94,9 +125,9 @@ try {
     $stmt->execute($params);
     $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
+    // ✅ Remove duplicates (kwa sababu ya LEFT JOIN na visits nyingi)
     $unique_patients = [];
     $seen_ids = [];
-    
     foreach ($patients as $patient) {
         $id = $patient['id'];
         if (!in_array($id, $seen_ids)) {
@@ -106,39 +137,87 @@ try {
     }
     $patients = $unique_patients;
     
+    // ============================================================
+    // ✅ ENRICH: Hesabu visits, appointments, determine doctor
+    // ============================================================
     foreach ($patients as $key => $patient) {
+        // Total visits
         $stmt = $db->prepare("SELECT COUNT(*) FROM visits WHERE patient_id = ?");
         $stmt->execute([$patient['id']]);
         $patients[$key]['total_visits'] = (int)$stmt->fetchColumn();
         
+        // Active appointments
         $stmt = $db->prepare("SELECT COUNT(*) FROM appointments WHERE patient_id = ? AND status IN ('scheduled', 'confirmed')");
         $stmt->execute([$patient['id']]);
         $patients[$key]['active_appointments'] = (int)$stmt->fetchColumn();
         
+        // Patient days
         $stmt = $db->prepare("SELECT DATEDIFF(NOW(), created_at) FROM patients WHERE id = ?");
         $stmt->execute([$patient['id']]);
         $patients[$key]['patient_days'] = (int)$stmt->fetchColumn();
         
+        // Patient status (new/existing)
         $patients[$key]['patient_status'] = ($patients[$key]['patient_days'] <= 7) ? 'new' : 'existing';
         
+        // Latest visit
         $stmt = $db->prepare("SELECT id, visit_number, status, created_at FROM visits WHERE patient_id = ? ORDER BY created_at DESC LIMIT 1");
         $stmt->execute([$patient['id']]);
         $patients[$key]['latest_visit'] = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        // ✅ MUHIMU: Doctor status inatokana na ACTIVE VISIT
+        $has_active_visit = !empty($patient['active_visit_id']);
+        $active_doctor_name = $patient['active_visit_doctor_name'] ?? null;
+        
+        $patients[$key]['has_active_visit'] = $has_active_visit;
+        $patients[$key]['display_doctor_name'] = $active_doctor_name;
+        $patients[$key]['is_with_doctor'] = !empty($active_doctor_name);
+        
+        // ✅ Sync: kama hakuna visit active, ondoa assigned_doctor_id
+        if (!$has_active_visit && !empty($patient['assigned_doctor_id'])) {
+            try {
+                $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = NULL WHERE id = ?");
+                $stmt->execute([$patient['id']]);
+            } catch (Exception $e) {}
+            $patients[$key]['assigned_doctor_id'] = null;
+            $patients[$key]['assigned_doctor_name'] = null;
+        }
     }
     
     $total_patients = count($patients);
     
+    // ============================================================
+    // ✅ STATS: With Doctor inatokana na VISIT ACTIVE
+    // ============================================================
     $stmt = $db->prepare("
         SELECT 
-            COUNT(DISTINCT id) as total,
-            SUM(CASE WHEN assigned_doctor_id IS NOT NULL THEN 1 ELSE 0 END) as with_doctor,
-            SUM(CASE WHEN assigned_doctor_id IS NULL THEN 1 ELSE 0 END) as without_doctor,
-            SUM(CASE WHEN created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as new_patients
-        FROM patients 
-        WHERE branch_id = ?
+            COUNT(DISTINCT p.id) as total,
+            SUM(CASE 
+                WHEN EXISTS (
+                    SELECT 1 FROM visits v 
+                    WHERE v.patient_id = p.id 
+                      AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test', 'waiting', 'prescribed')
+                      AND v.doctor_id IS NOT NULL
+                ) THEN 1 ELSE 0 END
+            ) as with_doctor,
+            SUM(CASE 
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM visits v 
+                    WHERE v.patient_id = p.id 
+                      AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test', 'waiting', 'prescribed')
+                      AND v.doctor_id IS NOT NULL
+                ) THEN 1 ELSE 0 END
+            ) as without_doctor,
+            SUM(CASE WHEN p.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as new_patients
+        FROM patients p
+        WHERE p.branch_id = ?
     ");
     $stmt->execute([$branch_id]);
     $stats = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    // Fallback kama stats haipatikani
+    if (!$stats) {
+        $stats = ['total' => 0, 'with_doctor' => 0, 'without_doctor' => 0, 'new_patients' => 0];
+    }
     
 } catch (Exception $e) {
     $error_message = "Database error: " . $e->getMessage();
@@ -784,9 +863,7 @@ include_once '../../components/reception_sidebar.php';
             color: #C4B5FD;
         }
         
-        /* ================================================================ */
-        /* ✅ ACTION BUTTONS - 3 BUTTONS (View, Edit, Assign) */
-        /* ================================================================ */
+        /* ACTION BUTTONS - 3 BUTTONS (View, Edit, Assign) */
         .action-buttons-group {
             display: flex;
             gap: 5px;
@@ -814,7 +891,6 @@ include_once '../../components/reception_sidebar.php';
             transform: translateY(-2px) scale(1.08);
         }
         
-        /* VIEW Button - BLUE */
         .action-btn.view {
             background: linear-gradient(135deg, #2563EB, #1D4ED8);
             color: white;
@@ -826,7 +902,6 @@ include_once '../../components/reception_sidebar.php';
             box-shadow: 0 4px 12px rgba(37, 99, 235, 0.5);
         }
         
-        /* EDIT Button - PURPLE */
         .action-btn.edit {
             background: linear-gradient(135deg, #7C3AED, #5B21B6);
             color: white;
@@ -838,7 +913,6 @@ include_once '../../components/reception_sidebar.php';
             box-shadow: 0 4px 12px rgba(124, 58, 237, 0.5);
         }
         
-        /* ASSIGN Button - GREEN (for assign) */
         .action-btn.assign {
             background: linear-gradient(135deg, #059669, #047857);
             color: white;
@@ -850,7 +924,6 @@ include_once '../../components/reception_sidebar.php';
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.5);
         }
         
-        /* CHANGE Button - ORANGE (for change) */
         .action-btn.change {
             background: linear-gradient(135deg, #D97706, #B45309);
             color: white;
@@ -862,7 +935,6 @@ include_once '../../components/reception_sidebar.php';
             box-shadow: 0 4px 12px rgba(217, 119, 6, 0.5);
         }
         
-        /* Tooltip */
         .action-btn::after {
             content: attr(data-tooltip);
             position: absolute;
@@ -1375,8 +1447,9 @@ include_once '../../components/reception_sidebar.php';
                         $status_class = $patient['patient_status'] ?? 'existing';
                         $status_text = $status_class === 'new' ? 'New' : 'Existing';
                         
-                        if (!empty($patient['assigned_doctor_name'])) {
-                            $doctor_status = '<span class="status-badge with_doctor">✅ Dr. ' . htmlspecialchars($patient['assigned_doctor_name']) . '</span>';
+                        // ✅ MUHIMU: Doctor status inatokana na VISIT ACTIVE
+                        if (!empty($patient['display_doctor_name'])) {
+                            $doctor_status = '<span class="status-badge with_doctor">✅ Dr. ' . htmlspecialchars($patient['display_doctor_name']) . '</span>';
                             $is_assigned = true;
                         } else {
                             $doctor_status = '<span class="status-badge without_doctor">⚠️ No Doctor</span>';
@@ -1768,9 +1841,10 @@ include_once '../../components/reception_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c👤 Braick - Patients V2 (3 BUTTONS)', 'font-size:18px; font-weight:bold; color:#2563EB;');
-    console.log('%c✅ 3 Buttons: View, Edit, Assign/Change', 'font-size:13px; color:#34D399; font-weight:bold;');
-    console.log('%c✅ View = Blue | Edit = Purple | Assign = Green | Change = Orange', 'font-size:13px; color:#7C3AED;');
+    console.log('%c👤 Braick - Patients V3 (FIXED DOCTOR STATUS)', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c✅ Doctor status inatokana na VISIT ACTIVE', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ patients.assigned_doctor_id inasafishwa auto', 'font-size:13px; color:#F59E0B;');
+    console.log('%c✅ 3 Buttons: View, Edit, Assign/Change', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>

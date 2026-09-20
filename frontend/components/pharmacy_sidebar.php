@@ -5,7 +5,8 @@
 // ✅ SAME DESIGN AS LABORATORY SIDEBAR
 // ✅ Same fonts, colors, spacing, animations
 // ✅ Direct AJAX - Hakuna API ya nje
-// ✅ Prescriptions + OTC + Inventory badges
+// ✅ Prescriptions + Inventory badges
+// ✅ OTC History REMOVED
 // ================================================================
 
 // ================================================================
@@ -103,7 +104,7 @@ $today_sales = 0;
 $today_otc = 0;
 $total_prescriptions = 0;
 $total_dispensed = 0;
-$total_otc = 0;
+$total_otc = 0; // Kept for AJAX data compatibility, but not displayed
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
@@ -162,12 +163,12 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $today_sales = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // 7. Today OTC Sales
+        // 7. Today OTC Sales (kept for AJAX data compatibility)
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
         $stmt->execute([$user_branch_id]);
         $today_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // 8. TOTAL OTC Sales
+        // 8. TOTAL OTC Sales (kept for AJAX data compatibility)
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ?");
         $stmt->execute([$user_branch_id]);
         $total_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
@@ -919,11 +920,7 @@ $initial_data = [
             <span class="link-text">New OTC Sale</span>
         </a>
         
-        <a href="/dispensary_system/frontend/pages/pharmacy/otc_history.php" class="sidebar-link <?= isActive('otc_history.php') ?>" id="sidebarTotalOtcLink">
-            <i class="fas fa-shopping-cart"></i>
-            <span class="link-text">OTC History</span>
-            <span class="badge <?= $total_otc > 0 ? 'green' : '' ?>" id="sidebarTotalOtcBadge"><?= $total_otc ?></span>
-        </a>
+        <!-- ❌ OTC History LINK - REMOVED -->
         
         <div class="nav-label"><span class="label-icon">📦</span> Medicines</div>
         
@@ -1228,21 +1225,9 @@ $initial_data = [
             }
         }
         
-        // 5. Total OTC
-        var totalOtcBadge = document.getElementById('sidebarTotalOtcBadge');
-        if (totalOtcBadge && data.total_otc !== undefined) {
-            var oldVal = totalOtcBadge.textContent;
-            var newVal = data.total_otc;
-            if (oldVal !== String(newVal)) {
-                hasChanges = true;
-                totalOtcBadge.textContent = newVal;
-                totalOtcBadge.className = parseInt(newVal) > 0 ? 'badge green' : 'badge';
-                totalOtcBadge.classList.remove('badge-update');
-                void totalOtcBadge.offsetWidth;
-                totalOtcBadge.classList.add('badge-update');
-                console.log('🔄 Total OTC: ' + oldVal + ' → ' + newVal);
-            }
-        }
+        // ❌ 5. Total OTC - REMOVED (OTC History link removed from sidebar)
+        // The badge element no longer exists in the HTML, so we skip this update.
+        // Data is still received from AJAX for backward compatibility.
         
         // 6. Update timestamp
         var timeEl = document.getElementById('sidebarUpdateTime');
@@ -1451,15 +1436,13 @@ $initial_data = [
         'font-size:13px; color:#6EA8FE;');
     console.log('%c📊 Initial Data:', 'font-size:13px; font-weight:bold; color:#D97706;');
     console.log('   Pending: <?= $pending_prescriptions ?>, Low Stock: <?= $low_stock_count ?>, Expired: <?= $expired_count ?>');
-    console.log('   Total Presc: <?= $total_prescriptions ?>, Total OTC: <?= $total_otc ?>');
+    console.log('   Total Presc: <?= $total_prescriptions ?>');
     console.log('%c⚡ Auto-Update: Every 2s (only if data changed)', 
         'font-size:13px; color:#34D399;');
     console.log('%c🔄 Force refresh: Every 5s (safety net)', 
         'font-size:13px; color:#F59E0B;');
     console.log('%c✅ SAME DESIGN AS LABORATORY SIDEBAR', 
         'font-size:13px; color:#34D399; font-weight:bold;');
-    console.log('%c✅ Font size: links 0.85rem, badges 0.65rem', 
-        'font-size:13px; color:#34D399;');
-    console.log('%c✅ Slow slide: 0.6s cubic-bezier', 
-        'font-size:13px; color:#34D399;');
+    console.log('%c✅ OTC History link REMOVED', 
+        'font-size:13px; color:#DC2626; font-weight:bold;');
 </script>

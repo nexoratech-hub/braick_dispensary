@@ -1,9 +1,10 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/new_otc_sale.php
-// PHARMACY - NEW OTC SALE
+// PHARMACY - NEW OTC SALE (V2 - Fixed)
 // ✅ BLUE THEME
-// ✅ FIXED: No more Bills table insert - OTC only
+// ✅ REMOVED: Redirect to otc_history (stays on page after sale)
+// ✅ REMOVED: "Send to Cashier" — Only "Pay Now (Self)" remains
 // ✅ FIXED: Multiple items stock deduction
 // ✅ FIXED: Quantity input starts empty, no scroll change
 // ✅ FIXED: Better FIFO - handles all expiry dates correctly
@@ -135,7 +136,8 @@ try {
 } catch (Exception $e) { $low_stock_count = 0; }
 
 // ================================================================
-// PROCESS OTC SALE - OTC ONLY (No Bills Table)
+// PROCESS OTC SALE - PAY NOW (SELF) ONLY
+// ✅ NO REDIRECT after sale — stays on page
 // ================================================================
 $message = '';
 $message_type = '';
@@ -145,7 +147,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $customer_phone = trim($_POST['customer_phone'] ?? '');
     $payment_method = $_POST['payment_method'] ?? 'cash';
     $discount_amount = (float)str_replace(',', '', $_POST['discount_amount'] ?? 0);
-    $payment_option = $_POST['payment_option'] ?? 'cashier';
     $items = json_decode($_POST['items_json'] ?? '[]', true);
     
     $premium_amount = (float)str_replace(',', '', $_POST['premium_amount'] ?? 0);
@@ -167,6 +168,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     
     $errors = [];
     if (empty($items)) $errors[] = 'Please add at least one medicine';
+    
+    // Validate quantity
+    foreach ($items as $it) {
+        if (empty($it['quantity']) || $it['quantity'] <= 0) {
+            $errors[] = "Please enter quantity for: " . $it['name'];
+        }
+    }
     
     // Check stock
     $stock_errors = [];
@@ -197,12 +205,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $sale_number = 'OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
             
             $patient_id = null;
-            $otc_payment_status = ($payment_option === 'self') ? 'paid' : 'pending';
-            $payment_notes = ($payment_option === 'self') ? 'Paid by Pharmacy (Self)' : 'OTC Sale - Bill sent to Cashier';
+            $otc_payment_status = 'paid'; // ✅ Always PAID (self-pay only)
+            $payment_notes = 'Paid by Pharmacy (Self)';
             
-            // ================================================================
-            // ✅ OTC SALE INSERT (NO BILLS TABLE)
-            // ================================================================
+            // ✅ OTC SALE INSERT
             $stmt_otc = $db->prepare("
                 INSERT INTO otc_sales (
                     sale_number, customer_name, customer_phone, 
@@ -218,9 +224,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ]);
             $sale_id = $db->lastInsertId();
             
-            // ================================================================
             // ✅ OTC SALE ITEMS INSERT
-            // ================================================================
             foreach ($items as $item) {
                 $stmt_otc_item = $db->prepare("
                     INSERT INTO otc_sale_items (
@@ -237,14 +241,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
             
             // ================================================================
-            // STOCK DEDUCTION - FIFO (First Expiry First Out)
+            // STOCK DEDUCTION - FIFO (Always deduct since payment is PAID)
             // ================================================================
-            $movement_type = ($payment_option === 'self') ? 'out' : 'reserved';
-            $ref_type = ($payment_option === 'self') ? 'otc' : 'otc_pending';
-            $note_prefix = ($payment_option === 'self') ? 'OTC Sale - PAID: ' : 'OTC Sale - PENDING: ';
-            
-            error_log("=== STOCK DEDUCTION START ===");
-            error_log("Sale #$sale_id ($sale_number) | Payment: $payment_option | Branch: $user_branch_id");
+            error_log("=== OTC STOCK DEDUCTION START ===");
+            error_log("Sale #$sale_id ($sale_number) | Branch: $user_branch_id");
             error_log("Total items: " . count($items));
             
             foreach ($items as $item_index => $item) {
@@ -319,14 +319,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             movement_type, quantity,
                             reference_type, reference_id,
                             performed_by, branch_id, notes, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                        ) VALUES (?, ?, 'out', ?, 'otc', ?, ?, ?, ?, NOW())
                     ");
                     $stmt_log_move->execute([
                         $batch_id, $patient_id,
-                        $movement_type, $deduct_qty,
-                        $ref_type, $sale_id,
+                        $deduct_qty,
+                        $sale_id,
                         $user_id, $user_branch_id,
-                        $note_prefix . $sale_number . ' - Customer: ' . $customer_name
+                        'OTC Sale - PAID: ' . $sale_number . ' - Customer: ' . $customer_name
                     ]);
                     $stmt_log_move->closeCursor();
                     
@@ -341,24 +341,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 }
             }
             
-            error_log("=== STOCK DEDUCTION END ===");
+            error_log("=== OTC STOCK DEDUCTION END ===");
             
             $db->commit();
             
-            if ($payment_option === 'self') {
-                $message = "✅ OTC Sale completed! Stock deducted for all items. Payment received.";
-            } else {
-                $message = "✅ OTC Sale completed! Stock reserved for all items. Bill sent to Cashier.";
-            }
-            if ($premium_amount > 0) $message .= " Premium TSh " . number_format($premium_amount) . " added.";
+            $message = "✅ OTC Sale completed! Sale: <strong>$sale_number</strong> | Total: <strong>TSh " . number_format($grand_total) . "</strong> | Stock deducted for all items.";
+            if ($premium_amount > 0) $message .= " Premium: TSh " . number_format($premium_amount) . " added.";
             $message_type = 'success';
             
-            $_SESSION['otc_sale_message'] = $message;
-            $_SESSION['otc_sale_message_type'] = $message_type;
-            $_SESSION['otc_sale_message_time'] = time();
-            
-            header('Location: otc_history.php?success=1&auto_dismiss=1');
-            exit;
+            // ✅ NO REDIRECT — stays on page
             
         } catch (Exception $e) {
             $db->rollBack();
@@ -370,14 +361,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $message = implode('<br>', $errors);
         $message_type = 'error';
     }
-}
-
-if (isset($_SESSION['otc_sale_message'])) {
-    $message = $_SESSION['otc_sale_message'];
-    $message_type = $_SESSION['otc_sale_message_type'] ?? 'success';
-    unset($_SESSION['otc_sale_message']);
-    unset($_SESSION['otc_sale_message_type']);
-    unset($_SESSION['otc_sale_message_time']);
 }
 
 $unread_notifications = 0;
@@ -460,7 +443,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .stat-card-2 .stat-label { font-size: 0.65rem; color: rgba(255,255,255,0.85); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin: 0; }
         .stat-card-2 .stat-number { font-size: 2.2rem; font-weight: 800; color: white; margin: 0; line-height: 1.1; }
         
-        /* BLUE THEME CARD VARIANTS */
         .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
         .card-blue-light { background: linear-gradient(135deg, #1E88E5, #1565C0); }
         
@@ -588,18 +570,59 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .premium-display { display: none; margin-top: 10px; padding-top: 10px; border-top: 2px dashed var(--border-color); }
         .premium-display .premium-info { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
         
-        .payment-options { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; }
-        .payment-option-card { flex: 1; min-width: 200px; padding: 16px 20px; border: 2px solid var(--border-color); border-radius: 12px; cursor: pointer; background: var(--bg-card); display: flex; align-items: center; gap: 14px; }
-        .payment-option-card:hover { border-color: var(--primary); transform: translateY(-2px); }
-        .payment-option-card.active { border-color: var(--primary); background: var(--primary-light); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1); }
-        .payment-option-card .option-icon { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink: 0; }
-        .payment-option-card .option-icon.cashier { background: var(--sky-light); color: var(--sky); }
-        .payment-option-card .option-icon.self { background: var(--success-light); color: var(--success); }
-        .payment-option-card .option-content h4 { font-size: 0.9rem; font-weight: 700; margin: 0; }
-        .payment-option-card .option-content p { font-size: 0.7rem; color: var(--text-secondary); margin: 2px 0 0 0; }
-        .payment-option-card .option-radio { margin-left: auto; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--border-color); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-        .payment-option-card.active .option-radio { border-color: var(--primary); background: var(--primary); }
-        .payment-option-card.active .option-radio::after { content: '✓'; color: white; font-size: 12px; font-weight: 700; }
+        /* PAYMENT INFO - SINGLE OPTION (PAY NOW) */
+        .payment-info-box {
+            background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
+            border: 2px solid var(--success);
+            border-radius: 12px;
+            padding: 18px 24px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+        }
+        [data-theme="dark"] .payment-info-box {
+            background: linear-gradient(135deg, #1A3A2A, #0F2A1A);
+        }
+        .payment-info-box .pay-icon {
+            width: 52px; height: 52px;
+            border-radius: 14px;
+            background: linear-gradient(135deg, #059669, #047857);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            flex-shrink: 0;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+        }
+        .payment-info-box .pay-content h4 {
+            font-size: 1rem;
+            font-weight: 800;
+            margin: 0;
+            color: var(--success);
+        }
+        .payment-info-box .pay-content p {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin: 4px 0 0 0;
+            font-weight: 500;
+        }
+        .payment-info-box .pay-badge {
+            margin-left: auto;
+            background: var(--success);
+            color: white;
+            padding: 5px 14px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
         
         .payment-methods { display: flex; gap: 8px; flex-wrap: wrap; }
         .payment-methods .method-btn { padding: 8px 18px; border: 2px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-secondary); cursor: pointer; font-weight: 500; font-size: 0.82rem; display: flex; align-items: center; gap: 6px; }
@@ -607,11 +630,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .payment-methods .method-btn.active { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
         
         .action-buttons { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 2px solid var(--border-color); }
-        .btn-complete-sale { padding: 12px 36px; border-radius: 12px; font-weight: 700; font-size: 1rem; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 10px; color: white; }
-        .btn-complete-sale:hover:not(:disabled) { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,0,0,0.3); }
+        .btn-complete-sale { padding: 12px 36px; border-radius: 12px; font-weight: 700; font-size: 1rem; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 10px; color: white; background: linear-gradient(135deg, #059669, #047857); }
+        .btn-complete-sale:hover:not(:disabled) { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(5, 150, 105, 0.4); }
         .btn-complete-sale:disabled { opacity: 0.4; cursor: not-allowed; }
-        .btn-complete-sale.cashier-mode { background: linear-gradient(135deg, #0B5ED7, #0A3D8A); }
-        .btn-complete-sale.self-mode { background: linear-gradient(135deg, #059669, #047857); }
         .btn-clear-cart { background: var(--danger); color: white; padding: 12px 24px; border-radius: 12px; font-weight: 600; font-size: 0.9rem; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
         .btn-outline { background: transparent; color: var(--text-secondary); border: 2px solid var(--border-color); padding: 10px 24px; border-radius: 12px; font-weight: 600; font-size: 0.9rem; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
         .btn-outline:hover { border-color: var(--primary); color: var(--primary); }
@@ -637,7 +658,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             .stats-2-cards { grid-template-columns: 1fr; }
             .action-buttons { flex-direction: column; }
             .action-buttons .btn-complete-sale, .action-buttons .btn-clear-cart, .action-buttons .btn-outline { width: 100%; justify-content: center; }
-            .payment-options { flex-direction: column; }
         }
     </style>
 </head>
@@ -653,9 +673,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 Sell medicines over-the-counter
                 <strong><?= htmlspecialchars($user_branch_name) ?></strong>
                 <span class="stat-chip"><i class="fas fa-pills"></i> <?= count($medicines_list) ?> medicines</span>
-                <span class="stat-chip"><i class="fas fa-cash-register"></i> 2 Payment Options</span>
-                <span class="stat-chip" style="background:rgba(251,191,36,0.2);color:#FCD34D;">
-                    <i class="fas fa-boxes"></i> Stock: <span id="stockModeDisplay">Reserve/Held</span>
+                <span class="stat-chip" style="background:rgba(52,211,153,0.25);color:#A7F3D0;">
+                    <i class="fas fa-hand-holding-usd"></i> Pay Now (Self)
+                </span>
+                <span class="stat-chip" style="background:rgba(52,211,153,0.2);color:#A7F3D0;">
+                    <i class="fas fa-boxes"></i> Stock: <span id="stockModeDisplay">Deduct Instantly</span>
                 </span>
                 <span class="stat-chip" style="background:rgba(255,255,255,0.15);color:white;">
                     <i class="fas fa-star"></i> Premium: Optional
@@ -671,7 +693,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <?php if ($message): ?>
         <div class="message-box <?= $message_type ?>" id="messageBox">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
-            <?= htmlspecialchars($message) ?>
+            <div><?= $message ?></div>
             <span class="message-close" onclick="dismissMessage()">&times;</span>
         </div>
     <?php endif; ?>
@@ -699,13 +721,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <input type="hidden" name="action" value="complete_sale">
             <input type="hidden" name="items_json" id="itemsJson" value="[]">
             <input type="hidden" name="discount_amount" id="discountAmountHidden" value="0">
-            <input type="hidden" name="payment_option" id="paymentOptionHidden" value="cashier">
             <input type="hidden" name="premium_amount" id="premiumAmountHidden" value="0">
             <input type="hidden" name="premium_note" id="premiumNoteHidden" value="">
             
             <div class="section-title">
                 <i class="fas fa-user"></i> Customer Information
-                <span class="badge-count" style="background:var(--warning);">OTC Only</span>
+                <span class="badge-count" style="background:var(--success);">Pay Now (Self)</span>
             </div>
             
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -873,52 +894,40 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 </div>
             </div>
             
+            <!-- ✅ PAYMENT INFO — SINGLE OPTION (PAY NOW) -->
             <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-                <div class="section-title"><i class="fas fa-credit-card"></i> Payment Option <span class="badge-count">Choose</span></div>
+                <div class="section-title"><i class="fas fa-credit-card"></i> Payment Method <span class="badge-count" style="background:var(--success);">Pay Now</span></div>
                 
-                <div class="payment-options">
-                    <div class="payment-option-card active" data-option="cashier" onclick="selectPaymentOption('cashier')">
-                        <div class="option-icon cashier"><i class="fas fa-cash-register"></i></div>
-                        <div class="option-content">
-                            <h4>Send to Cashier</h4>
-                            <p>Bill sent to Cashier for payment</p>
-                            <p style="font-size:0.6rem;color:var(--warning);margin-top:2px;"><i class="fas fa-info-circle"></i> Stock reserved until payment</p>
-                        </div>
-                        <div class="option-radio"></div>
+                <div class="payment-info-box">
+                    <div class="pay-icon"><i class="fas fa-hand-holding-usd"></i></div>
+                    <div class="pay-content">
+                        <h4>Pay Now (Self)</h4>
+                        <p>Pharmacy collects payment immediately — Stock deducted instantly</p>
+                    </div>
+                    <span class="pay-badge"><i class="fas fa-check-circle"></i> Active</span>
+                </div>
+                
+                <div class="mt-3">
+                    <div class="section-title" style="border-bottom: none; padding-bottom: 4px; margin-bottom: 8px;">
+                        <i class="fas fa-money-bill-wave"></i> Payment Method
                     </div>
                     
-                    <div class="payment-option-card" data-option="self" onclick="selectPaymentOption('self')">
-                        <div class="option-icon self"><i class="fas fa-hand-holding-usd"></i></div>
-                        <div class="option-content">
-                            <h4>Pay Now (Self)</h4>
-                            <p>Pharmacy collects payment immediately</p>
-                            <p style="font-size:0.6rem;color:var(--success);margin-top:2px;"><i class="fas fa-check-circle"></i> Stock deducted instantly</p>
-                        </div>
-                        <div class="option-radio"></div>
+                    <div class="payment-methods">
+                        <button type="button" class="method-btn active" data-method="cash" onclick="selectPaymentMethod('cash')"><i class="fas fa-money-bill-wave"></i> Cash</button>
+                        <button type="button" class="method-btn" data-method="m-pesa" onclick="selectPaymentMethod('m-pesa')"><i class="fas fa-mobile-alt"></i> M-Pesa</button>
+                        <button type="button" class="method-btn" data-method="airtel_money" onclick="selectPaymentMethod('airtel_money')"><i class="fas fa-mobile-alt"></i> Airtel Money</button>
+                        <button type="button" class="method-btn" data-method="tigo_pesa" onclick="selectPaymentMethod('tigo_pesa')"><i class="fas fa-mobile-alt"></i> Tigo Pesa</button>
+                        <button type="button" class="method-btn" data-method="halopesa" onclick="selectPaymentMethod('halopesa')"><i class="fas fa-mobile-alt"></i> Halopesa</button>
+                        <button type="button" class="method-btn" data-method="bank" onclick="selectPaymentMethod('bank')"><i class="fas fa-university"></i> Bank</button>
+                        <button type="button" class="method-btn" data-method="card" onclick="selectPaymentMethod('card')"><i class="fas fa-credit-card"></i> Card</button>
                     </div>
+                    <input type="hidden" name="payment_method" id="selectedPaymentMethod" value="cash">
                 </div>
-            </div>
-            
-            <div class="mt-3">
-                <div class="section-title" style="border-bottom: none; padding-bottom: 4px; margin-bottom: 8px;">
-                    <i class="fas fa-money-bill-wave"></i> Payment Method <span class="badge-count" style="background:var(--success);">Optional</span>
-                </div>
-                
-                <div class="payment-methods">
-                    <button type="button" class="method-btn active" data-method="cash" onclick="selectPaymentMethod('cash')"><i class="fas fa-money-bill-wave"></i> Cash</button>
-                    <button type="button" class="method-btn" data-method="m-pesa" onclick="selectPaymentMethod('m-pesa')"><i class="fas fa-mobile-alt"></i> M-Pesa</button>
-                    <button type="button" class="method-btn" data-method="airtel_money" onclick="selectPaymentMethod('airtel_money')"><i class="fas fa-mobile-alt"></i> Airtel Money</button>
-                    <button type="button" class="method-btn" data-method="tigo_pesa" onclick="selectPaymentMethod('tigo_pesa')"><i class="fas fa-mobile-alt"></i> Tigo Pesa</button>
-                    <button type="button" class="method-btn" data-method="halopesa" onclick="selectPaymentMethod('halopesa')"><i class="fas fa-mobile-alt"></i> Halopesa</button>
-                    <button type="button" class="method-btn" data-method="bank" onclick="selectPaymentMethod('bank')"><i class="fas fa-university"></i> Bank</button>
-                    <button type="button" class="method-btn" data-method="card" onclick="selectPaymentMethod('card')"><i class="fas fa-credit-card"></i> Card</button>
-                </div>
-                <input type="hidden" name="payment_method" id="selectedPaymentMethod" value="cash">
             </div>
             
             <div class="action-buttons">
-                <button type="submit" class="btn-complete-sale cashier-mode" id="completeSaleBtn" disabled>
-                    <i class="fas fa-receipt"></i> Send to Cashier (Reserve Stock)
+                <button type="submit" class="btn-complete-sale" id="completeSaleBtn" disabled>
+                    <i class="fas fa-hand-holding-usd"></i> Complete Sale & Deduct Stock
                 </button>
                 <button type="button" class="btn-clear-cart" onclick="clearCart()"><i class="fas fa-trash"></i> Clear Cart</button>
                 <a href="dashboard.php" class="btn-outline"><i class="fas fa-times"></i> Cancel</a>
@@ -931,9 +940,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span>|</span> New OTC Sale
             <span>|</span>
-            <span style="color:var(--primary);font-size:0.6rem;"><i class="fas fa-star"></i> Premium: Optional</span>
+            <span style="color:var(--success);font-size:0.6rem;"><i class="fas fa-hand-holding-usd"></i> Pay Now (Self) Only</span>
             <span>|</span>
-            <span style="color:var(--warning);font-size:0.6rem;"><i class="fas fa-boxes"></i> Stock: <span id="stockStatusDisplay">Reserve/Hold</span></span>
+            <span style="color:var(--success);font-size:0.6rem;"><i class="fas fa-boxes"></i> Stock: <span id="stockStatusDisplay">Deduct Instantly</span></span>
             <span>|</span> &copy; <?= date('Y') ?>
         </p>
     </footer>
@@ -966,9 +975,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         if (mb) { mb.style.opacity = '0'; setTimeout(function() { mb.style.display = 'none'; }, 500); }
     }
     
+    // ✅ AUTO-DISMISS SUCCESS MESSAGE (No redirect)
     document.addEventListener('DOMContentLoaded', function() {
         var mb = document.getElementById('messageBox');
-        if (mb) setTimeout(dismissMessage, 5000);
+        if (mb) setTimeout(dismissMessage, 6000);
     });
 
     var cart = [];
@@ -976,7 +986,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     var currentDiscountAmount = 0;
     var subtotal = 0;
     var grandTotal = 0;
-    var selectedPaymentOption = 'cashier';
     var currentPremiumAmount = 0;
     var currentPremiumNote = '';
     var selectedMedicines = {};
@@ -1147,30 +1156,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             showToast('Success', msg, 'success');
         } else {
             showToast('Error', 'No medicines were added', 'error');
-        }
-    }
-
-    function selectPaymentOption(option) {
-        selectedPaymentOption = option;
-        document.getElementById('paymentOptionHidden').value = option;
-        
-        document.querySelectorAll('.payment-option-card').forEach(function(card) { card.classList.remove('active'); });
-        document.querySelector('[data-option="' + option + '"]').classList.add('active');
-        
-        var btn = document.getElementById('completeSaleBtn');
-        var stockDisplay = document.getElementById('stockStatusDisplay');
-        var stockModeDisplay = document.getElementById('stockModeDisplay');
-        
-        if (option === 'self') {
-            btn.innerHTML = '<i class="fas fa-hand-holding-usd"></i> Pay Now & Deduct Stock';
-            btn.className = 'btn-complete-sale self-mode';
-            if (stockDisplay) stockDisplay.textContent = 'Deduct';
-            if (stockModeDisplay) stockModeDisplay.textContent = 'Deduct Instantly';
-        } else {
-            btn.innerHTML = '<i class="fas fa-receipt"></i> Send to Cashier (Reserve Stock)';
-            btn.className = 'btn-complete-sale cashier-mode';
-            if (stockDisplay) stockDisplay.textContent = 'Reserve/Hold';
-            if (stockModeDisplay) stockModeDisplay.textContent = 'Reserve/Held';
         }
     }
     
@@ -1644,13 +1629,32 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         if (e.key === 'Enter' && document.activeElement?.id === 'premiumAmountInput') { e.preventDefault(); applyPremium(); }
     });
 
-    console.log('%c💊 Braick OTC - NO BILLS TABLE', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
-    console.log('%c✅ BLUE THEME', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ OTC Sales go to otc_sales table only', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ NO bills table insert', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ NO bill_items table insert', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ NO payments table insert', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ Stock deducted from medications_inventory', 'font-size:13px;color:#34D399;');
+    // ✅ CONFIRM BEFORE SUBMIT
+    document.getElementById('otcSaleForm').addEventListener('submit', function(e) {
+        if (cart.length === 0) {
+            e.preventDefault();
+            showToast('Error', 'Please add at least one medicine', 'error');
+            return false;
+        }
+        
+        var hasZeroQty = cart.some(function(item) { return !item.quantity || item.quantity <= 0; });
+        if (hasZeroQty) {
+            e.preventDefault();
+            showToast('Error', 'Please enter quantity for all items', 'error');
+            return false;
+        }
+        
+        if (!confirm('Complete this OTC sale?\n\nStock will be deducted and payment recorded.')) {
+            e.preventDefault();
+            return false;
+        }
+    });
+
+    console.log('%c💊 Braick OTC - V2 (Pay Now Only)', 'font-size:18px;font-weight:bold;color:#059669;');
+    console.log('%c✅ NO redirect after sale', 'font-size:13px;color:#34D399;font-weight:bold;');
+    console.log('%c✅ ONLY "Pay Now (Self)" option', 'font-size:13px;color:#34D399;');
+    console.log('%c✅ Stock deducted instantly', 'font-size:13px;color:#34D399;');
+    console.log('%c✅ Sale stored in otc_sales table', 'font-size:13px;color:#34D399;');
 </script>
 
 </body>

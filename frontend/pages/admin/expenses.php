@@ -1,13 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/expenses.php
-// ADMIN - EXPENSES MANAGEMENT WITH PDF EXPORT
-// ✅ Uses SHARED header & sidebar (NO DUPLICATES)
-// ✅ Blue theme + full dark mode support via --page-* variables
+// ADMIN - EXPENSES MANAGEMENT (V11)
+// ✅ FIXED: Font Awesome 6 loaded kwa kila page
+// ✅ FIXED: JetBrains Mono font
+// ✅ Uses SHARED header & sidebar
+// ✅ Blue theme + full dark mode support
 // ✅ 4 Cards: All, Pending, Paid, Cancelled
-// ✅ View, Edit, Delete, Pay buttons
 // ✅ PDF Export
-// ✅ FIXED: Date filters (Daily, Week, Monthly, 3M, 6M, 1Y, All, Custom)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -272,9 +272,6 @@ $date_filter = isset($_GET['date_filter']) ? $_GET['date_filter'] : 'all';
 $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
-// ================================================================
-// ✅ FIXED: DATE CONDITION (HAKUNA "AND" MWANZO)
-// ================================================================
 $date_condition = "";
 $date_params = [];
 if ($date_filter === 'daily') {
@@ -399,17 +396,85 @@ $profile_pic_url = !empty($profile_pic)
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-// ================================================================
-// ✅ SHARED HEADER & SIDEBAR
-// ================================================================
 include_once '../../components/admin_header.php';
 include_once '../../components/admin_sidebar.php';
 ?>
 
-<!-- ================================================================
-     PAGE-SPECIFIC CSS - TUMIA VARIABLES ZA HEADER (--page-*)
-     ================================================================ -->
+<!-- ✅ FONT AWESOME 6 - LOADED DIRECTLY -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css">
+
+<!-- ✅ JETBRAINS MONO -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<!-- ✅ FORCE FONT AWESOME VIA @font-face -->
 <style>
+    @font-face {
+        font-family: 'Font Awesome 6 Free';
+        font-style: normal;
+        font-weight: 900;
+        font-display: block;
+        src: url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/webfonts/fa-solid-900.woff2") format("woff2");
+    }
+    @font-face {
+        font-family: 'Font Awesome 6 Free';
+        font-style: normal;
+        font-weight: 400;
+        font-display: block;
+        src: url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/webfonts/fa-regular-400.woff2") format("woff2");
+    }
+</style>
+
+<style>
+    :root {
+        --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+    }
+
+    /* ══════════════════════════════════════════════════════════════
+       ✅ FORCE FONT AWESOME ICONS
+       ══════════════════════════════════════════════════════════════ */
+    i.fas, i.far, i.fab, i.fa,
+    .fas, .far, .fab, .fa,
+    i[class*="fa-"] {
+        font-family: 'Font Awesome 6 Free', 'Font Awesome 6 Brands', 'FontAwesome' !important;
+        font-weight: 900 !important;
+        font-style: normal !important;
+        font-variant: normal !important;
+        text-rendering: auto !important;
+        -webkit-font-smoothing: antialiased !important;
+        display: inline-block !important;
+        line-height: 1 !important;
+    }
+    i.far, .far { font-weight: 400 !important; }
+    i.fab, .fab { font-family: 'Font Awesome 6 Brands' !important; font-weight: 400 !important; }
+
+    /* ✅ JetBrains Mono kwa namba */
+    .stat-number-exp,
+    .stat-sub-exp,
+    .stat-label-exp,
+    .data-table-exp,
+    .data-table-exp *,
+    .badge-status-exp,
+    .btn-exp,
+    .btn-add-exp,
+    .btn-search-exp,
+    .btn-reset-exp,
+    .filter-btn-exp,
+    .filter-input-exp,
+    .filter-label-exp,
+    .page-title-exp,
+    .page-subtitle-exp,
+    .header-badge-exp,
+    .role-badge-display,
+    .footer-exp,
+    .message-box-exp,
+    .table-footer-exp {
+        font-family: var(--font-mono) !important;
+        font-variant-numeric: tabular-nums;
+    }
+
     /* ================================================================
        PAGE HEADER - GREEN GRADIENT
        ================================================================ */
@@ -568,6 +633,7 @@ include_once '../../components/admin_sidebar.php';
         font-weight: 700;
         line-height: 1.2;
         letter-spacing: -0.02em;
+        font-family: var(--font-mono);
     }
 
     .stat-card-exp .stat-number-exp.blue { color: #0B5ED7; }
@@ -674,7 +740,7 @@ include_once '../../components/admin_sidebar.php';
         transition: all 0.3s;
         flex: 1;
         min-width: 120px;
-        font-family: inherit;
+        font-family: var(--font-mono);
     }
 
     .filter-input-exp:focus {
@@ -692,7 +758,7 @@ include_once '../../components/admin_sidebar.php';
         font-size: 0.72rem;
         cursor: pointer;
         transition: all 0.3s;
-        font-family: inherit;
+        font-family: var(--font-mono);
     }
 
     .btn-search-exp:hover {
@@ -713,7 +779,7 @@ include_once '../../components/admin_sidebar.php';
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        font-family: inherit;
+        font-family: var(--font-mono);
     }
 
     .btn-add-exp:hover {
@@ -760,6 +826,7 @@ include_once '../../components/admin_sidebar.php';
         width: 100%;
         border-collapse: collapse;
         font-size: 0.75rem;
+        font-family: var(--font-mono);
     }
 
     .data-table-exp thead th {
@@ -976,7 +1043,7 @@ include_once '../../components/admin_sidebar.php';
         outline: none;
         background: var(--page-input-bg, #FFFFFF);
         color: var(--page-text-primary, #1E293B);
-        font-family: inherit;
+        font-family: var(--font-mono);
     }
 
     .form-control-exp:focus {
@@ -1008,7 +1075,7 @@ include_once '../../components/admin_sidebar.php';
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        font-family: inherit;
+        font-family: var(--font-mono);
     }
 
     .btn-save-exp:hover {
@@ -1028,7 +1095,7 @@ include_once '../../components/admin_sidebar.php';
         cursor: pointer;
         transition: all 0.3s ease;
         text-decoration: none;
-        font-family: inherit;
+        font-family: var(--font-mono);
         display: inline-flex;
         align-items: center;
         gap: 6px;
@@ -1070,6 +1137,7 @@ include_once '../../components/admin_sidebar.php';
         font-size: 0.9rem;
         font-weight: 600;
         color: var(--page-text-primary, #1E293B);
+        font-family: var(--font-mono);
     }
 
     .view-item-exp.full-width { grid-column: 1 / -1; }
@@ -1138,7 +1206,7 @@ include_once '../../components/admin_sidebar.php';
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        font-family: inherit;
+        font-family: var(--font-mono);
     }
 
     .pdf-modal-header-exp .modal-actions-exp button:hover {
@@ -1162,131 +1230,6 @@ include_once '../../components/admin_sidebar.php';
         box-shadow: 0 1px 3px rgba(0,0,0,0.08);
         border: 1px solid var(--page-border, #E2E8F0);
         line-height: 1.5;
-    }
-
-    .pdf-content-exp .pdf-header-exp {
-        text-align: center;
-        padding-bottom: 12px;
-        border-bottom: 3px solid #059669;
-        margin-bottom: 16px;
-    }
-
-    .pdf-content-exp .pdf-header-exp img {
-        height: 55px;
-        width: auto;
-        object-fit: contain;
-        display: block;
-        margin: 0 auto;
-    }
-
-    .pdf-content-exp .clinic-name-exp {
-        font-size: 1.4rem;
-        font-weight: 800;
-        color: #059669;
-        letter-spacing: -0.5px;
-        margin-top: 4px;
-    }
-
-    .pdf-content-exp .clinic-sub-exp {
-        font-size: 0.75rem;
-        color: var(--page-text-secondary, #64748B);
-        letter-spacing: 0.5px;
-    }
-
-    .pdf-content-exp .doc-title-exp {
-        font-size: 0.85rem;
-        font-weight: 700;
-        color: #059669;
-        margin-top: 4px;
-        background: #D1FAE5;
-        padding: 4px 16px;
-        border-radius: 20px;
-        display: inline-block;
-    }
-
-    .pdf-content-exp .pdf-section-title-exp {
-        font-weight: 700;
-        font-size: 0.95rem;
-        color: #059669;
-        border-bottom: 2px solid #34D399;
-        padding-bottom: 4px;
-        margin: 6px 0 4px 0;
-    }
-
-    .pdf-content-exp .pdf-table-exp {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 12px;
-        margin: 4px 0;
-    }
-
-    .pdf-content-exp .pdf-table-exp th {
-        background: #059669;
-        color: white;
-        padding: 4px 8px;
-        text-align: left;
-        font-size: 10px;
-        text-transform: uppercase;
-        border: 1px solid #047857;
-    }
-
-    .pdf-content-exp .pdf-table-exp td {
-        padding: 4px 8px;
-        border-bottom: 1px solid #E2E8F0;
-        font-size: 11px;
-    }
-
-    .pdf-content-exp .pdf-table-exp tr:nth-child(even) td {
-        background: #F8FAFC;
-    }
-
-    .pdf-content-exp .pdf-footer-exp {
-        margin-top: 12px;
-        padding-top: 10px;
-        border-top: 2px solid #E2E8F0;
-    }
-
-    .pdf-content-exp .footer-stamp-exp {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 12px;
-    }
-
-    .pdf-content-exp .stamp-box-exp {
-        text-align: center;
-        padding: 6px 14px;
-        border: 3px solid #059669;
-        border-radius: 10px;
-        background: #D1FAE5;
-        min-width: 150px;
-    }
-
-    .pdf-content-exp .stamp-title-exp {
-        font-size: 10px;
-        color: var(--page-text-secondary, #64748B);
-        text-transform: uppercase;
-        font-weight: 700;
-    }
-
-    .pdf-content-exp .stamp-name-exp {
-        font-size: 14px;
-        font-weight: 800;
-        color: #059669;
-    }
-
-    .pdf-content-exp .stamp-line-exp {
-        font-size: 12px;
-        color: var(--page-text-secondary, #64748B);
-        margin-top: 2px;
-    }
-
-    .pdf-content-exp .footer-bottom-exp {
-        text-align: center;
-        margin-top: 6px;
-        font-size: 12px;
-        color: #94A3B8;
     }
 
     /* ================================================================
@@ -1463,13 +1406,13 @@ include_once '../../components/admin_sidebar.php';
     <div class="filter-section-exp">
         <div class="filter-row-exp" style="margin-bottom:6px;">
             <span class="filter-label-exp"><i class="fas fa-calendar"></i> Date:</span>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=daily<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === 'daily' ? 'active' : '' ?>">📅 Daily</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=week<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === 'week' ? 'active' : '' ?>">📅 Week</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=monthly<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === 'monthly' ? 'active' : '' ?>">📅 Monthly</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=3months<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === '3months' ? 'active' : '' ?>">📅 3 Months</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=6months<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === '6months' ? 'active' : '' ?>">📅 6 Months</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=1year<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === '1year' ? 'active' : '' ?>">📅 1 Year</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=all<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === 'all' ? 'active' : '' ?>">📅 All</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=daily<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === 'daily' ? 'active' : '' ?>"><i class="fas fa-calendar-day"></i> Daily</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=week<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === 'week' ? 'active' : '' ?>"><i class="fas fa-calendar-week"></i> Week</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=monthly<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === 'monthly' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> Monthly</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=3months<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === '3months' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 3M</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=6months<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === '6months' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 6M</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=1year<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === '1year' ? 'active' : '' ?>"><i class="fas fa-calendar"></i> 1Y</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=all<?= $filter_status !== 'all' ? '&status=' . urlencode($filter_status) : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $date_filter === 'all' ? 'active' : '' ?>"><i class="fas fa-infinity"></i> All</a>
         </div>
         
         <div class="filter-row-exp" style="border-top:1px solid var(--page-border);padding-top:8px;margin-top:4px;">
@@ -1495,10 +1438,10 @@ include_once '../../components/admin_sidebar.php';
     <div class="filter-section-exp">
         <div class="filter-row-exp">
             <span class="filter-label-exp"><i class="fas fa-filter"></i> Status:</span>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=all<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $filter_status === 'all' ? 'active' : '' ?>">📋 All</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=pending<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $filter_status === 'pending' ? 'active' : '' ?>">⏳ Pending</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=paid<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $filter_status === 'paid' ? 'active' : '' ?>">✅ Paid</a>
-            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=cancelled<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $filter_status === 'cancelled' ? 'active' : '' ?>">❌ Cancelled</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=all<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $filter_status === 'all' ? 'active' : '' ?>"><i class="fas fa-list"></i> All</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=pending<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $filter_status === 'pending' ? 'active' : '' ?>"><i class="fas fa-clock"></i> Pending</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=paid<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $filter_status === 'paid' ? 'active' : '' ?>"><i class="fas fa-check-circle"></i> Paid</a>
+            <a href="?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=cancelled<?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn-exp <?= $filter_status === 'cancelled' ? 'active' : '' ?>"><i class="fas fa-times-circle"></i> Cancelled</a>
             
             <?php if (!empty($categories)): ?>
             <select class="filter-input-exp" style="flex:0 1 auto;min-width:120px;max-width:180px;" onchange="window.location.href='?branch=<?= $selected_branch_id ?>&date_filter=<?= $date_filter ?>&status=<?= $filter_status ?>&category='+this.value<?= !empty($search) ? "+'&search=" . urlencode($search) . "'" : '' ?>">
@@ -1555,7 +1498,7 @@ include_once '../../components/admin_sidebar.php';
                             <tr>
                                 <td style="text-align:center;"><?= $i++ ?></td>
                                 <td>
-                                    <span style="font-family:monospace;font-weight:600;color:#059669;font-size:0.7rem;">
+                                    <span style="font-weight:600;color:#059669;font-size:0.7rem;">
                                         <?= htmlspecialchars($exp['expense_number']) ?>
                                     </span>
                                 </td>
@@ -1572,7 +1515,7 @@ include_once '../../components/admin_sidebar.php';
                                 <td>
                                     <span style="font-size:0.75rem;"><?= htmlspecialchars($exp['description']) ?></span>
                                     <?php if (!empty($exp['notes'])): ?>
-                                        <div style="font-size:0.65rem;color:var(--page-text-secondary);">📝 <?= htmlspecialchars($exp['notes']) ?></div>
+                                        <div style="font-size:0.65rem;color:var(--page-text-secondary);"><i class="fas fa-sticky-note"></i> <?= htmlspecialchars($exp['notes']) ?></div>
                                     <?php endif; ?>
                                 </td>
                                 <td style="text-align:center;font-weight:700;color:#059669;">
@@ -1922,7 +1865,7 @@ include_once '../../components/admin_sidebar.php';
     <div class="pdf-modal-exp">
         <div class="pdf-modal-header-exp">
             <div class="modal-title-exp">
-                <i class="fas fa-file-pdf" style="color:rgba(255,255,255,0.8);"></i> Expenses Report
+                <i class="fas fa-file-pdf"></i> Expenses Report
             </div>
             <div class="modal-actions-exp">
                 <button onclick="downloadPDF()"><i class="fas fa-download"></i> Download</button>
@@ -1937,12 +1880,29 @@ include_once '../../components/admin_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- PAGE-SPECIFIC JAVASCRIPT (NO dark mode, NO sidebar, NO date-time) -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // FOOTER TIME ONLY
-    // ================================================================
+    // ✅ VERIFY FONT AWESOME
+    (function() {
+        var testIcon = document.createElement('i');
+        testIcon.className = 'fas fa-check';
+        testIcon.style.position = 'absolute';
+        testIcon.style.left = '-9999px';
+        testIcon.style.fontSize = '24px';
+        document.body.appendChild(testIcon);
+        setTimeout(function() {
+            var computed = window.getComputedStyle(testIcon, ':before');
+            var content = computed.getPropertyValue('content');
+            if (content === 'none' || content === '""' || content === 'normal') {
+                console.warn('%c⚠️ Font Awesome HAIPO!', 'color:#F59E0B;font-weight:bold;');
+            } else {
+                console.log('%c✅ Font Awesome imepakiwa vizuri', 'color:#10B981;font-weight:bold;');
+            }
+            document.body.removeChild(testIcon);
+        }, 1000);
+    })();
+
     setInterval(function() {
         var now = new Date();
         var timeStr = now.toLocaleTimeString('en-US', {
@@ -1952,9 +1912,6 @@ include_once '../../components/admin_sidebar.php';
         if (ftEl) ftEl.textContent = timeStr;
     }, 1000);
 
-    // ================================================================
-    // FORMAT AMOUNT
-    // ================================================================
     function formatAmount(input) {
         var raw = input.value.replace(/[^0-9]/g, '');
         if (raw === '') { input.value = ''; return; }
@@ -1963,9 +1920,6 @@ include_once '../../components/admin_sidebar.php';
         input.value = num.toLocaleString('en-US');
     }
 
-    // ================================================================
-    // MODAL
-    // ================================================================
     function openAddModal() {
         document.getElementById('addModal').classList.add('show');
         document.body.style.overflow = 'hidden';
@@ -1995,9 +1949,6 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // EDIT MODAL
-    // ================================================================
     function openEditModal(id, branchId, number, category, description, amount, method, date, status, receipt, notes) {
         document.getElementById('editExpenseId').value = id;
         document.getElementById('editBranchId').value = branchId;
@@ -2014,9 +1965,6 @@ include_once '../../components/admin_sidebar.php';
         document.body.style.overflow = 'hidden';
     }
 
-    // ================================================================
-    // PDF GENERATION
-    // ================================================================
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
         var content = document.getElementById('pdfContent');
@@ -2054,71 +2002,71 @@ include_once '../../components/admin_sidebar.php';
         }
         
         var html = `
-            <div class="pdf-header-exp">
-                <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" onerror="this.style.display='none'">
-                <div class="clinic-name-exp">BRAICK DISPENSARY</div>
-                <div class="clinic-sub-exp">Tunajali Afya Yako</div>
-                <div class="doc-title-exp">💰 Expenses Report - ${filterDisplay}</div>
+            <div class="pdf-header-exp" style="text-align:center;padding-bottom:12px;border-bottom:3px solid #059669;margin-bottom:16px;">
+                <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" onerror="this.style.display='none'" style="height:55px;width:auto;object-fit:contain;display:block;margin:0 auto;">
+                <div style="font-size:1.4rem;font-weight:800;color:#059669;letter-spacing:-0.5px;margin-top:4px;font-family:'JetBrains Mono',monospace;">BRAICK DISPENSARY</div>
+                <div style="font-size:0.75rem;color:#64748B;letter-spacing:0.5px;font-family:'JetBrains Mono',monospace;">Tunajali Afya Yako</div>
+                <div style="font-size:0.85rem;font-weight:700;color:#059669;margin-top:4px;background:#D1FAE5;padding:4px 16px;border-radius:20px;display:inline-block;font-family:'JetBrains Mono',monospace;">💰 Expenses Report - ${filterDisplay}</div>
             </div>
             
             <div style="margin-bottom:8px;">
-                <div class="pdf-section-title-exp">📊 Summary</div>
+                <div style="font-weight:700;font-size:0.95rem;color:#059669;border-bottom:2px solid #34D399;padding-bottom:4px;margin:6px 0 4px 0;font-family:'JetBrains Mono',monospace;">📊 Summary</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin:4px 0;">
                     <div style="background:#D1FAE5;padding:6px 10px;border-radius:8px;text-align:center;border:1px solid #059669;">
-                        <div style="font-size:18px;font-weight:700;color:#059669;">${totalBills}</div>
+                        <div style="font-size:18px;font-weight:700;color:#059669;font-family:'JetBrains Mono',monospace;">${totalBills}</div>
                         <div style="font-size:9px;color:#64748B;text-transform:uppercase;">📋 Total</div>
                     </div>
                     <div style="background:#FEF3C7;padding:6px 10px;border-radius:8px;text-align:center;border:1px solid #D97706;">
-                        <div style="font-size:18px;font-weight:700;color:#D97706;">${pendingCount}</div>
+                        <div style="font-size:18px;font-weight:700;color:#D97706;font-family:'JetBrains Mono',monospace;">${pendingCount}</div>
                         <div style="font-size:9px;color:#64748B;text-transform:uppercase;">⏳ Pending</div>
                     </div>
                     <div style="background:#D1FAE5;padding:6px 10px;border-radius:8px;text-align:center;border:1px solid #059669;">
-                        <div style="font-size:18px;font-weight:700;color:#059669;">${paidCount}</div>
+                        <div style="font-size:18px;font-weight:700;color:#059669;font-family:'JetBrains Mono',monospace;">${paidCount}</div>
                         <div style="font-size:9px;color:#64748B;text-transform:uppercase;">✅ Paid</div>
                     </div>
                     <div style="background:#FEE2E2;padding:6px 10px;border-radius:8px;text-align:center;border:1px solid #DC2626;">
-                        <div style="font-size:18px;font-weight:700;color:#DC2626;">${cancelledCount}</div>
+                        <div style="font-size:18px;font-weight:700;color:#DC2626;font-family:'JetBrains Mono',monospace;">${cancelledCount}</div>
                         <div style="font-size:9px;color:#64748B;text-transform:uppercase;">❌ Cancelled</div>
                     </div>
                 </div>
                 <div style="background:#E8F0FE;padding:6px 10px;border-radius:6px;text-align:center;border:1px solid #0B5ED7;margin-top:4px;">
-                    <div style="font-size:16px;font-weight:700;color:#0B5ED7;">💰 Total: ${currency} ${Number(totalAmount).toLocaleString()}</div>
+                    <div style="font-size:16px;font-weight:700;color:#0B5ED7;font-family:'JetBrains Mono',monospace;">💰 Total: ${currency} ${Number(totalAmount).toLocaleString()}</div>
                 </div>
             </div>
             
             <div style="margin-bottom:8px;">
-                <div class="pdf-section-title-exp">📋 Expenses List (${totalBills})</div>
-                <table class="pdf-table-exp">
+                <div style="font-weight:700;font-size:0.95rem;color:#059669;border-bottom:2px solid #34D399;padding-bottom:4px;margin:6px 0 4px 0;font-family:'JetBrains Mono',monospace;">📋 Expenses List (${totalBills})</div>
+                <table style="width:100%;border-collapse:collapse;font-size:12px;margin:4px 0;font-family:'JetBrains Mono',monospace;">
                     <thead>
                         <tr>
-                            <th style="text-align:center;">#</th>
-                            <th>Expense #</th>
-                            <th>Branch</th>
-                            <th>Category</th>
-                            <th>Description</th>
-                            <th style="text-align:right;">Amount</th>
-                            <th style="text-align:center;">Method</th>
-                            <th style="text-align:center;">Date</th>
-                            <th style="text-align:center;">Status</th>
+                            <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:10px;text-transform:uppercase;border:1px solid #047857;">#</th>
+                            <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:10px;text-transform:uppercase;border:1px solid #047857;">Expense #</th>
+                            <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:10px;text-transform:uppercase;border:1px solid #047857;">Branch</th>
+                            <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:10px;text-transform:uppercase;border:1px solid #047857;">Category</th>
+                            <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:10px;text-transform:uppercase;border:1px solid #047857;">Description</th>
+                            <th style="background:#059669;color:white;padding:4px 8px;text-align:right;font-size:10px;text-transform:uppercase;border:1px solid #047857;">Amount</th>
+                            <th style="background:#059669;color:white;padding:4px 8px;text-align:center;font-size:10px;text-transform:uppercase;border:1px solid #047857;">Method</th>
+                            <th style="background:#059669;color:white;padding:4px 8px;text-align:center;font-size:10px;text-transform:uppercase;border:1px solid #047857;">Date</th>
+                            <th style="background:#059669;color:white;padding:4px 8px;text-align:center;font-size:10px;text-transform:uppercase;border:1px solid #047857;">Status</th>
                         </tr>
                     </thead>
                     <tbody>${expensesHtml}</tbody>
                 </table>
             </div>
             
-            <div class="pdf-footer-exp">
-                <div class="footer-stamp-exp">
-                    <div style="font-size:14px;color:#64748B;">
+            <div style="margin-top:12px;padding-top:10px;border-top:2px solid #E2E8F0;">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+                    <div style="font-size:14px;color:#64748B;font-family:'JetBrains Mono',monospace;">
                         <span>Generated by: <?= htmlspecialchars($user_full_name) ?></span>
                         <span style="margin-left:14px;">Date: <?= date('F d, Y') ?></span>
                     </div>
-                    <div class="stamp-box-exp">
-                        <div class="stamp-title-exp">Official Stamp</div>
-                        <div class="stamp-name-exp">BRAICK DISPENSARY</div>
-                        <div class="stamp-line-exp">Approved By: _____________</div>
+                    <div style="text-align:center;padding:6px 14px;border:3px solid #059669;border-radius:10px;background:#D1FAE5;min-width:150px;">
+                        <div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:700;font-family:'JetBrains Mono',monospace;">Official Stamp</div>
+                        <div style="font-size:14px;font-weight:800;color:#059669;font-family:'JetBrains Mono',monospace;">BRAICK DISPENSARY</div>
+                        <div style="font-size:12px;color:#64748B;margin-top:2px;font-family:'JetBrains Mono',monospace;">Approved By: _____________</div>
                     </div>
                 </div>
-                <div class="footer-bottom-exp">
+                <div style="text-align:center;margin-top:6px;font-size:12px;color:#94A3B8;font-family:'JetBrains Mono',monospace;">
                     Braick Dispensary • Generated on <?= date('F d, Y h:i:s A') ?>
                 </div>
             </div>
@@ -2149,22 +2097,17 @@ include_once '../../components/admin_sidebar.php';
         html2pdf().set(opt).from(element).save();
     }
 
-    // ================================================================
-    // SEARCH ENTER KEY
-    // ================================================================
     document.getElementById('searchInput')?.addEventListener('keypress', function(e) {
         if (e.key === 'Enter') this.form.submit();
     });
 
     <?php if ($message && $message_type): ?>
-        console.log('%c<?= $message_type === 'success' ? '✅' : '❌' ?> <?= addslashes($message) ?>', 'font-size:13px; color:<?= $message_type === 'success' ? '#059669' : '#DC2626' ?>;');
+        console.log('%c<?= $message_type === 'success' ? '✅' : '❌' ?> <?= addslashes($message) ?>', 'font-family:monospace;font-size:13px; color:<?= $message_type === 'success' ? '#059669' : '#DC2626' ?>;');
     <?php endif; ?>
 
-    console.log('%c💰 Braick - Expenses', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#059669;');
-    console.log('%c✅ NO duplicate dark mode JavaScript', 'font-size:13px; color:#059669;');
-    console.log('%c🌙 Dark mode: Handled by header', 'font-size:13px; color:#7C3AED;');
-    console.log('%c📊 All: <?= $all_expenses ?> | Pending: <?= $pending_expenses ?> | Paid: <?= $paid_expenses ?> | Cancelled: <?= $cancelled_expenses ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Braick - Expenses V11', 'font-family:monospace;font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ FIXED: Font Awesome 6 + JetBrains Mono', 'font-family:monospace;font-size:13px; color:#10B981; font-weight:bold;');
+    console.log('%c📊 All: <?= $all_expenses ?> | Pending: <?= $pending_expenses ?> | Paid: <?= $paid_expenses ?> | Cancelled: <?= $cancelled_expenses ?>', 'font-family:monospace;font-size:13px; color:#64748B;');
 </script>
 
 </body>

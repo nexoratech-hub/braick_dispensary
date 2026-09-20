@@ -1,18 +1,14 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/make_payment.php
-// CASHIER - MAKE PAYMENT - FULLY FIXED v5.0
+// CASHIER - MAKE PAYMENT - v7.0 (IMPROVED PAYMENT CARD)
 // ================================================================
-// ✅ Formula: remaining = subtotal 
-//            + premium_amount(bill hii pekee) 
-//            + premium_new(cashier) 
-//            - total_discount 
-//            - paid_amount
-// ================================================================
-// ✅ 5 Cards: Subtotal | Discount | Premium | Paid | Remaining
-// ✅ Payment Controls: Method | Discount | Premium | Partial
-// ✅ Other bills premium = INFO ONLY (not in calculation)
-// ✅ ADDED: LOCK bills with pending prescriptions - HAIWEZI KUFUNGULIWA
+// ✅ NEW: updateVisitPaymentStatus() - Inaupdate visit payment_status
+// ✅ NEW: updateVisitCompletionStatus() - Inaupdate is_completed
+// ✅ IMPROVED: Payment card - width inalingana na table, height imeongezwa
+// ✅ FIXED: Full payment → visit payment_status = 'paid'
+// ✅ FIXED: Partial payment → visit payment_status = 'partial'
+// ✅ LOCK bills with pending prescriptions
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -69,7 +65,143 @@ $message_type = '';
 $currency = 'TSh';
 
 // ================================================================
-// ✅ HELPER: CHECK IF BILL IS LOCKED (PENDING PRESCRIPTIONS)
+// ✅ HELPER: UPDATE VISIT PAYMENT STATUS
+// ================================================================
+function updateVisitPaymentStatus($db, $visit_id, $branch_id) {
+    if (empty($visit_id) || $visit_id <= 0) return false;
+    
+    try {
+        $stmt = $db->prepare("
+            SELECT id, total_amount, paid_amount, balance, status
+            FROM bills
+            WHERE visit_id = ? AND branch_id = ? AND status != 'cancelled'
+        ");
+        $stmt->execute([$visit_id, $branch_id]);
+        $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        if (empty($bills)) {
+            $stmt = $db->prepare("
+                UPDATE visits 
+                SET payment_status = 'pending', visit_total = 0, updated_at = NOW()
+                WHERE id = ? AND branch_id = ?
+            ");
+            $stmt->execute([$visit_id, $branch_id]);
+            return true;
+        }
+        
+        $visit_total = 0;
+        $visit_paid = 0;
+        $visit_balance = 0;
+        $all_paid = true;
+        $any_paid = false;
+        
+        foreach ($bills as $bill) {
+            $visit_total += (float)$bill['total_amount'];
+            $visit_paid += (float)$bill['paid_amount'];
+            $visit_balance += (float)$bill['balance'];
+            
+            if ($bill['status'] === 'paid') {
+                $any_paid = true;
+            } elseif ($bill['status'] === 'partial') {
+                $any_paid = true;
+                $all_paid = false;
+            } else {
+                $all_paid = false;
+            }
+        }
+        
+        $visit_payment_status = 'pending';
+        
+        if ($visit_total <= 0) {
+            $visit_payment_status = 'paid';
+        } elseif ($all_paid && $visit_balance <= 0.01) {
+            $visit_payment_status = 'paid';
+        } elseif ($any_paid && $visit_balance > 0) {
+            $visit_payment_status = 'partial';
+        } else {
+            $visit_payment_status = 'pending';
+        }
+        
+        $stmt = $db->prepare("
+            SELECT COALESCE(SUM(total_discount), 0) as total_discount
+            FROM bills
+            WHERE visit_id = ? AND branch_id = ? AND status != 'cancelled'
+        ");
+        $stmt->execute([$visit_id, $branch_id]);
+        $totals = $stmt->fetch(PDO::FETCH_ASSOC);
+        $visit_discount = (float)($totals['total_discount'] ?? 0);
+        
+        $stmt = $db->prepare("
+            UPDATE visits 
+            SET 
+                payment_status = ?,
+                visit_total = ?,
+                total_discount = ?,
+                updated_at = NOW()
+            WHERE id = ? AND branch_id = ?
+        ");
+        $stmt->execute([
+            $visit_payment_status,
+            $visit_total,
+            $visit_discount,
+            $visit_id,
+            $branch_id
+        ]);
+        
+        error_log("✅ VISIT #$visit_id UPDATED: payment_status=$visit_payment_status, total=$visit_total, paid=$visit_paid");
+        return true;
+        
+    } catch (Exception $e) {
+        error_log("❌ updateVisitPaymentStatus error: " . $e->getMessage());
+        return false;
+    }
+}
+
+// ================================================================
+// ✅ HELPER: UPDATE VISIT COMPLETION STATUS
+// ================================================================
+function updateVisitCompletionStatus($db, $visit_id, $branch_id) {
+    if (empty($visit_id) || $visit_id <= 0) return false;
+    
+    try {
+        $stmt = $db->prepare("
+            SELECT 
+                COUNT(*) as total_bills,
+                SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) as paid_bills,
+                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_bills
+            FROM bills
+            WHERE visit_id = ? AND branch_id = ?
+        ");
+        $stmt->execute([$visit_id, $branch_id]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        $total = (int)($result['total_bills'] ?? 0);
+        $paid = (int)($result['paid_bills'] ?? 0);
+        $cancelled = (int)($result['cancelled_bills'] ?? 0);
+        
+        $active_bills = $total - $cancelled;
+        
+        if ($active_bills > 0 && $paid == $active_bills) {
+            $stmt = $db->prepare("
+                UPDATE visits 
+                SET 
+                    is_completed = 1,
+                    completed_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = ? AND branch_id = ? AND is_completed = 0
+            ");
+            $stmt->execute([$visit_id, $branch_id]);
+        }
+        
+        return true;
+    } catch (Exception $e) {
+        error_log("updateVisitCompletionStatus error: " . $e->getMessage());
+        return false;
+    }
+}
+
+// ================================================================
+// ✅ HELPER: CHECK IF BILL IS LOCKED
 // ================================================================
 function isBillLocked($db, $bill_id) {
     try {
@@ -101,10 +233,10 @@ try {
     $currency = $settings['currency'] ?? 'TSh';
 
     // ================================================================
-    // ✅ CHECK LOCK STATUS - REDIRECT KAMA BILL NI LOCKED
+    // ✅ CHECK LOCK STATUS
     // ================================================================
     if (isBillLocked($db, $bill_id)) {
-        $_SESSION['flash_message'] = "🔒 Bill hii haiwezi kulipwa! Kuna prescriptions ambazo hazijathibitishwa na pharmacy. Tafadhali subiri pharmacy athibitishe kwanza.";
+        $_SESSION['flash_message'] = "🔒 Bill hii haiwezi kulipwa! Kuna prescriptions ambazo hazijathibitishwa na pharmacy.";
         $_SESSION['flash_type'] = 'error';
         header('Location: partial_payments.php?locked=1');
         exit;
@@ -131,11 +263,10 @@ try {
                 exit;
             }
             
-            // ✅ DOUBLE CHECK LOCK
             if (isBillLocked($db, $bill_id_post)) {
                 echo json_encode([
                     'success' => false, 
-                    'message' => '🔒 HAIWEZI KULIPWA! Kuna prescriptions ambazo hazijathibitishwa na pharmacy.',
+                    'message' => '🔒 HAIWEZI KULIPWA! Kuna prescriptions ambazo hazijathibitishwa.',
                     'locked' => true
                 ]);
                 exit;
@@ -158,6 +289,8 @@ try {
                     echo json_encode(['success' => false, 'message' => 'Bill not found']);
                     exit;
                 }
+                
+                $visit_id = (int)($current_bill['visit_id'] ?? 0);
                 
                 $subtotal = (float)($current_bill['subtotal'] ?? 0);
                 $paid_amount = (float)($current_bill['paid_amount'] ?? 0);
@@ -288,9 +421,6 @@ try {
                          ' | Cashier Disc: ' . $currency . ' ' . number_format($new_discount, 0);
                 if ($total_premium_all > 0) {
                     $notes .= ' | Premium: ' . $currency . ' ' . number_format($total_premium_all, 0);
-                    if ($new_premium > 0) {
-                        $notes .= ' (New: +' . number_format($new_premium, 0) . ')';
-                    }
                 }
                 
                 $stmt = $db->prepare("
@@ -309,15 +439,17 @@ try {
                     $notes
                 ]);
                 
+                // ✅ UPDATE VISIT
+                if ($visit_id > 0) {
+                    updateVisitPaymentStatus($db, $visit_id, $user_branch_id);
+                    updateVisitCompletionStatus($db, $visit_id, $user_branch_id);
+                }
+                
                 $db->commit();
                 
-                $message = "Payment successful!";
-                $message .= " Amount: " . $currency . " " . number_format($amount_to_pay, 0);
+                $message = "Payment successful! Amount: " . $currency . " " . number_format($amount_to_pay, 0);
                 if ($new_premium > 0) {
-                    $message .= " | 👑 New Premium: " . $currency . " " . number_format($new_premium, 0);
-                }
-                if ($new_discount > 0) {
-                    $message .= " | New Discount: " . $currency . " " . number_format($new_discount, 0);
+                    $message .= " | 👑 Premium: " . $currency . " " . number_format($new_premium, 0);
                 }
                 
                 $is_all_paid = ($new_balance <= 0.01);
@@ -332,25 +464,11 @@ try {
                     'message' => $message,
                     'receipt_number' => $receipt_number,
                     'amount_paid' => $amount_to_pay,
-                    'cashier_discount' => $updated_cashier_discount,
-                    'total_discount' => $updated_total_discount,
-                    'premium_amount' => $total_premium_all,
-                    'premium_note' => $premium_note_final,
                     'new_balance' => $new_balance,
                     'new_status' => $new_status,
                     'is_paid' => $is_all_paid,
                     'is_partial' => !$is_all_paid,
-                    'updated_totals' => [
-                        'subtotal' => $subtotal,
-                        'premium_bill' => $existing_premium,
-                        'premium_new' => $new_premium,
-                        'premium_total' => $total_premium_all,
-                        'total_amount' => $new_total_amount,
-                        'total_paid' => $new_paid,
-                        'total_balance' => $new_balance,
-                        'total_discount' => $updated_total_discount,
-                        'cashier_discount' => $updated_cashier_discount
-                    ]
+                    'visit_id' => $visit_id
                 ]);
                 
             } catch (Exception $e) {
@@ -366,40 +484,20 @@ try {
     }
 
     // ================================================================
-    // GET ONLY THIS BILL
+    // GET BILL
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
-            b.*,
-            b.subtotal,
-            b.total_amount,
-            b.paid_amount,
-            b.balance,
-            b.discount_amount,
-            b.pharmacy_discount,
-            b.cashier_discount,
-            b.total_discount,
-            b.premium_amount,
-            b.premium_note,
-            b.patient_id as patient_id_ref,
-            v.visit_number,
-            v.visit_type,
-            v.visit_date,
-            v.status as visit_status,
+            b.*, b.subtotal, b.total_amount, b.paid_amount, b.balance,
+            b.discount_amount, b.pharmacy_discount, b.cashier_discount, b.total_discount,
+            b.premium_amount, b.premium_note, b.patient_id as patient_id_ref,
+            b.visit_id,
+            v.visit_number, v.visit_type, v.visit_date, v.status as visit_status,
+            v.payment_status as visit_payment_status,
             u.full_name as doctor_name,
-            u.specialty as doctor_specialty,
-            p.full_name as patient_name,
-            p.patient_id as patient_number,
-            p.phone,
-            p.email,
-            p.gender,
-            p.date_of_birth,
-            p.address,
-            p.blood_group,
-            p.allergies,
-            p.emergency_contact,
-            b.created_at as bill_created,
-            b.updated_at as bill_updated
+            p.full_name as patient_name, p.patient_id as patient_number,
+            p.phone, p.email, p.gender, p.date_of_birth, p.address, p.blood_group,
+            b.created_at as bill_created, b.updated_at as bill_updated
         FROM bills b
         JOIN patients p ON b.patient_id = p.id
         LEFT JOIN visits v ON b.visit_id = v.id
@@ -422,7 +520,6 @@ try {
         $pharmacy_discount = (float)($bill['discount_amount'] ?? 0);
     }
     $cashier_discount = (float)($bill['cashier_discount'] ?? 0);
-    $discount_amount = $pharmacy_discount;
     $total_discount = $pharmacy_discount + $cashier_discount;
     
     $existing_premium = (float)($bill['premium_amount'] ?? 0);
@@ -431,20 +528,22 @@ try {
     $remaining_balance = $subtotal + $existing_premium - $total_discount - $paid_amount;
     if ($remaining_balance < 0) $remaining_balance = 0;
     
+    // ✅ AUTO-REPAIR
+    $visit_id_ref = (int)($bill['visit_id'] ?? 0);
+    if ($visit_id_ref > 0) {
+        updateVisitPaymentStatus($db, $visit_id_ref, $user_branch_id);
+        updateVisitCompletionStatus($db, $visit_id_ref, $user_branch_id);
+    }
+    
     $other_bills_premium = 0;
     $other_bills_premium_details = [];
     $patient_id_ref = $bill['patient_id_ref'] ?? $bill['patient_id'];
     
     try {
         $stmt_other = $db->prepare("
-            SELECT id, bill_number, premium_amount, premium_note, 
-                   subtotal, paid_amount, balance, status
+            SELECT id, bill_number, premium_amount, premium_note, subtotal, paid_amount, balance, status
             FROM bills 
-            WHERE patient_id = ? 
-              AND branch_id = ? 
-              AND id != ?
-              AND status != 'cancelled'
-              AND premium_amount > 0
+            WHERE patient_id = ? AND branch_id = ? AND id != ? AND status != 'cancelled' AND premium_amount > 0
             ORDER BY created_at ASC
         ");
         $stmt_other->execute([$patient_id_ref, $user_branch_id, $bill_id]);
@@ -457,8 +556,7 @@ try {
                 $other_bills_premium_details[] = [
                     'bill_number' => $ob['bill_number'],
                     'premium' => $op,
-                    'note' => $ob['premium_note'] ?? '',
-                    'status' => $ob['status'] ?? 'pending'
+                    'note' => $ob['premium_note'] ?? ''
                 ];
             }
         }
@@ -469,8 +567,7 @@ try {
     $is_locked = false;
 
     $stmt = $db->prepare("
-        SELECT 
-            bi.*,
+        SELECT bi.*,
             (SELECT status FROM prescriptions WHERE id = bi.reference_id AND reference_type = 'prescription') as prescription_status
         FROM bill_items bi
         WHERE bi.bill_id = ? AND bi.status != 'cancelled'
@@ -491,13 +588,9 @@ try {
     $unconfirmed_medication = 0;
     
     foreach ($bill_items as $item) {
-        if ($item['status'] === 'paid') {
-            $paid_items++;
-        } elseif ($item['status'] === 'partial') {
-            $partial_items++;
-        } elseif ($item['status'] === 'pending') {
-            $pending_items++;
-        }
+        if ($item['status'] === 'paid') $paid_items++;
+        elseif ($item['status'] === 'partial') $partial_items++;
+        elseif ($item['status'] === 'pending') $pending_items++;
         
         if ($item['item_type'] === 'medication') {
             $medication_items++;
@@ -518,7 +611,6 @@ try {
     $total_discount = 0;
     $pharmacy_discount = 0;
     $cashier_discount = 0;
-    $discount_amount = 0;
     $existing_premium = 0;
     $existing_premium_note = '';
     $other_bills_premium = 0;
@@ -534,6 +626,7 @@ try {
     $medication_items = 0;
     $unconfirmed_medication = 0;
     $currency = 'TSh';
+    $visit_id_ref = 0;
     error_log("Make payment error: " . $e->getMessage());
 }
 
@@ -559,10 +652,11 @@ include_once '../../components/cashier_sidebar.php';
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     
     <style>
-        /* [Same CSS as original make_payment.php] */
         :root {
+            --font-mono: 'JetBrains Mono', 'Courier New', monospace;
             --primary: #059669;
             --primary-dark: #047857;
             --primary-light: #34D399;
@@ -573,7 +667,6 @@ include_once '../../components/cashier_sidebar.php';
             --success-bg: #D1FAE5;
             --danger: #DC2626;
             --danger-dark: #B91C1C;
-            --danger-light: #F87171;
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
@@ -620,7 +713,6 @@ include_once '../../components/cashier_sidebar.php';
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 8px 24px rgba(0,0,0,0.4);
             --table-header-bg: #047857;
-            --table-header-text: #FFFFFF;
             --table-stripe: #1A3A2A;
             --table-hover: #065F46;
             --page-header-bg-from: #047857;
@@ -647,6 +739,7 @@ include_once '../../components/cashier_sidebar.php';
             margin-top: 68px;
             padding: 28px 32px;
             min-height: calc(100vh - 68px);
+            max-width: 1400px;
         }
         
         .page-header {
@@ -662,15 +755,16 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 20px var(--page-header-shadow);
             position: relative;
             overflow: hidden;
+            max-width: 1100px;
+            margin-left: auto;
+            margin-right: auto;
         }
         
         .page-header::before {
             content: '';
             position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 300px;
-            height: 300px;
+            top: -50%; right: -20%;
+            width: 300px; height: 300px;
             background: rgba(255,255,255,0.05);
             border-radius: 50%;
             pointer-events: none;
@@ -722,6 +816,11 @@ include_once '../../components/cashier_sidebar.php';
             gap: 6px;
             border: 1px solid rgba(255,255,255,0.1);
         }
+        .page-header .header-badge.premium-badge-header {
+            background: rgba(251,191,36,0.3);
+            color: #FCD34D;
+            font-weight: 600;
+        }
         .page-header .btn-outline-light {
             background: rgba(255,255,255,0.15);
             color: white;
@@ -744,16 +843,16 @@ include_once '../../components/cashier_sidebar.php';
             transform: translateY(-2px);
         }
         
-        /* [Weka CSS yote iliyobaki kutoka original make_payment.php hapa] */
-        /* Kwa ufupi, nimeacha CSS kama ilivyo kwenye original */
-        
+        /* BILL CARD */
         .bill-card {
             background: var(--bg-card);
             border-radius: 16px;
             border: 2px solid var(--border-color);
             overflow: hidden;
             transition: all 0.3s ease;
-            margin-bottom: 20px;
+            margin: 0 auto 20px;
+            max-width: 1100px;
+            width: 100%;
         }
         
         .bill-card .card-header {
@@ -807,6 +906,12 @@ include_once '../../components/cashier_sidebar.php';
             padding: 12px 14px;
             border: 2px solid var(--border-color);
             text-align: center;
+            transition: all 0.3s ease;
+        }
+        
+        .bill-summary-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
         }
         
         .bill-summary-card .label {
@@ -822,6 +927,8 @@ include_once '../../components/cashier_sidebar.php';
             font-weight: 700;
             display: block;
             margin-top: 2px;
+            font-family: var(--font-mono);
+            font-variant-numeric: tabular-nums;
         }
         
         .bill-summary-card.total .value { color: var(--primary); }
@@ -853,6 +960,8 @@ include_once '../../components/cashier_sidebar.php';
             padding: 8px 14px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
+            font-family: var(--font-mono);
+            font-variant-numeric: tabular-nums;
         }
         
         .data-table tbody tr:nth-child(even) { background: var(--table-stripe); }
@@ -863,65 +972,189 @@ include_once '../../components/cashier_sidebar.php';
             opacity: 0.85;
         }
         
+        /* ================================================================
+           ✅ PAYMENT CONTROLS CARD - IMPROVED
+           ✅ Width inalingana na table (max-width 1100px)
+           ✅ Height imeongezwa kidogo
+           ✅ Centered, haigusi sidebar
+           ================================================================ */
         .payment-controls-card {
             background: var(--bg-card);
             border-radius: 16px;
             border: 2px solid var(--success);
             overflow: hidden;
-            margin-top: 20px;
-            box-shadow: 0 4px 20px rgba(5, 150, 105, 0.15);
+            margin: 20px auto 0;
+            max-width: 1100px;
+            width: 100%;
+            box-shadow: 0 6px 24px rgba(5, 150, 105, 0.18);
             position: sticky;
-            bottom: 10px;
+            bottom: 12px;
             z-index: 20;
+            transition: all 0.3s ease;
+        }
+        
+        .payment-controls-card:hover {
+            box-shadow: 0 8px 32px rgba(5, 150, 105, 0.25);
         }
         
         .payment-controls-card .pc-header {
             background: linear-gradient(135deg, #059669, #047857);
-            padding: 12px 24px;
+            padding: 16px 28px;
             display: flex;
             align-items: center;
             justify-content: space-between;
             flex-wrap: wrap;
-            gap: 8px;
+            gap: 12px;
             color: white;
+            min-height: 62px;
+        }
+        
+        .payment-controls-card .pc-header > div:first-child {
+            font-size: 0.9rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
         
         .payment-controls-card .pc-body {
-            padding: 16px 20px;
+            padding: 20px 28px;
         }
         
         .payment-inputs-grid {
             display: grid;
             grid-template-columns: 1fr 1fr 1fr 1fr;
-            gap: 12px;
-            margin-bottom: 14px;
+            gap: 16px;
+            margin-bottom: 18px;
         }
         
         .payment-input-box {
             background: var(--bg-body);
-            border-radius: 10px;
-            padding: 10px 14px;
+            border-radius: 12px;
+            padding: 14px 16px;
             border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            min-height: 95px;
+        }
+        
+        .payment-input-box:hover {
+            border-color: var(--success-light);
+            box-shadow: 0 2px 8px rgba(5, 150, 105, 0.08);
+        }
+        
+        .payment-input-box > div:first-child {
+            font-size: 0.62rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            letter-spacing: 0.04em;
         }
         
         .payment-input-box select,
         .payment-input-box input[type="text"] {
             width: 100%;
-            padding: 6px 10px;
+            padding: 9px 12px;
             border: 2px solid var(--border-color);
-            border-radius: 6px;
-            font-size: 0.8rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
             background: var(--bg-card);
             color: var(--text-primary);
+            height: 40px;
+            font-family: var(--font-mono);
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .payment-input-box select:focus,
+        .payment-input-box input[type="text"]:focus {
+            border-color: var(--success);
+            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15);
+            outline: none;
+        }
+        
+        .payment-input-box select {
+            cursor: pointer;
+            font-family: 'Inter', sans-serif;
+        }
+        
+        .payment-input-box input#premiumNote {
+            margin-top: 6px;
+            font-size: 0.7rem;
+            height: 32px;
+            padding: 6px 10px;
+            font-family: 'Inter', sans-serif;
+            font-weight: 500;
         }
         
         .payment-buttons-row {
             display: flex;
-            gap: 10px;
+            gap: 12px;
             align-items: center;
             flex-wrap: wrap;
-            padding-top: 12px;
-            border-top: 1px solid var(--border-color);
+            padding-top: 18px;
+            border-top: 2px dashed var(--border-color);
+            margin-top: 4px;
+        }
+        
+        .payment-buttons-row .btn {
+            padding: 12px 28px;
+            font-size: 0.88rem;
+            border-radius: 10px;
+            min-height: 46px;
+            letter-spacing: 0.02em;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.12);
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 700;
+            cursor: pointer;
+            border: none;
+            color: white;
+        }
+        
+        .payment-buttons-row .btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 16px rgba(0,0,0,0.18);
+        }
+        
+        .payment-buttons-row .btn:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        /* ✅ Remaining Badge - Improved */
+        .payment-controls-card .pc-header .remaining-badge {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: rgba(255,255,255,0.18);
+            padding: 8px 20px;
+            border-radius: 22px;
+            border: 1px solid rgba(255,255,255,0.2);
+            backdrop-filter: blur(6px);
+        }
+        
+        .payment-controls-card .pc-header .remaining-badge .label {
+            font-size: 0.58rem;
+            font-weight: 700;
+            color: rgba(255,255,255,0.75);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        
+        .payment-controls-card .pc-header .remaining-badge .value {
+            font-size: 1.05rem;
+            font-weight: 800;
+            font-family: var(--font-mono);
+            color: #FCD34D;
+            letter-spacing: -0.02em;
         }
         
         .btn {
@@ -972,6 +1205,9 @@ include_once '../../components/cashier_sidebar.php';
             text-align: center;
             font-size: 0.7rem;
             color: var(--text-secondary);
+            max-width: 1100px;
+            margin-left: auto;
+            margin-right: auto;
         }
         
         .spinner {
@@ -986,13 +1222,43 @@ include_once '../../components/cashier_sidebar.php';
         
         @keyframes spin { to { transform: rotate(360deg); } }
         
+        /* ================================================================
+           ✅ RESPONSIVE
+           ================================================================ */
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
+            .payment-controls-card {
+                max-width: 100%;
+                margin-left: 0;
+                margin-right: 0;
+            }
         }
+        
         @media (max-width: 768px) {
             .bill-summary-grid { grid-template-columns: repeat(2, 1fr); }
-            .payment-inputs-grid { grid-template-columns: 1fr; }
+            .payment-inputs-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
             .patient-info-grid { grid-template-columns: 1fr; }
+            .payment-controls-card .pc-header { padding: 14px 18px; }
+            .payment-controls-card .pc-body { padding: 16px 18px; }
+            .payment-buttons-row .btn {
+                padding: 11px 20px;
+                font-size: 0.8rem;
+                width: 100%;
+                justify-content: center;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .payment-inputs-grid { grid-template-columns: 1fr; }
+            .payment-input-box { min-height: auto; }
+            .payment-controls-card .pc-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .payment-controls-card .pc-header .remaining-badge {
+                width: 100%;
+                justify-content: center;
+            }
         }
     </style>
 </head>
@@ -1026,7 +1292,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <a href="partial_payments.php" class="btn-outline-light">
-                <i class="fas fa-arrow-left"></i> Back to Partial
+                <i class="fas fa-arrow-left"></i> Back
             </a>
             <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-home"></i> Dashboard
@@ -1038,7 +1304,7 @@ include_once '../../components/cashier_sidebar.php';
     <div class="bill-card">
         <div class="card-header">
             <div>
-                <span class="bill-number" style="font-weight:700;font-family:monospace;">
+                <span class="bill-number" style="font-weight:700;font-family:var(--font-mono);">
                     <i class="fas fa-file-invoice"></i> <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
                 </span>
                 <span style="font-size:0.7rem;opacity:0.8;margin-left:12px;">
@@ -1151,8 +1417,8 @@ include_once '../../components/cashier_sidebar.php';
                                     </span>
                                 </td>
                                 <td style="text-align:center;"><?= $qty ?></td>
-                                <td style="text-align:right;font-family:monospace;"><?= $currency ?> <?= number_format($unit_price, 0) ?></td>
-                                <td style="text-align:right;font-family:monospace;font-weight:600;<?= $is_item_paid ? 'color:var(--success);' : ($is_item_partial ? 'color:var(--warning);' : 'color:var(--danger);') ?>">
+                                <td style="text-align:right;"><?= $currency ?> <?= number_format($unit_price, 0) ?></td>
+                                <td style="text-align:right;font-weight:600;<?= $is_item_paid ? 'color:var(--success);' : ($is_item_partial ? 'color:var(--warning);' : 'color:var(--danger);') ?>">
                                     <?= $currency ?> <?= number_format($price, 0) ?>
                                 </td>
                                 <td style="text-align:center;">
@@ -1193,26 +1459,29 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- PAYMENT CONTROLS CARD -->
+    <!-- PAYMENT CONTROLS CARD - IMPROVED -->
     <?php if (!$is_paid && $remaining_balance > 0): ?>
     <div class="payment-controls-card" id="paymentControls">
+        <!-- ✅ HEADER - IMPROVED -->
         <div class="pc-header">
-            <div style="font-size:0.85rem;font-weight:700;display:flex;align-items:center;gap:8px;">
-                <i class="fas fa-cash-register"></i> Payment Controls
+            <div>
+                <i class="fas fa-cash-register"></i> 
+                Payment Controls
             </div>
-            <div style="display:flex;align-items:center;gap:12px;background:rgba(255,255,255,0.15);padding:6px 16px;border-radius:20px;">
-                <div style="display:flex;flex-direction:column;align-items:center;padding:0 8px;">
-                    <span style="font-size:0.5rem;font-weight:600;color:rgba(255,255,255,0.7);text-transform:uppercase;">Remaining</span>
-                    <span style="font-size:0.95rem;font-weight:700;font-family:monospace;color:#FCD34D;" id="displayBalanceGrand"><?= $currency ?> <?= number_format($remaining_balance, 0) ?></span>
-                </div>
+            <div class="remaining-badge">
+                <span class="label">Remaining</span>
+                <span class="value" id="displayBalanceGrand"><?= $currency ?> <?= number_format($remaining_balance, 0) ?></span>
             </div>
         </div>
         
+        <!-- ✅ BODY - IMPROVED -->
         <div class="pc-body">
             <div class="payment-inputs-grid">
+                <!-- Payment Method -->
                 <div class="payment-input-box">
-                    <div style="font-size:0.55rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:6px;">
-                        <i class="fas fa-hand-holding-usd" style="color:var(--success);"></i> Payment Method
+                    <div>
+                        <i class="fas fa-hand-holding-usd" style="color:var(--success);"></i> 
+                        Payment Method
                     </div>
                     <select id="paymentMethod">
                         <option value="cash">💰 Cash</option>
@@ -1226,40 +1495,54 @@ include_once '../../components/cashier_sidebar.php';
                     </select>
                 </div>
                 
+                <!-- Discount -->
                 <div class="payment-input-box">
-                    <div style="font-size:0.55rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:6px;">
-                        <i class="fas fa-percent" style="color:var(--warning);"></i> Add Discount
+                    <div>
+                        <i class="fas fa-percent" style="color:var(--warning);"></i> 
+                        Add Discount
                     </div>
                     <div style="position:relative;">
-                        <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:0.6rem;color:var(--text-secondary);font-weight:600;"><?= $currency ?></span>
-                        <input type="text" id="discountAmount" placeholder="0" value="0" style="padding-left:32px;text-align:right;font-family:monospace;font-weight:600;" oninput="formatAmount(this); updateTotals();">
+                        <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:0.7rem;color:var(--text-secondary);font-weight:700;font-family:var(--font-mono);pointer-events:none;z-index:2;"><?= $currency ?></span>
+                        <input type="text" id="discountAmount" placeholder="0" value="0" 
+                               style="padding-left:52px;text-align:right;" 
+                               oninput="formatAmount(this); updateTotals();">
                     </div>
                 </div>
                 
+                <!-- Premium -->
                 <div class="payment-input-box">
-                    <div style="font-size:0.55rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:6px;">
-                        <i class="fas fa-crown" style="color:var(--gold);"></i> Add Premium
+                    <div>
+                        <i class="fas fa-crown" style="color:var(--gold);"></i> 
+                        Add Premium
                     </div>
                     <div style="position:relative;">
-                        <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:0.6rem;color:var(--text-secondary);font-weight:600;"><?= $currency ?></span>
-                        <input type="text" id="premiumAmount" placeholder="0" value="0" style="padding-left:32px;text-align:right;font-family:monospace;font-weight:600;" oninput="formatAmount(this); updateTotals();">
+                        <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:0.7rem;color:var(--text-secondary);font-weight:700;font-family:var(--font-mono);pointer-events:none;z-index:2;"><?= $currency ?></span>
+                        <input type="text" id="premiumAmount" placeholder="0" value="0" 
+                               style="padding-left:52px;text-align:right;" 
+                               oninput="formatAmount(this); updateTotals();">
                     </div>
-                    <input type="text" id="premiumNote" placeholder="Note (optional)" style="width:100%;padding:4px 8px;border:1px solid var(--border-color);border-radius:4px;font-size:0.65rem;margin-top:4px;background:var(--bg-card);color:var(--text-primary);" oninput="updateTotals();">
+                    <input type="text" id="premiumNote" placeholder="Note (optional)" 
+                           oninput="updateTotals();">
                 </div>
                 
+                <!-- Partial -->
                 <div class="payment-input-box">
-                    <div style="font-size:0.55rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:6px;">
-                        <i class="fas fa-hand-holding-heart" style="color:var(--primary);"></i> Partial Payment
+                    <div>
+                        <i class="fas fa-hand-holding-heart" style="color:var(--primary);"></i> 
+                        Partial Payment
                     </div>
                     <div style="position:relative;">
-                        <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:0.6rem;color:var(--text-secondary);font-weight:600;"><?= $currency ?></span>
-                        <input type="text" id="partialAmount" placeholder="Enter Amount" value="0" style="padding-left:32px;text-align:right;font-family:monospace;font-weight:600;" oninput="formatAmount(this); updateTotals();">
+                        <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:0.7rem;color:var(--text-secondary);font-weight:700;font-family:var(--font-mono);pointer-events:none;z-index:2;"><?= $currency ?></span>
+                        <input type="text" id="partialAmount" placeholder="Enter Amount" value="0" 
+                               style="padding-left:52px;text-align:right;" 
+                               oninput="formatAmount(this); updateTotals();">
                     </div>
                 </div>
             </div>
             
+            <!-- ✅ BUTTONS - IMPROVED -->
             <div class="payment-buttons-row">
-                <div style="flex:1;display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
+                <div style="flex:1;display:flex;gap:12px;flex-wrap:wrap;justify-content:flex-end;">
                     <button onclick="processPayment('partial')" class="btn btn-warning" id="partialPayBtn">
                         <i class="fas fa-hand-holding-heart"></i> PAY PARTIAL
                     </button>
@@ -1311,8 +1594,11 @@ include_once '../../components/cashier_sidebar.php';
     var existingPremiumNote = '<?= addslashes($existing_premium_note) ?>';
     var currency = '<?= $currency ?>';
     var isPaid = <?= $is_paid ? 'true' : 'false' ?>;
+    var visitId = <?= $visit_id_ref ?? 0 ?>;
 
-    console.log('💰 Make Payment - Lock Logic Enabled');
+    console.log('💰 Make Payment v7.0');
+    console.log('✅ Visit Status Auto-Update Enabled');
+    console.log('📋 Bill ID: ' + billId + ' | Visit ID: ' + visitId);
 
     (function() {
         var htmlElement = document.documentElement;
@@ -1358,7 +1644,6 @@ include_once '../../components/cashier_sidebar.php';
         var discountInput = document.getElementById('discountAmount');
         var premiumInput = document.getElementById('premiumAmount');
         var partialInput = document.getElementById('partialAmount');
-        var premiumNoteInput = document.getElementById('premiumNote');
         
         var newDiscount = getRawValue(discountInput);
         var newPremium = getRawValue(premiumInput);
@@ -1538,7 +1823,9 @@ include_once '../../components/cashier_sidebar.php';
 
     document.addEventListener('DOMContentLoaded', function() {
         updateTotals();
-        console.log('✅ Make Payment loaded - Lock logic enabled');
+        console.log('✅ Make Payment v7.0 loaded');
+        console.log('✅ Payment card improved');
+        console.log('✅ Visit status auto-update enabled');
     });
 </script>
 

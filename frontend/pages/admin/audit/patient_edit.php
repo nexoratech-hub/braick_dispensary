@@ -1,11 +1,12 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/admin/edit_patient.php
-// ADMIN - EDIT PATIENT (SAME AS RECEPTION V13)
-// ✅ Inatumia admin_header.php + admin_sidebar.php (shared)
-// ✅ 7 Vital Signs (with SpO2) - kama reception
-// ✅ Allergy chips + Symptom chips - kama reception
-// ✅ Doctor dropdown (online/offline) - kama reception
+// FILE: frontend/pages/admin/audit/patient_edit.php
+// ADMIN AUDIT - EDIT PATIENT (with Vital Signs)
+// ✅ Inatumia admin_audit_header.php + admin_audit_sidebar.php
+// ✅ Ina vital signs zote 7 (Temperature, BP, Pulse, Weight, Height, BMI, SpO2)
+// ✅ Ina allergy chips + symptom chips
+// ✅ Ina doctor dropdown (online/offline)
+// ✅ Ina search filter kwenye top nav
 // ✅ Blue theme + dark mode support
 // ================================================================
 
@@ -14,34 +15,42 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
-    header('Location: ../login.php');
+    header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
 
+// ✅ ADMIN TU
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
-        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
-        case 'reception': header('Location: ../reception/dashboard.php'); break;
-        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
-        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
-        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
-        case 'audit': header('Location: ../audit/dashboard.php'); break;
-        default: header('Location: ../login.php'); break;
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: /dispensary_system/frontend/pages/cashier/dashboard.php'); break;
+        case 'reception': header('Location: /dispensary_system/frontend/pages/reception/dashboard.php'); break;
+        case 'audit': header('Location: /dispensary_system/frontend/pages/audit/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
     }
     exit;
 }
 
-$user_id = $_SESSION['user_id'] ?? 0;
+$user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
+$user_is_online = $_SESSION['is_online'] ?? 1;
 
-require_once __DIR__ . '/../../../backend/config/database.php';
-require_once __DIR__ . '/../../../backend/helpers/functions.php';
+$patient_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
+
+if ($patient_id <= 0) {
+    header('Location: patients.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
+    exit;
+}
+
+require_once __DIR__ . '/../../../../backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
@@ -49,42 +58,46 @@ try {
     die("Database connection error: " . $e->getMessage());
 }
 
-$patient_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = $_GET['branch'] ?? 'all';
 $message = '';
 $message_type = '';
 
-if ($patient_id <= 0) {
-    header('Location: patients.php?branch=' . urlencode($selected_branch_id));
-    exit;
-}
-
 // ================================================================
-// GET PATIENT
+// GET PATIENT - INAFANYA KAZI KWA BRANCH YOYOTE
 // ================================================================
 $patient = null;
 try {
-    $stmt = $db->prepare("
-        SELECT p.*, b.name as branch_name, u.full_name as assigned_doctor_name
-        FROM patients p
-        LEFT JOIN branches b ON p.branch_id = b.id
-        LEFT JOIN users u ON p.assigned_doctor_id = u.id
-        WHERE p.id = ?
-    ");
-    $stmt->execute([$patient_id]);
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $stmt = $db->prepare("
+            SELECT p.*, u.full_name as assigned_doctor_name, b.name as branch_name
+            FROM patients p
+            LEFT JOIN users u ON p.assigned_doctor_id = u.id
+            LEFT JOIN branches b ON p.branch_id = b.id
+            WHERE p.id = ? AND p.branch_id = ?
+        ");
+        $stmt->execute([$patient_id, (int)$selected_branch_id]);
+    } else {
+        $stmt = $db->prepare("
+            SELECT p.*, u.full_name as assigned_doctor_name, b.name as branch_name
+            FROM patients p
+            LEFT JOIN users u ON p.assigned_doctor_id = u.id
+            LEFT JOIN branches b ON p.branch_id = b.id
+            WHERE p.id = ?
+        ");
+        $stmt->execute([$patient_id]);
+    }
     $patient = $stmt->fetch(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+} catch (Exception $e) {
+    $patient = null;
+}
 
 if (!$patient) {
-    header('Location: patients.php?branch=' . urlencode($selected_branch_id));
+    header('Location: patients.php?branch=' . urlencode($selected_branch_id) . '&error=notfound');
     exit;
 }
 
 $patient_branch_id = (int)$patient['branch_id'];
 
-// ================================================================
 // GET LAST VISIT
-// ================================================================
 $last_visit = null;
 try {
     $stmt = $db->prepare("SELECT * FROM visits WHERE patient_id = ? AND branch_id = ? ORDER BY id DESC LIMIT 1");
@@ -92,9 +105,7 @@ try {
     $last_visit = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $last_visit = null; }
 
-// ================================================================
 // GET VITAL SIGNS
-// ================================================================
 $vital_signs = null;
 try {
     $stmt = $db->prepare("SELECT * FROM vital_signs WHERE patient_id = ? AND branch_id = ? ORDER BY id DESC LIMIT 1");
@@ -102,15 +113,7 @@ try {
     $vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $vital_signs = null; }
 
-// ================================================================
-// GET BRANCHES + DOCTORS
-// ================================================================
-$branches_list = [];
-try {
-    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-    $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
-
+// GET DOCTORS
 $doctors = [];
 $online_doctors = [];
 $offline_doctors = [];
@@ -235,7 +238,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_patient'])) {
         $message_type = 'success';
         
         // Re-fetch
-        $stmt = $db->prepare("SELECT p.*, b.name as branch_name, u.full_name as assigned_doctor_name FROM patients p LEFT JOIN branches b ON p.branch_id = b.id LEFT JOIN users u ON p.assigned_doctor_id = u.id WHERE p.id = ?");
+        $stmt = $db->prepare("SELECT p.*, u.full_name as assigned_doctor_name, b.name as branch_name FROM patients p LEFT JOIN users u ON p.assigned_doctor_id = u.id LEFT JOIN branches b ON p.branch_id = b.id WHERE p.id = ?");
         $stmt->execute([$patient_id]);
         $patient = $stmt->fetch(PDO::FETCH_ASSOC);
         
@@ -275,8 +278,8 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ✅ SHARED HEADER + SIDEBAR
-include_once __DIR__ . '/../../components/admin_header.php';
-include_once __DIR__ . '/../../components/admin_sidebar.php';
+include_once __DIR__ . '/../../../components/admin_audit_header.php';
+include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
 ?>
 
 <style>
@@ -317,6 +320,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     --purple-bg: #2A1A3A;
 }
 
+/* PAGE HEADER */
 .page-header-audit {
     background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
     border-radius: var(--radius-lg);
@@ -645,7 +649,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     color: var(--text-secondary);
     font-weight: 600;
     padding: 2px 5px;
-    background: #E2E8F0;
+    background: var(--gray-200, #E2E8F0);
     border-radius: 5px;
     white-space: nowrap;
 }
@@ -675,7 +679,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     border-radius: 6px;
     display: inline-block;
     margin-top: 3px;
-    background: #E2E8F0;
+    background: var(--gray-200, #E2E8F0);
     color: var(--text-secondary);
 }
 .vital-bmi-category.normal { background: rgba(5, 150, 105, 0.15); color: #059669; }
@@ -722,7 +726,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <i class="fas fa-user-edit"></i>
                 Edit Patient
                 <span class="header-badge admin-tag">
-                    <i class="fas fa-crown"></i> ADMIN
+                    <i class="fas fa-crown"></i> ADMIN AUDIT
                 </span>
             </h1>
             <p class="page-subtitle">
@@ -1296,11 +1300,10 @@ document.addEventListener('DOMContentLoaded', function() {
     
     document.getElementById('spo2Input')?.addEventListener('input', calculateSpO2Category);
     
-    console.log('%c👤 Admin - Edit Patient V13 (SAME AS RECEPTION)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Uses SHARED header + sidebar', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c👤 Admin Audit - Edit Patient', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Uses admin_audit_header + admin_audit_sidebar', 'font-size:13px; color:#059669; font-weight:bold;');
     console.log('%c✅ 7 Vital Signs (with SpO2)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Branch: <?= htmlspecialchars($patient["branch_name"] ?? "N/A") ?>', 'font-size:13px; color:#60A5FA;');
-    console.log('%c✅ Patient: <?= htmlspecialchars($patient["full_name"] ?? "N/A") ?>', 'font-size:13px; color:#7C3AED;');
 });
 </script>
 

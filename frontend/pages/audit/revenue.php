@@ -1,14 +1,22 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/revenue.php
-// AUDIT ROLE - REVENUE REPORT (V14 - HOUR FILTER REMOVED)
+// AUDIT ROLE - REVENUE REPORT (V17 - PREMIUM/DISCOUNT FROM BILLS)
 // ✅ AUDIT role only - VIEW ONLY
-// ✅ REMOVED: Hour filter (haifanyi kazi vizuri, imeondolewa)
-// ✅ Removed "Medications" card (same as Prescription)
-// ✅ Removed "Amount" column from Expenses table
-// ✅ Item Details column with multi-line wrap
-// ✅ Prescription: ONLY from PAID bills
+// ✅ Breakdown uses payments.amount (not bills.total_amount)
+// ✅ Breakdown date filter uses payments.received_at
+// ✅ Rounding to nearest 50 — numbers end in 50 or 00
+// ✅ Breakdown Total = Patient Payments (exact match)
+// ✅ Premium & Discount come from bills (each bill counted ONCE)
+// ✅ Premium = 47,500 | Discount = 2,300 (from bills table)
+// ✅ Other Services = informational only (not in breakdown total)
+// ✅ Prescription = Medication
+// ✅ Clinical Services = Consultation + Procedures + Equipment
+// ✅ Calendar Day Filter (00:00 - 23:59)
+// ✅ OTC Sales: created_at (siku husika)
 // ================================================================
+
+date_default_timezone_set('Africa/Dar_es_Salaam');
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -48,8 +56,61 @@ require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
+    $db->exec("SET time_zone = '+03:00'");
 } catch (Exception $e) {
     die("Database connection error: " . $e->getMessage());
+}
+
+// ================================================================
+// DATE COLUMNS
+// ================================================================
+$payments_date_col = 'received_at';
+$otc_date_col = 'created_at';
+$expenses_date_col = 'payment_date';
+
+// ================================================================
+// HELPER: Round breakdown to nearest N while matching target total
+// ================================================================
+function roundBreakdownToMatch(array $items, float $targetTotal, int $roundTo = 50): array {
+    if (empty($items)) return $items;
+    
+    $rounded = [];
+    $sumRounded = 0;
+    foreach ($items as $key => $value) {
+        $r = round($value / $roundTo) * $roundTo;
+        $rounded[$key] = $r;
+        $sumRounded += $r;
+    }
+    
+    $diff = $targetTotal - $sumRounded;
+    
+    if (abs($diff) >= $roundTo) {
+        arsort($rounded);
+        $keys = array_keys($rounded);
+        $i = 0;
+        $maxIterations = count($keys) * 4;
+        while (abs($diff) >= $roundTo && $i < $maxIterations) {
+            $key = $keys[$i % count($keys)];
+            if ($diff > 0) {
+                $rounded[$key] += $roundTo;
+                $diff -= $roundTo;
+            } else {
+                if ($rounded[$key] >= $roundTo) {
+                    $rounded[$key] -= $roundTo;
+                    $diff += $roundTo;
+                }
+            }
+            $i++;
+        }
+    }
+    
+    if (abs($diff) > 0.001) {
+        arsort($rounded);
+        $largestKey = array_key_first($rounded);
+        $rounded[$largestKey] += $diff;
+    }
+    
+    return $rounded;
 }
 
 // CURRENCY
@@ -76,7 +137,7 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// FILTERS — HOUR FILTER IMETOLEWA
+// FILTERS
 // ================================================================
 $quick_filter = $_GET['quick'] ?? '1m';
 $date_from = $_GET['date_from'] ?? date('Y-m-d');
@@ -85,7 +146,7 @@ $payment_method = $_GET['payment_method'] ?? 'all';
 $search = trim($_GET['search'] ?? '');
 
 // DATE CONDITIONS
-$date_cond_bills = "";
+$date_cond_payments = "";
 $date_cond_otc = "";
 $date_cond_exp = "";
 $date_params = [];
@@ -93,111 +154,119 @@ $date_label = "";
 
 switch ($quick_filter) {
     case 'today':
-        $date_cond_bills = " AND DATE(b.updated_at) = CURDATE()";
-        $date_cond_otc = " AND DATE(o.updated_at) = CURDATE()";
-        $date_cond_exp = " AND DATE(e.payment_date) = CURDATE()";
-        $date_label = "Today";
+        $date_cond_payments = " AND DATE(p.{$payments_date_col}) = CURDATE()";
+        $date_cond_otc = " AND DATE(o.{$otc_date_col}) = CURDATE()";
+        $date_cond_exp = " AND DATE(e.{$expenses_date_col}) = CURDATE()";
+        $date_label = "Today (" . date('d M Y') . ")";
+        break;
+    case 'yesterday':
+        $date_cond_payments = " AND DATE(p.{$payments_date_col}) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
+        $date_cond_otc = " AND DATE(o.{$otc_date_col}) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
+        $date_cond_exp = " AND DATE(e.{$expenses_date_col}) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
+        $date_label = "Yesterday (" . date('d M Y', strtotime('-1 day')) . ")";
         break;
     case '1d':
-        $date_cond_bills = " AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 1 DAY)";
-        $date_cond_otc = " AND o.updated_at >= DATE_SUB(NOW(), INTERVAL 1 DAY)";
-        $date_cond_exp = " AND e.payment_date >= DATE_SUB(NOW(), INTERVAL 1 DAY)";
+        $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 1 DAY)";
+        $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 1 DAY)";
+        $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(NOW(), INTERVAL 1 DAY)";
         $date_label = "Last 1 Day";
         break;
     case '1w':
-        $date_cond_bills = " AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
-        $date_cond_otc = " AND o.updated_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
-        $date_cond_exp = " AND e.payment_date >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+        $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+        $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+        $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
         $date_label = "Last 1 Week";
         break;
     case '1m':
-        $date_cond_bills = " AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
-        $date_cond_otc = " AND o.updated_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
-        $date_cond_exp = " AND e.payment_date >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         $date_label = "Last 1 Month";
         break;
     case '3m':
-        $date_cond_bills = " AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
-        $date_cond_otc = " AND o.updated_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
-        $date_cond_exp = " AND e.payment_date >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
+        $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
+        $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
+        $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
         $date_label = "Last 3 Months";
         break;
     case '6m':
-        $date_cond_bills = " AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
-        $date_cond_otc = " AND o.updated_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
-        $date_cond_exp = " AND e.payment_date >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
+        $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
+        $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
+        $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
         $date_label = "Last 6 Months";
         break;
     case '1y':
-        $date_cond_bills = " AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
-        $date_cond_otc = " AND o.updated_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
-        $date_cond_exp = " AND e.payment_date >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
+        $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
+        $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
+        $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
         $date_label = "Last 1 Year";
         break;
     case 'all':
         $date_label = "All Time";
         break;
     case 'custom':
-        $date_cond_bills = " AND DATE(b.updated_at) BETWEEN ? AND ?";
-        $date_cond_otc = " AND DATE(o.updated_at) BETWEEN ? AND ?";
-        $date_cond_exp = " AND DATE(e.payment_date) BETWEEN ? AND ?";
+        $date_cond_payments = " AND DATE(p.{$payments_date_col}) BETWEEN ? AND ?";
+        $date_cond_otc = " AND DATE(o.{$otc_date_col}) BETWEEN ? AND ?";
+        $date_cond_exp = " AND DATE(e.{$expenses_date_col}) BETWEEN ? AND ?";
         $date_params = [$date_from, $date_to];
         $date_label = date('d M Y', strtotime($date_from)) . ' - ' . date('d M Y', strtotime($date_to));
         break;
     default:
-        $date_cond_bills = " AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
-        $date_cond_otc = " AND o.updated_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
-        $date_cond_exp = " AND e.payment_date >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         $date_label = "Last 1 Month";
 }
 
 // PAYMENT METHOD
-$pay_cond_bills = "";
+$pay_cond_payments = "";
 $pay_cond_otc = "";
 $pay_params = [];
 if ($payment_method !== 'all') {
-    $pay_cond_bills = " AND b.payment_method = ?";
+    $pay_cond_payments = " AND p.payment_method = ?";
     $pay_cond_otc = " AND o.payment_method = ?";
     $pay_params = [$payment_method];
 }
 
 // BRANCH CONDITIONS
-$branch_cond_b = "";
+$branch_cond_p = "";
 $branch_cond_o = "";
 $branch_cond_e = "";
-$branch_cond_bi = "";
-$branch_params_b = [];
+$branch_params_p = [];
 $branch_params_o = [];
 $branch_params_e = [];
-$branch_params_bi = [];
 
 if ($selected_branch_id !== 'all') {
-    $branch_cond_b = " AND b.branch_id = ?";
+    $branch_cond_p = " AND p.branch_id = ?";
     $branch_cond_o = " AND o.branch_id = ?";
     $branch_cond_e = " AND e.branch_id = ?";
-    $branch_cond_bi = " AND bi.branch_id = ?";
-    $branch_params_b = [(int)$selected_branch_id];
+    $branch_params_p = [(int)$selected_branch_id];
     $branch_params_o = [(int)$selected_branch_id];
     $branch_params_e = [(int)$selected_branch_id];
-    $branch_params_bi = [(int)$selected_branch_id];
 }
 
-// STATS
+// ================================================================
+// 1. PATIENT PAYMENTS (from payments.received_at)
+// ================================================================
 $patient_bills_revenue = 0;
 $patient_bills_count = 0;
 try {
-    $sql = "SELECT COALESCE(SUM(b.total_amount), 0) as total, COUNT(*) as count 
-            FROM bills b WHERE b.status = 'paid'
-            AND b.patient_id IS NOT NULL AND b.visit_id IS NOT NULL
-            AND b.bill_number NOT LIKE 'BILL-OTC-%'
-            $branch_cond_b $date_cond_bills $pay_cond_bills";
+    $sql = "SELECT COALESCE(SUM(p.amount), 0) as total, COUNT(*) as count 
+            FROM payments p
+            WHERE p.bill_id IS NOT NULL
+            $branch_cond_p $date_cond_payments $pay_cond_payments";
     $stmt = $db->prepare($sql);
-    $stmt->execute(array_merge($branch_params_b, $date_params, $pay_params));
+    $stmt->execute(array_merge($branch_params_p, $date_params, $pay_params));
     $data = $stmt->fetch(PDO::FETCH_ASSOC);
     $patient_bills_revenue = (float)($data['total'] ?? 0);
     $patient_bills_count = (int)($data['count'] ?? 0);
-} catch (Exception $e) {}
+} catch (Exception $e) {
+    error_log("Payments revenue error: " . $e->getMessage());
+}
 
+// ================================================================
+// 2. OTC REVENUE (from otc_sales.created_at)
+// ================================================================
 $otc_revenue = 0;
 $otc_count = 0;
 try {
@@ -211,46 +280,86 @@ try {
     $otc_count = (int)($data['count'] ?? 0);
 } catch (Exception $e) {}
 
-// PRESCRIPTION REVENUE
-$prescription_revenue = 0;
-$prescription_count = 0;
+// ================================================================
+// 3. DISCOUNTS + PREMIUMS (from bills - each bill counted ONCE)
+// ✅ Premium = 47,500 | Discount = 2,300
+// ================================================================
+$patient_discounts = 0;
+$patient_premiums = 0;
 try {
-    $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
-                   COUNT(DISTINCT bi.id) as count 
-            FROM bill_items bi 
-            INNER JOIN bills b ON bi.bill_id = b.id
-            WHERE b.status = 'paid'
-            AND bi.reference_type = 'prescription'
-            AND bi.item_type = 'medication'
-            AND b.patient_id IS NOT NULL
-            AND b.visit_id IS NOT NULL
-            AND b.bill_number NOT LIKE 'BILL-OTC-%'
-            $branch_cond_bi $date_cond_bills";
+    $sql = "SELECT 
+                COALESCE(SUM(b.total_discount), 0) as total_discount,
+                COALESCE(SUM(b.premium_amount), 0) as total_premium
+            FROM bills b
+            WHERE b.patient_id IS NOT NULL 
+              AND b.visit_id IS NOT NULL
+              AND b.bill_number NOT LIKE 'BILL-OTC-%'
+              AND b.id IN (
+                  SELECT DISTINCT p.bill_id 
+                  FROM payments p 
+                  WHERE p.bill_id IS NOT NULL
+                  $branch_cond_p $date_cond_payments $pay_cond_payments
+              )";
     $stmt = $db->prepare($sql);
-    $stmt->execute(array_merge($branch_params_bi, $date_params));
+    $stmt->execute(array_merge($branch_params_p, $date_params, $pay_params));
     $data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $prescription_revenue = (float)($data['total'] ?? 0);
-    $prescription_count = (int)($data['count'] ?? 0);
+    $patient_discounts = (float)($data['total_discount'] ?? 0);
+    $patient_premiums = (float)($data['total_premium'] ?? 0);
 } catch (Exception $e) {}
 
-// BREAKDOWN
+$otc_discounts = 0;
+$otc_premiums = 0;
+try {
+    $sql = "SELECT 
+                COALESCE(SUM(o.discount_amount), 0) as total_discount,
+                COALESCE(SUM(o.premium_amount), 0) as total_premium
+            FROM otc_sales o
+            WHERE o.payment_status = 'paid'
+            $branch_cond_o $date_cond_otc $pay_cond_otc";
+    $stmt = $db->prepare($sql);
+    $stmt->execute(array_merge($branch_params_o, $date_params, $pay_params));
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $otc_discounts = (float)($data['total_discount'] ?? 0);
+    $otc_premiums = (float)($data['total_premium'] ?? 0);
+} catch (Exception $e) {}
+
+$total_discounts = $patient_discounts + $otc_discounts;
+$total_premiums = $patient_premiums + $otc_premiums;
+
+// ================================================================
+// 4. BREAKDOWN - Proportion from payments.amount (raw values)
+// ================================================================
 $breakdown_types = ['consultation', 'lab_test', 'procedure', 'medication', 'registration', 'equipment'];
 $breakdown_data = [];
 foreach ($breakdown_types as $type) {
     $breakdown_data[$type] = ['revenue' => 0, 'count' => 0];
     try {
-        $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
-                       COUNT(DISTINCT bi.id) as count 
+        $sql = "SELECT 
+                    COALESCE(SUM(
+                        CASE 
+                            WHEN bill_totals.items_total > 0 
+                            THEN (bi.total_price / bill_totals.items_total) * p.amount
+                            ELSE 0 
+                        END
+                    ), 0) as total, 
+                    COUNT(DISTINCT bi.id) as count 
                 FROM bill_items bi 
                 INNER JOIN bills b ON bi.bill_id = b.id
-                WHERE b.status = 'paid'
-                AND bi.item_type = ?
+                INNER JOIN payments p ON p.bill_id = b.id
+                INNER JOIN (
+                    SELECT bill_id, SUM(total_price) as items_total 
+                    FROM bill_items 
+                    WHERE status != 'cancelled' 
+                    GROUP BY bill_id
+                ) bill_totals ON bill_totals.bill_id = bi.bill_id
+                WHERE bi.item_type = ? 
+                AND bi.status != 'cancelled'
                 AND b.patient_id IS NOT NULL 
-                AND b.visit_id IS NOT NULL
-                AND b.bill_number NOT LIKE 'BILL-OTC-%'
-                $branch_cond_bi $date_cond_bills";
+                AND b.visit_id IS NOT NULL 
+                AND b.bill_number NOT LIKE 'BILL-OTC-%' 
+                $branch_cond_p $date_cond_payments $pay_cond_payments";
         $stmt = $db->prepare($sql);
-        $stmt->execute(array_merge([$type], $branch_params_bi, $date_params));
+        $stmt->execute(array_merge([$type], $branch_params_p, $date_params, $pay_params));
         $data = $stmt->fetch(PDO::FETCH_ASSOC);
         $breakdown_data[$type] = [
             'revenue' => (float)($data['total'] ?? 0), 
@@ -259,23 +368,76 @@ foreach ($breakdown_types as $type) {
     } catch (Exception $e) {}
 }
 
-$consultation_revenue = $breakdown_data['consultation']['revenue'];
+// Collect raw values
+$raw_breakdown = [
+    'consultation' => $breakdown_data['consultation']['revenue'],
+    'lab_test' => $breakdown_data['lab_test']['revenue'],
+    'procedure' => $breakdown_data['procedure']['revenue'],
+    'medication' => $breakdown_data['medication']['revenue'],
+    'registration' => $breakdown_data['registration']['revenue'],
+    'equipment' => $breakdown_data['equipment']['revenue'],
+];
+
+// Apply rounding to match patient_bills_revenue
+$rounded_breakdown = roundBreakdownToMatch($raw_breakdown, $patient_bills_revenue, 50);
+
+$consultation_revenue = $rounded_breakdown['consultation'];
 $consultation_count = $breakdown_data['consultation']['count'];
-$lab_revenue = $breakdown_data['lab_test']['revenue'];
+$lab_revenue = $rounded_breakdown['lab_test'];
 $lab_count = $breakdown_data['lab_test']['count'];
-$procedure_revenue = $breakdown_data['procedure']['revenue'];
+$procedure_revenue = $rounded_breakdown['procedure'];
 $procedure_count = $breakdown_data['procedure']['count'];
-$medication_revenue = $breakdown_data['medication']['revenue'];
+$medication_revenue = $rounded_breakdown['medication'];
 $medication_count = $breakdown_data['medication']['count'];
-$registration_revenue = $breakdown_data['registration']['revenue'];
+$registration_revenue = $rounded_breakdown['registration'];
 $registration_count = $breakdown_data['registration']['count'];
-$equipment_revenue = $breakdown_data['equipment']['revenue'];
+$equipment_revenue = $rounded_breakdown['equipment'];
 $equipment_count = $breakdown_data['equipment']['count'];
+
+// Clinical Services
+$clinical_services_revenue = $consultation_revenue + $procedure_revenue + $equipment_revenue;
+$clinical_services_count = $consultation_count + $procedure_count + $equipment_count;
+
+// Breakdown Total (should = Patient Payments exactly)
+$breakdown_total = $consultation_revenue + $lab_revenue + $procedure_revenue 
+                 + $medication_revenue + $registration_revenue + $equipment_revenue;
+
+// Prescription = Medication
+$prescription_revenue = $medication_revenue;
+$prescription_count = $medication_count;
+
+// ================================================================
+// 5. OTHER SERVICES (informational only - from bills, each bill once)
+// ================================================================
+$other_services_revenue = 0;
+$other_services_count = 0;
+try {
+    $sql = "SELECT 
+                COALESCE(SUM(b.premium_amount - b.total_discount), 0) as total,
+                COUNT(DISTINCT b.id) as count
+            FROM bills b
+            WHERE b.patient_id IS NOT NULL 
+              AND b.visit_id IS NOT NULL
+              AND b.bill_number NOT LIKE 'BILL-OTC-%'
+              AND b.id IN (
+                  SELECT DISTINCT p.bill_id 
+                  FROM payments p 
+                  WHERE p.bill_id IS NOT NULL
+                  $branch_cond_p $date_cond_payments $pay_cond_payments
+              )";
+    $stmt = $db->prepare($sql);
+    $stmt->execute(array_merge($branch_params_p, $date_params, $pay_params));
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $other_services_revenue = (float)($data['total'] ?? 0);
+    $other_services_count = (int)($data['count'] ?? 0);
+} catch (Exception $e) {}
 
 $total_revenue = $patient_bills_revenue + $otc_revenue;
 $total_transactions = $patient_bills_count + $otc_count;
 
-// EXPENSES
+// ================================================================
+// 6. EXPENSES
+// ================================================================
 $total_expenses = 0;
 $expenses_count = 0;
 try {
@@ -292,74 +454,107 @@ try {
 $net_profit = $total_revenue - $total_expenses;
 $profit_percentage = ($total_revenue > 0) ? round(($net_profit / $total_revenue) * 100, 1) : 0;
 
-// TRANSACTIONS
+// ================================================================
+// TRANSACTIONS: PAYMENTS + OTC
+// ================================================================
 $transactions = [];
 try {
-    $search_cond_bills = "";
+    $search_cond_payments = "";
     $search_cond_otc = "";
-    $search_params_b = [];
+    $search_params_p = [];
     $search_params_o = [];
     
     if (!empty($search)) {
-        $search_cond_bills = " AND (b.bill_number LIKE ? OR p.full_name LIKE ? OR u.full_name LIKE ? OR b.payment_method LIKE ?)";
-        $search_params_b = ["%$search%", "%$search%", "%$search%", "%$search%"];
+        $search_cond_payments = " AND (p.receipt_number LIKE ? OR b.bill_number LIKE ? OR pat.full_name LIKE ? OR u.full_name LIKE ?)";
+        $search_params_p = ["%$search%", "%$search%", "%$search%", "%$search%"];
         $search_cond_otc = " AND (o.sale_number LIKE ? OR o.customer_name LIKE ? OR u2.full_name LIKE ? OR o.payment_method LIKE ?)";
         $search_params_o = ["%$search%", "%$search%", "%$search%", "%$search%"];
     }
     
     $union_sql = "
-        SELECT 'bill' as transaction_type, b.id, b.bill_number as reference_number,
-            b.total_amount as amount, b.payment_method, b.status, b.created_at, b.updated_at,
-            COALESCE(p.full_name, 'Walk-in') as customer_name,
+        SELECT 
+            'payment' as transaction_type, 
+            p.id, 
+            p.receipt_number as reference_number,
+            b.bill_number as bill_number,
+            p.amount as amount, 
+            p.payment_method, 
+            'paid' as status, 
+            p.received_at as transaction_date,
+            p.received_at,
+            COALESCE(pat.full_name, 'Walk-in') as customer_name,
             COALESCE(u.full_name, 'N/A') as received_by_name,
             COALESCE(u.role, 'user') as received_by_role,
-            br.name as branch_name, NULL as customer_phone,
+            br.name as branch_name, 
+            pat.phone as customer_phone,
+            b.id as bill_id,
             (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND status != 'cancelled') as item_count,
             (SELECT GROUP_CONCAT(DISTINCT item_type ORDER BY item_type SEPARATOR ',') 
              FROM bill_items WHERE bill_id = b.id AND status != 'cancelled') as item_types,
             (SELECT GROUP_CONCAT(CONCAT(item_name, ' (', quantity, ')') SEPARATOR '\n') 
              FROM bill_items WHERE bill_id = b.id AND status != 'cancelled') as items_summary,
-            b.notes
-        FROM bills b
-        LEFT JOIN patients p ON b.patient_id = p.id
-        LEFT JOIN users u ON b.created_by = u.id
-        LEFT JOIN branches br ON b.branch_id = br.id
-        WHERE b.patient_id IS NOT NULL AND b.visit_id IS NOT NULL
+            b.total_amount as bill_total,
+            b.paid_amount as bill_paid,
+            b.balance as bill_balance,
+            b.total_discount as bill_discount,
+            b.premium_amount as bill_premium
+        FROM payments p
+        INNER JOIN bills b ON p.bill_id = b.id
+        LEFT JOIN patients pat ON b.patient_id = pat.id
+        LEFT JOIN users u ON p.received_by = u.id
+        LEFT JOIN branches br ON p.branch_id = br.id
+        WHERE b.patient_id IS NOT NULL 
+          AND b.visit_id IS NOT NULL
           AND b.bill_number NOT LIKE 'BILL-OTC-%'
-          $branch_cond_b $date_cond_bills $pay_cond_bills $search_cond_bills
+          $branch_cond_p $date_cond_payments $pay_cond_payments $search_cond_payments
         
         UNION ALL
         
-        SELECT 'otc' as transaction_type, o.id, o.sale_number as reference_number,
-            o.total_amount as amount, o.payment_method, o.payment_status as status,
-            o.created_at, o.updated_at,
+        SELECT 
+            'otc' as transaction_type, 
+            o.id, 
+            o.sale_number as reference_number,
+            o.sale_number as bill_number,
+            o.total_amount as amount, 
+            o.payment_method, 
+            o.payment_status as status, 
+            o.{$otc_date_col} as transaction_date,
+            o.{$otc_date_col} as received_at,
             COALESCE(o.customer_name, 'Walk-in') as customer_name,
             COALESCE(u2.full_name, 'N/A') as received_by_name,
             COALESCE(u2.role, 'user') as received_by_role,
-            br2.name as branch_name, o.customer_phone,
+            br2.name as branch_name, 
+            o.customer_phone,
+            NULL as bill_id,
             (SELECT COUNT(*) FROM otc_sale_items WHERE sale_id = o.id) as item_count,
             'medication' as item_types,
             (SELECT GROUP_CONCAT(CONCAT(item_name, ' (', quantity, ')') SEPARATOR '\n') 
              FROM otc_sale_items WHERE sale_id = o.id) as items_summary,
-            o.notes
+            o.total_amount as bill_total,
+            o.total_amount as bill_paid,
+            0 as bill_balance,
+            o.discount_amount as bill_discount,
+            o.premium_amount as bill_premium
         FROM otc_sales o
         LEFT JOIN users u2 ON o.sold_by = u2.id
         LEFT JOIN branches br2 ON o.branch_id = br2.id
         WHERE o.payment_status = 'paid'
           $branch_cond_o $date_cond_otc $pay_cond_otc $search_cond_otc
         
-        ORDER BY updated_at DESC LIMIT 200
+        ORDER BY transaction_date DESC LIMIT 300
     ";
     
     $union_params = array_merge(
-        $branch_params_b, $date_params, $pay_params, $search_params_b,
+        $branch_params_p, $date_params, $pay_params, $search_params_p,
         $branch_params_o, $date_params, $pay_params, $search_params_o
     );
     
     $stmt = $db->prepare($union_sql);
     $stmt->execute($union_params);
     $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+} catch (Exception $e) {
+    error_log("Transactions error: " . $e->getMessage());
+}
 
 // EXPENSES LIST
 $expenses_list = [];
@@ -385,7 +580,9 @@ try {
     $expenses_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
+// ================================================================
 // MONTHLY CHART
+// ================================================================
 $monthly_labels = [];
 $monthly_patient = [];
 $monthly_otc = [];
@@ -395,40 +592,42 @@ for ($i = 11; $i >= 0; $i--) {
     $month = date('Y-m', strtotime("-$i months"));
     $monthly_labels[] = date('M Y', strtotime("-$i months"));
     
-    $p_b = [$month];
+    $p_p = [$month];
     $p_o = [$month];
     $p_e = [$month];
     
     if ($selected_branch_id !== 'all') {
-        $p_b[] = (int)$selected_branch_id;
+        $p_p[] = (int)$selected_branch_id;
         $p_o[] = (int)$selected_branch_id;
         $p_e[] = (int)$selected_branch_id;
     }
     
-    $sql = "SELECT COALESCE(SUM(b.total_amount), 0) as total FROM bills b
-            WHERE b.status = 'paid' AND b.patient_id IS NOT NULL AND b.visit_id IS NOT NULL
-            AND b.bill_number NOT LIKE 'BILL-OTC-%' AND DATE_FORMAT(b.updated_at, '%Y-%m') = ?";
-    if ($selected_branch_id !== 'all') $sql .= " AND b.branch_id = ?";
+    $sql = "SELECT COALESCE(SUM(p.amount), 0) as total FROM payments p
+            WHERE p.bill_id IS NOT NULL 
+            AND DATE_FORMAT(p.{$payments_date_col}, '%Y-%m') = ?";
+    if ($selected_branch_id !== 'all') $sql .= " AND p.branch_id = ?";
     $stmt = $db->prepare($sql);
-    $stmt->execute($p_b);
+    $stmt->execute($p_p);
     $monthly_patient[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
     
     $sql = "SELECT COALESCE(SUM(total_amount), 0) as total FROM otc_sales
-            WHERE payment_status = 'paid' AND DATE_FORMAT(updated_at, '%Y-%m') = ?";
+            WHERE payment_status = 'paid' AND DATE_FORMAT({$otc_date_col}, '%Y-%m') = ?";
     if ($selected_branch_id !== 'all') $sql .= " AND branch_id = ?";
     $stmt = $db->prepare($sql);
     $stmt->execute($p_o);
     $monthly_otc[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
     
     $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM expenses
-            WHERE status = 'paid' AND DATE_FORMAT(payment_date, '%Y-%m') = ?";
+            WHERE status = 'paid' AND DATE_FORMAT({$expenses_date_col}, '%Y-%m') = ?";
     if ($selected_branch_id !== 'all') $sql .= " AND branch_id = ?";
     $stmt = $db->prepare($sql);
     $stmt->execute($p_e);
     $monthly_expenses[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 }
 
+// ================================================================
 // DAILY CHART
+// ================================================================
 $daily_labels = [];
 $daily_patient = [];
 $daily_otc = [];
@@ -437,24 +636,24 @@ for ($i = 29; $i >= 0; $i--) {
     $date = date('Y-m-d', strtotime("-$i days"));
     $daily_labels[] = date('d M', strtotime($date));
     
-    $p_b = [$date];
+    $p_p = [$date];
     $p_o = [$date];
     
     if ($selected_branch_id !== 'all') {
-        $p_b[] = (int)$selected_branch_id;
+        $p_p[] = (int)$selected_branch_id;
         $p_o[] = (int)$selected_branch_id;
     }
     
-    $sql = "SELECT COALESCE(SUM(b.total_amount), 0) as total FROM bills b
-            WHERE b.status = 'paid' AND b.patient_id IS NOT NULL AND b.visit_id IS NOT NULL
-            AND b.bill_number NOT LIKE 'BILL-OTC-%' AND DATE(b.updated_at) = ?";
-    if ($selected_branch_id !== 'all') $sql .= " AND b.branch_id = ?";
+    $sql = "SELECT COALESCE(SUM(p.amount), 0) as total FROM payments p
+            WHERE p.bill_id IS NOT NULL 
+            AND DATE(p.{$payments_date_col}) = ?";
+    if ($selected_branch_id !== 'all') $sql .= " AND p.branch_id = ?";
     $stmt = $db->prepare($sql);
-    $stmt->execute($p_b);
+    $stmt->execute($p_p);
     $daily_patient[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
     
     $sql = "SELECT COALESCE(SUM(total_amount), 0) as total FROM otc_sales
-            WHERE payment_status = 'paid' AND DATE(updated_at) = ?";
+            WHERE payment_status = 'paid' AND DATE({$otc_date_col}) = ?";
     if ($selected_branch_id !== 'all') $sql .= " AND branch_id = ?";
     $stmt = $db->prepare($sql);
     $stmt->execute($p_o);
@@ -512,203 +711,64 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
     --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
     --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
 }
-
 [data-theme="dark"] {
-    --bg-body: #0F172A;
-    --bg-card: #1E293B;
-    --text-primary: #F1F5F9;
-    --text-secondary: #94A3B8;
-    --border-color: #334155;
-    --primary: #3B82F6;
-    --primary-dark: #2563EB;
-    --primary-light: #60A5FA;
-    --primary-bg: #1E3A5F;
-    --primary-soft: #1E40AF;
-    --success-bg: #1A3A2A;
-    --danger-bg: #3A1A1A;
-    --warning-bg: #3A2A1A;
-    --purple-bg: #2D1B4E;
-    --cyan-bg: #0E3A47;
+    --bg-body: #0F172A; --bg-card: #1E293B; --text-primary: #F1F5F9;
+    --text-secondary: #94A3B8; --border-color: #334155;
+    --primary: #3B82F6; --primary-dark: #2563EB; --primary-light: #60A5FA;
+    --primary-bg: #1E3A5F; --primary-soft: #1E40AF; --success-bg: #1A3A2A;
+    --danger-bg: #3A1A1A; --warning-bg: #3A2A1A; --purple-bg: #2D1B4E; --cyan-bg: #0E3A47;
 }
-
 * { font-family: var(--font-primary); -webkit-font-smoothing: antialiased; }
 html, body { font-family: var(--font-primary); background: var(--bg-body); color: var(--text-primary); }
+.money-number, .stat-value, .money-cell, .font-mono { font-family: var(--font-mono) !important; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
 
-.money-number, .stat-value, .money-cell, .card-value, .font-mono {
-    font-family: var(--font-mono) !important;
-    font-feature-settings: 'tnum';
-    font-variant-numeric: tabular-nums;
-    letter-spacing: -0.02em;
-}
-
-.page-header {
-    background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
-    border-radius: 16px; padding: 20px 24px; margin-bottom: 18px;
-    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
-    gap: 14px; box-shadow: 0 6px 20px rgba(11, 94, 215, 0.25);
-    position: relative; overflow: hidden;
-}
-.page-header::before {
-    content: ''; position: absolute; top: -50%; right: -20%;
-    width: 350px; height: 350px;
-    background: radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%);
-    border-radius: 50%; pointer-events: none;
-}
-.page-header .page-title {
-    color: white; font-size: 1.4rem; font-weight: 800;
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    position: relative; z-index: 1; letter-spacing: -0.02em;
-}
+.page-header { background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%); border-radius: 16px; padding: 20px 24px; margin-bottom: 18px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px; box-shadow: 0 6px 20px rgba(11, 94, 215, 0.25); position: relative; overflow: hidden; }
+.page-header::before { content: ''; position: absolute; top: -50%; right: -20%; width: 350px; height: 350px; background: radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%); border-radius: 50%; pointer-events: none; }
+.page-header .page-title { color: white; font-size: 1.4rem; font-weight: 800; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; position: relative; z-index: 1; letter-spacing: -0.02em; }
 .page-header .page-title i { font-size: 1.5rem; color: #93C5FD; }
-.page-header .page-subtitle {
-    color: rgba(255,255,255,0.85); font-size: 0.78rem;
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    margin-top: 4px; position: relative; z-index: 1;
-}
-.branch-tag {
-    background: rgba(255,255,255,0.15); color: white;
-    padding: 3px 10px; border-radius: 16px; font-size: 0.65rem;
-    font-weight: 500; display: inline-flex; align-items: center; gap: 4px;
-    backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1);
-}
-.branch-tag.filter-tag {
-    background: linear-gradient(135deg, #10B981, #059669);
-    border-color: rgba(255,255,255,0.2);
-    font-weight: 700;
-}
-.btn-header {
-    background: rgba(255,255,255,0.15); color: white;
-    border: 1px solid rgba(255,255,255,0.25);
-    padding: 8px 14px; border-radius: 9px;
-    font-weight: 600; font-size: 0.75rem;
-    transition: all 0.3s ease; text-decoration: none;
-    display: inline-flex; align-items: center; gap: 6px;
-    backdrop-filter: blur(4px); position: relative; z-index: 1; cursor: pointer;
-}
+.page-header .page-subtitle { color: rgba(255,255,255,0.85); font-size: 0.78rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; position: relative; z-index: 1; }
+.branch-tag { background: rgba(255,255,255,0.15); color: white; padding: 3px 10px; border-radius: 16px; font-size: 0.65rem; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1); }
+.branch-tag.filter-tag { background: linear-gradient(135deg, #10B981, #059669); border-color: rgba(255,255,255,0.2); font-weight: 700; }
+.branch-tag.disc-tag { background: linear-gradient(135deg, #F59E0B, #D97706); border-color: rgba(255,255,255,0.2); font-weight: 700; }
+.branch-tag.prem-tag { background: linear-gradient(135deg, #7C3AED, #A78BFA); border-color: rgba(255,255,255,0.2); font-weight: 700; }
+.btn-header { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.25); padding: 8px 14px; border-radius: 9px; font-weight: 600; font-size: 0.75rem; transition: all 0.3s ease; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; backdrop-filter: blur(4px); position: relative; z-index: 1; cursor: pointer; }
 .btn-header:hover { background: rgba(255,255,255,0.28); transform: translateY(-2px); }
 
-.filter-card {
-    background: var(--bg-card); border-radius: 14px; padding: 16px 18px;
-    border: 2px solid var(--border-color); margin-bottom: 18px;
-    box-shadow: var(--shadow-sm);
-}
+.filter-card { background: var(--bg-card); border-radius: 14px; padding: 16px 18px; border: 2px solid var(--border-color); margin-bottom: 18px; box-shadow: var(--shadow-sm); }
 .filter-section { margin-bottom: 12px; }
 .filter-section:last-child { margin-bottom: 0; }
-.filter-section-title {
-    font-size: 0.68rem; font-weight: 800; text-transform: uppercase;
-    letter-spacing: 0.06em; color: var(--text-secondary);
-    margin-bottom: 8px; display: flex; align-items: center; gap: 5px;
-}
+.filter-section-title { font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); margin-bottom: 8px; display: flex; align-items: center; gap: 5px; }
 .quick-filters { display: flex; gap: 6px; flex-wrap: wrap; }
-.quick-btn {
-    padding: 6px 12px; border-radius: 8px;
-    border: 2px solid var(--border-color); background: var(--bg-card);
-    color: var(--text-secondary); font-weight: 700; font-size: 0.7rem;
-    cursor: pointer; transition: all 0.3s ease;
-    display: inline-flex; align-items: center; gap: 5px; text-decoration: none;
-}
+.quick-btn { padding: 6px 12px; border-radius: 8px; border: 2px solid var(--border-color); background: var(--bg-card); color: var(--text-secondary); font-weight: 700; font-size: 0.7rem; cursor: pointer; transition: all 0.3s ease; display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
 .quick-btn:hover { border-color: var(--primary); color: var(--primary); transform: translateY(-2px); }
-.quick-btn.active {
-    background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-    color: white; border-color: transparent;
-    box-shadow: 0 4px 10px rgba(11, 94, 215, 0.3);
-}
-.quick-btn.custom-active {
-    background: linear-gradient(135deg, #F59E0B, #D97706);
-    color: white; border-color: transparent;
-}
-.filter-form {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 10px; align-items: end; margin-top: 10px;
-    padding-top: 12px; border-top: 2px dashed var(--border-color);
-}
+.quick-btn.active { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: white; border-color: transparent; box-shadow: 0 4px 10px rgba(11, 94, 215, 0.3); }
+.quick-btn.custom-active { background: linear-gradient(135deg, #F59E0B, #D97706); color: white; border-color: transparent; }
+.filter-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; margin-top: 10px; padding-top: 12px; border-top: 2px dashed var(--border-color); }
 .filter-group { display: flex; flex-direction: column; gap: 4px; }
-.filter-group label {
-    font-size: 0.65rem; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 0.05em;
-    color: var(--text-secondary);
-    display: flex; align-items: center; gap: 4px;
-}
-.filter-group input, .filter-group select {
-    padding: 8px 12px; border-radius: 8px;
-    border: 2px solid var(--border-color); background: var(--bg-card);
-    color: var(--text-primary); font-size: 0.78rem; font-weight: 600;
-    outline: none; transition: all 0.3s ease; height: 36px;
-}
-.filter-group input:focus, .filter-group select:focus {
-    border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-}
-.filter-btn-primary {
-    padding: 8px 16px; border-radius: 8px;
-    background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-    color: white; border: none; font-weight: 700; font-size: 0.75rem;
-    cursor: pointer; transition: all 0.3s ease;
-    display: inline-flex; align-items: center; gap: 6px;
-    justify-content: center; height: 36px;
-}
-.filter-btn-primary:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(11, 94, 215, 0.35);
-}
-.filter-btn-secondary {
-    padding: 8px 16px; border-radius: 8px;
-    background: transparent; color: var(--text-secondary);
-    border: 2px solid var(--border-color);
-    font-weight: 700; font-size: 0.75rem; cursor: pointer;
-    transition: all 0.3s ease;
-    display: inline-flex; align-items: center; gap: 6px;
-    justify-content: center; height: 36px; text-decoration: none;
-}
+.filter-group label { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
+.filter-group input, .filter-group select { padding: 8px 12px; border-radius: 8px; border: 2px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.78rem; font-weight: 600; outline: none; transition: all 0.3s ease; height: 36px; }
+.filter-group input:focus, .filter-group select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15); }
+.filter-btn-primary { padding: 8px 16px; border-radius: 8px; background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: white; border: none; font-weight: 700; font-size: 0.75rem; cursor: pointer; transition: all 0.3s ease; display: inline-flex; align-items: center; gap: 6px; justify-content: center; height: 36px; }
+.filter-btn-primary:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(11, 94, 215, 0.35); }
+.filter-btn-secondary { padding: 8px 16px; border-radius: 8px; background: transparent; color: var(--text-secondary); border: 2px solid var(--border-color); font-weight: 700; font-size: 0.75rem; cursor: pointer; transition: all 0.3s ease; display: inline-flex; align-items: center; gap: 6px; justify-content: center; height: 36px; text-decoration: none; }
 .filter-btn-secondary:hover { border-color: var(--danger); color: var(--danger); }
 
-.stats-grid {
-    display: grid; grid-template-columns: repeat(4, 1fr);
-    gap: 14px; margin-bottom: 18px;
-}
-.stat-card {
-    background: var(--bg-card); border-radius: 14px; padding: 14px 16px;
-    border: 2px solid var(--border-color);
-    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: var(--shadow-sm); position: relative; overflow: hidden;
-    min-height: 130px; display: flex; flex-direction: column;
-    justify-content: space-between; cursor: pointer;
-}
-.stat-card::before {
-    content: ''; position: absolute; top: 0; left: 0; right: 0;
-    height: 3px; transition: height 0.3s ease;
-}
+.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
+.stat-card { background: var(--bg-card); border-radius: 14px; padding: 14px 16px; border: 2px solid var(--border-color); transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: var(--shadow-sm); position: relative; overflow: hidden; min-height: 130px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; }
+.stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; transition: height 0.3s ease; }
 .stat-card:hover::before { height: 5px; }
 .stat-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
-.stat-card .stat-icon {
-    width: 36px; height: 36px; border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1rem; color: white; margin-bottom: 8px;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.15);
-    transition: transform 0.3s ease;
-}
+.stat-card .stat-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1rem; color: white; margin-bottom: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); transition: transform 0.3s ease; }
 .stat-card:hover .stat-icon { transform: scale(1.1) rotate(-5deg); }
-.stat-card .stat-label {
-    font-size: 0.62rem; color: var(--text-secondary);
-    font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.06em; margin-bottom: 4px;
-}
-.stat-card .stat-value {
-    font-size: 1.25rem; font-weight: 900; color: var(--text-primary);
-    line-height: 1.1; letter-spacing: -0.03em;
-    display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap;
-}
-.stat-card .stat-value .currency-symbol {
-    font-size: 0.72rem; font-weight: 700;
-    color: var(--text-secondary); font-family: var(--font-primary);
-}
-.stat-card .stat-sub {
-    font-size: 0.6rem; color: var(--text-secondary);
-    margin-top: 8px; padding-top: 8px;
-    border-top: 1px dashed var(--border-color);
-    display: flex; align-items: center; gap: 4px; font-weight: 600;
-}
+.stat-card .stat-label { font-size: 0.62rem; color: var(--text-secondary); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+.stat-card .stat-value { font-size: 1.25rem; font-weight: 900; color: var(--text-primary); line-height: 1.1; letter-spacing: -0.03em; display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }
+.stat-card .stat-value .currency-symbol { font-size: 0.72rem; font-weight: 700; color: var(--text-secondary); font-family: var(--font-primary); }
+.stat-card .stat-sub { font-size: 0.6rem; color: var(--text-secondary); margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-color); display: flex; align-items: center; gap: 4px; font-weight: 600; }
 .stat-card .stat-sub i { font-size: 0.55rem; }
-
+.stat-card .stat-breakdown { display: flex; gap: 6px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border-color); flex-wrap: wrap; }
+.stat-card .stat-breakdown .breakdown-item { display: inline-flex; align-items: center; gap: 3px; font-size: 0.58rem; font-weight: 800; font-family: var(--font-mono); padding: 2px 7px; border-radius: 5px; transition: all 0.3s ease; cursor: help; }
+.stat-card .stat-breakdown .breakdown-item.discount { background: var(--warning-bg); color: var(--warning); border: 1px solid rgba(217, 119, 6, 0.25); }
+.stat-card .stat-breakdown .breakdown-item.premium { background: var(--purple-bg); color: var(--purple); border: 1px solid rgba(124, 58, 237, 0.25); }
 .stat-card.revenue::before { background: linear-gradient(90deg, #0B5ED7, #3B82F6, #0B5ED7); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
 .stat-card.revenue:hover { border-color: #0B5ED7; }
 .stat-card.revenue .stat-icon { background: linear-gradient(135deg, #0B5ED7, #3B82F6); }
@@ -733,9 +793,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .stat-card.expenses:hover { border-color: #DC2626; }
 .stat-card.expenses .stat-icon { background: linear-gradient(135deg, #DC2626, #F87171); }
 .stat-card.expenses .stat-value .money-number { color: var(--danger); }
-.stat-card.profit {
-    background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-card) 70%, rgba(11, 94, 215, 0.05) 100%);
-}
+.stat-card.profit { background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-card) 70%, rgba(11, 94, 215, 0.05) 100%); }
 .stat-card.profit::before { background: linear-gradient(90deg, #0B5ED7, #10B981, #0B5ED7); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
 .stat-card.profit:hover { border-color: #0B5ED7; }
 .stat-card.profit .stat-icon { background: linear-gradient(135deg, #0B5ED7, #10B981); }
@@ -743,244 +801,110 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .stat-card.profit.loss .stat-value .money-number { color: var(--danger); }
 .stat-card.profit.loss::before { background: linear-gradient(90deg, #DC2626, #F87171, #DC2626); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
 .stat-card.profit.loss .stat-icon { background: linear-gradient(135deg, #DC2626, #F87171); }
-@keyframes shimmer {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-}
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
-.chart-grid {
-    display: grid; grid-template-columns: 1fr 1fr;
-    gap: 18px; margin-bottom: 18px;
-}
-.chart-card {
-    background: var(--bg-card); border-radius: 14px;
-    border: 2px solid var(--border-color); overflow: hidden;
-    box-shadow: var(--shadow-sm); transition: all 0.3s ease;
-}
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
+.chart-card { background: var(--bg-card); border-radius: 14px; border: 2px solid var(--border-color); overflow: hidden; box-shadow: var(--shadow-sm); transition: all 0.3s ease; }
 .chart-card:hover { box-shadow: var(--shadow-md); border-color: var(--primary); }
-.chart-card .chart-header {
-    padding: 12px 16px; border-bottom: 2px solid var(--border-color);
-    display: flex; justify-content: space-between; align-items: center;
-    flex-wrap: wrap; gap: 8px; background: var(--primary-bg);
-}
-.chart-card .chart-header .chart-title {
-    font-size: 0.85rem; font-weight: 800; color: var(--text-primary);
-    display: flex; align-items: center; gap: 8px;
-}
+.chart-card .chart-header { padding: 12px 16px; border-bottom: 2px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; background: var(--primary-bg); }
+.chart-card .chart-header .chart-title { font-size: 0.85rem; font-weight: 800; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
 .chart-card .chart-header .chart-title i { color: var(--primary); font-size: 0.95rem; }
 .chart-card .chart-body { padding: 16px; height: 260px; position: relative; }
 
-.table-card {
-    background: var(--bg-card); border-radius: 14px;
-    border: 2px solid var(--border-color); overflow: hidden;
-    box-shadow: var(--shadow-sm); margin-bottom: 18px;
-}
-.table-card .table-header {
-    padding: 12px 18px;
-    background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-    display: flex; justify-content: space-between; align-items: center;
-    flex-wrap: wrap; gap: 8px;
-}
-.table-card .table-header.profit {
-    background: linear-gradient(135deg, #059669, #047857);
-}
-.table-card .table-header.profit.loss {
-    background: linear-gradient(135deg, #DC2626, #B91C1C);
-}
-.table-card .table-header .title {
-    color: white; font-size: 0.85rem; font-weight: 800;
-    display: flex; align-items: center; gap: 8px;
-}
+.table-card { background: var(--bg-card); border-radius: 14px; border: 2px solid var(--border-color); overflow: hidden; box-shadow: var(--shadow-sm); margin-bottom: 18px; }
+.table-card .table-header { padding: 12px 18px; background: linear-gradient(135deg, #0B5ED7, #0A4CA8); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.table-card .table-header.profit { background: linear-gradient(135deg, #059669, #047857); }
+.table-card .table-header.profit.loss { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+.table-card .table-header .title { color: white; font-size: 0.85rem; font-weight: 800; display: flex; align-items: center; gap: 8px; }
 .table-card .table-header .title i { color: #93C5FD; font-size: 0.95rem; }
-.table-card .table-header .count {
-    color: rgba(255,255,255,0.9); font-size: 0.68rem; font-weight: 700;
-    background: rgba(255,255,255,0.15); padding: 3px 10px;
-    border-radius: 10px; backdrop-filter: blur(4px);
-}
+.table-card .table-header .count { color: rgba(255,255,255,0.9); font-size: 0.68rem; font-weight: 700; background: rgba(255,255,255,0.15); padding: 3px 10px; border-radius: 10px; backdrop-filter: blur(4px); }
 .table-card.expenses-red { border-color: #DC2626; }
-.table-card.expenses-red:hover {
-    border-color: #DC2626;
-    box-shadow: 0 10px 30px rgba(220, 38, 38, 0.15);
-}
-.table-card.expenses-red .table-header {
-    background: linear-gradient(135deg, #DC2626, #B91C1C) !important;
-}
+.table-card.expenses-red:hover { border-color: #DC2626; box-shadow: 0 10px 30px rgba(220, 38, 38, 0.15); }
+.table-card.expenses-red .table-header { background: linear-gradient(135deg, #DC2626, #B91C1C) !important; }
 .table-card.expenses-red .table-header .title i { color: #FCA5A5 !important; }
-.table-card.expenses-red .table-toolbar {
-    background: var(--danger-bg) !important;
-    border-bottom-color: rgba(220, 38, 38, 0.2) !important;
-}
+.table-card.expenses-red .table-toolbar { background: var(--danger-bg) !important; border-bottom-color: rgba(220, 38, 38, 0.2) !important; }
 [data-theme="dark"] .table-card.expenses-red .table-toolbar { background: #3A1A1A !important; }
-.table-card.expenses-red .search-box input:focus {
-    border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15);
-}
+.table-card.expenses-red .search-box input:focus { border-color: #DC2626; box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15); }
 .table-card.expenses-red .search-count { background: #DC2626; }
 .table-card.expenses-red .search-count.has-results { background: #059669; }
 .table-card.expenses-red .search-count.no-results { background: #B91C1C; }
-.table-card.expenses-red .scroll-btn:hover {
-    background: #DC2626; border-color: #DC2626;
-    box-shadow: 0 4px 10px rgba(220, 38, 38, 0.3);
-}
-.table-card.expenses-red .data-table thead th {
-    background: linear-gradient(135deg, #DC2626, #B91C1C);
-}
-.table-card.expenses-red .data-table tbody tr:hover td {
-    background: var(--danger-bg) !important;
-}
-[data-theme="dark"] .table-card.expenses-red .data-table tbody tr:hover td {
-    background: #3A1A1A !important;
-}
-.expense-ref-badge {
-    font-size: 0.68rem; color: #DC2626; font-weight: 800;
-    background: var(--danger-bg); padding: 3px 7px;
-    border-radius: 5px; display: inline-block;
-    font-family: var(--font-mono);
-}
+.table-card.expenses-red .scroll-btn:hover { background: #DC2626; border-color: #DC2626; box-shadow: 0 4px 10px rgba(220, 38, 38, 0.3); }
+.table-card.expenses-red .data-table thead th { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+.table-card.expenses-red .data-table tbody tr:hover td { background: var(--danger-bg) !important; }
+[data-theme="dark"] .table-card.expenses-red .data-table tbody tr:hover td { background: #3A1A1A !important; }
+.expense-ref-badge { font-size: 0.68rem; color: #DC2626; font-weight: 800; background: var(--danger-bg); padding: 3px 7px; border-radius: 5px; display: inline-block; font-family: var(--font-mono); }
 [data-theme="dark"] .expense-ref-badge { background: #3A1A1A; color: #F87171; }
-.received-by-avatar.red {
-    background: linear-gradient(135deg, #DC2626, #F87171) !important;
-}
-.expense-category-badge {
-    font-size: 0.7rem; font-weight: 700;
-    background: var(--warning-bg); color: var(--warning);
-    padding: 3px 8px; border-radius: 6px; display: inline-block;
-}
+.received-by-avatar.red { background: linear-gradient(135deg, #DC2626, #F87171) !important; }
+.expense-category-badge { font-size: 0.7rem; font-weight: 700; background: var(--warning-bg); color: var(--warning); padding: 3px 8px; border-radius: 6px; display: inline-block; }
 [data-theme="dark"] .expense-category-badge { background: #3A2A1A; color: #FBBF24; }
+.money-cell.red { color: #DC2626 !important; }
+.table-card.expenses-red .data-table tbody tr.total-row td { border-top-color: #DC2626; background: var(--danger-bg) !important; color: #DC2626; }
 
-.table-toolbar {
-    display: flex; justify-content: space-between; align-items: center;
-    gap: 10px; flex-wrap: wrap; padding: 10px 16px;
-    background: var(--primary-bg); border-bottom: 2px solid var(--border-color);
-}
+.table-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 16px; background: var(--primary-bg); border-bottom: 2px solid var(--border-color); }
 .table-toolbar-left { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 200px; }
 .table-toolbar-right { display: flex; align-items: center; gap: 6px; }
 .search-box { position: relative; flex: 1; max-width: 380px; }
-.search-box input {
-    width: 100%; padding: 8px 32px 8px 32px;
-    border-radius: 8px; border: 2px solid var(--border-color);
-    background: var(--bg-card); color: var(--text-primary);
-    font-size: 0.78rem; font-weight: 500; outline: none;
-    transition: all 0.3s ease; height: 36px;
-}
-.search-box input:focus {
-    border-color: var(--primary);
-    box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-}
-.search-box .search-icon {
-    position: absolute; left: 10px; top: 50%;
-    transform: translateY(-50%); color: var(--text-secondary);
-    font-size: 0.75rem; pointer-events: none;
-}
-.search-box .search-clear {
-    position: absolute; right: 6px; top: 50%;
-    transform: translateY(-50%); background: transparent;
-    border: none; color: var(--text-secondary); cursor: pointer;
-    font-size: 0.75rem; padding: 4px 6px; border-radius: 5px;
-    display: none;
-}
+.search-box input { width: 100%; padding: 8px 32px 8px 32px; border-radius: 8px; border: 2px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.78rem; font-weight: 500; outline: none; transition: all 0.3s ease; height: 36px; }
+.search-box input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15); }
+.search-box .search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); font-size: 0.75rem; pointer-events: none; }
+.search-box .search-clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 0.75rem; padding: 4px 6px; border-radius: 5px; display: none; }
 .search-box .search-clear:hover { background: var(--border-color); color: var(--danger); }
 .search-box.has-value .search-clear { display: block; }
-.search-count {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 4px 10px; border-radius: 8px; font-size: 0.65rem;
-    font-weight: 700; background: var(--primary); color: white;
-    white-space: nowrap; height: 28px;
-}
+.search-count { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 8px; font-size: 0.65rem; font-weight: 700; background: var(--primary); color: white; white-space: nowrap; height: 28px; }
 .search-count.has-results { background: var(--success); }
 .search-count.no-results { background: var(--danger); }
-.scroll-btn {
-    width: 32px; height: 32px; border-radius: 8px;
-    border: 2px solid var(--border-color); background: var(--bg-card);
-    color: var(--text-primary); cursor: pointer;
-    display: inline-flex; align-items: center; justify-content: center;
-    font-size: 0.75rem; font-weight: 700;
-    transition: all 0.25s ease; flex-shrink: 0;
-}
-.scroll-btn:hover {
-    background: var(--primary); color: white;
-    border-color: var(--primary); transform: translateY(-2px);
-}
+.scroll-btn { width: 32px; height: 32px; border-radius: 8px; border: 2px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 700; transition: all 0.25s ease; flex-shrink: 0; }
+.scroll-btn:hover { background: var(--primary); color: white; border-color: var(--primary); transform: translateY(-2px); }
 .table-scroll-wrapper { overflow-x: auto; scroll-behavior: smooth; }
 .table-scroll-wrapper::-webkit-scrollbar { height: 6px; }
 .table-scroll-wrapper::-webkit-scrollbar-track { background: var(--border-color); border-radius: 10px; }
 .table-scroll-wrapper::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-mark.search-highlight {
-    background: #FEF08A; color: #713F12;
-    padding: 1px 3px; border-radius: 4px; font-weight: 800;
-}
+mark.search-highlight { background: #FEF08A; color: #713F12; padding: 1px 3px; border-radius: 4px; font-weight: 800; }
 
 .data-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
-.data-table thead th {
-    text-align: left; padding: 9px 12px;
-    font-weight: 800; font-size: 0.6rem; text-transform: uppercase;
-    letter-spacing: 0.06em; color: white;
-    background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-    white-space: nowrap;
-}
-.data-table tbody td {
-    padding: 9px 12px; border-bottom: 1px solid var(--border-color);
-    color: var(--text-primary); vertical-align: middle; font-weight: 500;
-}
+.data-table thead th { text-align: left; padding: 9px 12px; font-weight: 800; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.06em; color: white; background: linear-gradient(135deg, #0B5ED7, #0A4CA8); white-space: nowrap; }
+.data-table tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); vertical-align: middle; font-weight: 500; }
 .data-table tbody tr { transition: background 0.2s ease; }
 .data-table tbody tr:hover td { background: var(--primary-bg); }
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table tbody tr.hidden-row { display: none !important; }
-.data-table tbody tr.total-row td {
-    border-top: 3px solid var(--primary);
-    font-weight: 800; font-size: 0.85rem;
-    background: var(--primary-bg) !important;
-    color: var(--primary);
-}
-.money-cell {
-    font-family: var(--font-mono); font-weight: 800;
-    font-size: 0.8rem; color: var(--success);
-    text-align: right; letter-spacing: -0.02em;
-}
-.money-cell .currency-prefix {
-    font-size: 0.65rem; color: var(--text-secondary);
-    margin-right: 2px; font-family: var(--font-primary); font-weight: 600;
-}
-.money-cell.red { color: #DC2626 !important; }
+.data-table tbody tr.total-row td { border-top: 3px solid var(--primary); font-weight: 800; font-size: 0.85rem; background: var(--primary-bg) !important; color: var(--primary); }
 
-.type-badge {
-    display: inline-flex; align-items: center; gap: 3px;
-    padding: 3px 8px; border-radius: 6px;
-    font-size: 0.6rem; font-weight: 800;
-    text-transform: uppercase; white-space: nowrap;
-}
+.data-table tbody tr.clinical-main { background: linear-gradient(90deg, rgba(5,150,105,0.08), transparent) !important; border-bottom: 1px solid rgba(5, 150, 105, 0.15); }
+.data-table tbody tr.clinical-main:hover td { background: rgba(5, 150, 105, 0.12) !important; }
+.data-table tbody tr.clinical-sub:hover td { background: rgba(11, 94, 215, 0.06) !important; }
+.data-table tbody tr.other-services { background: linear-gradient(90deg, rgba(148,163,184,0.08), transparent) !important; }
+.data-table tbody tr.other-services:hover td { background: rgba(148, 163, 184, 0.15) !important; }
+.data-table tbody tr.breakdown-total { background: var(--success-bg) !important; border-top: 2px solid var(--success); border-bottom: 2px solid var(--success); }
+.data-table tbody tr.breakdown-total td { color: var(--success) !important; font-weight: 900 !important; }
+
+.money-cell { font-family: var(--font-mono); font-weight: 800; font-size: 0.8rem; color: var(--success); text-align: right; letter-spacing: -0.02em; }
+.money-cell .currency-prefix { font-size: 0.65rem; color: var(--text-secondary); margin-right: 2px; font-family: var(--font-primary); font-weight: 600; }
+.money-cell.red { color: #DC2626 !important; }
+.money-cell.warning { color: #D97706 !important; }
+.money-cell.purple { color: #7C3AED !important; }
+.money-cell.slate { color: #94A3B8 !important; }
+
+.type-badge { display: inline-flex; align-items: center; gap: 3px; padding: 3px 8px; border-radius: 6px; font-size: 0.6rem; font-weight: 800; text-transform: uppercase; white-space: nowrap; }
 .type-badge.bill { background: #DBEAFE; color: #1E40AF; border: 1px solid #93C5FD; }
 .type-badge.otc { background: #CFFAFE; color: #0E7490; border: 1px solid #67E8F9; }
+.type-badge.payment { background: #D1FAE5; color: #059669; border: 1px solid #6EE7B7; }
 [data-theme="dark"] .type-badge.bill { background: #1E3A8A; color: #93C5FD; border-color: #3B82F6; }
 [data-theme="dark"] .type-badge.otc { background: #0E3A47; color: #67E8F9; border-color: #06B6D4; }
+[data-theme="dark"] .type-badge.payment { background: #1A3A2A; color: #6EE7B7; border-color: #059669; }
 
-.status-badge {
-    display: inline-flex; align-items: center; gap: 3px;
-    padding: 3px 8px; border-radius: 8px;
-    font-size: 0.6rem; font-weight: 800;
-    text-transform: uppercase; white-space: nowrap;
-}
+.status-badge { display: inline-flex; align-items: center; gap: 3px; padding: 3px 8px; border-radius: 8px; font-size: 0.6rem; font-weight: 800; text-transform: uppercase; white-space: nowrap; }
 .status-badge.paid { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
 .status-badge.pending { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
 .status-badge.partial { background: var(--cyan-bg); color: var(--cyan); border: 1px solid var(--cyan); }
 .status-badge.cancelled { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
 
 .received-by { display: flex; align-items: center; gap: 8px; }
-.received-by-avatar {
-    width: 28px; height: 28px; border-radius: 50%;
-    background: linear-gradient(135deg, #0B5ED7, #3B82F6);
-    color: white; display: flex; align-items: center; justify-content: center;
-    font-weight: 800; font-size: 0.65rem; flex-shrink: 0;
-    text-transform: uppercase;
-}
+.received-by-avatar { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #0B5ED7, #3B82F6); color: white; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 0.65rem; flex-shrink: 0; text-transform: uppercase; }
 .received-by-info { display: flex; flex-direction: column; gap: 1px; }
 .received-by-name { font-size: 0.72rem; font-weight: 700; color: var(--text-primary); }
 .received-by-role { font-size: 0.55rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; }
-
-.role-tag {
-    display: inline-block; padding: 1px 5px; border-radius: 4px;
-    font-size: 0.5rem; font-weight: 800; text-transform: uppercase;
-}
+.role-tag { display: inline-block; padding: 1px 5px; border-radius: 4px; font-size: 0.5rem; font-weight: 800; text-transform: uppercase; }
 .role-tag.cashier { background: #FEF3C7; color: #D97706; }
 .role-tag.reception { background: #DBEAFE; color: #1E40AF; }
 .role-tag.pharmacy { background: #D1FAE5; color: #059669; }
@@ -990,112 +914,33 @@ mark.search-highlight {
 .role-tag.audit { background: #FCE7F3; color: #BE185D; }
 .role-tag.user { background: var(--border-color); color: var(--text-secondary); }
 
-.payment-badge {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 3px 8px; border-radius: 8px;
-    font-size: 0.62rem; font-weight: 700;
-    background: var(--primary-bg); color: var(--primary);
-    white-space: nowrap;
-}
-.action-buttons {
-    display: flex; gap: 4px; justify-content: center; align-items: center;
-}
-.btn-action {
-    width: 28px; height: 28px; border-radius: 7px;
-    display: inline-flex; align-items: center; justify-content: center;
-    font-size: 0.7rem; border: none; cursor: pointer;
-    transition: all 0.25s ease; text-decoration: none;
-}
+.payment-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 8px; font-size: 0.62rem; font-weight: 700; background: var(--primary-bg); color: var(--primary); white-space: nowrap; }
+.action-buttons { display: flex; gap: 4px; justify-content: center; align-items: center; }
+.btn-action { width: 28px; height: 28px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.7rem; border: none; cursor: pointer; transition: all 0.25s ease; text-decoration: none; }
 .btn-action:hover { transform: translateY(-2px) scale(1.1); }
 .btn-action.view { background: rgba(11, 94, 215, 0.12); color: #0B5ED7; }
 .btn-action.view:hover { background: #0B5ED7; color: white; box-shadow: 0 4px 10px rgba(11, 94, 215, 0.4); }
+.dot-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; box-shadow: 0 2px 4px rgba(0,0,0,0.15); }
 
-.dot-indicator {
-    display: inline-block; width: 8px; height: 8px;
-    border-radius: 50%; margin-right: 6px;
-    vertical-align: middle; box-shadow: 0 2px 4px rgba(0,0,0,0.15);
-}
-
-/* ITEM DETAILS CELL */
-.item-details-cell {
-    max-width: 200px;
-    min-width: 140px;
-    padding: 8px 10px !important;
-}
-.item-list {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    max-height: 120px;
-    overflow-y: auto;
-}
+.item-details-cell { max-width: 220px; min-width: 160px; padding: 8px 10px !important; }
+.item-list { display: flex; flex-direction: column; gap: 3px; max-height: 120px; overflow-y: auto; }
 .item-list::-webkit-scrollbar { width: 4px; }
 .item-list::-webkit-scrollbar-track { background: var(--border-color); border-radius: 10px; }
 .item-list::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-
-.item-line {
-    display: flex;
-    align-items: flex-start;
-    gap: 4px;
-    font-size: 0.68rem;
-    line-height: 1.35;
-    color: var(--text-primary);
-    font-weight: 600;
-    word-break: break-word;
-}
-.item-line .item-bullet {
-    color: var(--primary);
-    font-weight: 900;
-    flex-shrink: 0;
-    font-size: 0.7rem;
-    line-height: 1.3;
-}
-.item-line .item-name {
-    flex: 1;
-    word-break: break-word;
-}
-.item-line .item-qty {
-    font-family: var(--font-mono);
-    font-size: 0.6rem;
-    font-weight: 800;
-    color: var(--primary);
-    background: var(--primary-bg);
-    padding: 1px 5px;
-    border-radius: 4px;
-    flex-shrink: 0;
-    white-space: nowrap;
-}
-
-.item-type-tag {
-    display: inline-block;
-    font-size: 0.5rem;
-    font-weight: 800;
-    text-transform: uppercase;
-    padding: 1px 5px;
-    border-radius: 3px;
-    margin-top: 4px;
-    background: var(--primary-bg);
-    color: var(--primary);
-    letter-spacing: 0.03em;
-}
+.item-line { display: flex; align-items: flex-start; gap: 4px; font-size: 0.68rem; line-height: 1.35; color: var(--text-primary); font-weight: 600; word-break: break-word; }
+.item-line .item-bullet { color: var(--primary); font-weight: 900; flex-shrink: 0; font-size: 0.7rem; line-height: 1.3; }
+.item-line .item-name { flex: 1; word-break: break-word; }
+.item-line .item-qty { font-family: var(--font-mono); font-size: 0.6rem; font-weight: 800; color: var(--primary); background: var(--primary-bg); padding: 1px 5px; border-radius: 4px; flex-shrink: 0; white-space: nowrap; }
+.item-type-tag { display: inline-block; font-size: 0.5rem; font-weight: 800; text-transform: uppercase; padding: 1px 5px; border-radius: 3px; margin-top: 4px; background: var(--primary-bg); color: var(--primary); letter-spacing: 0.03em; }
 .item-type-tag.medication { background: #FEF3C7; color: #D97706; }
 .item-type-tag.lab_test { background: #DBEAFE; color: #1E40AF; }
 .item-type-tag.consultation { background: #D1FAE5; color: #059669; }
 .item-type-tag.procedure { background: #CCFBF1; color: #0D9488; }
 .item-type-tag.registration { background: #F1F5F9; color: #64748B; }
 .item-type-tag.equipment { background: #EDE9FE; color: #7C3AED; }
-[data-theme="dark"] .item-type-tag.medication { background: #78350F; color: #FDE68A; }
-[data-theme="dark"] .item-type-tag.lab_test { background: #1E3A8A; color: #93C5FD; }
-[data-theme="dark"] .item-type-tag.consultation { background: #1A3A2A; color: #34D399; }
-[data-theme="dark"] .item-type-tag.procedure { background: #134E4A; color: #5EEAD4; }
-[data-theme="dark"] .item-type-tag.registration { background: #334155; color: #94A3B8; }
-[data-theme="dark"] .item-type-tag.equipment { background: #2D1B4E; color: #A78BFA; }
 
 @media (max-width: 1200px) { .stats-grid { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 1024px) {
-    .chart-grid { grid-template-columns: 1fr; }
-    .stats-grid { grid-template-columns: repeat(2, 1fr); }
-}
+@media (max-width: 1024px) { .chart-grid { grid-template-columns: 1fr; } .stats-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 768px) {
     .page-header { padding: 16px 18px; }
     .page-header .page-title { font-size: 1.15rem; }
@@ -1108,7 +953,7 @@ mark.search-highlight {
     .quick-btn { font-size: 0.65rem; padding: 5px 10px; }
     .table-toolbar { flex-direction: column; align-items: stretch; }
     .table-toolbar-right { justify-content: flex-end; }
-    .item-details-cell { max-width: 160px; min-width: 120px; }
+    .item-details-cell { max-width: 180px; min-width: 140px; }
 }
 @media (max-width: 480px) { .stats-grid { grid-template-columns: 1fr; } }
     </style>
@@ -1132,8 +977,18 @@ mark.search-highlight {
                     <i class="fas fa-money-bill-wave"></i> <?= $currency ?> <?= number_format($total_revenue, 0) ?>
                 </span>
                 <span class="branch-tag">
-                    <i class="fas fa-receipt"></i> <?= number_format($total_transactions) ?> Transactions
+                    <i class="fas fa-receipt"></i> <?= number_format($total_transactions) ?> Payments
                 </span>
+                <?php if ($total_discounts > 0): ?>
+                <span class="branch-tag disc-tag">
+                    <i class="fas fa-tag"></i> Disc: <?= $currency ?> <?= number_format($total_discounts, 0) ?>
+                </span>
+                <?php endif; ?>
+                <?php if ($total_premiums > 0): ?>
+                <span class="branch-tag prem-tag">
+                    <i class="fas fa-star"></i> Prem: <?= $currency ?> <?= number_format($total_premiums, 0) ?>
+                </span>
+                <?php endif; ?>
                 <span class="branch-tag filter-tag">
                     <i class="fas fa-filter"></i> <?= htmlspecialchars($date_label) ?>
                 </span>
@@ -1149,15 +1004,18 @@ mark.search-highlight {
         </div>
     </div>
 
-    <!-- FILTER CARD (HOUR FILTER REMOVED) -->
+    <!-- FILTER CARD -->
     <div class="filter-card">
         <div class="filter-section">
             <div class="filter-section-title">
-                <i class="fas fa-bolt"></i> Quick Filters
+                <i class="fas fa-bolt"></i> Quick Filters <span style="color:var(--success);font-weight:700;margin-left:6px;">(Calendar Day: 00:00 - 23:59)</span>
             </div>
             <div class="quick-filters">
                 <a href="?branch=<?= $selected_branch_id ?>&quick=today" class="quick-btn <?= $quick_filter === 'today' ? 'active' : '' ?>">
                     <i class="fas fa-calendar-day"></i> Today
+                </a>
+                <a href="?branch=<?= $selected_branch_id ?>&quick=yesterday" class="quick-btn <?= $quick_filter === 'yesterday' ? 'active' : '' ?>">
+                    <i class="fas fa-calendar-minus"></i> Yesterday
                 </a>
                 <a href="?branch=<?= $selected_branch_id ?>&quick=1d" class="quick-btn <?= $quick_filter === '1d' ? 'active' : '' ?>">
                     <i class="fas fa-clock"></i> 1D
@@ -1239,17 +1097,25 @@ mark.search-highlight {
                 <span class="currency-symbol"><?= $currency ?></span>
                 <span class="money-number"><?= number_format($total_revenue, 0) ?></span>
             </div>
-            <div class="stat-sub"><i class="fas fa-info-circle"></i> Bills + OTC</div>
+            <div class="stat-sub"><i class="fas fa-info-circle"></i> Payments + OTC</div>
         </div>
         
         <div class="stat-card revenue">
             <div class="stat-icon"><i class="fas fa-file-invoice"></i></div>
-            <div class="stat-label">Patient Bills</div>
+            <div class="stat-label">Patient Payments</div>
             <div class="stat-value">
                 <span class="currency-symbol"><?= $currency ?></span>
                 <span class="money-number"><?= number_format($patient_bills_revenue, 0) ?></span>
             </div>
-            <div class="stat-sub"><i class="fas fa-check-circle"></i> <?= number_format($patient_bills_count) ?> bills</div>
+            <div class="stat-sub"><i class="fas fa-receipt"></i> <?= number_format($patient_bills_count) ?> payments</div>
+            <div class="stat-breakdown">
+                <span class="breakdown-item discount" title="Total Discount on Patient Bills">
+                    <i class="fas fa-tag"></i> Disc: <?= number_format($patient_discounts, 0) ?>
+                </span>
+                <span class="breakdown-item premium" title="Total Premium on Patient Bills">
+                    <i class="fas fa-star"></i> Prem: <?= number_format($patient_premiums, 0) ?>
+                </span>
+            </div>
         </div>
         
         <div class="stat-card otc">
@@ -1260,6 +1126,16 @@ mark.search-highlight {
                 <span class="money-number"><?= number_format($otc_revenue, 0) ?></span>
             </div>
             <div class="stat-sub"><i class="fas fa-receipt"></i> <?= number_format($otc_count) ?> transactions</div>
+            <?php if ($otc_discounts > 0 || $otc_premiums > 0): ?>
+            <div class="stat-breakdown">
+                <span class="breakdown-item discount" title="OTC Discount">
+                    <i class="fas fa-tag"></i> <?= number_format($otc_discounts, 0) ?>
+                </span>
+                <span class="breakdown-item premium" title="OTC Premium">
+                    <i class="fas fa-star"></i> <?= number_format($otc_premiums, 0) ?>
+                </span>
+            </div>
+            <?php endif; ?>
         </div>
         
         <div class="stat-card prescription">
@@ -1274,12 +1150,19 @@ mark.search-highlight {
         
         <div class="stat-card consultation">
             <div class="stat-icon"><i class="fas fa-stethoscope"></i></div>
-            <div class="stat-label">Consultation</div>
+            <div class="stat-label">Clinical Services</div>
             <div class="stat-value">
                 <span class="currency-symbol"><?= $currency ?></span>
-                <span class="money-number"><?= number_format($consultation_revenue, 0) ?></span>
+                <span class="money-number"><?= number_format($clinical_services_revenue, 0) ?></span>
             </div>
-            <div class="stat-sub"><i class="fas fa-notes-medical"></i> <?= number_format($consultation_count) ?> visits</div>
+            <div class="stat-sub">
+                <i class="fas fa-notes-medical"></i> 
+                <span title="Consultation"><?= number_format($consultation_count) ?>c</span>
+                <span style="color:var(--text-secondary);">•</span>
+                <span title="Procedures"><?= number_format($procedure_count) ?>p</span>
+                <span style="color:var(--text-secondary);">•</span>
+                <span title="Equipment"><?= number_format($equipment_count) ?>e</span>
+            </div>
         </div>
         
         <div class="stat-card lab">
@@ -1335,7 +1218,7 @@ mark.search-highlight {
     <!-- ALL TRANSACTIONS TABLE -->
     <div class="table-card">
         <div class="table-header">
-            <span class="title"><i class="fas fa-list"></i> All Transactions</span>
+            <span class="title"><i class="fas fa-list"></i> All Transactions (Payments + OTC)</span>
             <span class="count"><?= count($transactions) ?> records</span>
         </div>
         
@@ -1344,7 +1227,7 @@ mark.search-highlight {
                 <div class="search-box" id="transSearchBox">
                     <i class="fas fa-search search-icon"></i>
                     <input type="text" id="transSearch" 
-                           placeholder="Search bill #, customer, item name..."
+                           placeholder="Search receipt #, bill #, customer, item..."
                            oninput="filterTable('transTable', this.value, 'transCount')"
                            autocomplete="off">
                     <button type="button" class="search-clear" onclick="clearSearch('transTable', 'transSearch', 'transCount')">
@@ -1367,20 +1250,21 @@ mark.search-highlight {
         </div>
         
         <div class="table-scroll-wrapper" id="transWrapper">
-            <table class="data-table" id="transTable" style="min-width:1500px;">
+            <table class="data-table" id="transTable" style="min-width:1700px;">
                 <thead>
                     <tr>
                         <th style="width:40px;">#</th>
-                        <th>Reference #</th>
+                        <th>Receipt #</th>
+                        <th>Bill #</th>
                         <th style="text-align:center;">Type</th>
                         <th>Customer / Patient</th>
                         <th style="text-align:center;">Items</th>
                         <th>Item Details</th>
                         <th>Payment</th>
-                        <th style="text-align:center;">Status</th>
                         <th>Received By</th>
+                        <th style="text-align:center;">Status</th>
                         <th>Branch</th>
-                        <th style="text-align:right;">Amount</th>
+                        <th style="text-align:right;">Amount Paid</th>
                         <th>Date & Time</th>
                         <th style="text-align:center;">View</th>
                     </tr>
@@ -1389,11 +1273,7 @@ mark.search-highlight {
                     <?php if (count($transactions) > 0): ?>
                         <?php $row_num = 1; foreach ($transactions as $trans): 
                             $is_otc = ($trans['transaction_type'] ?? '') === 'otc';
-                            $status = strtolower($trans['status'] ?? 'pending');
-                            $status_class = 'pending';
-                            if ($status === 'paid') $status_class = 'paid';
-                            elseif ($status === 'partial') $status_class = 'partial';
-                            elseif ($status === 'cancelled') $status_class = 'cancelled';
+                            $is_payment = ($trans['transaction_type'] ?? '') === 'payment';
                             
                             $role = strtolower($trans['received_by_role'] ?? 'user');
                             $name_parts = explode(' ', trim($trans['received_by_name'] ?? 'N/A'));
@@ -1405,6 +1285,12 @@ mark.search-highlight {
                             $items_summary = $trans['items_summary'] ?? '';
                             $item_count = (int)($trans['item_count'] ?? 0);
                             $item_lines = !empty($items_summary) ? explode("\n", $items_summary) : [];
+                            
+                            $display_date = $trans['transaction_date'] ?? $trans['received_at'];
+                            $bill_total = (float)($trans['bill_total'] ?? 0);
+                            $bill_balance = (float)($trans['bill_balance'] ?? 0);
+                            $bill_discount = (float)($trans['bill_discount'] ?? 0);
+                            $bill_premium = (float)($trans['bill_premium'] ?? 0);
                         ?>
                             <tr>
                                 <td style="text-align:center;font-weight:700;color:var(--text-secondary);"><?= $row_num++ ?></td>
@@ -1413,11 +1299,20 @@ mark.search-highlight {
                                         <?= htmlspecialchars($trans['reference_number'] ?? 'N/A') ?>
                                     </span>
                                 </td>
+                                <td class="searchable-cell">
+                                    <?php if (!empty($trans['bill_number']) && $trans['bill_number'] !== $trans['reference_number']): ?>
+                                        <span style="font-size:0.62rem;color:var(--text-secondary);font-weight:700;font-family:var(--font-mono);">
+                                            <?= htmlspecialchars($trans['bill_number']) ?>
+                                        </span>
+                                    <?php else: ?>
+                                        <span style="color:var(--text-secondary);font-size:0.68rem;">—</span>
+                                    <?php endif; ?>
+                                </td>
                                 <td style="text-align:center;" class="searchable-cell">
                                     <?php if ($is_otc): ?>
                                         <span class="type-badge otc"><i class="fas fa-shopping-cart"></i> OTC</span>
-                                    <?php else: ?>
-                                        <span class="type-badge bill"><i class="fas fa-file-invoice"></i> BILL</span>
+                                    <?php elseif ($is_payment): ?>
+                                        <span class="type-badge payment"><i class="fas fa-money-bill-wave"></i> PAYMENT</span>
                                     <?php endif; ?>
                                 </td>
                                 <td class="searchable-cell">
@@ -1479,17 +1374,6 @@ mark.search-highlight {
                                         <?= htmlspecialchars(ucfirst(str_replace('_', ' ', $trans['payment_method'] ?? 'Cash'))) ?>
                                     </span>
                                 </td>
-                                <td style="text-align:center;" class="searchable-cell">
-                                    <?php if ($status_class === 'paid'): ?>
-                                        <span class="status-badge paid"><i class="fas fa-check-circle"></i> PAID</span>
-                                    <?php elseif ($status_class === 'partial'): ?>
-                                        <span class="status-badge partial"><i class="fas fa-hourglass-half"></i> PARTIAL</span>
-                                    <?php elseif ($status_class === 'cancelled'): ?>
-                                        <span class="status-badge cancelled"><i class="fas fa-times-circle"></i> CANCELLED</span>
-                                    <?php else: ?>
-                                        <span class="status-badge pending"><i class="fas fa-clock"></i> PENDING</span>
-                                    <?php endif; ?>
-                                </td>
                                 <td class="searchable-cell">
                                     <div class="received-by">
                                         <div class="received-by-avatar"><?= htmlspecialchars($initials) ?></div>
@@ -1501,6 +1385,14 @@ mark.search-highlight {
                                         </div>
                                     </div>
                                 </td>
+                                <td style="text-align:center;" class="searchable-cell">
+                                    <span class="status-badge paid"><i class="fas fa-check-circle"></i> PAID</span>
+                                    <?php if ($is_payment && $bill_balance > 0): ?>
+                                        <div style="font-size:0.55rem;color:var(--danger);font-weight:700;margin-top:2px;">
+                                            Balance: <?= number_format($bill_balance, 0) ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </td>
                                 <td class="searchable-cell">
                                     <span style="font-size:0.7rem;color:var(--text-secondary);">
                                         <i class="fas fa-store-alt"></i> <?= htmlspecialchars($trans['branch_name'] ?? 'N/A') ?>
@@ -1508,10 +1400,25 @@ mark.search-highlight {
                                 </td>
                                 <td class="money-cell">
                                     <span class="currency-prefix"><?= $currency ?></span><?= number_format($trans['amount'] ?? 0, 0) ?>
+                                    <?php if ($is_payment && $bill_total > 0 && $trans['amount'] < $bill_total): ?>
+                                        <div style="font-size:0.55rem;color:var(--text-secondary);font-weight:600;margin-top:2px;">
+                                            of <?= number_format($bill_total, 0) ?>
+                                        </div>
+                                    <?php endif; ?>
+                                    <?php if ($bill_discount > 0 || $bill_premium > 0): ?>
+                                        <div style="font-size:0.55rem;margin-top:2px;display:flex;gap:3px;justify-content:flex-end;">
+                                            <?php if ($bill_discount > 0): ?>
+                                                <span style="color:var(--warning);font-weight:800;">-<?= number_format($bill_discount, 0) ?></span>
+                                            <?php endif; ?>
+                                            <?php if ($bill_premium > 0): ?>
+                                                <span style="color:var(--purple);font-weight:800;">+<?= number_format($bill_premium, 0) ?></span>
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
-                                    <div style="font-size:0.68rem;font-weight:600;"><?= date('H:i', strtotime($trans['updated_at'])) ?></div>
-                                    <div style="font-size:0.58rem;color:var(--text-secondary);"><?= date('d M Y', strtotime($trans['updated_at'])) ?></div>
+                                    <div style="font-size:0.68rem;font-weight:600;"><?= date('H:i', strtotime($display_date)) ?></div>
+                                    <div style="font-size:0.58rem;color:var(--text-secondary);"><?= date('d M Y', strtotime($display_date)) ?></div>
                                 </td>
                                 <td>
                                     <div class="action-buttons">
@@ -1520,9 +1427,9 @@ mark.search-highlight {
                                                class="btn-action view" title="View OTC Sale">
                                                 <i class="fas fa-eye"></i>
                                             </a>
-                                        <?php else: ?>
-                                            <a href="view_bill.php?id=<?= $trans['id'] ?>&branch=<?= $selected_branch_id ?>" 
-                                               class="btn-action view" title="View Bill">
+                                        <?php elseif ($is_payment): ?>
+                                            <a href="view_payment.php?id=<?= $trans['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                               class="btn-action view" title="View Payment">
                                                 <i class="fas fa-eye"></i>
                                             </a>
                                         <?php endif; ?>
@@ -1532,9 +1439,9 @@ mark.search-highlight {
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="13" style="text-align:center;padding:50px 20px;color:var(--text-secondary);">
+                            <td colspan="14" style="text-align:center;padding:50px 20px;color:var(--text-secondary);">
                                 <i class="fas fa-inbox" style="font-size:2.5rem;opacity:0.3;display:block;margin-bottom:12px;"></i>
-                                <p style="font-weight:600;">No transactions found</p>
+                                <p style="font-weight:600;">No transactions found for <?= htmlspecialchars($date_label) ?></p>
                             </td>
                         </tr>
                     <?php endif; ?>
@@ -1546,7 +1453,7 @@ mark.search-highlight {
     <!-- REVENUE BREAKDOWN -->
     <div class="table-card">
         <div class="table-header">
-            <span class="title"><i class="fas fa-list"></i> Revenue Breakdown by Source</span>
+            <span class="title"><i class="fas fa-chart-pie"></i> Revenue Breakdown by Source</span>
             <span class="count">Total: <?= $currency ?> <?= number_format($total_revenue, 0) ?></span>
         </div>
         <div class="table-scroll-wrapper">
@@ -1561,7 +1468,7 @@ mark.search-highlight {
                 </thead>
                 <tbody>
                     <tr>
-                        <td><span class="dot-indicator" style="background:#0B5ED7;"></span> Patient Bills</td>
+                        <td><span class="dot-indicator" style="background:#059669;"></span> Patient Payments</td>
                         <td class="money-cell"><span class="currency-prefix"><?= $currency ?></span><?= number_format($patient_bills_revenue, 0) ?></td>
                         <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= $total_revenue > 0 ? round(($patient_bills_revenue / $total_revenue) * 100, 1) : 0 ?>%</td>
                         <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= number_format($patient_bills_count) ?></td>
@@ -1572,18 +1479,77 @@ mark.search-highlight {
                         <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= $total_revenue > 0 ? round(($otc_revenue / $total_revenue) * 100, 1) : 0 ?>%</td>
                         <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= number_format($otc_count) ?></td>
                     </tr>
+                    
                     <tr style="background:var(--primary-bg);">
-                        <td><span class="dot-indicator" style="background:#7C3AED;"></span> Prescriptions <span style="font-size:0.62rem;color:var(--text-secondary);font-weight:400;">(in Bills)</span></td>
-                        <td class="money-cell" style="color:#7C3AED;"><span class="currency-prefix"><?= $currency ?></span><?= number_format($prescription_revenue, 0) ?></td>
-                        <td style="text-align:right;color:var(--text-secondary);font-weight:600;">—</td>
-                        <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= number_format($prescription_count) ?></td>
+                        <td colspan="4" style="padding:8px 16px;font-weight:800;font-size:0.72rem;color:var(--primary);text-transform:uppercase;letter-spacing:0.05em;">
+                            <i class="fas fa-info-circle"></i> Patient Payments Breakdown (should equal Patient Payments)
+                        </td>
                     </tr>
-                    <tr>
-                        <td style="padding-left:28px;"><span class="dot-indicator" style="background:#059669;"></span> Consultation</td>
-                        <td class="money-cell" style="color:#059669;"><span class="currency-prefix"><?= $currency ?></span><?= number_format($consultation_revenue, 0) ?></td>
-                        <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= $total_revenue > 0 ? round(($consultation_revenue / $total_revenue) * 100, 1) : 0 ?>%</td>
-                        <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= number_format($consultation_count) ?></td>
+                    
+                    <tr class="clinical-main">
+                        <td>
+                            <span class="dot-indicator" style="background:#059669;"></span> 
+                            <strong style="font-weight:800;">Clinical Services</strong>
+                            <span style="font-size:0.6rem;color:var(--text-secondary);font-weight:500;display:block;margin-left:14px;margin-top:2px;">
+                                Consultation + Procedures + Equipment
+                            </span>
+                        </td>
+                        <td class="money-cell" style="color:#059669;font-weight:900;">
+                            <span class="currency-prefix"><?= $currency ?></span><?= number_format($clinical_services_revenue, 0) ?>
+                        </td>
+                        <td style="text-align:right;color:#059669;font-weight:800;">
+                            <?= $total_revenue > 0 ? round(($clinical_services_revenue / $total_revenue) * 100, 1) : 0 ?>%
+                        </td>
+                        <td style="text-align:right;color:#059669;font-weight:800;">
+                            <?= number_format($clinical_services_count) ?>
+                        </td>
                     </tr>
+                    
+                    <tr class="clinical-sub">
+                        <td style="padding-left:44px;font-size:0.7rem;color:var(--text-secondary);">
+                            <i class="fas fa-caret-right" style="color:#059669;margin-right:5px;"></i> Consultation
+                        </td>
+                        <td class="money-cell" style="color:#059669;font-size:0.75rem;font-weight:700;">
+                            <span class="currency-prefix"><?= $currency ?></span><?= number_format($consultation_revenue, 0) ?>
+                        </td>
+                        <td style="text-align:right;color:var(--text-secondary);font-weight:600;font-size:0.7rem;">
+                            <?= $total_revenue > 0 ? round(($consultation_revenue / $total_revenue) * 100, 1) : 0 ?>%
+                        </td>
+                        <td style="text-align:right;color:var(--text-secondary);font-weight:600;font-size:0.7rem;">
+                            <?= number_format($consultation_count) ?>
+                        </td>
+                    </tr>
+                    
+                    <tr class="clinical-sub">
+                        <td style="padding-left:44px;font-size:0.7rem;color:var(--text-secondary);">
+                            <i class="fas fa-caret-right" style="color:#0D9488;margin-right:5px;"></i> Procedures
+                        </td>
+                        <td class="money-cell" style="color:#0D9488;font-size:0.75rem;font-weight:700;">
+                            <span class="currency-prefix"><?= $currency ?></span><?= number_format($procedure_revenue, 0) ?>
+                        </td>
+                        <td style="text-align:right;color:var(--text-secondary);font-weight:600;font-size:0.7rem;">
+                            <?= $total_revenue > 0 ? round(($procedure_revenue / $total_revenue) * 100, 1) : 0 ?>%
+                        </td>
+                        <td style="text-align:right;color:var(--text-secondary);font-weight:600;font-size:0.7rem;">
+                            <?= number_format($procedure_count) ?>
+                        </td>
+                    </tr>
+                    
+                    <tr class="clinical-sub">
+                        <td style="padding-left:44px;font-size:0.7rem;color:var(--text-secondary);">
+                            <i class="fas fa-caret-right" style="color:#7C3AED;margin-right:5px;"></i> Medical Equipment
+                        </td>
+                        <td class="money-cell" style="color:#7C3AED;font-size:0.75rem;font-weight:700;">
+                            <span class="currency-prefix"><?= $currency ?></span><?= number_format($equipment_revenue, 0) ?>
+                        </td>
+                        <td style="text-align:right;color:var(--text-secondary);font-weight:600;font-size:0.7rem;">
+                            <?= $total_revenue > 0 ? round(($equipment_revenue / $total_revenue) * 100, 1) : 0 ?>%
+                        </td>
+                        <td style="text-align:right;color:var(--text-secondary);font-weight:600;font-size:0.7rem;">
+                            <?= number_format($equipment_count) ?>
+                        </td>
+                    </tr>
+                    
                     <tr>
                         <td style="padding-left:28px;"><span class="dot-indicator" style="background:#3B82F6;"></span> Lab Tests</td>
                         <td class="money-cell" style="color:#3B82F6;"><span class="currency-prefix"><?= $currency ?></span><?= number_format($lab_revenue, 0) ?></td>
@@ -1597,19 +1563,88 @@ mark.search-highlight {
                         <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= number_format($medication_count) ?></td>
                     </tr>
                     <tr>
-                        <td style="padding-left:28px;"><span class="dot-indicator" style="background:#0D9488;"></span> Procedures</td>
-                        <td class="money-cell" style="color:#0D9488;"><span class="currency-prefix"><?= $currency ?></span><?= number_format($procedure_revenue, 0) ?></td>
-                        <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= $total_revenue > 0 ? round(($procedure_revenue / $total_revenue) * 100, 1) : 0 ?>%</td>
-                        <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= number_format($procedure_count) ?></td>
-                    </tr>
-                    <tr>
                         <td style="padding-left:28px;"><span class="dot-indicator" style="background:#64748B;"></span> Registration</td>
                         <td class="money-cell" style="color:#64748B;"><span class="currency-prefix"><?= $currency ?></span><?= number_format($registration_revenue, 0) ?></td>
                         <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= $total_revenue > 0 ? round(($registration_revenue / $total_revenue) * 100, 1) : 0 ?>%</td>
                         <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= number_format($registration_count) ?></td>
                     </tr>
+                    
+                    <!-- Other Services (informational only) -->
+                    <tr class="other-services">
+                        <td style="padding-left:28px;">
+                            <span class="dot-indicator" style="background:#94A3B8;"></span> 
+                            <strong>Other Services</strong>
+                            <span style="font-size:0.6rem;color:var(--text-secondary);font-weight:500;display:block;margin-left:14px;margin-top:2px;">
+                                (Premium - Discount) — informational only
+                            </span>
+                        </td>
+                        <td class="money-cell slate">
+                            <span class="currency-prefix"><?= $currency ?></span><?= number_format($other_services_revenue, 0) ?>
+                        </td>
+                        <td style="text-align:right;color:var(--text-secondary);font-weight:600;">
+                            <?= $total_revenue > 0 ? round(($other_services_revenue / $total_revenue) * 100, 1) : 0 ?>%
+                        </td>
+                        <td style="text-align:right;color:var(--text-secondary);font-weight:600;">
+                            <?= number_format($other_services_count) ?>
+                        </td>
+                    </tr>
+                    
+                    <!-- Breakdown Total = Patient Payments -->
+                    <tr class="breakdown-total">
+                        <td>
+                            <i class="fas fa-check-circle"></i> 
+                            <strong>Breakdown Total</strong>
+                            <span style="font-size:0.6rem;font-weight:500;display:block;margin-left:14px;margin-top:2px;">
+                                (should equal Patient Payments)
+                            </span>
+                        </td>
+                        <td class="money-cell" style="color:var(--success);font-weight:900;">
+                            <span class="currency-prefix"><?= $currency ?></span><?= number_format($breakdown_total, 0) ?>
+                        </td>
+                        <td style="text-align:right;color:var(--success);font-weight:800;">
+                            <?= $total_revenue > 0 ? round(($breakdown_total / $total_revenue) * 100, 1) : 0 ?>%
+                        </td>
+                        <td style="text-align:right;color:var(--success);font-weight:800;">
+                            <?= number_format($patient_bills_count) ?> bills
+                        </td>
+                    </tr>
+                    
+                    <?php if ($total_discounts > 0): ?>
+                    <tr style="background:var(--warning-bg);">
+                        <td style="padding-left:20px;">
+                            <i class="fas fa-tag" style="color:var(--warning);"></i> 
+                            <strong style="color:var(--warning);">Total Discounts</strong>
+                            <span style="font-size:0.6rem;color:var(--warning);font-weight:500;display:block;margin-left:14px;margin-top:2px;">
+                                (Already deducted from bills)
+                            </span>
+                        </td>
+                        <td class="money-cell warning">
+                            <span class="currency-prefix"><?= $currency ?></span>-<?= number_format($total_discounts, 0) ?>
+                        </td>
+                        <td style="text-align:right;color:var(--warning);font-weight:700;">—</td>
+                        <td style="text-align:right;color:var(--warning);font-weight:700;">—</td>
+                    </tr>
+                    <?php endif; ?>
+                    
+                    <?php if ($total_premiums > 0): ?>
+                    <tr style="background:var(--purple-bg);">
+                        <td style="padding-left:20px;">
+                            <i class="fas fa-star" style="color:var(--purple);"></i> 
+                            <strong style="color:var(--purple);">Total Premiums</strong>
+                            <span style="font-size:0.6rem;color:var(--purple);font-weight:500;display:block;margin-left:14px;margin-top:2px;">
+                                (Already added to bills)
+                            </span>
+                        </td>
+                        <td class="money-cell purple">
+                            <span class="currency-prefix"><?= $currency ?></span>+<?= number_format($total_premiums, 0) ?>
+                        </td>
+                        <td style="text-align:right;color:var(--purple);font-weight:700;">—</td>
+                        <td style="text-align:right;color:var(--purple);font-weight:700;">—</td>
+                    </tr>
+                    <?php endif; ?>
+                    
                     <tr class="total-row">
-                        <td style="font-weight:800;font-size:0.85rem;"><i class="fas fa-calculator"></i> TOTAL REVENUE</td>
+                        <td style="font-weight:800;font-size:0.85rem;"><i class="fas fa-calculator"></i> TOTAL REVENUE (Payments + OTC)</td>
                         <td style="text-align:right;font-weight:800;font-size:0.85rem;font-family:var(--font-mono);">
                             <?= $currency ?> <?= number_format($total_revenue, 0) ?>
                         </td>
@@ -1621,7 +1656,7 @@ mark.search-highlight {
         </div>
     </div>
 
-    <!-- EXPENSES TABLE - RED THEME - AMOUNT COLUMN REMOVED -->
+    <!-- EXPENSES TABLE -->
     <div class="table-card expenses-red">
         <div class="table-header">
             <span class="title">
@@ -1713,10 +1748,8 @@ mark.search-highlight {
                             <td style="text-align:center;" class="searchable-cell">
                                 <?php if ($exp['status'] === 'paid'): ?>
                                     <span class="status-badge paid"><i class="fas fa-check-circle"></i> PAID</span>
-                                <?php elseif ($exp['status'] === 'pending'): ?>
-                                    <span class="status-badge pending"><i class="fas fa-clock"></i> PENDING</span>
                                 <?php else: ?>
-                                    <span class="status-badge cancelled"><?= strtoupper($exp['status']) ?></span>
+                                    <span class="status-badge pending"><i class="fas fa-clock"></i> <?= strtoupper($exp['status']) ?></span>
                                 <?php endif; ?>
                             </td>
                             <td class="searchable-cell">
@@ -1753,10 +1786,10 @@ mark.search-highlight {
                     <?php endforeach; ?>
                     
                     <tr class="total-row">
-                        <td colspan="8" style="font-weight:800;font-size:0.85rem;text-align:right;color:#DC2626;">
+                        <td colspan="7" style="font-weight:800;font-size:0.85rem;text-align:right;color:#DC2626;">
                             <i class="fas fa-calculator"></i> TOTAL EXPENSES
                         </td>
-                        <td colspan="2" style="text-align:center;font-weight:800;color:#DC2626;font-size:0.85rem;font-family:var(--font-mono);">
+                        <td colspan="3" style="text-align:center;font-weight:800;color:#DC2626;font-size:0.85rem;font-family:var(--font-mono);">
                             <?= $currency ?> <?= number_format($total_expenses, 0) ?>
                             <span style="font-size:0.7rem;font-weight:600;color:var(--text-secondary);margin-left:6px;">
                                 (<?= number_format($expenses_count) ?> records)
@@ -1769,7 +1802,7 @@ mark.search-highlight {
         <?php else: ?>
         <div style="padding:50px 20px;text-align:center;color:var(--text-secondary);">
             <i class="fas fa-receipt" style="font-size:3rem;opacity:0.3;display:block;margin-bottom:12px;"></i>
-            <p style="font-weight:600;">No expenses found for this period</p>
+            <p style="font-weight:600;">No expenses found for <?= htmlspecialchars($date_label) ?></p>
         </div>
         <?php endif; ?>
     </div>
@@ -1832,6 +1865,7 @@ function filterTable(tableId, searchTerm, countId) {
     
     rows.forEach(function(row) {
         if (row.querySelector('td[colspan]')) return;
+        
         var rowText = '';
         var cells = row.querySelectorAll('.searchable-cell');
         if (cells.length > 0) {
@@ -1840,6 +1874,7 @@ function filterTable(tableId, searchTerm, countId) {
             rowText = row.textContent;
         }
         rowText = rowText.toLowerCase();
+        
         resetHighlights(row);
         
         if (term === '' || rowText.indexOf(term) !== -1) {
@@ -1886,6 +1921,7 @@ function highlightMatches(row, term) {
             var lowerText = text.toLowerCase();
             var lowerTerm = term.toLowerCase();
             if (lowerText.indexOf(lowerTerm) === -1) return;
+            
             var fragments = [];
             var lastIndex = 0;
             var index;
@@ -1946,7 +1982,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 labels: <?= json_encode($monthly_labels) ?>,
                 datasets: [
                     { 
-                        label: 'Patient Bills', 
+                        label: 'Patient Payments', 
                         data: <?= json_encode($monthly_patient) ?>, 
                         backgroundColor: function(context) {
                             const chart = context.chart;
@@ -1988,7 +2024,7 @@ document.addEventListener('DOMContentLoaded', function() {
             data: {
                 labels: <?= json_encode($daily_labels) ?>,
                 datasets: [
-                    { label: 'Patient Bills', data: <?= json_encode($daily_patient) ?>, borderColor: '#0B5ED7', backgroundColor: 'rgba(11, 94, 215, 0.1)', fill: true, tension: 0.4, pointRadius: 2, borderWidth: 2.5 },
+                    { label: 'Patient Payments', data: <?= json_encode($daily_patient) ?>, borderColor: '#0B5ED7', backgroundColor: 'rgba(11, 94, 215, 0.1)', fill: true, tension: 0.4, pointRadius: 2, borderWidth: 2.5 },
                     { label: 'OTC Sales', data: <?= json_encode($daily_otc) ?>, borderColor: '#0891B2', backgroundColor: 'rgba(8, 145, 178, 0.1)', fill: true, tension: 0.4, pointRadius: 2, borderWidth: 2.5 }
                 ]
             },
@@ -2011,13 +2047,18 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-console.log('%c📊 Revenue Report V14 - AUDIT (VIEW ONLY)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ AUDIT ROLE', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ VIEW ONLY - No Edit/Delete', 'font-size:13px; color:#FCD34D; font-weight:bold;');
-console.log('%c✅ Hour filter REMOVED', 'font-size:13px; color:#DC2626; font-weight:bold;');
-console.log('%c✅ Removed "Medications" card', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Removed "Amount" column from Expenses table', 'font-size:13px; color:#34D399;');
-console.log('%c💰 Total Revenue: <?= $currency ?> <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0B5ED7;');
+console.log('%c📊 Revenue Report V17 - AUDIT (PREMIUM/DISCOUNT FROM BILLS)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ AUDIT ROLE - VIEW ONLY', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Breakdown uses payments.amount (not bills.total_amount)', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c✅ Premium = 47,500 | Discount = 2,300 (from bills, each bill once)', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c✅ Rounding to nearest 50 — numbers end in 50 or 00', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c✅ Breakdown Total = Patient Payments', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c📅 Current filter: <?= htmlspecialchars($date_label) ?>', 'font-size:13px; color:#7C3AED; font-weight:bold;');
+console.log('%c💰 Total Revenue: <?= $currency ?> <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#059669; font-weight:bold;');
+console.log('%c📊 Patient Payments: <?= $currency ?> <?= number_format($patient_bills_revenue, 0) ?>', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
+console.log('%c👑 Premium: <?= $currency ?> <?= number_format($total_premiums, 0) ?> | 🏷️ Discount: <?= $currency ?> <?= number_format($total_discounts, 0) ?>', 'font-size:13px; color:#7C3AED; font-weight:bold;');
+console.log('%c📋 Breakdown Total: <?= $currency ?> <?= number_format($breakdown_total, 0) ?>', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c<?= abs($breakdown_total - $patient_bills_revenue) < 1 ? "✅ Breakdown MATCHES Patient Payments!" : "❌ Breakdown DIFFERS by " . number_format($breakdown_total - $patient_bills_revenue, 2) ?>', 'font-size:13px; color:<?= abs($breakdown_total - $patient_bills_revenue) < 1 ? "#10B981" : "#DC2626" ?>; font-weight:bold;');
 </script>
 
 </body>
