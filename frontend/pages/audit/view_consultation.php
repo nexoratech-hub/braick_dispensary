@@ -1,22 +1,22 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/view_consultation.php
-// AUDIT - VIEW CONSULTATION DETAILS
-// ✅ View consultation details
-// ✅ Delete button - inafuta consultation + bill_item + update bill
-// ✅ BLUE THEME (Audit)
+// AUDIT - VIEW CONSULTATION DETAILS (VIEW ONLY)
+// ✅ Inatumia audit_header.php + audit_sidebar.php
+// ✅ AUDIT ROLE TU
+// ✅ HAKUNA Edit button - VIEW ONLY
+// ✅ Inaonyesha visit info, patient, doctor, diagnosis, vitals, 
+//    bill, lab tests, prescriptions, procedures, payments
 // ================================================================
 
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+if (session_status() === PHP_SESSION_NONE) session_start();
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
 
-// ✅ AUDIT ROLE ONLY
+// ✅ AUDIT ROLE TU
 if ($_SESSION['role'] !== 'audit') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -31,12 +31,20 @@ if ($_SESSION['role'] !== 'audit') {
     exit;
 }
 
-$user_id = $_SESSION['user_id'] ?? 0;
+$user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Audit User';
 $user_role = $_SESSION['role'] ?? 'audit';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_audit = true;
+
+$visit_id = (int)($_GET['id'] ?? 0);
+$selected_branch_id = $_GET['branch'] ?? 'all';
+
+if ($visit_id <= 0) {
+    header('Location: other_services.php?tab=consultations&branch=' . urlencode($selected_branch_id));
+    exit;
+}
 
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -46,226 +54,234 @@ try {
     die("Database connection error: " . $e->getMessage());
 }
 
-// ================================================================
-// GET PARAMETERS
-// ================================================================
-$consultation_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
+// CURRENCY
+$currency = 'TSh';
+try {
+    $stmt = $db->query("SELECT setting_value FROM system_settings WHERE setting_key = 'currency'");
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row && !empty($row['setting_value'])) $currency = $row['setting_value'];
+} catch (Exception $e) {}
 
-if ($consultation_id <= 0) {
-    header('Location: other_services.php?branch=' . $selected_branch_id);
-    exit;
-}
-
-// ================================================================
-// FETCH CONSULTATION DETAILS
-// ================================================================
-$sql = "
-    SELECT 
-        c.*,
-        pat.full_name as patient_name,
-        pat.patient_id as patient_number,
-        pat.phone as patient_phone,
-        pat.gender as patient_gender,
-        pat.date_of_birth,
-        pat.address as patient_address,
-        doc.full_name as doctor_name,
-        doc.role as doctor_role,
-        b.name as branch_name,
-        v.visit_number,
-        v.visit_date,
-        v.created_at as visit_created_at,
-        v.status as visit_status,
-        v.id as visit_id
-    FROM consultations c
-    LEFT JOIN patients pat ON c.patient_id = pat.id
-    LEFT JOIN users doc ON c.doctor_id = doc.id
-    LEFT JOIN branches b ON c.branch_id = b.id
-    LEFT JOIN visits v ON c.visit_id = v.id
-    WHERE c.id = ?
-";
-
-$stmt = $db->prepare($sql);
-$stmt->execute([$consultation_id]);
-$consultation = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$consultation) {
-    header('Location: other_services.php?branch=' . $selected_branch_id);
-    exit;
-}
-
-// ================================================================
-// FIND RELATED BILL & BILL ITEM
-// ================================================================
-$bill_item = null;
-$bill = null;
-$is_paid = false;
-
-$bill_sql = "
-    SELECT 
-        bi.*,
-        b.id as bill_id,
-        b.bill_number,
-        b.total_amount,
-        b.paid_amount,
-        b.balance,
-        b.payment_status,
-        b.status as bill_status,
-        b.created_at as bill_created_at,
-        b.updated_at as bill_updated_at,
-        b.visit_id as bill_visit_id
-    FROM bill_items bi
-    INNER JOIN bills b ON bi.bill_id = b.id
-    WHERE bi.item_type = 'consultation'
-    AND (
-        bi.reference_id = ?
-        OR bi.reference_type = 'consultation'
-    )
-    AND bi.bill_id IN (
-        SELECT id FROM bills WHERE visit_id = ? OR patient_id = ?
-    )
-    ORDER BY bi.id DESC
-    LIMIT 1
-";
-
-$stmt = $db->prepare($bill_sql);
-$stmt->execute([
-    $consultation_id,
-    $consultation['visit_id'] ?? 0,
-    $consultation['patient_id'] ?? 0
-]);
-$bill_item = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if ($bill_item) {
-    $bill = [
-        'id' => $bill_item['bill_id'],
-        'bill_number' => $bill_item['bill_number'],
-        'total_amount' => $bill_item['total_amount'],
-        'paid_amount' => $bill_item['paid_amount'],
-        'balance' => $bill_item['balance'],
-        'payment_status' => $bill_item['payment_status'],
-        'status' => $bill_item['bill_status'],
-        'created_at' => $bill_item['bill_created_at'],
-        'updated_at' => $bill_item['bill_updated_at']
-    ];
-    
-    if ($bill_item['total_price'] > 0 && ($bill['paid_amount'] > 0 || $bill['payment_status'] === 'paid' || $bill['payment_status'] === 'partial')) {
-        $is_paid = true;
-    }
-}
-
-// ================================================================
-// HANDLE DELETE
-// ================================================================
-$delete_message = '';
-$delete_success = false;
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete') {
-    try {
-        $db->beginTransaction();
-        
-        $deleted_info = [];
-        
-        // ✅ Futa bill_item na update bill kama ipo
-        if ($bill_item) {
-            // 1. Futa bill_item
-            $stmt = $db->prepare("DELETE FROM bill_items WHERE id = ?");
-            $stmt->execute([$bill_item['id']]);
-            $deleted_info[] = "Bill item deleted";
-            
-            // 2. Recalculate bill totals
-            $stmt = $db->prepare("
-                SELECT COALESCE(SUM(total_price), 0) as new_total
-                FROM bill_items 
-                WHERE bill_id = ?
-            ");
-            $stmt->execute([$bill['id']]);
-            $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['new_total'];
-            
-            // 3. Update bill
-            $new_balance = $new_total - $bill['paid_amount'];
-            $new_status = 'pending';
-            if ($bill['paid_amount'] >= $new_total && $new_total > 0) {
-                $new_status = 'paid';
-            } elseif ($bill['paid_amount'] > 0) {
-                $new_status = 'partial';
-            }
-            
-            // Kama bill haina items tena, futa bill
-            if ($new_total <= 0) {
-                $stmt = $db->prepare("DELETE FROM bills WHERE id = ?");
-                $stmt->execute([$bill['id']]);
-                $deleted_info[] = "Empty bill deleted";
-            } else {
-                $stmt = $db->prepare("
-                    UPDATE bills 
-                    SET total_amount = ?, 
-                        balance = ?, 
-                        payment_status = ?,
-                        updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([$new_total, $new_balance, $new_status, $bill['id']]);
-                $deleted_info[] = "Bill updated: Total=" . number_format($new_total, 0) . ", Balance=" . number_format($new_balance, 0);
-            }
-        }
-        
-        // ✅ Futa consultation
-        $stmt = $db->prepare("DELETE FROM consultations WHERE id = ?");
-        $stmt->execute([$consultation_id]);
-        $deleted_info[] = "Consultation deleted";
-        
-        // ✅ Log activity
-        try {
-            $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, ip_address, created_at) 
-                          VALUES (?, ?, 'delete_consultation', ?, ?, NOW())")
-               ->execute([
-                   $user_id, 
-                   $selected_branch_id !== 'all' ? (int)$selected_branch_id : $user_branch_id,
-                   "Deleted consultation #{$consultation_id} - Patient: " . ($consultation['patient_name'] ?? 'N/A') . " | " . implode(" | ", $deleted_info),
-                   $_SERVER['REMOTE_ADDR'] ?? 'unknown'
-               ]);
-        } catch (Exception $e) {}
-        
-        $db->commit();
-        
-        $delete_success = true;
-        $delete_message = "✅ Consultation deleted successfully! " . implode(" | ", $deleted_info);
-        
-        header("refresh:2;url=other_services.php?branch=" . $selected_branch_id);
-        
-    } catch (Exception $e) {
-        $db->rollBack();
-        $delete_message = "❌ Error deleting consultation: " . $e->getMessage();
-    }
-}
-
-// ================================================================
-// HELPER FUNCTIONS
-// ================================================================
+// HELPERS
 function calculateAge($dob) {
     if (empty($dob)) return 'N/A';
-    return (new DateTime($dob))->diff(new DateTime('today'))->y;
+    try {
+        return (new DateTime($dob))->diff(new DateTime('today'))->y . ' yrs';
+    } catch (Exception $e) { return 'N/A'; }
 }
 
 function getStatusBadge($status) {
     $map = [
-        'pending' => ['class' => 'warning', 'icon' => '⏳', 'label' => 'Pending'],
-        'in_progress' => ['class' => 'info', 'icon' => '🔄', 'label' => 'In Progress'],
-        'completed' => ['class' => 'success', 'icon' => '✅', 'label' => 'Completed'],
-        'cancelled' => ['class' => 'danger', 'icon' => '❌', 'label' => 'Cancelled'],
-        'paid' => ['class' => 'success', 'icon' => '✅', 'label' => 'Paid'],
-        'partial' => ['class' => 'info', 'icon' => '🔄', 'label' => 'Partial'],
-        'active' => ['class' => 'success', 'icon' => '✅', 'label' => 'Active']
+        'pending'    => ['class' => 'warning', 'icon' => '⏳', 'label' => 'Pending'],
+        'confirmed'  => ['class' => 'info',    'icon' => '🔵', 'label' => 'Confirmed'],
+        'paid'       => ['class' => 'success', 'icon' => '✅', 'label' => 'Paid'],
+        'dispensed'  => ['class' => 'cyan',    'icon' => '📦', 'label' => 'Dispensed'],
+        'completed'  => ['class' => 'success', 'icon' => '✅', 'label' => 'Completed'],
+        'cancelled'  => ['class' => 'danger',  'icon' => '❌', 'label' => 'Cancelled'],
+        'partial'    => ['class' => 'purple',  'icon' => '⚡', 'label' => 'Partial'],
+        'in_progress'=> ['class' => 'info',    'icon' => '🔄', 'label' => 'In Progress'],
+        'assigned'   => ['class' => 'info',    'icon' => '👨‍⚕️', 'label' => 'Assigned'],
+        'with_doctor'=> ['class' => 'cyan',    'icon' => '🩺', 'label' => 'With Doctor'],
+        'lab_test'   => ['class' => 'purple',  'icon' => '🧪', 'label' => 'Lab Test'],
+        'lab_completed' => ['class' => 'success', 'icon' => '✅', 'label' => 'Lab Completed'],
+        'prescribed' => ['class' => 'cyan',    'icon' => '💊', 'label' => 'Prescribed'],
+        'waiting'    => ['class' => 'warning', 'icon' => '⏳', 'label' => 'Waiting'],
     ];
-    return $map[$status] ?? ['class' => 'warning', 'icon' => '❓', 'label' => ucfirst($status)];
+    return $map[$status] ?? ['class' => 'warning', 'icon' => '❓', 'label' => ucfirst($status ?: 'Unknown')];
 }
 
-$status_info = getStatusBadge($consultation['status'] ?? 'completed');
-$age = calculateAge($consultation['date_of_birth']);
+function formatTsh($amount) {
+    return 'TSh ' . number_format((float)$amount, 0);
+}
+
+function getInitials($name) {
+    if (empty($name)) return 'NA';
+    $parts = preg_split('/\s+/', trim($name));
+    if (count($parts) >= 2) {
+        return strtoupper(substr($parts[0], 0, 1) . substr($parts[1], 0, 1));
+    }
+    return strtoupper(substr($name, 0, 2));
+}
+
+// FETCH CONSULTATION
+$visit = null;
+try {
+    $stmt = $db->prepare("
+        SELECT v.*,
+               p.id as patient_db_id, p.full_name as patient_name, 
+               p.patient_id as patient_number, p.phone as patient_phone,
+               p.gender as patient_gender, p.date_of_birth, p.address as patient_address,
+               p.blood_group, p.allergies, p.email as patient_email,
+               d.full_name as doctor_name, d.specialty as doctor_specialty,
+               r.full_name as receptionist_name,
+               br.name as branch_name,
+               dis.disease_name, dis.disease_code
+        FROM visits v
+        LEFT JOIN patients p ON v.patient_id = p.id
+        LEFT JOIN users d ON v.doctor_id = d.id
+        LEFT JOIN users r ON v.receptionist_id = r.id
+        LEFT JOIN branches br ON v.branch_id = br.id
+        LEFT JOIN diseases dis ON v.disease_id = dis.id
+        WHERE v.id = ?
+        LIMIT 1
+    ");
+    $stmt->execute([$visit_id]);
+    $visit = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    error_log("Visit fetch error: " . $e->getMessage());
+}
+
+if (!$visit) {
+    $_SESSION['error_message'] = "Consultation not found.";
+    header('Location: other_services.php?tab=consultations&branch=' . urlencode($selected_branch_id));
+    exit;
+}
+
+$patient_db_id = $visit['patient_db_id'];
+
+// FETCH BILL + PAYMENTS
+$bill = null;
+$payments = [];
+try {
+    $stmt = $db->prepare("
+        SELECT b.*,
+               (SELECT COUNT(*) FROM payments WHERE bill_id = b.id) as payments_count
+        FROM bills b
+        WHERE b.visit_id = ?
+        ORDER BY b.id DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$visit_id]);
+    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($bill) {
+        $stmt = $db->prepare("
+            SELECT p.*, u.full_name as received_by_name, u.role as received_by_role
+            FROM payments p
+            LEFT JOIN users u ON p.received_by = u.id
+            WHERE p.bill_id = ?
+            ORDER BY p.received_at DESC
+        ");
+        $stmt->execute([$bill['id']]);
+        $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (Exception $e) {}
+
+// FETCH BILL ITEMS
+$bill_items = [];
+if ($bill) {
+    try {
+        $stmt = $db->prepare("
+            SELECT * FROM bill_items
+            WHERE bill_id = ?
+            ORDER BY 
+                CASE item_type 
+                    WHEN 'consultation' THEN 1
+                    WHEN 'lab_test' THEN 2
+                    WHEN 'medication' THEN 3
+                    WHEN 'procedure' THEN 4
+                    WHEN 'equipment' THEN 5
+                    ELSE 6
+                END, id ASC
+        ");
+        $stmt->execute([$bill['id']]);
+        $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
+
+// FETCH LAB TESTS
+$lab_tests = [];
+try {
+    $stmt = $db->prepare("
+        SELECT lt.*, 
+               tech.full_name as technician_name,
+               doc.full_name as doctor_name,
+               ltc.test_name as catalog_name,
+               ltc.category as test_category
+        FROM lab_tests lt
+        LEFT JOIN users tech ON lt.lab_technician_id = tech.id
+        LEFT JOIN users doc ON lt.doctor_id = doc.id
+        LEFT JOIN lab_tests_catalog ltc ON lt.test_id = ltc.id
+        WHERE lt.visit_id = ?
+        ORDER BY lt.created_at ASC
+    ");
+    $stmt->execute([$visit_id]);
+    $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {}
+
+// FETCH PRESCRIPTIONS
+$prescriptions = [];
+try {
+    $stmt = $db->prepare("
+        SELECT pr.*, 
+               doc.full_name as doctor_name,
+               pharm.full_name as pharmacy_name
+        FROM prescriptions pr
+        LEFT JOIN users doc ON pr.doctor_id = doc.id
+        LEFT JOIN users pharm ON pr.pharmacy_id = pharm.id
+        WHERE pr.visit_id = ?
+        ORDER BY pr.created_at ASC
+    ");
+    $stmt->execute([$visit_id]);
+    $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    foreach ($prescriptions as &$presc) {
+        $stmt = $db->prepare("
+            SELECT pi.*, 
+                   u.full_name as dispensed_by_name,
+                   mi.medication_name as inventory_name,
+                   mi.batch_number
+            FROM prescription_items pi
+            LEFT JOIN users u ON pi.dispensed_by = u.id
+            LEFT JOIN medications_inventory mi ON pi.inventory_id = mi.id
+            WHERE pi.prescription_id = ?
+            ORDER BY pi.id ASC
+        ");
+        $stmt->execute([$presc['id']]);
+        $presc['items'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+    unset($presc);
+} catch (Exception $e) {}
+
+// FETCH PROCEDURES
+$procedures = [];
+try {
+    $stmt = $db->prepare("
+        SELECT pr.*, 
+               doc.full_name as doctor_name,
+               pc.category as procedure_category
+        FROM procedures pr
+        LEFT JOIN users doc ON pr.doctor_id = doc.id
+        LEFT JOIN procedures_catalog pc ON pr.procedure_id = pc.id
+        WHERE pr.visit_id = ?
+        ORDER BY pr.created_at ASC
+    ");
+    $stmt->execute([$visit_id]);
+    $procedures = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {}
+
+// FETCH VITALS
+$vitals = null;
+try {
+    $stmt = $db->prepare("
+        SELECT vs.*, u.full_name as recorded_by_name
+        FROM vital_signs vs
+        LEFT JOIN users u ON vs.recorded_by = u.id
+        WHERE vs.visit_id = ?
+        ORDER BY vs.recorded_at DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$visit_id]);
+    $vitals = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (Exception $e) {}
+
+$status_info = getStatusBadge($visit['status']);
+$payment_info = getStatusBadge($visit['payment_status']);
+$patient_age = calculateAge($visit['date_of_birth']);
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
+// ✅ AUDIT HEADER + SIDEBAR
 include_once __DIR__ . '/../../components/audit_header.php';
 include_once __DIR__ . '/../../components/audit_sidebar.php';
 ?>
@@ -275,13 +291,12 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Consultation Details - Audit</title>
+    <title>View Consultation - <?= htmlspecialchars($visit['visit_number']) ?></title>
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
 :root {
@@ -289,9 +304,13 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
     --font-mono: 'JetBrains Mono', 'Courier New', monospace;
     --primary: #0B5ED7;
     --primary-dark: #0A4CA8;
-    --primary-darker: #083C8A;
-    --primary-light: #6EA8FE;
+    --primary-light: #3B82F6;
     --primary-bg: #E8F0FE;
+    --bg-body: #F1F5F9;
+    --bg-card: #FFFFFF;
+    --text-primary: #1E293B;
+    --text-secondary: #64748B;
+    --border-color: #E2E8F0;
     --success: #059669;
     --success-bg: #D1FAE5;
     --danger: #DC2626;
@@ -302,24 +321,18 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
     --purple-bg: #EDE9FE;
     --cyan: #0891B2;
     --cyan-bg: #CFFAFE;
-    --gray-50: #F8FAFC;
-    --bg-body: #F1F5F9;
-    --bg-card: #FFFFFF;
-    --text-primary: #1E293B;
-    --text-secondary: #64748B;
-    --border-color: #E2E8F0;
     --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
-    --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
-    --shadow-lg: 0 10px 40px rgba(0,0,0,0.12);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
 }
-
 [data-theme="dark"] {
     --bg-body: #0F172A;
     --bg-card: #1E293B;
     --text-primary: #F1F5F9;
     --text-secondary: #94A3B8;
     --border-color: #334155;
-    --gray-50: #1A1A2E;
+    --primary: #3B82F6;
+    --primary-dark: #2563EB;
+    --primary-light: #60A5FA;
     --primary-bg: #1E3A5F;
     --success-bg: #1A3A2A;
     --danger-bg: #3A1A1A;
@@ -327,431 +340,177 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
     --purple-bg: #2D1B4E;
     --cyan-bg: #0E3A47;
 }
-
-* { font-family: var(--font-primary); -webkit-font-smoothing: antialiased; box-sizing: border-box; }
-body { background: var(--bg-body); color: var(--text-primary); margin: 0; padding: 0; }
-
-.main-content { margin-left: 270px; margin-top: 68px; padding: 24px 28px; min-height: calc(100vh - 68px); }
-
-@media (max-width: 1024px) {
-    .main-content { margin-left: 0; padding: 16px; }
-}
+* { font-family: var(--font-primary); box-sizing: border-box; }
+html, body { background: var(--bg-body); color: var(--text-primary); margin: 0; }
+.mono { font-family: var(--font-mono) !important; font-variant-numeric: tabular-nums; }
 
 /* PAGE HEADER */
-.page-header-custom {
-    background: linear-gradient(135deg, #0B5ED7, #0A4CA8, #083C8A);
-    border-radius: 16px;
-    padding: 20px 28px;
-    margin-bottom: 20px;
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    align-items: center;
-    gap: 16px;
-    box-shadow: 0 4px 20px rgba(11, 94, 215, 0.3);
-    position: relative;
-    overflow: hidden;
-}
+.page-header { background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%); border-radius: 16px; padding: 20px 24px; margin-bottom: 18px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px; box-shadow: 0 6px 20px rgba(11, 94, 215, 0.25); position: relative; overflow: hidden; }
+.page-header::before { content: ''; position: absolute; top: -50%; right: -20%; width: 350px; height: 350px; background: radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%); border-radius: 50%; pointer-events: none; }
+.page-header .page-title { color: white; font-size: 1.4rem; font-weight: 800; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; position: relative; z-index: 1; letter-spacing: -0.02em; margin: 0; }
+.page-header .page-title i { font-size: 1.5rem; color: #93C5FD; }
+.page-header .page-subtitle { color: rgba(255,255,255,0.85); font-size: 0.78rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; position: relative; z-index: 1; }
+.branch-tag { background: rgba(255,255,255,0.15); color: white; padding: 3px 10px; border-radius: 16px; font-size: 0.65rem; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1); }
+.branch-tag.audit-tag { background: linear-gradient(135deg, #0EA5E9, #0284C7); font-weight: 800; }
+.branch-tag.view-only-tag { background: linear-gradient(135deg, #F59E0B, #D97706); font-weight: 800; }
+.branch-tag.count-tag { background: linear-gradient(135deg, #10B981, #059669); font-weight: 700; }
+.btn-header { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.25); padding: 8px 14px; border-radius: 9px; font-weight: 600; font-size: 0.75rem; transition: all 0.3s ease; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; backdrop-filter: blur(4px); position: relative; z-index: 1; cursor: pointer; }
+.btn-header:hover { background: rgba(255,255,255,0.28); transform: translateY(-2px); color: white; }
 
-.page-header-custom::before {
-    content: '';
-    position: absolute;
-    top: -50%; right: -20%;
-    width: 300px; height: 300px;
-    background: rgba(255,255,255,0.05);
-    border-radius: 50%;
-    pointer-events: none;
-}
-
-.page-header-custom .page-title {
-    color: white;
-    font-size: 1.4rem;
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-    position: relative;
-    z-index: 1;
-    margin: 0;
-}
-
-.page-header-custom .page-title i { font-size: 1.6rem; opacity: 0.9; }
-.page-header-custom .page-subtitle {
-    color: rgba(255,255,255,0.85);
-    font-size: 0.82rem;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    position: relative;
-    z-index: 1;
-    margin-top: 4px;
-}
-
-.btn-header {
-    background: rgba(255,255,255,0.15);
-    color: white;
-    border: 1px solid rgba(255,255,255,0.25);
-    padding: 8px 14px;
-    border-radius: 9px;
-    font-weight: 600;
-    font-size: 0.75rem;
-    transition: all 0.3s ease;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-    position: relative;
-    z-index: 1;
-}
-
-.btn-header:hover {
-    background: rgba(255,255,255,0.28);
-    transform: translateY(-2px);
-    color: white;
-}
-
-/* ALERTS */
-.alert {
-    padding: 14px 20px;
-    border-radius: 12px;
-    margin-bottom: 20px;
-    font-weight: 600;
-    font-size: 0.85rem;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    animation: slideDown 0.4s ease;
-}
-
-@keyframes slideDown {
-    from { opacity: 0; transform: translateY(-20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.alert-success { background: var(--success-bg); color: var(--success); border: 2px solid var(--success); }
-.alert-danger { background: var(--danger-bg); color: var(--danger); border: 2px solid var(--danger); }
-
-/* DELETE WARNING */
-.delete-warning {
-    background: var(--danger-bg);
-    border: 2px solid var(--danger);
-    border-radius: 12px;
-    padding: 16px 20px;
-    margin-bottom: 20px;
-    color: var(--danger);
-    font-size: 0.85rem;
-    font-weight: 600;
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-}
-
-.delete-warning i {
-    font-size: 1.4rem;
-    margin-top: 2px;
-}
-
-.delete-warning ul {
-    margin: 8px 0 0;
-    padding-left: 20px;
-    font-weight: 500;
-}
-
-/* DETAIL CARD */
-.detail-card {
-    background: var(--bg-card);
-    border-radius: 14px;
-    border: 2px solid var(--border-color);
-    margin-bottom: 20px;
-    overflow: hidden;
+/* View Only Notice */
+.view-only-notice {
+    background: linear-gradient(135deg, var(--warning-bg), #FEF9E7);
+    border-left: 4px solid var(--warning);
+    border-radius: 10px; padding: 12px 18px; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 12px;
+    font-size: 0.78rem; font-weight: 700; color: var(--warning);
     box-shadow: var(--shadow-sm);
 }
-
-.detail-card .card-header {
-    background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-    color: white;
-    padding: 14px 20px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 10px;
-}
-
-.detail-card .card-header h3 {
-    margin: 0;
-    font-size: 1rem;
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.detail-card .card-body { padding: 20px; }
-
-.info-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 16px;
-}
-
-.info-item {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.info-item .info-label {
-    font-size: 0.65rem;
-    font-weight: 700;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-
-.info-item .info-value {
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    font-family: var(--font-mono);
-}
-
-.info-item .info-value.highlight {
-    color: var(--primary);
-    font-size: 1rem;
-    font-weight: 800;
-}
-
-/* STATUS BADGE */
-.status-badge {
-    padding: 4px 14px;
-    border-radius: 20px;
-    font-size: 0.7rem;
-    font-weight: 700;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
+[data-theme="dark"] .view-only-notice { background: linear-gradient(135deg, #3A2A1A, #2D2015); color: #FBBF24; }
+.view-only-notice i { font-size: 1.15rem; flex-shrink: 0; }
+.view-only-notice .notice-text { flex: 1; line-height: 1.5; }
+.view-only-notice .notice-badge {
+    background: var(--warning); color: white;
+    padding: 4px 12px; border-radius: 8px;
+    font-size: 0.62rem; font-weight: 800;
+    text-transform: uppercase; letter-spacing: 0.05em;
     white-space: nowrap;
 }
 
+/* STATUS BANNER */
+.status-banner { border-radius: 14px; padding: 16px 22px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; position: relative; overflow: hidden; box-shadow: var(--shadow-md); }
+.status-banner.pending { background: linear-gradient(135deg, #D97706, #B45309); color: white; }
+.status-banner.waiting { background: linear-gradient(135deg, #F59E0B, #D97706); color: white; }
+.status-banner.assigned { background: linear-gradient(135deg, #0EA5E9, #0284C7); color: white; }
+.status-banner.with_doctor { background: linear-gradient(135deg, #0891B2, #0E7490); color: white; }
+.status-banner.lab_test { background: linear-gradient(135deg, #7C3AED, #6D28D9); color: white; }
+.status-banner.lab_completed { background: linear-gradient(135deg, #059669, #047857); color: white; }
+.status-banner.prescribed { background: linear-gradient(135deg, #0891B2, #0E7490); color: white; }
+.status-banner.completed { background: linear-gradient(135deg, #059669, #047857); color: white; }
+.status-banner.cancelled { background: linear-gradient(135deg, #DC2626, #B91C1C); color: white; }
+.status-banner .status-left { display: flex; align-items: center; gap: 16px; position: relative; z-index: 1; }
+.status-banner .status-icon { width: 56px; height: 56px; border-radius: 14px; background: rgba(255,255,255,0.2); display: flex; align-items: center; justify-content: center; font-size: 1.5rem; border: 2px solid rgba(255,255,255,0.3); backdrop-filter: blur(4px); }
+.status-banner .status-info .status-label { font-size: 1.35rem; font-weight: 900; letter-spacing: -0.02em; line-height: 1.1; }
+.status-banner .status-info .status-sub { font-size: 0.75rem; opacity: 0.9; font-weight: 500; margin-top: 4px; }
+.status-banner .status-amount { text-align: right; position: relative; z-index: 1; }
+.status-banner .status-amount .label { font-size: 0.65rem; opacity: 0.85; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; margin-bottom: 4px; }
+.status-banner .status-amount .value { font-size: 1.75rem; font-weight: 900; font-family: var(--font-mono); letter-spacing: -0.03em; line-height: 1; }
+.status-banner .status-amount .currency-prefix { font-size: 0.95rem; opacity: 0.9; font-family: var(--font-primary); font-weight: 700; }
+
+.view-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px; }
+
+/* INFO CARDS */
+.info-card { background: var(--bg-card); border-radius: 14px; border: 2px solid var(--border-color); overflow: hidden; box-shadow: var(--shadow-sm); transition: all 0.3s ease; margin-bottom: 16px; }
+.info-card:hover { box-shadow: var(--shadow-md); border-color: var(--primary); }
+.info-card.blue-theme { border-color: var(--primary); }
+.info-card.blue-theme .card-header { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: white; border-bottom-color: transparent; }
+.info-card.blue-theme .card-header i { color: #93C5FD; }
+.info-card .card-header { padding: 14px 18px; background: var(--primary-bg); border-bottom: 2px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 0.85rem; font-weight: 800; color: var(--text-primary); }
+.info-card .card-header .title { display: flex; align-items: center; gap: 8px; }
+.info-card .card-header i { color: var(--primary); font-size: 0.95rem; }
+.info-card .card-body { padding: 18px 20px; }
+
+.info-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border-color); font-size: 0.82rem; }
+.info-row:last-child { border-bottom: none; padding-bottom: 0; }
+.info-row:first-child { padding-top: 0; }
+.info-row .label { color: var(--text-secondary); font-weight: 600; font-size: 0.72rem; display: flex; align-items: center; gap: 6px; flex-shrink: 0; min-width: 120px; }
+.info-row .label i { font-size: 0.7rem; opacity: 0.8; color: var(--primary); }
+.info-row .value { color: var(--text-primary); font-weight: 700; text-align: right; word-break: break-word; flex: 1; }
+.info-row .value.mono { font-family: var(--font-mono); font-size: 0.8rem; letter-spacing: -0.02em; }
+
+.profile-header { display: flex; align-items: center; gap: 14px; padding: 16px 18px; background: linear-gradient(135deg, var(--primary-bg), var(--primary-bg)); border-bottom: 2px solid var(--border-color); }
+.profile-avatar { width: 56px; height: 56px; border-radius: 14px; background: linear-gradient(135deg, #0B5ED7, #3B82F6); color: white; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; font-weight: 900; text-transform: uppercase; flex-shrink: 0; box-shadow: 0 6px 16px rgba(11, 94, 215, 0.3); border: 3px solid var(--bg-card); }
+.profile-name { font-size: 1.1rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em; line-height: 1.2; margin-bottom: 4px; }
+.profile-meta { display: flex; flex-wrap: wrap; gap: 8px; }
+.profile-meta-item { font-size: 0.68rem; font-weight: 600; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 4px; background: var(--bg-card); padding: 3px 10px; border-radius: 12px; border: 1px solid var(--border-color); }
+.profile-meta-item i { color: var(--primary); font-size: 0.65rem; }
+
+.status-badge { padding: 4px 12px; border-radius: 18px; font-size: 0.68rem; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .status-badge.warning { background: #FEF3C7; color: #D97706; }
 .status-badge.success { background: #D1FAE5; color: #059669; }
-.status-badge.danger { background: #FEE2E2; color: #EF4444; }
-.status-badge.info { background: #E8F0FE; color: #0B5ED7; }
-.status-badge.purple { background: #EDE9FE; color: #7C3AED; }
+.status-badge.danger  { background: #FEE2E2; color: #EF4444; }
+.status-badge.info    { background: #E8F0FE; color: #0B5ED7; }
+.status-badge.purple  { background: #EDE9FE; color: #7C3AED; }
+.status-badge.cyan    { background: #CFFAFE; color: #0891B2; }
 
-/* BILL INFO BOX */
-.bill-info {
-    background: linear-gradient(135deg, #E8F0FE, #D6E4FF);
-    border: 2px solid var(--primary-light);
-    border-radius: 12px;
-    padding: 16px;
-    margin-top: 16px;
-}
+/* VITALS GRID */
+.vitals-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.vital-item { background: linear-gradient(135deg, var(--primary-bg), var(--bg-card)); border-radius: 10px; padding: 12px 14px; border: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 2px; }
+.vital-item .vital-label { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 0.05em; }
+.vital-item .vital-value { font-size: 1.05rem; font-weight: 800; color: var(--primary); font-family: var(--font-mono); }
 
-[data-theme="dark"] .bill-info {
-    background: linear-gradient(135deg, #1E3A5F, #16294A);
-    border-color: #334155;
-}
+/* TABLE */
+.data-table-wrap { overflow-x: auto; border-radius: 10px; }
+.data-table-wrap::-webkit-scrollbar { height: 8px; }
+.data-table-wrap::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 10px; }
+.data-table-wrap::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; min-width: 800px; }
+.data-table thead th { text-align: left; padding: 10px 12px; font-weight: 800; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.06em; color: white; background: linear-gradient(135deg, #0B5ED7, #0A4CA8); white-space: nowrap; }
+.data-table tbody td { padding: 10px 12px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); vertical-align: middle; }
+.data-table tbody tr:hover td { background: var(--primary-bg); }
+.data-table tbody tr:last-child td { border-bottom: none; }
 
-.bill-info .bill-title {
-    font-size: 0.8rem;
-    font-weight: 800;
-    color: var(--primary);
-    margin-bottom: 10px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
+.amount-cell { font-family: var(--font-mono); font-weight: 800; color: var(--primary); font-size: 0.82rem; text-align: right; white-space: nowrap; }
+.amount-cell.green { color: var(--success); }
+.amount-cell.red { color: var(--danger); }
 
-.bill-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 12px;
-}
+.received-by-cell { display: flex; align-items: center; gap: 8px; }
+.received-by-avatar { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #059669, #34D399); color: white; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 0.6rem; text-transform: uppercase; flex-shrink: 0; font-family: var(--font-mono); }
+.received-by-name { font-size: 0.75rem; font-weight: 700; color: var(--text-primary); }
+.received-by-meta { font-size: 0.58rem; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); }
 
-.bill-grid .bill-item {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
+/* BILL SUMMARY */
+.bill-summary-box { background: linear-gradient(135deg, #EDE9FE, #DDD6FE); border-radius: 12px; padding: 16px 20px; border-left: 4px solid var(--purple); }
+[data-theme="dark"] .bill-summary-box { background: linear-gradient(135deg, #2D1B4E, #1E1B4B); }
+.bill-summary-title { font-size: 0.7rem; font-weight: 800; text-transform: uppercase; color: var(--purple); letter-spacing: 0.05em; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+.bill-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.bill-summary-item { background: rgba(255,255,255,0.6); padding: 10px 14px; border-radius: 8px; text-align: center; }
+[data-theme="dark"] .bill-summary-item { background: rgba(255,255,255,0.1); }
+.bill-summary-item .bs-label { font-size: 0.58rem; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 0.05em; }
+.bill-summary-item .bs-value { font-size: 0.95rem; font-weight: 800; font-family: var(--font-mono); color: var(--text-primary); margin-top: 2px; }
+.bill-summary-item.paid .bs-value { color: var(--success); }
+.bill-summary-item.balance .bs-value { color: var(--danger); }
+.bill-summary-item.total .bs-value { color: var(--primary); }
+.bill-summary-item.discount .bs-value { color: var(--cyan); }
+.bill-summary-item.premium .bs-value { color: var(--purple); }
 
-.bill-grid .bill-label {
-    font-size: 0.6rem;
-    font-weight: 700;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-}
+/* ACTION BAR */
+.action-bar { background: var(--bg-card); border-radius: 14px; border: 2px solid var(--border-color); padding: 16px 20px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; box-shadow: var(--shadow-sm); position: sticky; bottom: 20px; z-index: 10; }
+.action-bar .action-info { display: flex; align-items: center; gap: 12px; }
+.action-bar .action-info .info-icon { width: 42px; height: 42px; border-radius: 12px; background: var(--warning-bg); color: var(--warning); display: flex; align-items: center; justify-content: center; font-size: 1.1rem; }
+.action-bar .action-info .info-text .info-title { font-size: 0.85rem; font-weight: 800; color: var(--text-primary); }
+.action-bar .action-info .info-text .info-sub { font-size: 0.7rem; color: var(--text-secondary); font-weight: 500; }
+.action-bar .action-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn { padding: 10px 20px; border-radius: 10px; font-weight: 700; font-size: 0.8rem; border: none; cursor: pointer; transition: all 0.3s ease; display: inline-flex; align-items: center; gap: 7px; text-decoration: none; white-space: nowrap; }
+.btn:hover { transform: translateY(-2px); }
+.btn-primary { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); color: white; box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
+.btn-primary:hover { color: white; }
+.btn-secondary { background: var(--bg-card); color: var(--text-primary); border: 2px solid var(--border-color); }
+.btn-secondary:hover { border-color: var(--primary); color: var(--primary); }
 
-.bill-grid .bill-value {
-    font-size: 0.85rem;
-    font-weight: 700;
-    font-family: var(--font-mono);
-    color: var(--text-primary);
-}
+/* EMPTY */
+.empty-section { text-align: center; padding: 30px 20px; color: var(--text-secondary); font-size: 0.8rem; }
+.empty-section i { font-size: 2.5rem; opacity: 0.3; display: block; margin-bottom: 8px; }
 
-.bill-grid .bill-value.amount { color: var(--primary); }
-.bill-grid .bill-value.paid { color: var(--success); }
-.bill-grid .bill-value.balance { color: var(--danger); }
+.footer { padding: 14px 0; border-top: 1px solid var(--border-color); margin-top: 24px; text-align: center; font-size: 0.7rem; color: var(--text-secondary); }
+.footer .footer-brand { color: var(--primary); font-weight: 600; }
 
-/* RESULT BOX */
-.result-box {
-    background: var(--gray-50);
-    border: 2px dashed var(--border-color);
-    border-radius: 10px;
-    padding: 16px;
-    margin-top: 10px;
-    font-family: var(--font-mono);
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    line-height: 1.6;
-}
-
-[data-theme="dark"] .result-box {
-    background: #1A1A2E;
-}
-
-/* ACTION BUTTONS */
-.action-buttons {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-top: 20px;
-    padding-top: 20px;
-    border-top: 2px dashed var(--border-color);
-}
-
-.btn {
-    padding: 10px 22px;
-    border-radius: 10px;
-    font-weight: 700;
-    font-size: 0.85rem;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    text-decoration: none;
-    border: none;
-    transition: all 0.3s ease;
-}
-
-.btn-secondary {
-    background: var(--bg-body);
-    color: var(--text-primary);
-    border: 2px solid var(--border-color);
-}
-
-.btn-secondary:hover {
-    border-color: var(--primary);
-    color: var(--primary);
-    background: var(--primary-bg);
-    transform: translateY(-2px);
-}
-
-.btn-delete {
-    background: linear-gradient(135deg, #DC2626, #B91C1C);
-    color: white;
-    box-shadow: 0 3px 10px rgba(220, 38, 38, 0.3);
-}
-
-.btn-delete:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(220, 38, 38, 0.5);
-}
-
-/* MODAL */
-.modal-overlay {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.6);
-    display: none;
-    align-items: center;
-    justify-content: center;
-    z-index: 9999;
-    backdrop-filter: blur(4px);
-}
-
-.modal-overlay.show { display: flex; }
-
-.modal-box {
-    background: var(--bg-card);
-    border-radius: 16px;
-    padding: 28px;
-    max-width: 480px;
-    width: 90%;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-    animation: modalIn 0.3s ease;
-    text-align: center;
-}
-
-@keyframes modalIn {
-    from { transform: scale(0.9); opacity: 0; }
-    to { transform: scale(1); opacity: 1; }
-}
-
-.modal-box .modal-icon {
-    width: 68px; height: 68px;
-    border-radius: 50%;
-    background: var(--danger-bg);
-    color: var(--danger);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.8rem;
-    margin: 0 auto 16px;
-}
-
-.modal-box h3 {
-    font-size: 1.2rem;
-    font-weight: 800;
-    color: var(--text-primary);
-    margin: 0 0 8px;
-}
-
-.modal-box p {
-    font-size: 0.85rem;
-    color: var(--text-secondary);
-    margin: 0 0 20px;
-    line-height: 1.5;
-}
-
-.modal-box .modal-actions {
-    display: flex;
-    gap: 10px;
-    justify-content: center;
-}
-
-.modal-box .modal-actions button {
-    padding: 10px 24px;
-    border-radius: 8px;
-    font-weight: 700;
-    font-size: 0.85rem;
-    cursor: pointer;
-    border: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.modal-box .btn-cancel {
-    background: var(--bg-body);
-    color: var(--text-primary);
-    border: 2px solid var(--border-color);
-}
-
-.modal-box .btn-confirm-delete {
-    background: linear-gradient(135deg, #DC2626, #B91C1C);
-    color: white;
-}
-
+@media (max-width: 1024px) { .view-grid { grid-template-columns: 1fr; } }
 @media (max-width: 768px) {
-    .page-header-custom { padding: 16px 20px; }
-    .page-header-custom .page-title { font-size: 1.15rem; }
-    .info-grid { grid-template-columns: 1fr; }
+    .page-header { padding: 16px 18px; }
+    .page-header .page-title { font-size: 1.15rem; }
+    .status-banner { padding: 14px 16px; }
+    .status-banner .status-amount .value { font-size: 1.35rem; }
+    .status-banner .status-icon { width: 44px; height: 44px; font-size: 1.2rem; }
+    .status-banner .status-info .status-label { font-size: 1.1rem; }
+    .action-bar { padding: 12px 14px; flex-direction: column; align-items: stretch; }
+    .action-bar .action-buttons { justify-content: center; }
+    .btn { padding: 8px 14px; font-size: 0.75rem; }
+}
+@media print {
+    .action-bar, .btn-header, .view-only-notice { display: none !important; }
+    .page-header { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; }
+    .status-banner { -webkit-print-color-adjust: exact; }
 }
     </style>
 </head>
@@ -760,327 +519,719 @@ body { background: var(--bg-body); color: var(--text-primary); margin: 0; paddin
 <main class="main-content">
 
     <!-- PAGE HEADER -->
-    <div class="page-header-custom">
+    <div class="page-header">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-stethoscope"></i>
                 Consultation Details
-                <span style="background:rgba(255,255,255,0.2);padding:3px 12px;border-radius:20px;font-size:0.6rem;font-weight:600;text-transform:uppercase;">AUDIT VIEW</span>
+                <span class="branch-tag audit-tag"><i class="fas fa-shield-alt"></i> AUDIT</span>
+                <span class="branch-tag view-only-tag"><i class="fas fa-eye"></i> VIEW ONLY</span>
+                <span class="branch-tag count-tag">
+                    <i class="fas fa-hashtag"></i> <?= htmlspecialchars($visit['visit_number']) ?>
+                </span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-hashtag"></i> ID: <?= $consultation['id'] ?> • 
-                <i class="fas fa-calendar"></i> <?= date('d M Y, H:i', strtotime($consultation['created_at'] ?? $consultation['visit_date'])) ?>
+                <i class="fas fa-calendar"></i>
+                <?= date('d M Y, H:i', strtotime($visit['visit_date'])) ?>
+                <span class="branch-tag">
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($visit['branch_name'] ?? 'N/A') ?>
+                </span>
+                <?php if (!empty($visit['visit_type'])): ?>
+                    <span class="branch-tag">
+                        <i class="fas fa-notes-medical"></i> <?= htmlspecialchars($visit['visit_type']) ?>
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
             <button onclick="window.print()" class="btn-header">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="other_services.php?branch=<?= $selected_branch_id ?>" class="btn-header">
+            <a href="other_services.php?tab=consultations&branch=<?= $selected_branch_id ?>" class="btn-header">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
     </div>
 
-    <!-- DELETE MESSAGE -->
-    <?php if (!empty($delete_message)): ?>
-        <div class="alert <?= $delete_success ? 'alert-success' : 'alert-danger' ?>">
-            <i class="fas <?= $delete_success ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
-            <?= htmlspecialchars($delete_message) ?>
-        </div>
-    <?php endif; ?>
+    <!-- VIEW ONLY NOTICE -->
+    <div class="view-only-notice">
+        <i class="fas fa-info-circle"></i>
+        <span class="notice-text">
+            You are viewing this consultation in <strong>VIEW ONLY</strong> mode. 
+            You cannot edit or delete records. For any changes, please contact your Administrator.
+        </span>
+        <span class="notice-badge">
+            <i class="fas fa-lock"></i> VIEW ONLY
+        </span>
+    </div>
 
-    <!-- WARNING KAMA INA BILL -->
-    <?php if ($bill_item && !$delete_success): ?>
-        <div class="delete-warning">
-            <i class="fas fa-exclamation-triangle"></i>
-            <div>
-                <strong>⚠️ This consultation is linked to a Bill!</strong><br>
-                Deleting this consultation will also:
-                <ul>
-                    <li>Delete the related bill item (<?= htmlspecialchars($bill_item['item_name'] ?? 'Consultation') ?>)</li>
-                    <li>Recalculate Bill #<?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?> totals</li>
-                    <li>Update bill balance & payment status</li>
-                </ul>
+    <!-- STATUS BANNER -->
+    <div class="status-banner <?= htmlspecialchars($visit['status']) ?>">
+        <div class="status-left">
+            <div class="status-icon">
+                <i class="fas fa-<?= $visit['status'] === 'completed' ? 'check-double' : ($visit['status'] === 'cancelled' ? 'times-circle' : ($visit['status'] === 'waiting' ? 'hourglass-half' : 'stethoscope')) ?>"></i>
+            </div>
+            <div class="status-info">
+                <div class="status-label"><?= strtoupper($status_info['label']) ?></div>
+                <div class="status-sub">
+                    <i class="fas fa-stethoscope"></i>
+                    <?= htmlspecialchars($visit['visit_type'] ?: 'Consultation') ?>
+                    • <i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($visit['doctor_name'] ?? 'Not assigned') ?>
+                    • <i class="fas fa-money-bill-wave"></i> <?= htmlspecialchars(ucfirst($visit['payment_status'])) ?>
+                </div>
             </div>
         </div>
-    <?php endif; ?>
+        <div class="status-amount">
+            <div class="label">Consultation Fee</div>
+            <div class="value">
+                <span class="currency-prefix"><?= $currency ?></span>
+                <?= number_format($visit['consultation_fee'] ?? 0, 0) ?>
+            </div>
+        </div>
+    </div>
 
-    <!-- CONSULTATION INFO -->
-    <div class="detail-card">
+    <!-- PATIENT + DOCTOR INFO -->
+    <div class="view-grid">
+        
+        <!-- PATIENT -->
+        <div class="info-card blue-theme">
+            <div class="card-header">
+                <span class="title"><i class="fas fa-user"></i> Patient Information</span>
+            </div>
+            <div class="profile-header">
+                <div class="profile-avatar">
+                    <?= strtoupper(substr($visit['patient_name'] ?? 'U', 0, 1)) ?>
+                </div>
+                <div style="flex:1;">
+                    <div class="profile-name"><?= htmlspecialchars($visit['patient_name'] ?? 'Unknown') ?></div>
+                    <div class="profile-meta">
+                        <?php if (!empty($visit['patient_number'])): ?>
+                            <span class="profile-meta-item">
+                                <i class="fas fa-id-card"></i> <?= htmlspecialchars($visit['patient_number']) ?>
+                            </span>
+                        <?php endif; ?>
+                        <?php if (!empty($visit['patient_gender'])): ?>
+                            <span class="profile-meta-item">
+                                <i class="fas fa-<?= strtolower($visit['patient_gender']) === 'female' ? 'venus' : 'mars' ?>"></i>
+                                <?= htmlspecialchars($visit['patient_gender']) ?>
+                            </span>
+                        <?php endif; ?>
+                        <?php if ($patient_age !== 'N/A'): ?>
+                            <span class="profile-meta-item">
+                                <i class="fas fa-birthday-cake"></i> <?= $patient_age ?>
+                            </span>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="info-row">
+                    <span class="label"><i class="fas fa-phone"></i> Phone</span>
+                    <span class="value mono"><?= htmlspecialchars($visit['patient_phone'] ?? 'N/A') ?></span>
+                </div>
+                <?php if (!empty($visit['patient_email'])): ?>
+                <div class="info-row">
+                    <span class="label"><i class="fas fa-envelope"></i> Email</span>
+                    <span class="value mono"><?= htmlspecialchars($visit['patient_email']) ?></span>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($visit['patient_address'])): ?>
+                <div class="info-row">
+                    <span class="label"><i class="fas fa-map-marker-alt"></i> Address</span>
+                    <span class="value"><?= htmlspecialchars($visit['patient_address']) ?></span>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($visit['blood_group'])): ?>
+                <div class="info-row">
+                    <span class="label"><i class="fas fa-tint"></i> Blood Group</span>
+                    <span class="value" style="color:var(--danger);"><?= htmlspecialchars($visit['blood_group']) ?></span>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($visit['allergies'])): ?>
+                <div class="info-row">
+                    <span class="label"><i class="fas fa-exclamation-triangle"></i> Allergies</span>
+                    <span class="value" style="color:var(--danger);"><?= htmlspecialchars($visit['allergies']) ?></span>
+                </div>
+                <?php endif; ?>
+            </div>
+        </div>
+
+        <!-- DOCTOR -->
+        <div class="info-card blue-theme">
+            <div class="card-header">
+                <span class="title"><i class="fas fa-user-md"></i> Doctor Information</span>
+            </div>
+            <div class="profile-header">
+                <div class="profile-avatar" style="background:linear-gradient(135deg,#059669,#34D399);">
+                    <?= strtoupper(substr($visit['doctor_name'] ?? 'D', 0, 1)) ?>
+                </div>
+                <div style="flex:1;">
+                    <div class="profile-name">Dr. <?= htmlspecialchars($visit['doctor_name'] ?? 'Not Assigned') ?></div>
+                    <div class="profile-meta">
+                        <?php if (!empty($visit['doctor_specialty'])): ?>
+                            <span class="profile-meta-item">
+                                <i class="fas fa-briefcase-medical"></i> <?= htmlspecialchars($visit['doctor_specialty']) ?>
+                            </span>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="info-row">
+                    <span class="label"><i class="fas fa-user-tie"></i> Receptionist</span>
+                    <span class="value"><?= htmlspecialchars($visit['receptionist_name'] ?? 'N/A') ?></span>
+                </div>
+                <?php if (!empty($visit['disease_name'])): ?>
+                <div class="info-row">
+                    <span class="label"><i class="fas fa-notes-medical"></i> Disease</span>
+                    <span class="value">
+                        <?= htmlspecialchars($visit['disease_name']) ?>
+                        <?php if (!empty($visit['disease_code'])): ?>
+                            <span style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-secondary);">
+                                (<?= htmlspecialchars($visit['disease_code']) ?>)
+                            </span>
+                        <?php endif; ?>
+                    </span>
+                </div>
+                <?php endif; ?>
+                <div class="info-row">
+                    <span class="label"><i class="fas fa-calendar-check"></i> Visit Date</span>
+                    <span class="value mono"><?= date('d M Y, H:i', strtotime($visit['visit_date'])) ?></span>
+                </div>
+                <div class="info-row">
+                    <span class="label"><i class="fas fa-info-circle"></i> Visit Status</span>
+                    <span class="value">
+                        <span class="status-badge <?= $status_info['class'] ?>">
+                            <?= $status_info['icon'] ?> <?= $status_info['label'] ?>
+                        </span>
+                    </span>
+                </div>
+                <div class="info-row">
+                    <span class="label"><i class="fas fa-credit-card"></i> Payment</span>
+                    <span class="value">
+                        <span class="status-badge <?= $payment_info['class'] ?>">
+                            <?= $payment_info['icon'] ?> <?= $payment_info['label'] ?>
+                        </span>
+                    </span>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- CHIEF COMPLAINT + DIAGNOSIS -->
+    <?php if (!empty($visit['symptoms']) || !empty($visit['hpi']) || !empty($visit['physical_exam']) || !empty($visit['diagnosis']) || !empty($visit['treatment']) || !empty($visit['notes'])): ?>
+    <div class="info-card">
         <div class="card-header">
-            <h3><i class="fas fa-stethoscope"></i> Consultation Information</h3>
-            <span class="status-badge <?= $status_info['class'] ?>" style="background:rgba(255,255,255,0.2);color:white;">
-                <?= $status_info['icon'] ?> <?= $status_info['label'] ?>
-            </span>
+            <span class="title"><i class="fas fa-notes-medical"></i> Clinical Notes</span>
         </div>
         <div class="card-body">
-            <div class="info-grid">
-                <div class="info-item">
-                    <span class="info-label"><i class="fas fa-stethoscope"></i> Consultation Type</span>
-                    <span class="info-value highlight"><?= htmlspecialchars($consultation['consultation_type'] ?? 'General') ?></span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label"><i class="fas fa-money-bill-wave"></i> Fee</span>
-                    <span class="info-value highlight">TSh <?= number_format($consultation['consultation_fee'] ?? 0, 0) ?></span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label"><i class="fas fa-calendar"></i> Consultation Date</span>
-                    <span class="info-value">
-                        <?= !empty($consultation['consultation_date']) ? date('d M Y', strtotime($consultation['consultation_date'])) : 'N/A' ?>
-                    </span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label"><i class="fas fa-clock"></i> Time</span>
-                    <span class="info-value">
-                        <?= !empty($consultation['consultation_time']) ? date('H:i', strtotime($consultation['consultation_time'])) : 'N/A' ?>
-                    </span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label"><i class="fas fa-store-alt"></i> Branch</span>
-                    <span class="info-value"><?= htmlspecialchars($consultation['branch_name'] ?? 'N/A') ?></span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label"><i class="fas fa-user-md"></i> Doctor</span>
-                    <span class="info-value">Dr. <?= htmlspecialchars($consultation['doctor_name'] ?? 'N/A') ?></span>
-                </div>
-            </div>
-
-            <!-- CHIEF COMPLAINT -->
-            <?php if (!empty($consultation['chief_complaint'])): ?>
-            <div style="margin-top:20px;">
-                <span class="info-label" style="font-size:0.65rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;">
-                    <i class="fas fa-comment-medical"></i> Chief Complaint
-                </span>
-                <div class="result-box">
-                    <?= nl2br(htmlspecialchars($consultation['chief_complaint'])) ?>
-                </div>
+            <?php if (!empty($visit['symptoms'])): ?>
+            <div class="info-row">
+                <span class="label"><i class="fas fa-comment-medical"></i> Symptoms</span>
+                <span class="value" style="text-align:left;font-weight:600;"><?= nl2br(htmlspecialchars($visit['symptoms'])) ?></span>
             </div>
             <?php endif; ?>
-
-            <!-- DIAGNOSIS -->
-            <?php if (!empty($consultation['diagnosis'])): ?>
-            <div style="margin-top:16px;">
-                <span class="info-label" style="font-size:0.65rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;">
-                    <i class="fas fa-notes-medical"></i> Diagnosis
-                </span>
-                <div class="result-box" style="border-color:var(--success);">
-                    <?= nl2br(htmlspecialchars($consultation['diagnosis'])) ?>
-                </div>
+            <?php if (!empty($visit['hpi'])): ?>
+            <div class="info-row">
+                <span class="label"><i class="fas fa-history"></i> HPI</span>
+                <span class="value" style="text-align:left;font-weight:600;"><?= nl2br(htmlspecialchars($visit['hpi'])) ?></span>
             </div>
             <?php endif; ?>
-
-            <!-- TREATMENT -->
-            <?php if (!empty($consultation['treatment'])): ?>
-            <div style="margin-top:16px;">
-                <span class="info-label" style="font-size:0.65rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;">
-                    <i class="fas fa-prescription-bottle-medical"></i> Treatment
-                </span>
-                <div class="result-box" style="border-color:var(--primary);">
-                    <?= nl2br(htmlspecialchars($consultation['treatment'])) ?>
-                </div>
+            <?php if (!empty($visit['physical_exam'])): ?>
+            <div class="info-row">
+                <span class="label"><i class="fas fa-stethoscope"></i> Physical Exam</span>
+                <span class="value" style="text-align:left;font-weight:600;"><?= nl2br(htmlspecialchars($visit['physical_exam'])) ?></span>
             </div>
             <?php endif; ?>
-
-            <!-- NOTES -->
-            <?php if (!empty($consultation['notes'])): ?>
-            <div style="margin-top:16px;">
-                <span class="info-label" style="font-size:0.65rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;">
-                    <i class="fas fa-sticky-note"></i> Notes
-                </span>
-                <div class="result-box">
-                    <?= nl2br(htmlspecialchars($consultation['notes'])) ?>
-                </div>
+            <?php if (!empty($visit['diagnosis'])): ?>
+            <div class="info-row">
+                <span class="label"><i class="fas fa-diagnoses"></i> Diagnosis</span>
+                <span class="value" style="text-align:left;font-weight:700;color:var(--purple);"><?= nl2br(htmlspecialchars($visit['diagnosis'])) ?></span>
+            </div>
+            <?php endif; ?>
+            <?php if (!empty($visit['treatment'])): ?>
+            <div class="info-row">
+                <span class="label"><i class="fas fa-prescription"></i> Treatment</span>
+                <span class="value" style="text-align:left;font-weight:600;"><?= nl2br(htmlspecialchars($visit['treatment'])) ?></span>
+            </div>
+            <?php endif; ?>
+            <?php if (!empty($visit['notes'])): ?>
+            <div class="info-row">
+                <span class="label"><i class="fas fa-sticky-note"></i> Notes</span>
+                <span class="value" style="text-align:left;font-weight:600;"><?= nl2br(htmlspecialchars($visit['notes'])) ?></span>
             </div>
             <?php endif; ?>
         </div>
     </div>
+    <?php endif; ?>
 
-    <!-- PATIENT & VISIT INFO -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
-        
-        <!-- PATIENT INFO -->
-        <div class="detail-card">
-            <div class="card-header">
-                <h3><i class="fas fa-user"></i> Patient Information</h3>
+    <!-- VITAL SIGNS -->
+    <?php if ($vitals): ?>
+    <div class="info-card">
+        <div class="card-header">
+            <span class="title"><i class="fas fa-heartbeat"></i> Vital Signs</span>
+            <span style="font-size:0.68rem;color:var(--text-secondary);">
+                <i class="fas fa-user"></i> <?= htmlspecialchars($vitals['recorded_by_name'] ?? 'N/A') ?>
+                • <?= date('d M Y, H:i', strtotime($vitals['recorded_at'])) ?>
+            </span>
+        </div>
+        <div class="card-body">
+            <div class="vitals-grid">
+                <?php if (!empty($vitals['temperature'])): ?>
+                <div class="vital-item">
+                    <span class="vital-label"><i class="fas fa-thermometer-half"></i> Temperature</span>
+                    <span class="vital-value"><?= $vitals['temperature'] ?> °C</span>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($vitals['blood_pressure_systolic'])): ?>
+                <div class="vital-item">
+                    <span class="vital-label"><i class="fas fa-heart"></i> BP</span>
+                    <span class="vital-value"><?= $vitals['blood_pressure_systolic'] ?>/<?= $vitals['blood_pressure_diastolic'] ?></span>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($vitals['pulse_rate'])): ?>
+                <div class="vital-item">
+                    <span class="vital-label"><i class="fas fa-heartbeat"></i> Pulse</span>
+                    <span class="vital-value"><?= $vitals['pulse_rate'] ?> bpm</span>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($vitals['respiratory_rate'])): ?>
+                <div class="vital-item">
+                    <span class="vital-label"><i class="fas fa-lungs"></i> Respiratory</span>
+                    <span class="vital-value"><?= $vitals['respiratory_rate'] ?> /min</span>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($vitals['oxygen_saturation'])): ?>
+                <div class="vital-item">
+                    <span class="vital-label"><i class="fas fa-lungs"></i> SpO₂</span>
+                    <span class="vital-value"><?= $vitals['oxygen_saturation'] ?> %</span>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($vitals['weight'])): ?>
+                <div class="vital-item">
+                    <span class="vital-label"><i class="fas fa-weight"></i> Weight</span>
+                    <span class="vital-value"><?= $vitals['weight'] ?> kg</span>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($vitals['height'])): ?>
+                <div class="vital-item">
+                    <span class="vital-label"><i class="fas fa-ruler-vertical"></i> Height</span>
+                    <span class="vital-value"><?= $vitals['height'] ?> cm</span>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($vitals['bmi'])): ?>
+                <div class="vital-item">
+                    <span class="vital-label"><i class="fas fa-calculator"></i> BMI</span>
+                    <span class="vital-value"><?= $vitals['bmi'] ?></span>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($vitals['blood_glucose'])): ?>
+                <div class="vital-item">
+                    <span class="vital-label"><i class="fas fa-tint"></i> Glucose</span>
+                    <span class="vital-value"><?= $vitals['blood_glucose'] ?> mg/dL</span>
+                </div>
+                <?php endif; ?>
             </div>
-            <div class="card-body">
-                <div class="info-grid" style="grid-template-columns:1fr;">
-                    <div class="info-item">
-                        <span class="info-label">Full Name</span>
-                        <span class="info-value highlight"><?= htmlspecialchars($consultation['patient_name'] ?? 'N/A') ?></span>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- BILL SUMMARY -->
+    <?php if ($bill): ?>
+    <div class="info-card">
+        <div class="card-header">
+            <span class="title"><i class="fas fa-file-invoice-dollar"></i> Bill Summary</span>
+            <a href="view_bill.php?id=<?= $bill['id'] ?>&branch=<?= $selected_branch_id ?>" 
+               style="text-decoration:none;background:var(--primary);color:white;padding:6px 14px;border-radius:8px;font-size:0.7rem;font-weight:700;">
+                <i class="fas fa-eye"></i> View Full Bill
+            </a>
+        </div>
+        <div class="card-body">
+            <div class="bill-summary-box">
+                <div class="bill-summary-title">
+                    <i class="fas fa-file-invoice"></i> <?= htmlspecialchars($bill['bill_number']) ?>
+                </div>
+                <div class="bill-summary-grid">
+                    <div class="bill-summary-item total">
+                        <div class="bs-label">Total Bill</div>
+                        <div class="bs-value"><?= formatTsh($bill['total_amount'] ?? 0) ?></div>
                     </div>
-                    <div class="info-item">
-                        <span class="info-label">Patient ID</span>
-                        <span class="info-value"><?= htmlspecialchars($consultation['patient_number'] ?? 'N/A') ?></span>
+                    <div class="bill-summary-item paid">
+                        <div class="bs-label">Paid</div>
+                        <div class="bs-value"><?= formatTsh($bill['paid_amount'] ?? 0) ?></div>
                     </div>
-                    <div class="info-item">
-                        <span class="info-label">Phone</span>
-                        <span class="info-value"><?= htmlspecialchars($consultation['patient_phone'] ?? '—') ?></span>
+                    <div class="bill-summary-item balance">
+                        <div class="bs-label">Balance</div>
+                        <div class="bs-value"><?= formatTsh($bill['balance'] ?? 0) ?></div>
                     </div>
-                    <div class="info-item">
-                        <span class="info-label">Gender / Age</span>
-                        <span class="info-value">
-                            <?= htmlspecialchars($consultation['patient_gender'] ?? '—') ?> • <?= $age ?> yrs
-                        </span>
+                    <div class="bill-summary-item discount">
+                        <div class="bs-label">Discount</div>
+                        <div class="bs-value"><?= formatTsh($bill['total_discount'] ?? 0) ?></div>
                     </div>
-                    <?php if (!empty($consultation['patient_address'])): ?>
-                    <div class="info-item">
-                        <span class="info-label">Address</span>
-                        <span class="info-value"><?= htmlspecialchars($consultation['patient_address']) ?></span>
+                    <div class="bill-summary-item premium">
+                        <div class="bs-label">Premium</div>
+                        <div class="bs-value"><?= formatTsh($bill['premium_amount'] ?? 0) ?></div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- BILL ITEMS -->
+    <?php if (!empty($bill_items)): ?>
+    <div class="info-card">
+        <div class="card-header">
+            <span class="title"><i class="fas fa-list"></i> Bill Items (<?= count($bill_items) ?>)</span>
+        </div>
+        <div class="card-body" style="padding:0;">
+            <div class="data-table-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th style="width:45px;">#</th>
+                            <th>Item</th>
+                            <th>Type</th>
+                            <th>Qty</th>
+                            <th style="text-align:right;">Unit Price</th>
+                            <th style="text-align:right;">Discount</th>
+                            <th style="text-align:right;">Total</th>
+                            <th style="text-align:center;">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php $i = 1; foreach ($bill_items as $item): 
+                            $is = getStatusBadge($item['status']);
+                        ?>
+                            <tr>
+                                <td style="text-align:center;font-weight:700;"><?= $i++ ?></td>
+                                <td style="font-weight:700;color:var(--primary);"><?= htmlspecialchars($item['item_name']) ?></td>
+                                <td>
+                                    <span class="status-badge purple" style="font-size:0.55rem;">
+                                        <?= ucfirst(str_replace('_', ' ', $item['item_type'])) ?>
+                                    </span>
+                                </td>
+                                <td><?= $item['quantity'] ?></td>
+                                <td class="amount-cell"><?= formatTsh($item['unit_price']) ?></td>
+                                <td class="amount-cell <?= ($item['discount_amount'] ?? 0) > 0 ? 'red' : '' ?>">
+                                    <?= ($item['discount_amount'] ?? 0) > 0 ? '-' . formatTsh($item['discount_amount']) : '—' ?>
+                                </td>
+                                <td class="amount-cell"><?= formatTsh($item['total_price']) ?></td>
+                                <td style="text-align:center;">
+                                    <span class="status-badge <?= $is['class'] ?>" style="font-size:0.55rem;">
+                                        <?= $is['icon'] ?> <?= $is['label'] ?>
+                                    </span>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- LAB TESTS -->
+    <?php if (!empty($lab_tests)): ?>
+    <div class="info-card">
+        <div class="card-header">
+            <span class="title"><i class="fas fa-flask"></i> Lab Tests (<?= count($lab_tests) ?>)</span>
+        </div>
+        <div class="card-body" style="padding:0;">
+            <div class="data-table-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Test</th>
+                            <th>Category</th>
+                            <th>Results</th>
+                            <th>Technician</th>
+                            <th style="text-align:right;">Price</th>
+                            <th style="text-align:center;">Status</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($lab_tests as $lt): 
+                            $ls = getStatusBadge($lt['status']);
+                        ?>
+                            <tr>
+                                <td style="font-weight:700;color:var(--primary);">
+                                    <?= htmlspecialchars($lt['test_name'] ?? $lt['catalog_name'] ?? 'N/A') ?>
+                                </td>
+                                <td>
+                                    <span class="status-badge info" style="font-size:0.55rem;">
+                                        <?= htmlspecialchars($lt['test_category'] ?? 'N/A') ?>
+                                    </span>
+                                </td>
+                                <td style="font-size:0.72rem;font-weight:600;color:var(--success);">
+                                    <?= htmlspecialchars($lt['results'] ?? '—') ?>
+                                </td>
+                                <td style="font-size:0.72rem;">
+                                    <i class="fas fa-user-nurse" style="color:var(--cyan);"></i>
+                                    <?= htmlspecialchars($lt['technician_name'] ?? 'N/A') ?>
+                                </td>
+                                <td class="amount-cell"><?= formatTsh($lt['test_price'] ?? 0) ?></td>
+                                <td style="text-align:center;">
+                                    <span class="status-badge <?= $ls['class'] ?>" style="font-size:0.55rem;">
+                                        <?= $ls['icon'] ?> <?= $ls['label'] ?>
+                                    </span>
+                                </td>
+                                <td style="font-size:0.7rem;">
+                                    <?= $lt['completed_at'] ? date('d M Y', strtotime($lt['completed_at'])) : '—' ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- PRESCRIPTIONS / MEDICATIONS -->
+    <?php if (!empty($prescriptions)): ?>
+    <div class="info-card">
+        <div class="card-header">
+            <span class="title"><i class="fas fa-pills"></i> Medications (<?= count($prescriptions) ?> prescription(s))</span>
+        </div>
+        <div class="card-body" style="padding:0;">
+            <?php foreach ($prescriptions as $presc): 
+                $ps = getStatusBadge($presc['status']);
+            ?>
+                <div style="padding:14px 20px;border-bottom:2px solid var(--border-color);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+                        <div>
+                            <span style="font-family:var(--font-mono);font-weight:800;color:var(--primary);font-size:0.85rem;">
+                                <i class="fas fa-prescription"></i> <?= htmlspecialchars($presc['prescription_number']) ?>
+                            </span>
+                            <span class="status-badge <?= $ps['class'] ?>" style="margin-left:8px;font-size:0.55rem;">
+                                <?= $ps['icon'] ?> <?= $ps['label'] ?>
+                            </span>
+                        </div>
+                        <div style="font-size:0.68rem;color:var(--text-secondary);">
+                            <i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($presc['doctor_name'] ?? 'N/A') ?>
+                            <?php if (!empty($presc['pharmacy_name'])): ?>
+                                • <i class="fas fa-pills"></i> <?= htmlspecialchars($presc['pharmacy_name']) ?>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    
+                    <?php if (!empty($presc['items'])): ?>
+                    <div class="data-table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Medication</th>
+                                    <th>Dosage</th>
+                                    <th>Frequency</th>
+                                    <th>Qty</th>
+                                    <th>Duration</th>
+                                    <th style="text-align:right;">Unit Price</th>
+                                    <th style="text-align:right;">Total</th>
+                                    <th>Dispensed By</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($presc['items'] as $pi): ?>
+                                    <tr>
+                                        <td style="font-weight:700;color:var(--primary);">
+                                            <?= htmlspecialchars($pi['medication_name'] ?? $pi['inventory_name'] ?? 'N/A') ?>
+                                            <?php if (!empty($pi['batch_number'])): ?>
+                                                <div style="font-size:0.58rem;color:var(--text-secondary);font-family:var(--font-mono);">
+                                                    Batch: <?= htmlspecialchars($pi['batch_number']) ?>
+                                                </div>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td style="font-size:0.72rem;"><?= htmlspecialchars($pi['dosage'] ?? '—') ?></td>
+                                        <td style="font-size:0.72rem;"><?= htmlspecialchars($pi['frequency'] ?? '—') ?></td>
+                                        <td style="font-weight:700;"><?= $pi['quantity'] ?></td>
+                                        <td style="font-size:0.72rem;"><?= htmlspecialchars($pi['duration'] ?? '—') ?></td>
+                                        <td class="amount-cell"><?= formatTsh($pi['unit_price'] ?? 0) ?></td>
+                                        <td class="amount-cell"><?= formatTsh($pi['total_price'] ?? 0) ?></td>
+                                        <td style="font-size:0.7rem;">
+                                            <?php if (!empty($pi['dispensed_by_name'])): ?>
+                                                <i class="fas fa-check-circle" style="color:var(--success);"></i>
+                                                <?= htmlspecialchars($pi['dispensed_by_name']) ?>
+                                            <?php else: ?>
+                                                <span style="color:var(--text-secondary);font-style:italic;">Not dispensed</span>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                    <?php else: ?>
+                        <div class="empty-section" style="padding:14px;">
+                            <i class="fas fa-pills"></i>
+                            No items in this prescription
+                        </div>
                     <?php endif; ?>
                 </div>
-            </div>
-        </div>
-
-        <!-- VISIT INFO -->
-        <div class="detail-card">
-            <div class="card-header">
-                <h3><i class="fas fa-calendar-check"></i> Visit Information</h3>
-            </div>
-            <div class="card-body">
-                <div class="info-grid" style="grid-template-columns:1fr;">
-                    <div class="info-item">
-                        <span class="info-label">Visit Number</span>
-                        <span class="info-value highlight"><?= htmlspecialchars($consultation['visit_number'] ?? 'N/A') ?></span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Visit Date</span>
-                        <span class="info-value">
-                            <?= !empty($consultation['visit_date']) ? date('d M Y', strtotime($consultation['visit_date'])) : 'N/A' ?>
-                        </span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Doctor</span>
-                        <span class="info-value">Dr. <?= htmlspecialchars($consultation['doctor_name'] ?? 'N/A') ?></span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Visit Status</span>
-                        <span class="info-value"><?= htmlspecialchars(ucfirst($consultation['visit_status'] ?? 'N/A')) ?></span>
-                    </div>
-                </div>
-            </div>
+            <?php endforeach; ?>
         </div>
     </div>
+    <?php endif; ?>
 
-    <!-- BILL INFO -->
-    <?php if ($bill_item): ?>
-    <div class="detail-card">
+    <!-- PROCEDURES -->
+    <?php if (!empty($procedures)): ?>
+    <div class="info-card">
         <div class="card-header">
-            <h3><i class="fas fa-file-invoice"></i> Related Bill Information</h3>
-            <span class="status-badge <?= $is_paid ? 'success' : 'warning' ?>" style="background:rgba(255,255,255,0.2);color:white;">
-                <?= $is_paid ? '✅ PAID' : '⏳ ' . strtoupper($bill['payment_status'] ?? 'PENDING') ?>
-            </span>
+            <span class="title"><i class="fas fa-syringe"></i> Procedures (<?= count($procedures) ?>)</span>
         </div>
-        <div class="card-body">
-            <div class="bill-info">
-                <div class="bill-title">
-                    <i class="fas fa-receipt"></i>
-                    Bill #<?= htmlspecialchars($bill['bill_number']) ?>
-                </div>
-                <div class="bill-grid">
-                    <div class="bill-item">
-                        <span class="bill-label">Bill Amount</span>
-                        <span class="bill-value amount">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></span>
-                    </div>
-                    <div class="bill-item">
-                        <span class="bill-label">Paid Amount</span>
-                        <span class="bill-value paid">TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></span>
-                    </div>
-                    <div class="bill-item">
-                        <span class="bill-label">Balance</span>
-                        <span class="bill-value balance">TSh <?= number_format($bill['balance'] ?? 0, 0) ?></span>
-                    </div>
-                    <div class="bill-item">
-                        <span class="bill-label">Item Name</span>
-                        <span class="bill-value" style="font-size:0.75rem;"><?= htmlspecialchars($bill_item['item_name'] ?? 'Consultation') ?></span>
-                    </div>
-                    <div class="bill-item">
-                        <span class="bill-label">Item Price</span>
-                        <span class="bill-value amount">TSh <?= number_format($bill_item['total_price'] ?? 0, 0) ?></span>
-                    </div>
-                    <div class="bill-item">
-                        <span class="bill-label">Bill Date</span>
-                        <span class="bill-value" style="font-size:0.75rem;"><?= date('d M Y H:i', strtotime($bill['created_at'])) ?></span>
-                    </div>
-                </div>
+        <div class="card-body" style="padding:0;">
+            <div class="data-table-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Procedure</th>
+                            <th>Category</th>
+                            <th>Doctor</th>
+                            <th style="text-align:right;">Price</th>
+                            <th style="text-align:center;">Status</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($procedures as $proc): 
+                            $prs = getStatusBadge($proc['status']);
+                        ?>
+                            <tr>
+                                <td style="font-weight:700;color:var(--primary);">
+                                    <?= htmlspecialchars($proc['procedure_name']) ?>
+                                </td>
+                                <td>
+                                    <span class="status-badge purple" style="font-size:0.55rem;">
+                                        <?= htmlspecialchars($proc['procedure_category'] ?? $proc['category'] ?? 'N/A') ?>
+                                    </span>
+                                </td>
+                                <td style="font-size:0.72rem;">
+                                    <i class="fas fa-user-md" style="color:var(--cyan);"></i>
+                                    <?= htmlspecialchars($proc['doctor_name'] ?? 'N/A') ?>
+                                </td>
+                                <td class="amount-cell"><?= formatTsh($proc['procedure_price'] ?? 0) ?></td>
+                                <td style="text-align:center;">
+                                    <span class="status-badge <?= $prs['class'] ?>" style="font-size:0.55rem;">
+                                        <?= $prs['icon'] ?> <?= $prs['label'] ?>
+                                    </span>
+                                </td>
+                                <td style="font-size:0.7rem;">
+                                    <?= date('d M Y', strtotime($proc['created_at'])) ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
     <?php endif; ?>
 
-    <!-- ACTIONS -->
-    <?php if (!$delete_success): ?>
-    <div class="action-buttons">
-        <a href="other_services.php?branch=<?= $selected_branch_id ?>" class="btn btn-secondary">
-            <i class="fas fa-arrow-left"></i> Back to Services
-        </a>
-        <button type="button" class="btn btn-delete" onclick="openDeleteModal()">
-            <i class="fas fa-trash"></i> Delete Consultation
-        </button>
+    <!-- PAYMENTS -->
+    <?php if (!empty($payments)): ?>
+    <div class="info-card">
+        <div class="card-header">
+            <span class="title"><i class="fas fa-money-bill-wave"></i> Payment History (<?= count($payments) ?>)</span>
+        </div>
+        <div class="card-body" style="padding:0;">
+            <div class="data-table-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Receipt #</th>
+                            <th style="text-align:right;">Amount</th>
+                            <th>Method</th>
+                            <th>Received By</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($payments as $p): 
+                            $rb_initials = getInitials($p['received_by_name'] ?? '');
+                            $is_refund = ($p['amount'] ?? 0) < 0;
+                        ?>
+                            <tr>
+                                <td style="font-family:var(--font-mono);font-weight:700;color:<?= $is_refund ? 'var(--danger)' : 'var(--primary)' ?>;">
+                                    <?php if ($is_refund): ?>
+                                        <i class="fas fa-undo-alt"></i>
+                                    <?php endif; ?>
+                                    <?= htmlspecialchars($p['receipt_number']) ?>
+                                </td>
+                                <td class="amount-cell <?= $is_refund ? 'red' : 'green' ?>">
+                                    <?= $is_refund ? '-' : '' ?><?= formatTsh(abs($p['amount'])) ?>
+                                </td>
+                                <td><?= strtoupper(str_replace('_', ' ', $p['payment_method'] ?? 'cash')) ?></td>
+                                <td>
+                                    <div class="received-by-cell">
+                                        <div class="received-by-avatar"><?= htmlspecialchars($rb_initials) ?></div>
+                                        <div>
+                                            <div class="received-by-name"><?= htmlspecialchars($p['received_by_name'] ?? 'N/A') ?></div>
+                                            <div class="received-by-meta"><?= htmlspecialchars(strtoupper($p['received_by_role'] ?? 'user')) ?></div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td style="font-size:0.72rem;"><?= date('d M Y, H:i', strtotime($p['received_at'])) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
     <?php endif; ?>
+
+    <!-- ✅ ACTION BAR - VIEW ONLY (No Edit) -->
+    <div class="action-bar">
+        <div class="action-info">
+            <div class="info-icon"><i class="fas fa-eye"></i></div>
+            <div class="info-text">
+                <div class="info-title">View Only Mode</div>
+                <div class="info-sub">
+                    <i class="fas fa-lock"></i> Audit role cannot edit or delete records
+                </div>
+            </div>
+        </div>
+        <div class="action-buttons">
+            <button onclick="window.print()" class="btn btn-secondary">
+                <i class="fas fa-print"></i> Print
+            </button>
+            
+            <!-- ❌ Edit button IMEONDOLEWA -->
+            
+            <a href="other_services.php?tab=consultations&branch=<?= $selected_branch_id ?>" class="btn btn-primary">
+                <i class="fas fa-arrow-left"></i> Back to Consultations
+            </a>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <p>
+            <span class="footer-brand">Braick Dispensary</span> Management System
+            <span style="margin:0 8px;">|</span>
+            Consultation <?= htmlspecialchars($visit['visit_number']) ?> (View Only)
+            <span style="margin:0 8px;">|</span>
+            <span><?= date('d M Y, H:i:s') ?></span>
+        </p>
+    </footer>
 
 </main>
 
-<!-- DELETE MODAL -->
-<div class="modal-overlay" id="deleteModal">
-    <div class="modal-box">
-        <div class="modal-icon">
-            <i class="fas fa-exclamation-triangle"></i>
-        </div>
-        <h3>Delete Consultation?</h3>
-        <p>
-            Are you sure you want to delete consultation for<br>
-            <strong style="color:var(--primary);font-family:var(--font-mono);">
-                <?= htmlspecialchars($consultation['patient_name'] ?? 'N/A') ?>
-            </strong><br>
-            <?php if ($bill_item): ?>
-                <span style="color:var(--danger);font-weight:700;font-size:0.8rem;display:block;margin-top:8px;">
-                    <i class="fas fa-exclamation-circle"></i> This will also delete the bill item and update Bill #<?= htmlspecialchars($bill['bill_number']) ?>
-                </span>
-            <?php endif; ?>
-        </p>
-        <form method="POST" id="deleteForm">
-            <input type="hidden" name="action" value="delete">
-            <div class="modal-actions">
-                <button type="button" class="btn-cancel" onclick="closeDeleteModal()">
-                    <i class="fas fa-times"></i> Cancel
-                </button>
-                <button type="submit" class="btn-confirm-delete">
-                    <i class="fas fa-trash"></i> Yes, Delete
-                </button>
-            </div>
-        </form>
-    </div>
-</div>
-
 <script>
-function openDeleteModal() {
-    document.getElementById('deleteModal').classList.add('show');
-    document.body.style.overflow = 'hidden';
-}
-
-function closeDeleteModal() {
-    document.getElementById('deleteModal').classList.remove('show');
-    document.body.style.overflow = '';
-}
-
-document.getElementById('deleteModal').addEventListener('click', function(e) {
-    if (e.target === this) closeDeleteModal();
-});
-
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') closeDeleteModal();
-});
-
-console.log('%c🔍 Audit - View Consultation', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ Consultation ID: <?= $consultation_id ?>', 'font-size:12px;color:#10B981;');
-console.log('%c✅ Patient: <?= htmlspecialchars($consultation['patient_name'] ?? 'N/A') ?>', 'font-size:12px;color:#3B82F6;');
-<?php if ($bill_item): ?>
-console.log('%c✅ Linked to Bill: <?= htmlspecialchars($bill['bill_number']) ?>', 'font-size:12px;color:#F59E0B;');
+console.log('%c🔍 Audit - View Consultation (VIEW ONLY)', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ Uses audit_header + audit_sidebar', 'font-size:13px;color:#34D399;font-weight:bold;');
+console.log('%c✅ NO Edit button', 'font-size:13px;color:#F59E0B;font-weight:bold;');
+console.log('%c🩺 Visit: <?= htmlspecialchars($visit['visit_number']) ?>', 'font-size:13px;color:#34D399;font-weight:bold;');
+console.log('%c👤 Patient: <?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?>', 'font-size:13px;color:#34D399;');
+console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($visit['doctor_name'] ?? 'N/A') ?>', 'font-size:13px;color:#34D399;');
+console.log('%c💰 Fee: <?= $currency ?> <?= number_format($visit['consultation_fee'] ?? 0, 0) ?>', 'font-size:13px;color:#0B5ED7;font-weight:bold;');
+<?php if ($bill): ?>
+console.log('%c📄 Bill: <?= htmlspecialchars($bill['bill_number']) ?>', 'font-size:13px;color:#7C3AED;font-weight:bold;');
 <?php endif; ?>
+console.log('%c🧪 Lab Tests: <?= count($lab_tests) ?>', 'font-size:13px;color:#0891B2;');
+console.log('%c💊 Prescriptions: <?= count($prescriptions) ?>', 'font-size:13px;color:#7C3AED;');
+console.log('%c💉 Procedures: <?= count($procedures) ?>', 'font-size:13px;color:#059669;');
 </script>
 
 </body>

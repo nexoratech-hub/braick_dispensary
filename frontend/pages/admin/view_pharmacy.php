@@ -1,9 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/view_pharmacy.php
-// SUPER ADMIN - VIEW PHARMACY BRANCH DETAILS (V5 - GROUPED BY PATIENT)
+// SUPER ADMIN - VIEW PHARMACY BRANCH DETAILS (V7 - PRESCRIPTION GROSS)
+// ✅ V7: PRESCRIPTION = Medication_RAW (GROSS - bila discount, bila premium)
+// ✅ V7: Prescription BILA round off (exact value, 2 decimal places)
+// ✅ V7: Formula breakdown card imeondolewa (Prescription ipo Card pekee)
+// ✅ SAWA KWA 100% NA AUDIT V13, ADMIN V20, CASHIERS V13.1, VIEW_CASHIER V14, PHARMACIES V3
 // ✅ Recent Prescriptions: GROUPED BY PATIENT
-// ✅ Kila mgonjwa = row moja na visits zake zote
 // ✅ Blue theme + full dark mode support
 // ✅ JetBrains Mono font kwa numbers
 // ✅ Inventory button inafilter kwa BRANCH
@@ -62,6 +65,13 @@ try {
 }
 
 // ================================================================
+// ✅ V7: ROUND TO NEAREST 50 FUNCTION (kwa cards zingine)
+// ================================================================
+function round_to_50($value) {
+    return round($value / 50) * 50;
+}
+
+// ================================================================
 // GET BRANCH ID
 // ================================================================
 $pharmacy_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
@@ -73,7 +83,8 @@ if ($pharmacy_id <= 0) {
 }
 
 // ================================================================
-// FETCH PHARMACY DETAILS
+// ✅ V7: FETCH PHARMACY DETAILS - PRESCRIPTION GROSS
+// Formula: Medication_RAW (GROSS - bila discount, bila premium)
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
@@ -88,17 +99,39 @@ $stmt = $db->prepare("
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'confirmed') as confirmed_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'cancelled') as cancelled_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id) as total_prescriptions,
+        
+        -- ✅ V7: Medication RAW (GROSS - bila discount)
         (SELECT COALESCE(SUM(bi.total_price), 0) 
          FROM bill_items bi
          INNER JOIN bills bl ON bi.bill_id = bl.id
          WHERE bi.item_type = 'medication' 
-         AND bl.branch_id = b.id 
-         AND bl.status = 'paid') as prescription_revenue,
-        (SELECT COALESCE(SUM(bl.total_discount), 0) 
+         AND bi.status != 'cancelled'
+         AND bl.status IN ('paid', 'partial')
+         AND bl.patient_id IS NOT NULL
+         AND bl.visit_id IS NOT NULL
+         AND bl.bill_number NOT LIKE 'BILL-OTC-%'
+         AND bl.branch_id = b.id) as medication_revenue_raw,
+        
+        -- Pharmacy Discount (info only - haipunguzwi kwenye Prescription)
+        (SELECT COALESCE(SUM(bl.pharmacy_discount), 0) 
          FROM bills bl
-         WHERE bl.branch_id = b.id 
-         AND bl.status = 'paid'
-         AND bl.visit_id IS NOT NULL) as prescription_discount_total,
+         WHERE bl.status IN ('paid', 'partial')
+         AND bl.patient_id IS NOT NULL
+         AND bl.visit_id IS NOT NULL
+         AND bl.bill_number NOT LIKE 'BILL-OTC-%'
+         AND bl.pharmacy_discount > 0
+         AND bl.branch_id = b.id) as pharmacy_discount_total,
+        
+        -- Pharmacy Premium (info only)
+        (SELECT COALESCE(SUM(bl.pharmacy_premium), 0) 
+         FROM bills bl
+         WHERE bl.status IN ('paid', 'partial')
+         AND bl.patient_id IS NOT NULL
+         AND bl.visit_id IS NOT NULL
+         AND bl.bill_number NOT LIKE 'BILL-OTC-%'
+         AND bl.pharmacy_premium > 0
+         AND bl.branch_id = b.id) as pharmacy_premium_total,
+        
         (SELECT COUNT(*) FROM otc_sales WHERE branch_id = b.id) as total_otc_sales,
         (SELECT COALESCE(SUM(total_amount), 0) 
          FROM otc_sales 
@@ -118,9 +151,22 @@ if (!$pharmacy) {
     exit;
 }
 
-$prescription_revenue = $pharmacy['prescription_revenue'] ?? 0;
-$prescription_discount = $pharmacy['prescription_discount_total'] ?? 0;
-$otc_revenue = $pharmacy['otc_revenue'] ?? 0;
+// ================================================================
+// ✅ V7: CALCULATE PRESCRIPTION REVENUE = GROSS
+// ================================================================
+$medication_revenue_raw = (float)($pharmacy['medication_revenue_raw'] ?? 0);
+$pharmacy_discount = (float)($pharmacy['pharmacy_discount_total'] ?? 0);
+$pharmacy_premium = (float)($pharmacy['pharmacy_premium_total'] ?? 0);
+
+// ✅ V7: Prescription Revenue = Medication_RAW (GROSS - bila discount, bila premium, bila round)
+$prescription_revenue = $medication_revenue_raw;
+
+$otc_revenue = (float)($pharmacy['otc_revenue'] ?? 0);
+$otc_revenue = round_to_50($otc_revenue);
+$medication_revenue_raw = round_to_50($medication_revenue_raw);
+$pharmacy_discount = round_to_50($pharmacy_discount);
+$pharmacy_premium = round_to_50($pharmacy_premium);
+
 $total_revenue = $prescription_revenue + $otc_revenue;
 
 // ================================================================
@@ -198,14 +244,14 @@ try {
                 COALESCE((
                     SELECT SUM(bi.total_price) 
                     FROM bill_items bi
-                    INNER JOIN bills bl ON bi.bill_id = bl.id
                     WHERE bi.reference_id = p.id 
                     AND bi.reference_type = 'prescription'
+                    AND bi.item_type = 'medication'
+                    AND bi.status != 'cancelled'
                 ), 0) as total_amount,
                 COALESCE((
                     SELECT SUM(bi.discount_amount) 
                     FROM bill_items bi
-                    INNER JOIN bills bl ON bi.bill_id = bl.id
                     WHERE bi.reference_id = p.id 
                     AND bi.reference_type = 'prescription'
                 ), 0) as discount_amount
@@ -397,11 +443,33 @@ include_once '../../components/admin_sidebar.php';
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
 <!-- ================================================================ -->
-<!-- PAGE-SPECIFIC CSS -->
+<!-- PAGE-SPECIFIC CSS - V7 DESIGN MPYA -->
 <!-- ================================================================ -->
 <style>
     :root {
         --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+        --primary: #0B5ED7;
+        --primary-dark: #0A4CA8;
+        --success: #059669;
+        --danger: #DC2626;
+        --warning: #D97706;
+        --purple: #7C3AED;
+        --bg-card: #FFFFFF;
+        --bg-body: #F1F5F9;
+        --text-primary: #1E293B;
+        --text-secondary: #64748B;
+        --border-color: #E2E8F0;
+        --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+        --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
+    }
+    
+    [data-theme="dark"] {
+        --bg-card: #1E293B;
+        --bg-body: #0F172A;
+        --text-primary: #F1F5F9;
+        --text-secondary: #94A3B8;
+        --border-color: #334155;
     }
     
     .font-mono,
@@ -445,7 +513,7 @@ include_once '../../components/admin_sidebar.php';
         right: -10%;
         width: 400px;
         height: 400px;
-        background: rgba(255,255,255,0.05);
+        background: radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%);
         border-radius: 50%;
         pointer-events: none;
     }
@@ -461,6 +529,7 @@ include_once '../../components/admin_sidebar.php';
         position: relative;
         z-index: 1;
         margin: 0;
+        font-family: var(--font-mono);
     }
 
     .page-header-pharm .page-subtitle {
@@ -476,15 +545,17 @@ include_once '../../components/admin_sidebar.php';
     }
 
     .page-header-pharm .role-badge-display {
-        background: rgba(255,255,255,0.2);
-        color: white;
+        background: linear-gradient(135deg, #FCD34D, #F59E0B);
+        color: #78350F;
         padding: 4px 14px;
         border-radius: 20px;
         font-size: 0.65rem;
-        font-weight: 600;
+        font-weight: 800;
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
     }
 
     .page-header-pharm .header-badge {
@@ -500,6 +571,7 @@ include_once '../../components/admin_sidebar.php';
         gap: 6px;
         border: 1px solid rgba(255,255,255,0.1);
         transition: all 0.3s ease;
+        font-family: var(--font-mono);
     }
 
     .page-header-pharm .header-badge:hover {
@@ -513,7 +585,7 @@ include_once '../../components/admin_sidebar.php';
         border: 1px solid rgba(255,255,255,0.2);
         padding: 8px 18px;
         border-radius: 12px;
-        font-weight: 500;
+        font-weight: 600;
         font-size: 0.82rem;
         transition: all 0.3s;
         text-decoration: none;
@@ -524,6 +596,7 @@ include_once '../../components/admin_sidebar.php';
         position: relative;
         z-index: 1;
         cursor: pointer;
+        font-family: var(--font-mono);
     }
 
     .page-header-pharm .btn-outline-light:hover {
@@ -535,18 +608,18 @@ include_once '../../components/admin_sidebar.php';
 
     /* DETAIL CARD */
     .detail-card-pharm {
-        background: var(--page-bg-card, #FFFFFF);
+        background: var(--bg-card);
         border-radius: 16px;
         padding: 22px 26px;
-        border: 2px solid var(--page-border, #E2E8F0);
-        box-shadow: var(--page-shadow-sm, 0 1px 3px rgba(0,0,0,0.06));
+        border: 2px solid var(--border-color);
+        box-shadow: var(--shadow-sm);
         transition: all 0.3s ease;
         margin-bottom: 24px;
     }
 
     .detail-card-pharm:hover {
-        border-color: var(--page-primary, #0B5ED7);
-        box-shadow: var(--page-shadow-md, 0 4px 12px rgba(0,0,0,0.08));
+        border-color: var(--primary);
+        box-shadow: var(--shadow-md);
     }
 
     .detail-card-header {
@@ -555,7 +628,7 @@ include_once '../../components/admin_sidebar.php';
         align-items: center;
         margin-bottom: 18px;
         padding-bottom: 14px;
-        border-bottom: 2px dashed var(--page-border, #E2E8F0);
+        border-bottom: 2px dashed var(--border-color);
         flex-wrap: wrap;
         gap: 10px;
     }
@@ -563,14 +636,15 @@ include_once '../../components/admin_sidebar.php';
     .detail-card-title {
         font-size: 0.95rem;
         font-weight: 700;
-        color: var(--page-text-primary, #1E293B);
+        color: var(--text-primary);
         display: flex;
         align-items: center;
         gap: 10px;
+        font-family: var(--font-mono);
     }
 
     .detail-card-title i {
-        color: var(--page-primary, #0B5ED7);
+        color: var(--primary);
         font-size: 1.1rem;
     }
 
@@ -586,15 +660,16 @@ include_once '../../components/admin_sidebar.php';
         transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         border: 2px solid transparent;
         cursor: pointer;
-        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        background: linear-gradient(135deg, #059669, #047857);
         color: white;
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
+        font-family: var(--font-mono);
     }
 
     .btn-inventory:hover {
         transform: translateY(-2px);
-        box-shadow: 0 8px 24px rgba(11, 94, 215, 0.4);
-        background: linear-gradient(135deg, #0A4CA8, #083C8A);
+        box-shadow: 0 8px 24px rgba(5, 150, 105, 0.4);
+        background: linear-gradient(135deg, #047857, #065F46);
         color: white;
     }
 
@@ -616,17 +691,18 @@ include_once '../../components/admin_sidebar.php';
 
     .detail-label-pharm {
         font-size: 0.7rem;
-        color: var(--page-text-secondary, #64748B);
-        font-weight: 600;
+        color: var(--text-secondary);
+        font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.04em;
         margin: 0 0 4px 0;
+        font-family: var(--font-mono);
     }
 
     .detail-value-pharm {
         font-size: 0.95rem;
         font-weight: 600;
-        color: var(--page-text-primary, #1E293B);
+        color: var(--text-primary);
         margin: 0;
     }
 
@@ -649,7 +725,7 @@ include_once '../../components/admin_sidebar.php';
         color: white;
         position: relative;
         overflow: hidden;
-        min-height: 110px;
+        min-height: 130px;
         cursor: pointer;
         text-decoration: none;
     }
@@ -712,10 +788,11 @@ include_once '../../components/admin_sidebar.php';
     .stat-card-8-pharm .stat-label-pharm {
         font-size: 0.6rem;
         color: rgba(255,255,255,0.85);
-        font-weight: 600;
+        font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.06em;
         margin: 0 0 1px 0;
+        font-family: var(--font-mono);
     }
 
     .stat-card-8-pharm .stat-number-small {
@@ -742,6 +819,7 @@ include_once '../../components/admin_sidebar.php';
         align-items: center;
         gap: 6px;
         flex-wrap: wrap;
+        font-family: var(--font-mono);
     }
 
     .stat-card-8-pharm .stat-arrow-pharm {
@@ -760,23 +838,30 @@ include_once '../../components/admin_sidebar.php';
     }
 
     .card-blue-pharm { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+    .card-blue-pharm:hover { box-shadow: 0 10px 32px rgba(11, 94, 215, 0.4); }
     .card-red-pharm { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+    .card-red-pharm:hover { box-shadow: 0 10px 32px rgba(220, 38, 38, 0.4); }
     .card-green-pharm { background: linear-gradient(135deg, #059669, #047857); }
+    .card-green-pharm:hover { box-shadow: 0 10px 32px rgba(5, 150, 105, 0.4); }
     .card-orange-pharm { background: linear-gradient(135deg, #D97706, #B45309); }
+    .card-orange-pharm:hover { box-shadow: 0 10px 32px rgba(217, 119, 6, 0.4); }
+    .card-purple-pharm { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+    .card-purple-pharm:hover { box-shadow: 0 10px 32px rgba(124, 58, 237, 0.4); }
 
     /* CARDS */
     .card-pharm {
-        background: var(--page-bg-card, #FFFFFF);
+        background: var(--bg-card);
         border-radius: 16px;
-        border: 2px solid var(--page-border, #E2E8F0);
+        border: 2px solid var(--border-color);
         overflow: hidden;
-        box-shadow: var(--page-shadow-sm, 0 1px 3px rgba(0,0,0,0.06));
+        box-shadow: var(--shadow-sm);
         margin-bottom: 24px;
-        transition: border-color 0.3s ease;
+        transition: all 0.3s ease;
     }
 
     .card-pharm:hover {
-        border-color: var(--page-primary, #0B5ED7);
+        border-color: var(--primary);
+        box-shadow: var(--shadow-md);
     }
 
     .card-header-pharm {
@@ -787,16 +872,33 @@ include_once '../../components/admin_sidebar.php';
         align-items: center;
         flex-wrap: wrap;
         gap: 8px;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .card-header-pharm::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -10%;
+        width: 300px;
+        height: 300px;
+        background: rgba(255,255,255,0.04);
+        border-radius: 50%;
+        pointer-events: none;
     }
 
     .card-header-pharm .card-title-pharm {
         color: white;
         font-size: 0.9rem;
-        font-weight: 600;
+        font-weight: 700;
         margin: 0;
         display: flex;
         align-items: center;
         gap: 8px;
+        position: relative;
+        z-index: 1;
+        font-family: var(--font-mono);
     }
 
     .card-header-pharm .card-title-pharm i {
@@ -809,10 +911,13 @@ include_once '../../components/admin_sidebar.php';
         font-size: 0.7rem;
         text-decoration: none;
         transition: all 0.3s;
-        font-weight: 500;
+        font-weight: 600;
         display: inline-flex;
         align-items: center;
         gap: 4px;
+        position: relative;
+        z-index: 1;
+        font-family: var(--font-mono);
     }
 
     .card-header-pharm .card-action-pharm:hover {
@@ -830,10 +935,11 @@ include_once '../../components/admin_sidebar.php';
         width: 100%;
         border-collapse: collapse;
         font-size: 0.78rem;
+        font-family: var(--font-mono);
     }
 
     .data-table-pharm thead {
-        background: var(--page-hover, #F8FAFC);
+        background: var(--bg-body);
     }
 
     [data-theme="dark"] .data-table-pharm thead {
@@ -843,24 +949,26 @@ include_once '../../components/admin_sidebar.php';
     .data-table-pharm thead th {
         padding: 10px 14px;
         text-align: left;
-        font-weight: 600;
-        color: var(--page-text-secondary, #64748B);
+        font-weight: 700;
+        color: var(--text-secondary);
         font-size: 0.6rem;
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        border-bottom: 2px solid var(--page-border, #E2E8F0);
+        border-bottom: 2px solid var(--border-color);
         white-space: nowrap;
+        font-family: var(--font-mono);
     }
 
     .data-table-pharm td {
         padding: 10px 14px;
-        border-bottom: 1px solid var(--page-border, #E2E8F0);
-        color: var(--page-text-primary, #1E293B);
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-primary);
         vertical-align: top;
+        font-family: var(--font-mono);
     }
 
     .data-table-pharm tr:hover td {
-        background: var(--page-hover, #F8FAFC);
+        background: var(--bg-body);
     }
 
     [data-theme="dark"] .data-table-pharm tr:hover td {
@@ -880,14 +988,14 @@ include_once '../../components/admin_sidebar.php';
     .text-green-600 { color: #059669; }
     .text-red-600 { color: #DC2626; }
     .text-yellow-600 { color: #D97706; }
+    .text-purple-600 { color: #7C3AED; }
     .text-gray-400 { color: #94A3B8; }
     .text-gray-500 { color: #64748B; }
     [data-theme="dark"] .text-blue-600 { color: #60A5FA; }
     [data-theme="dark"] .text-green-600 { color: #34D399; }
     [data-theme="dark"] .text-red-600 { color: #F87171; }
     [data-theme="dark"] .text-yellow-600 { color: #FBBF24; }
-    [data-theme="dark"] .text-gray-400 { color: #64748B; }
-    [data-theme="dark"] .text-gray-500 { color: #94A3B8; }
+    [data-theme="dark"] .text-purple-600 { color: #A78BFA; }
 
     /* MEDICINES CELL */
     .medicines-cell {
@@ -912,6 +1020,7 @@ include_once '../../components/admin_sidebar.php';
         width: fit-content;
         max-width: 100%;
         transition: all 0.2s ease;
+        font-family: var(--font-mono);
     }
     
     .med-item:hover {
@@ -956,6 +1065,7 @@ include_once '../../components/admin_sidebar.php';
         cursor: pointer;
         transition: all 0.2s ease;
         user-select: none;
+        font-family: var(--font-mono);
     }
     
     .med-more:hover {
@@ -1007,8 +1117,9 @@ include_once '../../components/admin_sidebar.php';
         padding: 3px 12px;
         border-radius: 20px;
         font-size: 0.6rem;
-        font-weight: 600;
+        font-weight: 700;
         white-space: nowrap;
+        font-family: var(--font-mono);
     }
 
     .status-badge-pharm.success { background: #D1FAE5; color: #059669; }
@@ -1031,12 +1142,15 @@ include_once '../../components/admin_sidebar.php';
         padding: 6px 14px;
         border-radius: 8px;
         font-size: 0.75rem;
-        font-weight: 600;
+        font-weight: 700;
         text-decoration: none;
         background: rgba(255,255,255,0.2);
         color: white;
         border: 1px solid rgba(255,255,255,0.3);
         transition: all 0.3s ease;
+        font-family: var(--font-mono);
+        position: relative;
+        z-index: 1;
     }
 
     .btn-add-pharm:hover {
@@ -1052,12 +1166,13 @@ include_once '../../components/admin_sidebar.php';
         padding: 4px 10px;
         border-radius: 6px;
         font-size: 0.7rem;
-        font-weight: 600;
+        font-weight: 700;
         text-decoration: none;
         background: rgba(11, 94, 215, 0.1);
         color: #0B5ED7;
         border: 1px solid rgba(11, 94, 215, 0.3);
         transition: all 0.2s ease;
+        font-family: var(--font-mono);
     }
 
     .btn-edit-small:hover {
@@ -1070,45 +1185,39 @@ include_once '../../components/admin_sidebar.php';
     .empty-state-pharm {
         text-align: center;
         padding: 40px 20px;
-        color: var(--page-text-secondary, #64748B);
+        color: var(--text-secondary);
+        font-family: var(--font-mono);
     }
 
     .empty-state-pharm i {
         font-size: 2.5rem;
-        color: var(--page-border, #E2E8F0);
+        color: var(--border-color);
         margin-bottom: 8px;
         display: block;
     }
 
-    /* ================================================================
-       ✅ PATIENT RX GROUP - Grouped by Patient
-       ================================================================ */
+    /* ✅ PATIENT RX GROUP */
     .patients-rx-container {
         display: flex;
         flex-direction: column;
         gap: 12px;
         padding: 16px;
-        background: var(--page-bg-body, #F1F5F9);
-    }
-
-    [data-theme="dark"] .patients-rx-container {
-        background: #0F172A;
+        background: var(--bg-body);
     }
 
     .patient-rx-group {
-        background: var(--page-bg-card, #FFFFFF);
+        background: var(--bg-card);
         border-radius: 14px;
-        border: 2px solid var(--page-border, #E2E8F0);
+        border: 2px solid var(--border-color);
         overflow: hidden;
         transition: all 0.3s ease;
     }
 
     .patient-rx-group:hover {
-        border-color: var(--page-primary, #0B5ED7);
+        border-color: var(--primary);
         box-shadow: 0 4px 16px rgba(11, 94, 215, 0.1);
     }
 
-    /* PATIENT HEADER */
     .patient-rx-header {
         display: flex;
         justify-content: space-between;
@@ -1183,7 +1292,7 @@ include_once '../../components/admin_sidebar.php';
     .patient-rx-name {
         font-size: 0.95rem;
         font-weight: 800;
-        color: var(--page-text-primary, #1E293B);
+        color: var(--text-primary);
         display: flex;
         align-items: center;
         gap: 8px;
@@ -1196,11 +1305,12 @@ include_once '../../components/admin_sidebar.php';
         align-items: center;
         gap: 4px;
         background: rgba(11, 94, 215, 0.12);
-        color: var(--page-primary, #0B5ED7);
+        color: var(--primary);
         padding: 2px 10px;
         border-radius: 12px;
         font-size: 0.65rem;
         font-weight: 700;
+        font-family: var(--font-mono);
     }
 
     .patient-rx-meta {
@@ -1208,9 +1318,10 @@ include_once '../../components/admin_sidebar.php';
         align-items: center;
         gap: 12px;
         font-size: 0.68rem;
-        color: var(--page-text-secondary, #64748B);
+        color: var(--text-secondary);
         flex-wrap: wrap;
         font-weight: 500;
+        font-family: var(--font-mono);
     }
 
     .patient-rx-meta span {
@@ -1246,6 +1357,7 @@ include_once '../../components/admin_sidebar.php';
         font-weight: 700;
         opacity: 0.9;
         letter-spacing: 0.06em;
+        font-family: var(--font-mono);
     }
 
     .patient-rx-total-value {
@@ -1254,7 +1366,7 @@ include_once '../../components/admin_sidebar.php';
     }
 
     .patient-rx-chevron {
-        color: var(--page-text-secondary, #64748B);
+        color: var(--text-secondary);
         font-size: 0.9rem;
         transition: transform 0.3s ease;
         flex-shrink: 0;
@@ -1264,7 +1376,6 @@ include_once '../../components/admin_sidebar.php';
         transform: rotate(180deg);
     }
 
-    /* PATIENT BODY */
     .patient-rx-body {
         max-height: 0;
         overflow: hidden;
@@ -1279,16 +1390,12 @@ include_once '../../components/admin_sidebar.php';
 
     /* VISIT BLOCK */
     .visit-rx-block {
-        background: var(--page-bg-body, #F8FAFC);
+        background: var(--bg-body);
         border-radius: 12px;
-        border: 2px solid var(--page-border, #E2E8F0);
+        border: 2px solid var(--border-color);
         overflow: hidden;
         margin-bottom: 14px;
         transition: all 0.3s ease;
-    }
-
-    [data-theme="dark"] .visit-rx-block {
-        background: #0F172A;
     }
 
     .visit-rx-block:last-child {
@@ -1296,11 +1403,10 @@ include_once '../../components/admin_sidebar.php';
     }
 
     .visit-rx-block:hover {
-        border-color: var(--page-primary, #0B5ED7);
+        border-color: var(--primary);
         box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
     }
 
-    /* VISIT HEADER */
     .visit-rx-header {
         display: flex;
         justify-content: space-between;
@@ -1308,7 +1414,7 @@ include_once '../../components/admin_sidebar.php';
         gap: 12px;
         padding: 10px 16px;
         background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-        border-bottom: 2px solid var(--page-border, #E2E8F0);
+        border-bottom: 2px solid var(--border-color);
         flex-wrap: wrap;
     }
 
@@ -1345,6 +1451,7 @@ include_once '../../components/admin_sidebar.php';
         padding: 3px 12px;
         border-radius: 8px;
         border: 1px solid rgba(245, 158, 11, 0.3);
+        font-family: var(--font-mono);
     }
 
     [data-theme="dark"] .visit-rx-number {
@@ -1357,8 +1464,9 @@ include_once '../../components/admin_sidebar.php';
         align-items: center;
         gap: 4px;
         font-size: 0.7rem;
-        color: var(--page-text-secondary, #64748B);
+        color: var(--text-secondary);
         font-weight: 600;
+        font-family: var(--font-mono);
     }
 
     .visit-rx-doctor {
@@ -1366,11 +1474,12 @@ include_once '../../components/admin_sidebar.php';
         align-items: center;
         gap: 4px;
         font-size: 0.72rem;
-        color: var(--page-primary, #0B5ED7);
+        color: var(--primary);
         font-weight: 700;
         background: rgba(11, 94, 215, 0.1);
         padding: 3px 10px;
         border-radius: 12px;
+        font-family: var(--font-mono);
     }
 
     [data-theme="dark"] .visit-rx-doctor {
@@ -1390,12 +1499,13 @@ include_once '../../components/admin_sidebar.php';
         align-items: center;
         gap: 4px;
         font-size: 0.68rem;
-        color: var(--page-text-secondary, #64748B);
+        color: var(--text-secondary);
         font-weight: 700;
         background: rgba(255, 255, 255, 0.7);
         padding: 3px 10px;
         border-radius: 10px;
-        border: 1px solid var(--page-border, #E2E8F0);
+        border: 1px solid var(--border-color);
+        font-family: var(--font-mono);
     }
 
     [data-theme="dark"] .visit-rx-stat {
@@ -1421,10 +1531,10 @@ include_once '../../components/admin_sidebar.php';
     }
 
     .visit-table thead th {
-        background: var(--page-bg-card, #FFFFFF);
+        background: var(--bg-card);
         padding: 8px 14px;
         font-size: 0.58rem;
-        border-bottom: 1px solid var(--page-border, #E2E8F0);
+        border-bottom: 1px solid var(--border-color);
     }
 
     [data-theme="dark"] .visit-table thead th {
@@ -1439,16 +1549,42 @@ include_once '../../components/admin_sidebar.php';
     /* FOOTER */
     .footer-pharm {
         padding: 14px 0;
-        border-top: 2px solid var(--page-border, #E2E8F0);
+        border-top: 2px solid var(--border-color);
         margin-top: 20px;
         text-align: center;
         font-size: 0.7rem;
-        color: var(--page-text-secondary, #64748B);
+        color: var(--text-secondary);
+        font-family: var(--font-mono);
     }
 
     .footer-pharm .footer-brand-pharm {
-        color: var(--page-primary, #0B5ED7);
+        color: var(--primary);
         font-weight: 700;
+    }
+
+    /* ANIMATIONS */
+    @keyframes fadeInUpPharm {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .animate-fade-in-up-pharm {
+        animation: fadeInUpPharm 0.5s ease forwards;
+        opacity: 0;
+    }
+
+    @keyframes pulse-dot {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+    }
+
+    .pulse-dot {
+        display: inline-block;
+        width: 6px; height: 6px;
+        border-radius: 50%;
+        background: currentColor;
+        margin-right: 4px;
+        animation: pulse-dot 1.5s infinite;
     }
 
     /* RESPONSIVE */
@@ -1460,7 +1596,7 @@ include_once '../../components/admin_sidebar.php';
         .stats-grid-8-pharm { grid-template-columns: 1fr 1fr; }
         .page-header-pharm { padding: 18px 20px; flex-direction: column; align-items: flex-start; }
         .page-header-pharm .page-title { font-size: 1.3rem; }
-        .stat-card-8-pharm { padding: 14px 16px; min-height: 90px; }
+        .stat-card-8-pharm { padding: 14px 16px; min-height: 110px; }
         .stat-card-8-pharm .stat-number-small { font-size: 1.8rem; }
         .stat-card-8-pharm .stat-amount-large { font-size: 1.4rem; }
         .detail-card-header { flex-direction: column; align-items: flex-start; }
@@ -1483,18 +1619,8 @@ include_once '../../components/admin_sidebar.php';
 
     @media (max-width: 480px) {
         .stats-grid-8-pharm { grid-template-columns: 1fr; }
-        .stat-card-8-pharm { padding: 12px 14px; min-height: 80px; }
+        .stat-card-8-pharm { padding: 12px 14px; min-height: 90px; }
         .page-header-pharm .page-title { font-size: 1.1rem; }
-    }
-
-    @keyframes fadeInUpPharm {
-        from { opacity: 0; transform: translateY(20px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-
-    .animate-fade-in-up-pharm {
-        animation: fadeInUpPharm 0.5s ease forwards;
-        opacity: 0;
     }
 </style>
 
@@ -1507,7 +1633,10 @@ include_once '../../components/admin_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-prescription-bottle-medical"></i>
                 Pharmacy Details
-                <span class="role-badge-display">ADMIN</span>
+                <span class="role-badge-display"><i class="fas fa-user-shield"></i> ADMIN</span>
+                <span class="header-badge" style="background:rgba(252,211,77,0.15);border-color:rgba(252,211,77,0.3);color:#FCD34D;">
+                    <span class="pulse-dot"></span> V7 GROSS
+                </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-store-alt"></i>
@@ -1587,20 +1716,21 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
         
-        <a href="prescriptions.php?branch=<?= $pharmacy['id'] ?>&filter=all" class="stat-card-8-pharm card-blue-pharm">
+        <!-- ✅ V7: Prescription Card = GROSS (Bila round off) -->
+        <a href="prescriptions.php?branch=<?= $pharmacy['id'] ?>&filter=all" class="stat-card-8-pharm card-purple-pharm">
             <div class="stat-icon-pharm"><i class="fas fa-prescription"></i></div>
             <div class="stat-content-pharm">
-                <p class="stat-label-pharm">Total Prescriptions</p>
+                <p class="stat-label-pharm">Prescriptions (Gross)</p>
                 <div>
                     <span class="stat-number-small"><?= number_format($pharmacy['total_prescriptions'] ?? 0) ?></span>
-                    <span class="stat-amount-large" style="font-size:1.2rem;display:block;">TSh <?= number_format($prescription_revenue, 0) ?></span>
+                    <span class="stat-amount-large" style="font-size:1.1rem;display:block;">TSh <?= number_format($prescription_revenue, 2, '.', ',') ?></span>
                 </div>
                 <p class="stat-sub-pharm"><?= $pharmacy['pending_prescriptions'] ?? 0 ?> pending · <?= $pharmacy['dispensed_prescriptions'] ?? 0 ?> dispensed</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
         
-        <a href="otc_sales.php?branch=<?= $pharmacy['id'] ?>" class="stat-card-8-pharm card-blue-pharm">
+        <a href="otc_sales.php?branch=<?= $pharmacy['id'] ?>" class="stat-card-8-pharm card-orange-pharm">
             <div class="stat-icon-pharm"><i class="fas fa-shopping-cart"></i></div>
             <div class="stat-content-pharm">
                 <p class="stat-label-pharm">OTC Sales</p>
@@ -1618,7 +1748,7 @@ include_once '../../components/admin_sidebar.php';
             <div class="stat-content-pharm">
                 <p class="stat-label-pharm">Total Revenue</p>
                 <p class="stat-amount-large">TSh <?= number_format($total_revenue, 0) ?></p>
-                <p class="stat-sub-pharm">Rx: TSh <?= number_format($prescription_revenue, 0) ?> · OTC: TSh <?= number_format($otc_revenue, 0) ?></p>
+                <p class="stat-sub-pharm">Rx: TSh <?= number_format($prescription_revenue, 2, '.', ',') ?> · OTC: TSh <?= number_format($otc_revenue, 0) ?></p>
             </div>
             <i class="fas fa-arrow-right stat-arrow-pharm"></i>
         </a>
@@ -1670,7 +1800,7 @@ include_once '../../components/admin_sidebar.php';
     <div class="card-pharm animate-fade-in-up-pharm" style="animation-delay:0.15s;">
         <div class="card-header-pharm">
             <h3 class="card-title-pharm">
-                <i class="fas fa-prescription-bottle-medical"></i> Recent Prescriptions
+                <i class="fas fa-prescription-bottle-medical"></i> Recent Prescriptions (Gross)
                 <span style="background:rgba(255,255,255,0.2);padding:2px 10px;border-radius:12px;font-size:0.7rem;font-family:var(--font-mono);">
                     <?= count($recent_prescriptions) ?> Patients
                 </span>
@@ -1679,7 +1809,7 @@ include_once '../../components/admin_sidebar.php';
                 View All <i class="fas fa-arrow-right"></i>
             </a>
         </div>
-        <div class="card-body-pharm" style="padding:0;background:var(--page-bg-body, #F1F5F9);">
+        <div class="card-body-pharm" style="padding:0;background:var(--bg-body);">
             <?php if (count($recent_prescriptions) > 0): ?>
                 <div class="patients-rx-container">
                     <?php $patient_num = 1; foreach ($recent_prescriptions as $patient): 
@@ -1788,10 +1918,10 @@ include_once '../../components/admin_sidebar.php';
                                                         $rx_key = $visit_key . '_rx' . $rx_num;
                                                     ?>
                                                         <tr>
-                                                            <td class="text-center text-xs font-mono" style="color:var(--page-text-secondary);">
+                                                            <td class="text-center text-xs font-mono" style="color:var(--text-secondary);">
                                                                 <?= $rx_num++ ?>
                                                             </td>
-                                                            <td class="font-mono text-xs" style="color:var(--page-primary);font-weight:700;">
+                                                            <td class="font-mono text-xs" style="color:var(--primary);font-weight:700;">
                                                                 <?= htmlspecialchars($rx['prescription_number'] ?? 'N/A') ?>
                                                             </td>
                                                             <td>
@@ -1831,7 +1961,7 @@ include_once '../../components/admin_sidebar.php';
                                                                     <?= ucfirst($rx['status'] ?? 'Pending') ?>
                                                                 </span>
                                                             </td>
-                                                            <td class="text-xs font-mono" style="color:var(--page-text-secondary);">
+                                                            <td class="text-xs font-mono" style="color:var(--text-secondary);">
                                                                 <?= !empty($rx['created_at']) ? date('M d, Y H:i', strtotime($rx['created_at'])) : 'N/A' ?>
                                                             </td>
                                                         </tr>
@@ -2076,7 +2206,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- FOOTER -->
     <footer class="footer-pharm">
         <p>
-            <span class="footer-brand-pharm">Braick Dispensary</span> Management System
+            <span class="footer-brand-pharm">Braick Dispensary</span> Management System V7
             <span style="color:#CBD5E1;margin:0 8px;">|</span>
             Pharmacy Details - <?= htmlspecialchars($pharmacy['name']) ?>
             <span style="color:#CBD5E1;margin:0 8px;">|</span>
@@ -2134,7 +2264,6 @@ include_once '../../components/admin_sidebar.php';
         var showFirst = isOtc ? 2 : 3;
         
         if (isExpanded) {
-            // Collapse: Onyesha chache tu
             var html = '';
             var showLimit = Math.min(showFirst, meds.length);
             for (var i = 0; i < showLimit; i++) {
@@ -2145,7 +2274,6 @@ include_once '../../components/admin_sidebar.php';
             }
             parentCell.innerHTML = html;
         } else {
-            // Expand: Onyesha zote
             var html = '';
             for (var i = 0; i < meds.length; i++) {
                 html += '<div class="' + itemClass + '"><i class="fas ' + iconClass + '"></i><span>' + escapeHtml(meds[i]) + '</span></div>';
@@ -2174,11 +2302,15 @@ include_once '../../components/admin_sidebar.php';
         if (ftEl) ftEl.textContent = timeStr;
     }, 1000);
 
-    console.log('%c💊 Braick - View Pharmacy V5 GROUPED BY PATIENT', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Recent Prescriptions: Grouped by patient name', 'font-size:13px; color:#059669; font-weight:bold;');
-    console.log('%c✅ Kila mgonjwa ana visits zake + medicines + status', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ Inventory button inafilter kwa BRANCH', 'font-size:13px; color:#D97706;');
+    console.log('%c💊 Braick - View Pharmacy V7 GROSS', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ V7: PRESCRIPTION = Medication_RAW (GROSS - bila discount, bila premium)', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ V7: Prescription BILA round off (exact value, 2 decimal places)', 'font-size:13px; color:#FCD34D; font-weight:bold;');
+    console.log('%c✅ SAWA KWA 100% NA AUDIT V13, ADMIN V20, CASHIERS V13.1, VIEW_CASHIER V14, PHARMACIES V3', 'font-size:13px; color:#FCD34D; font-weight:bold;');
+    console.log('%c✅ Recent Prescriptions: Grouped by patient name', 'font-size:13px; color:#7C3AED;');
     console.log('%c🏥 Pharmacy: <?= htmlspecialchars($pharmacy['name']) ?> (ID: <?= $pharmacy['id'] ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c💊 Prescription (GROSS): TSh <?= number_format($prescription_revenue, 2, '.', ',') ?>', 'font-size:13px; color:#7C3AED; font-weight:bold;');
+    console.log('%c🛒 OTC: TSh <?= number_format($otc_revenue, 0) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

@@ -1,12 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/prescriptions.php
-// ADMIN - PRESCRIPTIONS GROUPED BY PATIENT → VISIT (V6)
+// ADMIN - PRESCRIPTIONS GROUPED BY PATIENT → VISIT (V7)
+// ✅ V7: PRESCRIPTION REVENUE = Medication_RAW - Pharmacy_Discount (415,000)
+// ✅ SAWA KWA 100% NA AUDIT V15.1, ADMIN V19, PHARMACIES V2, VIEW_PHARMACY V6
 // ✅ FIXED: Prescriptions zenye quantity = 0 HAZIONEKANI
 // ✅ FONT: JetBrains Mono (kwa IDs, namba, code)
 // ✅ Quick date filters (Today, 1W, 1M, 3M, 6M, 1Y, All, Custom)
 // ✅ Scroll buttons < > kwenye kila visit table
 // ✅ VIEW + DELETE moja kwa patient
+// ✅ Design MPYA: Gradient cards, animations, hover effects
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -26,6 +29,7 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../../auth/login.php'); break;
     }
     exit;
@@ -45,6 +49,13 @@ try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     die("Database connection error: " . $e->getMessage());
+}
+
+// ================================================================
+// ✅ V7: ROUND TO NEAREST 50 FUNCTION
+// ================================================================
+function round_to_50($value) {
+    return round($value / 50) * 50;
 }
 
 // ================================================================
@@ -247,7 +258,6 @@ unset($presc);
 $patients_data = [];
 
 foreach ($all_prescriptions as $presc) {
-    // ✅ FIXED: Skip kama medications hazina items (baada ya filter)
     if (empty($presc['medications'])) continue;
     
     $patient_id = $presc['patient_id'] ?? 0;
@@ -304,7 +314,6 @@ foreach ($patients_data as &$patient) {
 }
 unset($patient);
 
-// ✅ FIXED: Filter out patients with 0 visits (baada ya filter)
 $patients_data = array_filter($patients_data, function($p) {
     return !empty($p['visits']) && $p['total_prescriptions'] > 0;
 });
@@ -385,7 +394,8 @@ try {
 }
 
 // ================================================================
-// STATS - ✅ Only prescriptions with items > 0
+// ✅ V7: STATS - SAWA NA AUDIT V15.1
+// Prescription Revenue = Medication_RAW - Pharmacy_Discount
 // ================================================================
 $stats_where = " WHERE EXISTS (
     SELECT 1 FROM prescription_items pi_check 
@@ -406,6 +416,7 @@ if (!empty($quick_date_to)) {
     $stats_params[] = $quick_date_to;
 }
 
+// Counts
 $stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $stats_where");
 $stmt->execute($stats_params);
 $total_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
@@ -426,10 +437,46 @@ $stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $stats_where
 $stmt->execute($stats_params);
 $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(pi.total_price), 0) as total FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'dispensed' AND pi.quantity > 0");
+// ✅ V7: Medication RAW total (bila discount)
+$stmt = $db->prepare("
+    SELECT COALESCE(SUM(pi.total_price), 0) as total 
+    FROM prescription_items pi 
+    INNER JOIN prescriptions p ON pi.prescription_id = p.id 
+    $stats_where 
+    AND p.status = 'dispensed' 
+    AND pi.quantity > 0
+");
 $stmt->execute($stats_params);
-$total_amount_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+$medication_raw_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
+// ✅ V7: Pharmacy Discount (kutoka bills)
+$discount_where = " WHERE b.status IN ('paid', 'partial') 
+    AND b.patient_id IS NOT NULL 
+    AND b.visit_id IS NOT NULL 
+    AND b.bill_number NOT LIKE 'BILL-OTC-%'
+    AND b.pharmacy_discount > 0";
+$discount_params = [];
+if ($selected_branch_id !== 'all') {
+    $discount_where .= " AND b.branch_id = ?";
+    $discount_params[] = (int)$selected_branch_id;
+}
+if (!empty($quick_date_from)) {
+    $discount_where .= " AND DATE(b.created_at) >= ?";
+    $discount_params[] = $quick_date_from;
+}
+if (!empty($quick_date_to)) {
+    $discount_where .= " AND DATE(b.created_at) <= ?";
+    $discount_params[] = $quick_date_to;
+}
+
+$stmt = $db->prepare("SELECT COALESCE(SUM(b.pharmacy_discount), 0) as total FROM bills b $discount_where");
+$stmt->execute($discount_params);
+$pharmacy_discount_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// ✅ V7: Prescription Revenue = Medication_RAW - Pharmacy_Discount
+$total_amount_all = round_to_50($medication_raw_total - $pharmacy_discount_total);
+
+// Pending/Confirmed/Cancelled amounts (RAW)
 $stmt = $db->prepare("SELECT COALESCE(SUM(pi.total_price), 0) as total FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id $stats_where AND p.status = 'pending' AND pi.quantity > 0");
 $stmt->execute($stats_params);
 $pending_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
@@ -525,7 +572,6 @@ body {
     font-family: var(--font-main) !important;
 }
 
-/* Apply JetBrains Mono to all numeric/code elements */
 .stat-number,
 .stat-amount,
 .stat-value,
@@ -556,19 +602,16 @@ select,
     font-variant-numeric: tabular-nums;
 }
 
-/* Table headers use JetBrains Mono (small caps) */
 .data-table thead th {
     font-family: var(--font-mono) !important;
     letter-spacing: 0.02em;
 }
 
-/* Headings use Inter */
 .page-title, h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-main) !important;
     letter-spacing: -0.01em;
 }
 
-/* Buttons use Inter for better readability */
 .btn-patient-view,
 .btn-patient-delete,
 .btn-outline-light,
@@ -601,7 +644,7 @@ select,
     position: absolute;
     top: -50%; right: -20%;
     width: 300px; height: 300px;
-    background: rgba(255,255,255,0.05);
+    background: radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%);
     border-radius: 50%;
     pointer-events: none;
 }
@@ -633,12 +676,12 @@ select,
 }
 
 .page-header-custom .role-badge-display {
-    background: rgba(255,255,255,0.2);
-    color: white;
+    background: linear-gradient(135deg, #FCD34D, #F59E0B);
+    color: #78350F;
     padding: 3px 12px;
     border-radius: 20px;
     font-size: 0.6rem;
-    font-weight: 600;
+    font-weight: 800;
     text-transform: uppercase;
 }
 
@@ -728,8 +771,22 @@ select,
 .card-blue-1 { background: linear-gradient(135deg, #3B82F6, #0B5ED7, #0A4CA8); }
 .card-blue-2 { background: linear-gradient(135deg, #0EA5E9, #0284C7, #075985); }
 .card-blue-3 { background: linear-gradient(135deg, #0B5ED7, #083C8A, #062E6B); }
-.card-blue-4 { background: linear-gradient(135deg, #4F46E5, #4338CA, #3730A3); }
+.card-blue-4 { background: linear-gradient(135deg, #059669, #047857, #065F46); }
 .card-blue-5 { background: linear-gradient(135deg, #DC2626, #B91C1C, #991B1B); }
+
+/* V7 SAHIHI BADGE */
+.v7-badge {
+    background: linear-gradient(135deg, #FCD34D, #F59E0B);
+    color: #78350F;
+    padding: 3px 12px;
+    border-radius: 20px;
+    font-size: 0.6rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
 
 /* FILTER SECTION */
 .filter-section {
@@ -1341,7 +1398,7 @@ select,
     font-size: 0.6rem;
     text-transform: uppercase;
     color: white;
-    background: var(--primary);
+    background: linear-gradient(135deg, var(--primary), var(--primary-dark));
     border-bottom: 3px solid var(--primary-dark);
     white-space: nowrap;
 }
@@ -1527,6 +1584,19 @@ mark.highlight {
 }
 .animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
 
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+.pulse-dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    margin-right: 4px;
+    animation: pulse-dot 1.5s infinite;
+}
+
 /* RESPONSIVE */
 @media (max-width: 1200px) { .stats-grid-5 { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 1024px) { .stats-grid-5 { grid-template-columns: repeat(2, 1fr); } }
@@ -1555,6 +1625,9 @@ mark.highlight {
                 <i class="fas fa-prescription"></i>
                 Prescriptions
                 <span class="role-badge-display"><?= strtoupper($user_role) ?></span>
+                <span class="v7-badge">
+                    <span class="pulse-dot"></span> V7 SAHIHI
+                </span>
                 <?php if ($selected_branch_id !== 'all'): ?>
                     <span class="branch-tag">
                         <i class="fas fa-store-alt"></i> <?= htmlspecialchars($selected_branch_name) ?>
@@ -1566,6 +1639,9 @@ mark.highlight {
                 <span class="branch-tag"><i class="fas fa-prescription"></i> <?= $total_all ?> Prescriptions</span>
                 <span class="branch-tag" style="background:rgba(52,211,153,0.25);color:#A7F3D0;">
                     <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($total_amount_all, 0) ?>
+                </span>
+                <span class="branch-tag" style="background:rgba(252,211,77,0.2);color:#FCD34D;">
+                    <i class="fas fa-calculator"></i> RAW: TSh <?= number_format($medication_raw_total, 0) ?> - Disc: TSh <?= number_format($pharmacy_discount_total, 0) ?>
                 </span>
             </p>
         </div>
@@ -1621,6 +1697,33 @@ mark.highlight {
                 <p class="stat-amount">TSh <?= number_format($cancelled_amount, 0) ?></p>
             </div>
         </a>
+    </div>
+
+    <!-- V7 REVENUE BREAKDOWN CARD -->
+    <div class="filter-section animate-fade-in-up" style="background:linear-gradient(135deg,#EFF6FF,#DBEAFE);border:2px solid #BFDBFE;padding:16px 20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;width:100%;flex-wrap:wrap;gap:12px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+                <i class="fas fa-calculator" style="color:#0B5ED7;font-size:1.3rem;"></i>
+                <div>
+                    <div style="font-weight:800;color:#0B5ED7;font-size:0.9rem;font-family:var(--font-mono);">Prescription Revenue Breakdown (V7 SAHIHI)</div>
+                    <div style="font-size:0.65rem;color:#64748B;font-family:var(--font-mono);">Formula: Medication_RAW - Pharmacy_Discount</div>
+                </div>
+            </div>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;">
+                <div style="text-align:center;padding:6px 14px;background:white;border-radius:8px;border:2px solid #BFDBFE;">
+                    <div style="font-size:0.55rem;color:#64748B;font-weight:700;text-transform:uppercase;">Medication RAW</div>
+                    <div style="font-weight:800;color:#0B5ED7;font-family:var(--font-mono);font-size:0.9rem;">TSh <?= number_format($medication_raw_total, 0) ?></div>
+                </div>
+                <div style="text-align:center;padding:6px 14px;background:white;border-radius:8px;border:2px solid #FCD34D;">
+                    <div style="font-size:0.55rem;color:#D97706;font-weight:700;text-transform:uppercase;">Pharmacy Discount</div>
+                    <div style="font-weight:800;color:#D97706;font-family:var(--font-mono);font-size:0.9rem;">- TSh <?= number_format($pharmacy_discount_total, 0) ?></div>
+                </div>
+                <div style="text-align:center;padding:6px 14px;background:white;border-radius:8px;border:2px solid #C4B5FD;">
+                    <div style="font-size:0.55rem;color:#7C3AED;font-weight:700;text-transform:uppercase;">Prescription Revenue</div>
+                    <div style="font-weight:800;color:#7C3AED;font-family:var(--font-mono);font-size:0.9rem;">TSh <?= number_format($total_amount_all, 0) ?></div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- QUICK DATE FILTERS -->
@@ -2002,7 +2105,7 @@ mark.highlight {
 
     <footer class="footer">
         <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
+            <span class="footer-brand">Braick Dispensary</span> Management System V7 SAHIHI
             <span style="margin:0 8px;">|</span>
             Prescriptions (Grouped by Patient → Visit)
             <span style="margin:0 8px;">|</span>
@@ -2328,10 +2431,14 @@ function showToast(title, message, type) {
     });
 <?php endif; ?>
 
-console.log('%c💊 Braick - Prescriptions V6 (Zero-Items Hidden)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ Prescriptions zenye quantity = 0 HAZIONEKANI', 'font-size:12px;color:#34D399;font-weight:bold;');
-console.log('%c✅ Stats zinahesabu prescriptions zenye items > 0', 'font-size:12px;color:#34D399;');
+console.log('%c💊 Braick - Prescriptions V7 SAHIHI', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ PRESCRIPTION = Medication_RAW - Pharmacy_Discount (415,000)', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c✅ SAWA KWA 100% NA AUDIT V15.1, ADMIN V19, PHARMACIES V2', 'font-size:12px;color:#FCD34D;font-weight:bold;');
+console.log('%c✅ Prescriptions zenye quantity = 0 HAZIONEKANI', 'font-size:12px;color:#34D399;');
 console.log('%c✅ JetBrains Mono font', 'font-size:12px;color:#0891B2;');
+console.log('%c💊 Medication RAW: TSh <?= number_format($medication_raw_total, 0) ?>', 'font-size:12px;color:#0B5ED7;');
+console.log('%c🏷️ Pharmacy Discount: TSh <?= number_format($pharmacy_discount_total, 0) ?>', 'font-size:12px;color:#D97706;');
+console.log('%c💰 Prescription Revenue: TSh <?= number_format($total_amount_all, 0) ?>', 'font-size:12px;color:#7C3AED;font-weight:bold;');
 </script>
 
 </body>

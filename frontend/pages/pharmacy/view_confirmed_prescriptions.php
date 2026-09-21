@@ -2,9 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/view_confirmed_prescriptions.php
 // PHARMACY - VIEW CONFIRMED PRESCRIPTIONS (VIEW ONLY - ENGLISH)
-// ✅ FIXED: Bill Info inaonyesha MEDICATION TOTAL pekee
-// ✅ FIXED: Haijumuishi consultation, lab, n.k.
-// ✅ ENGLISH ONLY
+// ✅ FIXED V3: Medication Total inatumia prescription_items.unit_price
+// ✅ FIXED V3: Paid/Balance za MEDICATION PEKEE (bila consultation)
+// ✅ FIXED V3: Inatumia pharmacy_discount na pharmacy_premium PEKEE
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) session_start();
@@ -68,7 +68,9 @@ try {
         $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
     
-    // ✅ GET ITEMS FOR THIS VISIT ONLY
+    // ================================================================
+    // ✅ GET ITEMS - TUMIA prescription_items.unit_price (SAHIHI)
+    // ================================================================
     $items = [];
     $total_quantity = 0;
     $total_amount = 0;
@@ -88,16 +90,21 @@ try {
         $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         foreach ($items as $item) {
+            // ✅ SAHIHI: Tumia pi.unit_price (kutoka prescription_items)
+            $unit_price = (float)($item['unit_price'] ?? 0);
+            $item_total = $unit_price * $item['quantity'];
             $total_quantity += $item['quantity'];
-            $total_amount += $item['total_price'];
+            $total_amount += $item_total;
             $total_items++;
         }
     }
     
-    // ✅ GET MEDICATION-ONLY BILL INFO (NOT GRAND TOTAL)
+    // ================================================================
+    // ✅ GET MEDICATION-ONLY BILL INFO
+    // ✅ FIXED: Medication Total inatumia prescription_items.unit_price
+    // ✅ FIXED: Paid/Balance za MEDICATION PEKEE
+    // ================================================================
     $bill = null;
-    $other_charges = 0;
-    $grand_total = 0;
     
     if ($visit_id > 0 && count($prescriptions) > 0) {
         $prescription_ids = array_column($prescriptions, 'id');
@@ -105,49 +112,69 @@ try {
         if (!empty($prescription_ids)) {
             $placeholders = implode(',', array_fill(0, count($prescription_ids), '?'));
             
+            // ✅ Pata bill_id kutoka bill_items (medication only)
             $stmt = $db->prepare("
-                SELECT 
-                    b.id as bill_id,
-                    b.bill_number,
-                    b.status as bill_status,
-                    b.paid_amount,
-                    b.balance,
-                    b.total_amount as bill_grand_total,
-                    SUM(CASE WHEN bi.item_type = 'medication' THEN bi.total_price ELSE 0 END) as medication_total,
-                    SUM(CASE WHEN bi.item_type = 'medication' THEN bi.discount_amount ELSE 0 END) as medication_discount,
-                    SUM(CASE WHEN bi.item_type != 'medication' THEN bi.total_price ELSE 0 END) as other_total
+                SELECT DISTINCT b.id as bill_id, b.bill_number, b.status as bill_status,
+                       b.pharmacy_discount, b.pharmacy_premium
                 FROM bills b
                 JOIN bill_items bi ON b.id = bi.bill_id
                 WHERE bi.patient_id = ? 
                   AND bi.branch_id = ?
+                  AND bi.item_type = 'medication'
                   AND bi.reference_type = 'prescription'
                   AND bi.reference_id IN ($placeholders)
                   AND bi.status != 'cancelled'
-                GROUP BY b.id
                 ORDER BY b.created_at DESC
                 LIMIT 1
             ");
             $bill_params = [$patient_id, $user_branch_id];
             foreach ($prescription_ids as $pid) $bill_params[] = $pid;
             $stmt->execute($bill_params);
-            $bill_data = $stmt->fetch(PDO::FETCH_ASSOC);
+            $bill_row = $stmt->fetch(PDO::FETCH_ASSOC);
             
-            if ($bill_data && $bill_data['bill_id']) {
-                $med_total = (float)($bill_data['medication_total'] ?? 0);
-                $med_discount = (float)($bill_data['medication_discount'] ?? 0);
-                $other_total = (float)($bill_data['other_total'] ?? 0);
+            if ($bill_row && $bill_row['bill_id']) {
+                $bill_id = $bill_row['bill_id'];
+                $pharm_discount = (float)($bill_row['pharmacy_discount'] ?? 0);
+                $pharm_premium = (float)($bill_row['pharmacy_premium'] ?? 0);
+                
+                // ✅ Medication total = jumla ya prescription_items (unit_price × quantity)
+                $medication_total = 0;
+                foreach ($items as $it) {
+                    $medication_total += ((float)($it['unit_price'] ?? 0)) * $it['quantity'];
+                }
+                
+                // ✅ Paid amount kwa medication pekee = malipo yaliyolipwa kwa bill
+                // Tunatumia proportion: (medication_net_total / bill_total) × paid_amount
+                // Lakini kwa usahihi zaidi, tunachukua paid_amount kutoka bills table
+                // na kuhesabu medication balance pekee
+                $stmt_paid = $db->prepare("SELECT paid_amount FROM bills WHERE id = ?");
+                $stmt_paid->execute([$bill_id]);
+                $paid_row = $stmt_paid->fetch(PDO::FETCH_ASSOC);
+                $total_paid = (float)($paid_row['paid_amount'] ?? 0);
+                
+                // ✅ Net total ya pharmacy = medication_total + premium - discount
+                $pharmacy_net_total = $medication_total + $pharm_premium - $pharm_discount;
+                
+                // ✅ Paid for medication = min(total_paid, pharmacy_net_total)
+                // Maana yake: kama ameilipa yote, medication paid = pharmacy_net_total
+                // Kama hajalipa yote, tunagawanya kwa proportion
+                $medication_paid = min($total_paid, $pharmacy_net_total);
+                $medication_balance = $pharmacy_net_total - $medication_paid;
+                
+                // ✅ Kama ameilipa zaidi ya medication, medication balance = 0
+                if ($medication_balance < 0) $medication_balance = 0;
                 
                 $bill = [
-                    'bill_id' => $bill_data['bill_id'],
-                    'bill_number' => $bill_data['bill_number'],
-                    'status' => $bill_data['bill_status'],
-                    'paid_amount' => (float)($bill_data['paid_amount'] ?? 0),
-                    'balance' => (float)($bill_data['balance'] ?? 0),
-                    'medication_total' => $med_total - $med_discount,
-                    'medication_subtotal' => $med_total,
-                    'medication_discount' => $med_discount,
-                    'other_total' => $other_total,
-                    'grand_total' => (float)($bill_data['bill_grand_total'] ?? ($med_total + $other_total - $med_discount))
+                    'bill_id' => $bill_id,
+                    'bill_number' => $bill_row['bill_number'],
+                    'status' => $bill_row['bill_status'],
+                    'paid_amount' => $medication_paid,           // ✅ Medication paid pekee
+                    'balance' => $medication_balance,            // ✅ Medication balance pekee
+                    'medication_subtotal' => $medication_total,
+                    'medication_total' => $medication_total,
+                    'pharmacy_discount' => $pharm_discount,
+                    'pharmacy_premium' => $pharm_premium,
+                    'pharmacy_net_total' => $pharmacy_net_total,
                 ];
             }
         }
@@ -193,6 +220,10 @@ include_once '../../components/pharmacy_sidebar.php';
             --warning-bg: #FEF3C7;
             --info: #3B82F6;
             --info-bg: #DBEAFE;
+            --purple: #7C3AED;
+            --purple-bg: #EDE9FE;
+            --danger: #DC2626;
+            --danger-bg: #FEE2E2;
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --text-primary: #1E293B;
@@ -213,6 +244,8 @@ include_once '../../components/pharmacy_sidebar.php';
             --success-bg: #1A3A2A;
             --warning-bg: #3A2A1A;
             --info-bg: #1E3A5F;
+            --purple-bg: #2D1B4E;
+            --danger-bg: #3A1A1A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -422,7 +455,7 @@ include_once '../../components/pharmacy_sidebar.php';
         .item-card .item-price { margin-top: 8px; text-align: right; font-weight: 700; font-size: 0.95rem; color: var(--success); font-family: var(--font-mono); }
         .item-card .item-price .label { font-weight: 400; color: var(--text-secondary); font-size: 0.7rem; font-family: var(--font-primary); }
         
-        /* ✅ MEDICATION BILL INFO CARD (FIXED) */
+        /* ✅ MEDICATION BILL INFO CARD (FIXED V3) */
         .bill-info-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -447,8 +480,8 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .bill-info-card .bill-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-            gap: 16px;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
         }
         
         .bill-info-card .bill-item {
@@ -456,14 +489,47 @@ include_once '../../components/pharmacy_sidebar.php';
             padding: 12px;
             background: var(--bg-body);
             border-radius: var(--radius);
+            border: 1.5px solid var(--border-color);
+        }
+        
+        .bill-info-card .bill-item.highlight-primary {
+            background: var(--primary-bg);
+            border-color: var(--primary);
+        }
+        
+        .bill-info-card .bill-item.highlight-premium {
+            background: var(--purple-bg);
+            border-color: var(--purple);
+        }
+        
+        .bill-info-card .bill-item.highlight-discount {
+            background: var(--warning-bg);
+            border-color: var(--warning);
+        }
+        
+        .bill-info-card .bill-item.highlight-net {
+            background: var(--success-bg);
+            border-color: var(--success);
+        }
+        
+        .bill-info-card .bill-item.highlight-paid {
+            background: var(--info-bg);
+            border-color: var(--info);
+        }
+        
+        .bill-info-card .bill-item.highlight-balance {
+            background: var(--danger-bg);
+            border-color: var(--danger);
         }
         
         .bill-info-card .bill-label { font-size: 0.6rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; display: block; margin-bottom: 4px; }
         
-        .bill-info-card .bill-value { font-size: 1.1rem; font-weight: 800; color: var(--text-primary); font-family: var(--font-mono); }
+        .bill-info-card .bill-value { font-size: 1.05rem; font-weight: 800; color: var(--text-primary); font-family: var(--font-mono); }
         .bill-info-card .bill-value.primary { color: var(--primary); }
         .bill-info-card .bill-value.success { color: var(--success); }
         .bill-info-card .bill-value.warning { color: var(--warning); }
+        .bill-info-card .bill-value.purple { color: var(--purple); }
+        .bill-info-card .bill-value.info { color: var(--info); }
         .bill-info-card .bill-value.danger { color: #DC2626; }
         
         .badge-status { display: inline-block; padding: 4px 14px; border-radius: 20px; font-size: 0.65rem; font-weight: 700; }
@@ -604,7 +670,11 @@ include_once '../../components/pharmacy_sidebar.php';
     </div>
 
     <div class="items-grid" id="itemsGrid">
-        <?php foreach ($items as $index => $item): ?>
+        <?php foreach ($items as $index => $item): 
+            // ✅ FIXED: Tumia pi.unit_price kutoka prescription_items
+            $item_unit_price = (float)($item['unit_price'] ?? 0);
+            $item_total_price = $item_unit_price * $item['quantity'];
+        ?>
             <div class="item-card" data-item-id="<?= $item['id'] ?>">
                 <div class="item-badge">#<?= $index + 1 ?> • CONFIRMED</div>
                 
@@ -634,6 +704,14 @@ include_once '../../components/pharmacy_sidebar.php';
                         <span class="label">📏 Route</span>
                         <div class="value-display"><?= htmlspecialchars($item['route'] ?: '—') ?></div>
                     </div>
+                    <div class="item-detail">
+                        <span class="label">💰 Unit Price</span>
+                        <div class="value-display highlight"><?= $currency ?> <?= formatMoney($item_unit_price) ?></div>
+                    </div>
+                    <div class="item-detail">
+                        <span class="label">🧮 Amount</span>
+                        <div class="value-display highlight"><?= $currency ?> <?= formatMoney($item_total_price) ?></div>
+                    </div>
                 </div>
                 
                 <?php if (!empty($item['instructions'])): ?>
@@ -645,53 +723,74 @@ include_once '../../components/pharmacy_sidebar.php';
                 
                 <div class="item-price">
                     <span class="label">Total Price: </span>
-                    <?= $currency ?> <?= formatMoney($item['total_price'] ?? 0) ?>
+                    <?= $currency ?> <?= formatMoney($item_total_price) ?>
                 </div>
             </div>
         <?php endforeach; ?>
     </div>
 
     <?php if ($bill && $bill['medication_total'] > 0): ?>
-    <!-- ✅ MEDICATION BILL INFO - FIXED -->
+    <!-- ✅ MEDICATION BILL INFO - FIXED V3 (PHARMACY ONLY) -->
     <div class="bill-info-card">
         <div class="bill-title">
             <i class="fas fa-pills"></i>
             Medication Bill Info — #<?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
             <span style="font-size:0.65rem;font-weight:400;color:var(--text-secondary);margin-left:auto;">
-                <i class="fas fa-info-circle"></i> Prescription items only
+                <i class="fas fa-info-circle"></i> Pharmacy items only
             </span>
         </div>
         <div class="bill-grid">
-            <div class="bill-item">
+            <div class="bill-item highlight-primary">
                 <span class="bill-label">💊 Medication Total</span>
                 <span class="bill-value primary"><?= $currency ?> <?= formatMoney($bill['medication_total']) ?></span>
             </div>
-            <div class="bill-item">
-                <span class="bill-label">Discount</span>
-                <span class="bill-value warning">-<?= $currency ?> <?= formatMoney($bill['medication_discount']) ?></span>
-            </div>
-            <div class="bill-item">
-                <span class="bill-label">Paid</span>
-                <span class="bill-value success"><?= $currency ?> <?= formatMoney($bill['paid_amount']) ?></span>
-            </div>
-            <div class="bill-item">
-                <span class="bill-label">Balance</span>
-                <span class="bill-value <?= $bill['balance'] > 0 ? 'danger' : 'success' ?>">
-                    <?= $currency ?> <?= formatMoney($bill['balance']) ?>
+            <div class="bill-item highlight-premium">
+                <span class="bill-label">➕ Pharm Premium</span>
+                <span class="bill-value purple">
+                    <?= $bill['pharmacy_premium'] > 0 ? '+' . $currency . ' ' . formatMoney($bill['pharmacy_premium']) : '—' ?>
                 </span>
+            </div>
+            <div class="bill-item highlight-discount">
+                <span class="bill-label">➖ Pharm Discount</span>
+                <span class="bill-value warning">
+                    <?= $bill['pharmacy_discount'] > 0 ? '-' . $currency . ' ' . formatMoney($bill['pharmacy_discount']) : '—' ?>
+                </span>
+            </div>
+            <div class="bill-item highlight-net">
+                <span class="bill-label">🧾 Pharmacy Net Total</span>
+                <span class="bill-value success"><?= $currency ?> <?= formatMoney($bill['pharmacy_net_total']) ?></span>
+            </div>
+            <div class="bill-item highlight-paid">
+                <span class="bill-label">💵 Paid (Medication)</span>
+                <span class="bill-value info"><?= $currency ?> <?= formatMoney($bill['paid_amount']) ?></span>
+            </div>
+            <div class="bill-item highlight-balance">
+                <span class="bill-label">⏳ Balance (Medication)</span>
+                <span class="bill-value danger"><?= $currency ?> <?= formatMoney($bill['balance']) ?></span>
             </div>
         </div>
         
-        <?php if ($bill['other_total'] > 0): ?>
-        <div style="margin-top:14px;padding:10px 14px;background:var(--warning-bg);border-left:3px solid var(--warning);border-radius:8px;font-size:0.75rem;color:var(--warning);">
-            <i class="fas fa-info-circle"></i>
-            <strong>Note:</strong> This bill also includes other charges 
-            (<strong><?= $currency ?> <?= formatMoney($bill['other_total']) ?></strong>) 
-            such as consultation, lab tests, procedures, etc.<br>
-            <strong>Grand Total:</strong> <?= $currency ?> <?= formatMoney($bill['grand_total']) ?> 
-            <span style="opacity:0.8;">(Medication + Other charges - Discount)</span>
+        <!-- ✅ FORMULA DISPLAY -->
+        <div style="margin-top:14px;padding:12px 16px;background:var(--bg-body);border-radius:10px;border:1.5px dashed var(--border-color);font-size:0.75rem;font-family:var(--font-mono);color:var(--text-secondary);text-align:center;">
+            <strong style="color:var(--primary);">Formula:</strong> 
+            Medication Total (<?= $currency ?> <?= formatMoney($bill['medication_total']) ?>) 
+            + Pharm Premium (<?= $currency ?> <?= formatMoney($bill['pharmacy_premium']) ?>) 
+            − Pharm Discount (<?= $currency ?> <?= formatMoney($bill['pharmacy_discount']) ?>) 
+            = <strong style="color:var(--success);"><?= $currency ?> <?= formatMoney($bill['pharmacy_net_total']) ?></strong>
         </div>
-        <?php endif; ?>
+        
+        <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center;">
+            <div style="padding:8px 16px;background:var(--bg-body);border-radius:8px;font-size:0.7rem;">
+                <span style="color:var(--text-secondary);">Status:</span>
+                <strong style="font-family:var(--font-mono);color:var(--primary);text-transform:uppercase;"><?= htmlspecialchars($bill['status'] ?? 'N/A') ?></strong>
+            </div>
+        </div>
+        
+        <div style="margin-top:12px;padding:10px 14px;background:var(--info-bg);border-left:3px solid var(--info);border-radius:8px;font-size:0.7rem;color:var(--info);">
+            <i class="fas fa-info-circle"></i>
+            <strong>Note:</strong> This shows <strong>medication + pharmacy charges only</strong>. 
+            Consultation, lab tests, and other charges are not included here.
+        </div>
     </div>
     <?php endif; ?>
 
@@ -722,7 +821,7 @@ include_once '../../components/pharmacy_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Confirmed Prescriptions (View Only)
+            Confirmed Prescriptions (View Only - Pharmacy Items)
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
         </p>
@@ -789,10 +888,11 @@ include_once '../../components/pharmacy_sidebar.php';
             var quantity = parseInt(card.querySelectorAll('.value-display')[2]?.textContent) || 0;
             var duration = card.querySelectorAll('.value-display')[3]?.textContent?.trim() || 'N/A';
             var route = card.querySelectorAll('.value-display')[4]?.textContent?.trim() || 'N/A';
-            var price = parseInt(card.querySelector('.item-price')?.textContent?.replace(/[^0-9]/g, '')) || 0;
+            var unitPrice = parseInt(card.querySelectorAll('.value-display')[5]?.textContent?.replace(/[^0-9]/g, '')) || 0;
+            var amount = parseInt(card.querySelectorAll('.value-display')[6]?.textContent?.replace(/[^0-9]/g, '')) || 0;
             
             totalQty += quantity;
-            totalAmount += price;
+            totalAmount += amount;
             totalItems++;
             
             itemsHtml += `
@@ -806,9 +906,10 @@ include_once '../../components/pharmacy_sidebar.php';
                         <div><span style="font-weight:600;color:#64748B;">Frequency:</span> ${frequency}</div>
                         <div><span style="font-weight:600;color:#64748B;">Quantity:</span> ${quantity}</div>
                         <div><span style="font-weight:600;color:#64748B;">Duration:</span> ${duration}</div>
-                        <div style="grid-column:span 2;"><span style="font-weight:600;color:#64748B;">Route:</span> ${route}</div>
+                        <div><span style="font-weight:600;color:#64748B;">Route:</span> ${route}</div>
+                        <div><span style="font-weight:600;color:#64748B;">Unit Price:</span> <?= $currency ?> ${formatMoney(unitPrice)}</div>
                         <div style="grid-column:span 2;text-align:right;font-weight:700;color:#059669;font-size:15px;font-family:monospace;margin-top:6px;">
-                            Total: <?= $currency ?> ${formatMoney(price)}
+                            Amount: <?= $currency ?> ${formatMoney(amount)}
                         </div>
                     </div>
                 </div>
@@ -817,6 +918,47 @@ include_once '../../components/pharmacy_sidebar.php';
         
         var visitNumber = '<?= addslashes($visit_info['visit_number'] ?? 'N/A') ?>';
         var visitDate = '<?= $visit_info ? date('d M Y', strtotime($visit_info['visit_date'] ?? $visit_info['created_at'] ?? 'now')) : date('d M Y') ?>';
+        
+        <?php if ($bill): ?>
+        var billHtml = `
+            <div style="margin:16px 0;padding:14px 18px;background:#F8FAFC;border-radius:10px;border:2px solid #0B5ED7;">
+                <div style="font-size:0.95rem;font-weight:700;color:#0B5ED7;margin-bottom:10px;">
+                    💊 Medication Bill Info — #<?= addslashes($bill['bill_number'] ?? 'N/A') ?>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px;">
+                    <div style="padding:10px;background:white;border-radius:8px;border:1.5px solid #0B5ED7;text-align:center;">
+                        <div style="font-size:10px;font-weight:700;color:#64748B;text-transform:uppercase;">Medication Total</div>
+                        <div style="font-size:18px;font-weight:800;color:#0B5ED7;font-family:monospace;"><?= $currency ?> <?= formatMoney($bill['medication_total']) ?></div>
+                    </div>
+                    <div style="padding:10px;background:#EDE9FE;border-radius:8px;border:1.5px solid #7C3AED;text-align:center;">
+                        <div style="font-size:10px;font-weight:700;color:#64748B;text-transform:uppercase;">Pharm Premium</div>
+                        <div style="font-size:18px;font-weight:800;color:#7C3AED;font-family:monospace;">+<?= $currency ?> <?= formatMoney($bill['pharmacy_premium']) ?></div>
+                    </div>
+                    <div style="padding:10px;background:#FEF3C7;border-radius:8px;border:1.5px solid #D97706;text-align:center;">
+                        <div style="font-size:10px;font-weight:700;color:#64748B;text-transform:uppercase;">Pharm Discount</div>
+                        <div style="font-size:18px;font-weight:800;color:#D97706;font-family:monospace;">-<?= $currency ?> <?= formatMoney($bill['pharmacy_discount']) ?></div>
+                    </div>
+                    <div style="padding:10px;background:#D1FAE5;border-radius:8px;border:1.5px solid #059669;text-align:center;">
+                        <div style="font-size:10px;font-weight:700;color:#64748B;text-transform:uppercase;">Pharmacy Net Total</div>
+                        <div style="font-size:18px;font-weight:800;color:#059669;font-family:monospace;"><?= $currency ?> <?= formatMoney($bill['pharmacy_net_total']) ?></div>
+                    </div>
+                    <div style="padding:10px;background:#DBEAFE;border-radius:8px;border:1.5px solid #3B82F6;text-align:center;">
+                        <div style="font-size:10px;font-weight:700;color:#64748B;text-transform:uppercase;">Paid (Medication)</div>
+                        <div style="font-size:18px;font-weight:800;color:#3B82F6;font-family:monospace;"><?= $currency ?> <?= formatMoney($bill['paid_amount']) ?></div>
+                    </div>
+                    <div style="padding:10px;background:#FEE2E2;border-radius:8px;border:1.5px solid #DC2626;text-align:center;">
+                        <div style="font-size:10px;font-weight:700;color:#64748B;text-transform:uppercase;">Balance (Medication)</div>
+                        <div style="font-size:18px;font-weight:800;color:#DC2626;font-family:monospace;"><?= $currency ?> <?= formatMoney($bill['balance']) ?></div>
+                    </div>
+                </div>
+                <div style="margin-top:10px;padding:8px 12px;background:#E8F0FE;border-radius:6px;font-size:11px;font-family:monospace;text-align:center;color:#0B5ED7;">
+                    <strong>Formula:</strong> Med Total (<?= $currency ?> <?= formatMoney($bill['medication_total']) ?>) + Premium (<?= $currency ?> <?= formatMoney($bill['pharmacy_premium']) ?>) − Discount (<?= $currency ?> <?= formatMoney($bill['pharmacy_discount']) ?>) = <strong><?= $currency ?> <?= formatMoney($bill['pharmacy_net_total']) ?></strong>
+                </div>
+            </div>
+        `;
+        <?php else: ?>
+        var billHtml = '';
+        <?php endif; ?>
         
         content.innerHTML = `
             <div style="font-family:'Inter',sans-serif;padding:20px;">
@@ -841,6 +983,8 @@ include_once '../../components/pharmacy_sidebar.php';
                     <div style="font-size:1rem;font-weight:700;color:#0B5ED7;border-bottom:2px solid #6EA8FE;padding-bottom:4px;margin-bottom:10px;">📋 Confirmed Items (${totalItems})</div>
                     ${itemsHtml}
                 </div>
+                
+                ${billHtml}
                 
                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin:16px 0;padding:12px 16px;background:#DBEAFE;border-radius:8px;">
                     <div style="text-align:center;">
@@ -897,8 +1041,10 @@ include_once '../../components/pharmacy_sidebar.php';
     document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closePDFModal(); });
     document.getElementById('pdfModal').addEventListener('click', function(e) { if (e.target === this) closePDFModal(); });
     
-    console.log('%c✅ Braick - Confirmed Prescriptions (Medication Only)', 'font-size:18px; font-weight:bold; color:#3B82F6;');
-    console.log('%c✅ Bill Info inaonyesha MEDICATION total pekee', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ Braick - Confirmed Prescriptions V3 (Fixed)', 'font-size:18px; font-weight:bold; color:#3B82F6;');
+    console.log('%c✅ Medication Total = prescription_items.unit_price × quantity', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ Paid/Balance = Medication PEKEE', 'font-size:13px; color:#7C3AED; font-weight:bold;');
+    console.log('%c✅ Haijumuishi consultation, lab, cashier', 'font-size:13px; color:#D97706; font-weight:bold;');
 </script>
 
 </body>

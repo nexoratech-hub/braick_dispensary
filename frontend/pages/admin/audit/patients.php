@@ -1,10 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/patients.php
-// ADMIN AUDIT - PATIENTS REPORT (COMPACT V2)
-// ✅ Size zimepunguzwa kwa kila kitu
-// ✅ Fonts ndogo zaidi
-// ✅ Gender cards zimebaki
+// ADMIN AUDIT - PATIENTS REPORT (V3 - IMPROVED BUTTONS)
+// ✅ Action buttons zinaonekana vizuri (View, Edit, Delete)
+// ✅ Table layout imeboreshwa
+// ✅ Row height imeongezwa
+// ✅ Hover effects nzuri
 // ✅ Search + Scroll buttons
 // ================================================================
 
@@ -194,6 +195,7 @@ include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
     --pink-bg: #FCE7F3;
     --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
     --shadow-md: 0 2px 8px rgba(0,0,0,0.06);
+    --shadow-lg: 0 4px 16px rgba(0,0,0,0.1);
 }
 
 [data-theme="dark"] {
@@ -735,18 +737,18 @@ html, body {
 .table-wrapper::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
 
 /* ================================================================
-   DATA TABLE - COMPACT
+   DATA TABLE - IMPROVED
    ================================================================ */
 .data-table { 
     width: 100%; 
     border-collapse: collapse; 
-    font-size: 0.72rem;
-    min-width: 950px;
+    font-size: 0.74rem;
+    min-width: 1100px;
 }
 
 .data-table thead th {
     text-align: left;
-    padding: 9px 12px;
+    padding: 11px 14px;
     font-weight: 800;
     font-size: 0.58rem;
     text-transform: uppercase;
@@ -766,16 +768,25 @@ html, body {
 }
 
 .data-table tbody td {
-    padding: 9px 12px;
+    padding: 12px 14px;
     border-bottom: 1px solid var(--border-color);
     color: var(--text-primary);
     vertical-align: middle;
     font-weight: 500;
 }
 
-.data-table tbody tr { transition: background 0.2s ease; }
-.data-table tbody tr:hover td { background: var(--primary-bg); }
-[data-theme="dark"] .data-table tbody tr:hover td { background: #1E3A5F; }
+.data-table tbody tr { 
+    transition: all 0.2s ease;
+}
+
+.data-table tbody tr:hover td { 
+    background: var(--primary-bg); 
+}
+
+[data-theme="dark"] .data-table tbody tr:hover td { 
+    background: #1E3A5F; 
+}
+
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table tbody tr.hidden-row { display: none !important; }
 
@@ -783,14 +794,14 @@ html, body {
    AVATAR - COMPACT
    ================================================================ */
 .avatar-circle {
-    width: 32px;
-    height: 32px;
+    width: 36px;
+    height: 36px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
     font-weight: 800;
-    font-size: 0.75rem;
+    font-size: 0.82rem;
     color: white;
     background: linear-gradient(135deg, #0B5ED7, #3B82F6);
     box-shadow: 0 2px 6px rgba(11, 94, 215, 0.25);
@@ -804,13 +815,14 @@ html, body {
 .badge-gender {
     display: inline-flex;
     align-items: center;
-    gap: 3px;
-    padding: 3px 9px;
+    gap: 4px;
+    padding: 4px 10px;
     border-radius: 10px;
-    font-size: 0.6rem;
+    font-size: 0.62rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.03em;
+    white-space: nowrap;
 }
 
 .badge-gender.male { 
@@ -835,12 +847,12 @@ html, body {
 
 .patient-id-badge {
     font-family: var(--font-mono);
-    font-size: 0.62rem;
+    font-size: 0.65rem;
     color: var(--primary);
     font-weight: 800;
     background: var(--primary-bg);
-    padding: 2px 8px;
-    border-radius: 5px;
+    padding: 4px 10px;
+    border-radius: 6px;
     letter-spacing: -0.02em;
     display: inline-block;
     border: 1px solid rgba(11, 94, 215, 0.2);
@@ -858,7 +870,7 @@ html, body {
 .money-cell {
     font-family: var(--font-mono);
     font-weight: 800;
-    font-size: 0.74rem;
+    font-size: 0.78rem;
     color: var(--success);
     text-align: right;
     letter-spacing: -0.02em;
@@ -866,81 +878,122 @@ html, body {
 }
 
 .money-cell .currency-prefix {
-    font-size: 0.6rem;
+    font-size: 0.62rem;
     font-weight: 600;
     color: var(--text-secondary);
     margin-right: 2px;
 }
 
 /* ================================================================
-   ACTION BUTTONS - COMPACT
+   ✅ V3: ACTION BUTTONS - IMPROVED (With Labels!)
    ================================================================ */
 .action-buttons {
     display: flex;
-    gap: 4px;
+    gap: 6px;
     justify-content: center;
     align-items: center;
+    flex-wrap: nowrap;
 }
 
 .btn-action {
-    width: 28px;
-    height: 28px;
-    border-radius: 7px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.72rem;
-    border: none;
+    gap: 5px;
+    padding: 7px 12px;
+    border-radius: 8px;
+    font-size: 0.68rem;
+    font-weight: 800;
+    border: 1.5px solid transparent;
     cursor: pointer;
-    transition: all 0.25s ease;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     text-decoration: none;
+    white-space: nowrap;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    font-family: var(--font-primary);
+    position: relative;
+    overflow: hidden;
+    min-width: 68px;
+}
+
+.btn-action::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+    transition: left 0.5s ease;
+}
+
+.btn-action:hover::before {
+    left: 100%;
+}
+
+.btn-action i {
+    font-size: 0.72rem;
 }
 
 .btn-action:hover {
-    transform: translateY(-1px) scale(1.08);
+    transform: translateY(-2px);
 }
 
+.btn-action:active {
+    transform: translateY(0) scale(0.97);
+}
+
+/* VIEW Button - Blue */
 .btn-action.view {
-    background: rgba(11, 94, 215, 0.12);
-    color: #0B5ED7;
+    background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+    color: white;
+    box-shadow: 0 2px 6px rgba(11, 94, 215, 0.3);
 }
 
 .btn-action.view:hover {
-    background: #0B5ED7;
+    background: linear-gradient(135deg, #0A4CA8, #083C8A);
+    box-shadow: 0 6px 16px rgba(11, 94, 215, 0.5);
     color: white;
-    box-shadow: 0 3px 10px rgba(11, 94, 215, 0.4);
 }
 
+/* EDIT Button - Amber */
 .btn-action.edit {
-    background: rgba(245, 158, 11, 0.15);
-    color: #D97706;
+    background: linear-gradient(135deg, #F59E0B, #D97706);
+    color: white;
+    box-shadow: 0 2px 6px rgba(245, 158, 11, 0.3);
 }
 
 .btn-action.edit:hover {
-    background: #F59E0B;
+    background: linear-gradient(135deg, #D97706, #B45309);
+    box-shadow: 0 6px 16px rgba(245, 158, 11, 0.5);
     color: white;
-    box-shadow: 0 3px 10px rgba(245, 158, 11, 0.4);
 }
 
+/* DELETE Button - Red */
 .btn-action.delete {
-    background: rgba(220, 38, 38, 0.12);
-    color: #DC2626;
+    background: linear-gradient(135deg, #DC2626, #B91C1C);
+    color: white;
+    box-shadow: 0 2px 6px rgba(220, 38, 38, 0.3);
 }
 
 .btn-action.delete:hover {
-    background: #DC2626;
+    background: linear-gradient(135deg, #B91C1C, #991B1B);
+    box-shadow: 0 6px 16px rgba(220, 38, 38, 0.5);
     color: white;
-    box-shadow: 0 3px 10px rgba(220, 38, 38, 0.4);
 }
 
+/* Dark mode adjustments */
 [data-theme="dark"] .btn-action.view {
-    background: rgba(96, 165, 250, 0.15);
-    color: #93C5FD;
+    background: linear-gradient(135deg, #3B82F6, #2563EB);
 }
 
-[data-theme="dark"] .btn-action.view:hover {
-    background: #3B82F6;
-    color: white;
+[data-theme="dark"] .btn-action.edit {
+    background: linear-gradient(135deg, #FBBF24, #F59E0B);
+}
+
+[data-theme="dark"] .btn-action.delete {
+    background: linear-gradient(135deg, #EF4444, #DC2626);
 }
 
 mark.search-highlight {
@@ -1131,15 +1184,29 @@ mark.search-highlight {
         justify-content: flex-end;
     }
     
-    .data-table { font-size: 0.65rem; }
+    .data-table { font-size: 0.68rem; min-width: 1000px; }
     .data-table thead th,
-    .data-table tbody td { padding: 7px 8px; }
-    .btn-action { width: 26px; height: 26px; font-size: 0.68rem; }
+    .data-table tbody td { padding: 9px 10px; }
+    
+    /* Make buttons smaller but keep labels */
+    .btn-action {
+        padding: 6px 9px;
+        font-size: 0.6rem;
+        min-width: 58px;
+    }
+    
+    .btn-action i { font-size: 0.65rem; }
+    .btn-action span { display: inline; }
 }
 
 @media (max-width: 480px) {
     .stats-grid { grid-template-columns: 1fr; }
     .search-result-count { display: none; }
+    
+    /* Hide labels on very small screens, show icons only */
+    .btn-action span { display: none; }
+    .btn-action { min-width: 36px; padding: 7px 9px; }
+    .btn-action i { font-size: 0.78rem; }
 }
 </style>
 
@@ -1333,15 +1400,15 @@ mark.search-highlight {
             <table class="data-table" id="patientsTable">
                 <thead>
                     <tr>
-                        <th style="width:40px;">#</th>
-                        <th>Patient</th>
-                        <th>Patient ID</th>
-                        <th>Gender</th>
-                        <th>Phone</th>
-                        <th style="text-align:center;">Visits</th>
-                        <th style="text-align:right;">Total Spent</th>
-                        <th>Last Visit</th>
-                        <th style="text-align:center;">Actions</th>
+                        <th style="width:45px;text-align:center;">#</th>
+                        <th style="min-width:200px;">Patient</th>
+                        <th style="min-width:130px;">Patient ID</th>
+                        <th style="min-width:100px;">Gender</th>
+                        <th style="min-width:130px;">Phone</th>
+                        <th style="width:80px;text-align:center;">Visits</th>
+                        <th style="width:130px;text-align:right;">Total Spent</th>
+                        <th style="min-width:110px;">Last Visit</th>
+                        <th style="width:240px;text-align:center;">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -1353,16 +1420,17 @@ mark.search-highlight {
                             $initial = strtoupper(substr($p['full_name'] ?? 'P', 0, 1));
                         ?>
                             <tr class="patient-row">
-                                <td style="text-align:center;font-weight:700;color:var(--text-secondary);font-family:var(--font-mono);font-size:0.68rem;">
+                                <td style="text-align:center;font-weight:700;color:var(--text-secondary);font-family:var(--font-mono);font-size:0.72rem;">
                                     <?= $row_num++ ?>
                                 </td>
                                 <td class="searchable-cell">
-                                    <div style="display:flex;align-items:center;gap:8px;">
+                                    <div style="display:flex;align-items:center;gap:10px;">
                                         <div class="avatar-circle"><?= $initial ?></div>
                                         <div>
-                                            <div style="font-weight:700;font-size:0.75rem;"><?= htmlspecialchars($p['full_name'] ?? 'N/A') ?></div>
+                                            <div style="font-weight:700;font-size:0.78rem;color:var(--text-primary);"><?= htmlspecialchars($p['full_name'] ?? 'N/A') ?></div>
                                             <?php if (!empty($p['email'])): ?>
-                                                <div style="font-size:0.6rem;color:var(--text-secondary);">
+                                                <div style="font-size:0.62rem;color:var(--text-secondary);margin-top:1px;">
+                                                    <i class="fas fa-envelope" style="font-size:0.55rem;"></i>
                                                     <?= htmlspecialchars($p['email']) ?>
                                                 </div>
                                             <?php endif; ?>
@@ -1380,38 +1448,53 @@ mark.search-highlight {
                                         <?= htmlspecialchars(ucfirst($p['gender'] ?? 'N/A')) ?>
                                     </span>
                                 </td>
-                                <td class="searchable-cell" style="font-size:0.7rem;font-family:var(--font-mono);font-weight:600;">
-                                    <?= htmlspecialchars($p['phone'] ?? 'N/A') ?>
+                                <td class="searchable-cell" style="font-size:0.72rem;font-family:var(--font-mono);font-weight:600;">
+                                    <?php if (!empty($p['phone'])): ?>
+                                        <i class="fas fa-phone" style="font-size:0.58rem;color:var(--text-secondary);"></i>
+                                        <?= htmlspecialchars($p['phone']) ?>
+                                    <?php else: ?>
+                                        <span style="color:var(--text-secondary);font-size:0.68rem;">—</span>
+                                    <?php endif; ?>
                                 </td>
-                                <td style="text-align:center;font-weight:800;color:var(--primary);font-family:var(--font-mono);font-size:0.8rem;">
-                                    <?= number_format($p['total_visits'] ?? 0) ?>
+                                <td style="text-align:center;">
+                                    <span style="font-weight:800;color:var(--primary);font-family:var(--font-mono);font-size:0.85rem;background:var(--primary-bg);padding:3px 10px;border-radius:6px;display:inline-block;">
+                                        <?= number_format($p['total_visits'] ?? 0) ?>
+                                    </span>
                                 </td>
                                 <td class="money-cell">
                                     <span class="currency-prefix"><?= $currency ?></span><?= number_format($p['total_spent'] ?? 0, 0) ?>
                                 </td>
-                                <td style="font-size:0.66rem;color:var(--text-secondary);font-family:var(--font-mono);">
-                                    <?= $p['last_visit'] ? date('d M Y', strtotime($p['last_visit'])) : 'Never' ?>
+                                <td style="font-size:0.68rem;color:var(--text-secondary);font-family:var(--font-mono);">
+                                    <?php if ($p['last_visit']): ?>
+                                        <i class="fas fa-calendar-check" style="font-size:0.58rem;color:var(--success);"></i>
+                                        <?= date('d M Y', strtotime($p['last_visit'])) ?>
+                                    <?php else: ?>
+                                        <span style="color:var(--text-secondary);font-style:italic;">Never</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <div class="action-buttons">
                                         <a href="patient_details.php?id=<?= $p['id'] ?>&branch=<?= $selected_branch_id ?>" 
                                            class="btn-action view" 
-                                           title="View"
+                                           title="View Patient Details"
                                            target="_blank">
                                             <i class="fas fa-eye"></i>
+                                            <span>View</span>
                                         </a>
                                         
                                         <a href="patient_edit.php?id=<?= $p['id'] ?>&branch=<?= $selected_branch_id ?>" 
                                            class="btn-action edit" 
-                                           title="Edit">
+                                           title="Edit Patient">
                                             <i class="fas fa-edit"></i>
+                                            <span>Edit</span>
                                         </a>
                                         
                                         <button type="button" 
                                                 class="btn-action delete" 
-                                                title="Delete"
+                                                title="Delete Patient"
                                                 onclick="confirmDeletePatient(<?= $p['id'] ?>, '<?= htmlspecialchars(addslashes($p['full_name'] ?? 'N/A')) ?>', '<?= htmlspecialchars(addslashes($p['patient_id'] ?? 'N/A')) ?>')">
                                             <i class="fas fa-trash"></i>
+                                            <span>Delete</span>
                                         </button>
                                     </div>
                                 </td>
@@ -1628,9 +1711,9 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-console.log('%c📋 Patients Report V2 - COMPACT', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Fonts: Ndogo (compact)', 'font-size:12px; color:#34D399;');
-console.log('%c✅ Cards: 4 (Gender cards)', 'font-size:12px; color:#34D399;');
+console.log('%c📋 Patients Report V3 - IMPROVED BUTTONS', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ Action buttons: View (blue), Edit (amber), Delete (red)', 'font-size:12px; color:#34D399;');
+console.log('%c✅ Buttons zina labels + icons', 'font-size:12px; color:#34D399;');
 console.log('%c♂ Male: <?= $male_count ?> | ♀ Female: <?= $female_count ?>', 'font-size:12px; color:#3B82F6;');
 </script>
 

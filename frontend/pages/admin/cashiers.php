@@ -1,14 +1,16 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/cashiers.php
-// SUPER ADMIN - VIEW ALL CASHIERS (V13 - PREMIUM & DISCOUNT ON PATIENT PAYMENTS)
+// SUPER ADMIN - VIEW ALL CASHIERS (V13.1 - PRESCRIPTION GROSS)
+// ✅ V13.1: Ondoa formula breakdown card ya juu (Prescription ipo Card #4 pekee)
+// ✅ V13: PRESCRIPTION = Medication_RAW (GROSS - bila discount, bila premium)
+// ✅ V13: Prescription BILA round off (exact value, 2 decimal places)
+// ✅ SAWA KWA 100% NA AUDIT V13, ADMIN V20
 // ✅ FIXED: Font Awesome 6 included (icons zinaonekana)
 // ✅ FONT: JetBrains Mono
 // ✅ PAYMENTS-BASED
 // ✅ Uses SHARED header & sidebar
-// ✅ 8 cards (4 top + 4 bottom) SAME AS DASHBOARD
-// ✅ Patient Payments card shows PREMIUM + DISCOUNT badges
-// ✅ ✅ ✅ ALL AMOUNTS ROUNDED TO NEAREST 50 ✅ ✅ ✅
+// ✅ 8 cards (4 top + 4 bottom) with All Discount + All Premium
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -57,7 +59,7 @@ try {
 }
 
 // ================================================================
-// ✅ ROUND TO NEAREST 50 FUNCTION
+// ✅ V13.1: ROUND TO NEAREST 50 FUNCTION (kwa cards zingine)
 // ================================================================
 function round_to_50($value) {
     return round($value / 50) * 50;
@@ -86,7 +88,7 @@ try {
 } catch (Exception $e) { $branches = []; }
 
 // ================================================================
-// FINANCIAL SUMMARY - PAYMENTS-BASED (SAME AS DASHBOARD)
+// ✅ V13.1: FINANCIAL SUMMARY - PRESCRIPTION GROSS
 // ================================================================
 function getFinancialSummary($db, $branch_id = 'all') {
     $results = [];
@@ -98,11 +100,10 @@ function getFinancialSummary($db, $branch_id = 'all') {
         $params_p[] = (int)$branch_id;
     }
     
-    // Patient Payments
+    // Patient revenue (payments)
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(p.amount), 0) as patient_revenue,
-               COUNT(DISTINCT p.id) as payments_count,
-               COUNT(DISTINCT p.bill_id) as bills_count
+               COUNT(DISTINCT p.id) as payments_count
         FROM payments p
         INNER JOIN bills b ON p.bill_id = b.id
         WHERE b.patient_id IS NOT NULL 
@@ -114,111 +115,69 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     $results['patient_revenue'] = $row['patient_revenue'] ?? 0;
     $results['payments_count'] = $row['payments_count'] ?? 0;
-    $results['paid_bills'] = $row['bills_count'] ?? 0;
     
-    // OTC Revenue
+    // OTC revenue
     $branch_cond = "";
     $params = [];
     if ($branch_id !== 'all' && is_numeric($branch_id)) {
         $branch_cond = " AND os.branch_id = ?";
         $params[] = (int)$branch_id;
     }
-    $stmt = $db->prepare("SELECT COALESCE(SUM(os.total_amount), 0) as otc_revenue, COUNT(*) as otc_count FROM otc_sales os WHERE os.payment_status = 'paid' $branch_cond");
+    $stmt = $db->prepare("SELECT COALESCE(SUM(os.total_amount), 0) as otc_revenue FROM otc_sales os WHERE os.payment_status = 'paid' $branch_cond");
     $stmt->execute($params);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    $results['otc_revenue'] = $row['otc_revenue'] ?? 0;
-    $results['otc_count'] = $row['otc_count'] ?? 0;
+    $results['otc_revenue'] = $stmt->fetch(PDO::FETCH_ASSOC)['otc_revenue'] ?? 0;
     
-    // Prescription Revenue (proportion)
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(
-            CASE 
-                WHEN bill_totals.items_total > 0 
-                THEN (bi.total_price / bill_totals.items_total) * p.amount
-                ELSE 0 
-            END
-        ), 0) as prescription_revenue
-        FROM bill_items bi 
-        INNER JOIN bills b ON bi.bill_id = b.id
-        INNER JOIN payments p ON p.bill_id = b.id
-        INNER JOIN (
-            SELECT bill_id, SUM(total_price) as items_total 
-            FROM bill_items 
-            WHERE status != 'cancelled' 
-            GROUP BY bill_id
-        ) bill_totals ON bill_totals.bill_id = bi.bill_id
-        WHERE bi.reference_type = 'prescription'
-        AND bi.item_type = 'medication'
-        AND bi.status != 'cancelled'
-        AND b.patient_id IS NOT NULL 
-        AND b.visit_id IS NOT NULL 
-        AND b.bill_number NOT LIKE 'BILL-OTC-%'
-        $branch_p
-    ");
-    $stmt->execute($params_p);
-    $results['prescription_revenue'] = $stmt->fetch(PDO::FETCH_ASSOC)['prescription_revenue'] ?? 0;
-    
-    // Clinical Services = Consultation + Procedures + Equipment
-    $clinical = 0;
-    foreach (['consultation', 'procedure', 'equipment'] as $type) {
-        $stmt = $db->prepare("
-            SELECT COALESCE(SUM(
-                CASE 
-                    WHEN bill_totals.items_total > 0 
-                    THEN (bi.total_price / bill_totals.items_total) * p.amount
-                    ELSE 0 
-                END
-            ), 0) as total
-            FROM bill_items bi 
-            INNER JOIN bills b ON bi.bill_id = b.id
-            INNER JOIN payments p ON p.bill_id = b.id
-            INNER JOIN (
-                SELECT bill_id, SUM(total_price) as items_total 
-                FROM bill_items 
-                WHERE status != 'cancelled' 
-                GROUP BY bill_id
-            ) bill_totals ON bill_totals.bill_id = bi.bill_id
-            WHERE bi.item_type = ?
-            AND bi.status != 'cancelled'
-            AND b.patient_id IS NOT NULL 
-            AND b.visit_id IS NOT NULL 
-            AND b.bill_number NOT LIKE 'BILL-OTC-%'
-            $branch_p
-        ");
-        $stmt->execute(array_merge([$type], $params_p));
-        $clinical += (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+    // ✅ V13.1: Medication RAW (GROSS - bila discount)
+    $branch_med = "";
+    $params_med = [];
+    if ($branch_id !== 'all' && is_numeric($branch_id)) {
+        $branch_med = " AND bi.branch_id = ?";
+        $params_med[] = (int)$branch_id;
     }
-    $results['clinical_revenue'] = $clinical;
-    
-    // Lab Tests (proportion)
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(
-            CASE 
-                WHEN bill_totals.items_total > 0 
-                THEN (bi.total_price / bill_totals.items_total) * p.amount
-                ELSE 0 
-            END
-        ), 0) as lab_revenue
-        FROM bill_items bi 
+        SELECT COALESCE(SUM(bi.total_price), 0) as medication_raw
+        FROM bill_items bi
         INNER JOIN bills b ON bi.bill_id = b.id
-        INNER JOIN payments p ON p.bill_id = b.id
-        INNER JOIN (
-            SELECT bill_id, SUM(total_price) as items_total 
-            FROM bill_items 
-            WHERE status != 'cancelled' 
-            GROUP BY bill_id
-        ) bill_totals ON bill_totals.bill_id = bi.bill_id
-        WHERE bi.item_type = 'lab_test'
+        WHERE bi.item_type = 'medication'
         AND bi.status != 'cancelled'
-        AND b.patient_id IS NOT NULL 
-        AND b.visit_id IS NOT NULL 
+        AND b.status IN ('paid', 'partial')
+        AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
         AND b.bill_number NOT LIKE 'BILL-OTC-%'
-        $branch_p
+        $branch_med
     ");
-    $stmt->execute($params_p);
-    $results['lab_revenue'] = $stmt->fetch(PDO::FETCH_ASSOC)['lab_revenue'] ?? 0;
+    $stmt->execute($params_med);
+    $results['medication_raw'] = $stmt->fetch(PDO::FETCH_ASSOC)['medication_raw'] ?? 0;
     
-    // Total Revenue
+    // Pharmacy Discount (info only)
+    $branch_disc = "";
+    $params_disc = [];
+    if ($branch_id !== 'all' && is_numeric($branch_id)) {
+        $branch_disc = " AND b.branch_id = ?";
+        $params_disc[] = (int)$branch_id;
+    }
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(b.pharmacy_discount), 0) as pharmacy_discount
+        FROM bills b
+        WHERE b.status IN ('paid', 'partial')
+        AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
+        AND b.pharmacy_discount > 0
+        $branch_disc
+    ");
+    $stmt->execute($params_disc);
+    $results['pharmacy_discount'] = $stmt->fetch(PDO::FETCH_ASSOC)['pharmacy_discount'] ?? 0;
+    
+    // ✅ V13.1: PRESCRIPTION = Medication_RAW (GROSS - bila discount, bila premium, bila round)
+    $results['prescription_revenue'] = (float)$results['medication_raw'];
+    
+    // Round Patient Revenue + OTC + Medication_RAW (cards zingine zinatumia round 50)
+    $results['patient_revenue'] = round_to_50($results['patient_revenue']);
+    $results['otc_revenue'] = round_to_50($results['otc_revenue']);
+    $results['medication_raw'] = round_to_50($results['medication_raw']);
+    $results['pharmacy_discount'] = round_to_50($results['pharmacy_discount']);
+    
     $results['total_revenue'] = $results['patient_revenue'] + $results['otc_revenue'];
     
     // Expenses
@@ -228,16 +187,26 @@ function getFinancialSummary($db, $branch_id = 'all') {
         $branch_exp = " AND branch_id = ?";
         $params_exp[] = (int)$branch_id;
     }
-    $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total_expenses, COUNT(*) as expenses_count FROM expenses WHERE status = 'paid' $branch_exp");
+    $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total_expenses FROM expenses WHERE status = 'paid' $branch_exp");
     $stmt->execute($params_exp);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    $results['total_expenses'] = $row['total_expenses'] ?? 0;
-    $results['expenses_count'] = $row['expenses_count'] ?? 0;
+    $results['total_expenses'] = round_to_50($stmt->fetch(PDO::FETCH_ASSOC)['total_expenses'] ?? 0);
     
-    // Net Profit
     $results['net_profit'] = $results['total_revenue'] - $results['total_expenses'];
     
-    // Pending Bills
+    // Paid bills
+    $stmt = $db->prepare("
+        SELECT COUNT(DISTINCT p.bill_id) as paid_bills
+        FROM payments p
+        INNER JOIN bills b ON p.bill_id = b.id
+        WHERE b.patient_id IS NOT NULL 
+        AND b.visit_id IS NOT NULL 
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
+        $branch_p
+    ");
+    $stmt->execute($params_p);
+    $results['paid_bills'] = $stmt->fetch(PDO::FETCH_ASSOC)['paid_bills'] ?? 0;
+    
+    // Pending bills
     $branch_b = "";
     $params_b = [];
     if ($branch_id !== 'all' && is_numeric($branch_id)) {
@@ -248,29 +217,33 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $stmt->execute($params_b);
     $results['pending_bills'] = $stmt->fetch(PDO::FETCH_ASSOC)['pending_bills'] ?? 0;
     
-    // Total Bills
     $stmt = $db->prepare("SELECT COUNT(*) as total_bills FROM bills b WHERE b.patient_id IS NOT NULL AND b.visit_id IS NOT NULL AND b.bill_number NOT LIKE 'BILL-OTC-%' $branch_b");
     $stmt->execute($params_b);
     $results['total_bills'] = $stmt->fetch(PDO::FETCH_ASSOC)['total_bills'] ?? 0;
     
-    // Discounts + Premiums
-    $stmt = $db->prepare("SELECT COALESCE(SUM(b.total_discount), 0) as total_discount, COALESCE(SUM(b.premium_amount), 0) as total_premium FROM bills b WHERE b.bill_number NOT LIKE 'BILL-OTC-%' $branch_b");
+    // Total Discount
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(b.pharmacy_discount + b.cashier_discount), 0) as total_discount 
+        FROM bills b 
+        WHERE b.status IN ('paid', 'partial')
+        AND (b.pharmacy_discount > 0 OR b.cashier_discount > 0)
+        AND b.bill_number NOT LIKE 'BILL-OTC-%' 
+        $branch_b
+    ");
     $stmt->execute($params_b);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    $results['total_discount'] = $row['total_discount'] ?? 0;
-    $results['total_premium'] = $row['total_premium'] ?? 0;
+    $results['total_discount'] = round_to_50($stmt->fetch(PDO::FETCH_ASSOC)['total_discount'] ?? 0);
     
-    // ✅ ROUND ALL TO NEAREST 50
-    $results['patient_revenue'] = round_to_50($results['patient_revenue']);
-    $results['otc_revenue'] = round_to_50($results['otc_revenue']);
-    $results['prescription_revenue'] = round_to_50($results['prescription_revenue']);
-    $results['clinical_revenue'] = round_to_50($results['clinical_revenue']);
-    $results['lab_revenue'] = round_to_50($results['lab_revenue']);
-    $results['total_revenue'] = round_to_50($results['total_revenue']);
-    $results['total_expenses'] = round_to_50($results['total_expenses']);
-    $results['net_profit'] = round_to_50($results['net_profit']);
-    $results['total_discount'] = round_to_50($results['total_discount']);
-    $results['total_premium'] = round_to_50($results['total_premium']);
+    // Total Premium
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(b.pharmacy_premium + b.cashier_premium), 0) as total_premium 
+        FROM bills b 
+        WHERE b.status IN ('paid', 'partial')
+        AND (b.pharmacy_premium > 0 OR b.cashier_premium > 0)
+        AND b.bill_number NOT LIKE 'BILL-OTC-%' 
+        $branch_b
+    ");
+    $stmt->execute($params_b);
+    $results['total_premium'] = round_to_50($stmt->fetch(PDO::FETCH_ASSOC)['total_premium'] ?? 0);
     
     return $results;
 }
@@ -278,7 +251,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
 $financial = getFinancialSummary($db, $selected_branch_id);
 
 // ================================================================
-// FETCH BRANCHES - WITH ALL AMOUNTS (ROUNDED TO 50)
+// ✅ V13.1: FETCH BRANCHES - PRESCRIPTION GROSS
 // ================================================================
 $query = "
     SELECT b.*,
@@ -301,9 +274,25 @@ $query = "
         
         COALESCE((SELECT COALESCE(SUM(os.total_amount), 0) FROM otc_sales os WHERE os.branch_id = b.id AND os.payment_status = 'paid'), 0) as otc_revenue,
         
+        -- ✅ V13.1: PRESCRIPTION = Medication_RAW (GROSS - bila discount, bila premium)
+        COALESCE((
+            SELECT COALESCE(SUM(bi.total_price), 0)
+            FROM bill_items bi
+            INNER JOIN bills pb ON bi.bill_id = pb.id
+            WHERE pb.branch_id = b.id
+            AND bi.item_type = 'medication'
+            AND bi.status != 'cancelled'
+            AND pb.status IN ('paid', 'partial')
+            AND pb.patient_id IS NOT NULL
+            AND pb.visit_id IS NOT NULL
+            AND pb.bill_number NOT LIKE 'BILL-OTC-%'
+        ), 0) as prescription_revenue,
+        
         COALESCE((SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE branch_id = b.id AND status = 'paid'), 0) as branch_expenses,
-        COALESCE((SELECT COALESCE(SUM(pb.total_discount), 0) FROM bills pb WHERE pb.branch_id = b.id AND pb.bill_number NOT LIKE 'BILL-OTC-%'), 0) as branch_discount,
-        COALESCE((SELECT COALESCE(SUM(pb.premium_amount), 0) FROM bills pb WHERE pb.branch_id = b.id AND pb.bill_number NOT LIKE 'BILL-OTC-%'), 0) as branch_premium,
+        
+        COALESCE((SELECT COALESCE(SUM(pb.pharmacy_discount + pb.cashier_discount), 0) FROM bills pb WHERE pb.branch_id = b.id AND (pb.pharmacy_discount > 0 OR pb.cashier_discount > 0) AND pb.bill_number NOT LIKE 'BILL-OTC-%'), 0) as branch_discount,
+        
+        COALESCE((SELECT COALESCE(SUM(pb.pharmacy_premium + pb.cashier_premium), 0) FROM bills pb WHERE pb.branch_id = b.id AND (pb.pharmacy_premium > 0 OR pb.cashier_premium > 0) AND pb.bill_number NOT LIKE 'BILL-OTC-%'), 0) as branch_premium,
         
         COALESCE(
             (SELECT COALESCE(SUM(p.amount), 0) 
@@ -359,21 +348,23 @@ try {
     $stmt = $db->prepare($query);
     $stmt->execute($params);
     $cashiers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // ✅ ROUND ALL BRANCH AMOUNTS TO NEAREST 50
-    foreach ($cashiers as &$cashier) {
-        $cashier['patient_bills_revenue'] = round_to_50($cashier['patient_bills_revenue'] ?? 0);
-        $cashier['otc_revenue'] = round_to_50($cashier['otc_revenue'] ?? 0);
-        $cashier['branch_expenses'] = round_to_50($cashier['branch_expenses'] ?? 0);
-        $cashier['branch_discount'] = round_to_50($cashier['branch_discount'] ?? 0);
-        $cashier['branch_premium'] = round_to_50($cashier['branch_premium'] ?? 0);
-        $cashier['total_revenue'] = round_to_50($cashier['total_revenue'] ?? 0);
-    }
-    unset($cashier);
 } catch (Exception $e) {
     error_log("Error fetching cashiers: " . $e->getMessage());
     $cashiers = [];
 }
+
+// ✅ V13.1: Prescription BILA round off (exact value) per branch
+foreach ($cashiers as &$c) {
+    $c['prescription_revenue'] = (float)($c['prescription_revenue'] ?? 0);
+    // Rounding kwa cards zingine
+    $c['patient_bills_revenue'] = round_to_50($c['patient_bills_revenue'] ?? 0);
+    $c['otc_revenue'] = round_to_50($c['otc_revenue'] ?? 0);
+    $c['branch_discount'] = round_to_50($c['branch_discount'] ?? 0);
+    $c['branch_premium'] = round_to_50($c['branch_premium'] ?? 0);
+    $c['branch_expenses'] = round_to_50($c['branch_expenses'] ?? 0);
+    $c['total_revenue'] = round_to_50($c['total_revenue'] ?? 0);
+}
+unset($c);
 
 $total_cashiers = count($cashiers);
 
@@ -429,6 +420,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         --page-primary-bg: #1E3A5F;
     }
 
+    /* ✅ ENSURE FONT AWESOME WORKS */
     .fas, .far, .fab, .fa {
         font-family: "Font Awesome 6 Free" !important;
         font-weight: 900 !important;
@@ -442,6 +434,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .far { font-weight: 400 !important; }
     .fab { font-family: "Font Awesome 6 Brands" !important; font-weight: 400 !important; }
 
+    /* ✅ JetBrains Mono kwa namba */
     .stat-number,
     .stat-label,
     .stat-sub,
@@ -460,6 +453,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         letter-spacing: -0.02em;
     }
 
+    /* ✅ ICONS LAZIMA ZITUMIE FONT AWESOME (sio JetBrains Mono) */
     .fas, .far, .fab, .fa,
     .stat-icon i,
     .page-header-title i,
@@ -480,7 +474,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     html[data-theme="dark"] .main-content { background: #0F172A !important; }
 
     /* ================================================================
-       BLUE PAGE HEADER CARD
+       BLUE PAGE HEADER CARD - V13.1
        ================================================================ */
     .page-header-card {
         background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #083C8A 100%);
@@ -548,14 +542,41 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .page-header-subtitle strong { color: white; font-weight: 700; }
 
     .role-badge-display {
-        background: rgba(255,255,255,0.25);
-        color: white;
+        background: linear-gradient(135deg, #FCD34D, #F59E0B);
+        color: #78350F;
         padding: 4px 14px;
         border-radius: 20px;
         font-size: 0.65rem;
-        font-weight: 700;
+        font-weight: 800;
         text-transform: uppercase;
         letter-spacing: 0.05em;
+    }
+
+    .v13-badge {
+        background: rgba(252,211,77,0.25);
+        color: #FCD34D;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.62rem;
+        font-weight: 800;
+        border: 1px solid rgba(252,211,77,0.4);
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .pulse-dot {
+        display: inline-block;
+        width: 6px; height: 6px;
+        border-radius: 50%;
+        background: currentColor;
+        margin-right: 4px;
+        animation: pulseDot 1.5s infinite;
+    }
+
+    @keyframes pulseDot {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
     }
 
     .page-header-badge {
@@ -610,7 +631,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     /* ================================================================
-       8 CARDS GRID — SAME AS DASHBOARD
+       8 CARDS GRID
        ================================================================ */
     .stats-grid-8 {
         display: grid;
@@ -711,7 +732,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     .stat-card-8 .stat-number {
-        font-size: 1.65rem;
+        font-size: 1.5rem;
         font-weight: 800;
         color: white;
         margin: 0;
@@ -734,19 +755,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         font-size: 0.6rem;
     }
 
-    /* ✅ PREMIUM & DISCOUNT BADGES ON GREEN CARD */
-    .stat-card-8 .stat-sub .premium-badge {
-        color: #FCD34D;
-        font-weight: 800;
-        text-shadow: 0 0 8px rgba(252, 211, 77, 0.5);
-    }
-
-    .stat-card-8 .stat-sub .discount-badge {
-        color: #FEF08A;
-        font-weight: 800;
-        text-shadow: 0 0 8px rgba(254, 240, 138, 0.5);
-    }
-
     .stat-card-8 .stat-arrow {
         position: absolute;
         right: 14px;
@@ -762,7 +770,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         color: rgba(255,255,255,0.5);
     }
 
-    /* Card Colors — SAME AS DASHBOARD */
+    /* Card Colors */
     .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
     .card-blue:hover { box-shadow: 0 12px 36px rgba(11, 94, 215, 0.4); }
 
@@ -783,9 +791,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
     .card-teal:hover { box-shadow: 0 12px 36px rgba(13, 148, 136, 0.4); }
-
-    .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
-    .card-cyan:hover { box-shadow: 0 12px 36px rgba(8, 145, 178, 0.4); }
 
     @keyframes premiumPulse {
         0%, 100% { box-shadow: 0 4px 16px rgba(245, 158, 11, 0.3); }
@@ -1189,7 +1194,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .page-header-title { font-size: 1.2rem; }
         .page-header-title i { width: 36px; height: 36px; font-size: 1rem; }
         .stats-grid-8 { grid-template-columns: 1fr 1fr; gap: 12px; }
-        .stat-card-8 .stat-number { font-size: 1.25rem; }
+        .stat-card-8 .stat-number { font-size: 1.15rem; }
         .stat-card-8 .stat-icon { width: 38px; height: 38px; font-size: 1rem; }
         .cashier-grid { grid-template-columns: 1fr; }
         .filter-bar { flex-direction: column; align-items: stretch; }
@@ -1198,7 +1203,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     @media (max-width: 480px) {
         .stats-grid-8 { grid-template-columns: 1fr; gap: 12px; }
-        .stat-card-8 .stat-number { font-size: 1.2rem; }
+        .stat-card-8 .stat-number { font-size: 1.15rem; }
         .stat-card-8 { min-height: 120px; padding: 14px 16px; }
         .stat-card-8 .stat-icon { width: 34px; height: 34px; font-size: 0.9rem; }
         .page-header-title { font-size: 1rem; }
@@ -1225,7 +1230,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <h1 class="page-header-title">
                 <i class="fas fa-cash-register"></i>
                 Cashiers Dashboard
-                <span class="role-badge-display">ADMIN</span>
+                <span class="role-badge-display"><i class="fas fa-user-shield"></i> ADMIN</span>
+                <span class="v13-badge">
+                    <span class="pulse-dot"></span> V13.1 GROSS
+                </span>
             </h1>
             <p class="page-header-subtitle">
                 <i class="fas fa-store-alt"></i>
@@ -1258,10 +1266,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================
-         8 CARDS — SAME AS DASHBOARD
+         8 CARDS - 4 TOP + 4 BOTTOM (V13.1: Prescription Card #4 pekee)
          ================================================================ -->
     <div class="stats-grid-8 animate-fade-in-up" style="animation-delay:0.05s;">
 
+        <!-- ROW 1 -->
         <!-- 1. Total Revenue - BLUE -->
         <div class="stat-card-8 card-blue">
             <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
@@ -1273,87 +1282,84 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
 
-        <!-- 2. Patient Payments + PREMIUM + DISCOUNT - GREEN -->
-        <div class="stat-card-8 card-green">
-            <div class="stat-icon"><i class="fas fa-hand-holding-usd"></i></div>
+        <!-- 2. Total Expenses - RED -->
+        <div class="stat-card-8 card-red">
+            <div class="stat-icon"><i class="fas fa-arrow-up"></i></div>
             <div class="stat-content">
-                <p class="stat-label">Patient Payments</p>
-                <p class="stat-number">TSh <?= number_format($financial['patient_revenue'], 0) ?></p>
+                <p class="stat-label">Total Expenses</p>
+                <p class="stat-number">TSh <?= number_format($financial['total_expenses'], 0) ?></p>
+                <p class="stat-sub"><i class="fas fa-file-invoice"></i> From expenses</p>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </div>
+
+        <!-- 3. Net Profit - GREEN -->
+        <div class="stat-card-8 card-green">
+            <div class="stat-icon"><i class="fas fa-chart-line"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Net Profit</p>
+                <p class="stat-number">TSh <?= number_format($financial['net_profit'], 0) ?></p>
+                <p class="stat-sub"><i class="fas fa-calculator"></i> Revenue - Expenses</p>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </div>
+
+        <!-- 4. Prescription Revenue (GROSS) - PURPLE (V13.1: Card #4 pekee) -->
+        <div class="stat-card-8 card-purple">
+            <div class="stat-icon"><i class="fas fa-prescription"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Prescription (Gross)</p>
+                <p class="stat-number" style="font-size:1.35rem;">
+                    TSh <?= number_format($financial['prescription_revenue'], 2, '.', ',') ?>
+                </p>
                 <p class="stat-sub">
-                    <i class="fas fa-receipt"></i> <?= number_format($financial['payments_count']) ?> payments
-                    <?php if (($financial['total_premium'] ?? 0) > 0): ?>
-                        <span class="premium-badge"> • ⭐ Prem: <?= number_format($financial['total_premium'], 0) ?></span>
-                    <?php endif; ?>
-                    <?php if (($financial['total_discount'] ?? 0) > 0): ?>
-                        <span class="discount-badge"> • 🏷️ Disc: <?= number_format($financial['total_discount'], 0) ?></span>
-                    <?php endif; ?>
+                    <i class="fas fa-info-circle"></i> GROSS = Medication RAW
                 </p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
 
-        <!-- 3. OTC Sales - CYAN -->
-        <div class="stat-card-8 card-cyan">
+        <!-- ROW 2 -->
+        <!-- 5. OTC Revenue - TEAL -->
+        <div class="stat-card-8 card-teal">
             <div class="stat-icon"><i class="fas fa-cash-register"></i></div>
             <div class="stat-content">
-                <p class="stat-label">OTC Sales</p>
+                <p class="stat-label">OTC Revenue</p>
                 <p class="stat-number">TSh <?= number_format($financial['otc_revenue'], 0) ?></p>
-                <p class="stat-sub"><i class="fas fa-shopping-cart"></i> <?= number_format($financial['otc_count']) ?> transactions</p>
+                <p class="stat-sub"><i class="fas fa-shopping-cart"></i> Over-the-counter</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
 
-        <!-- 4. Prescriptions - PURPLE -->
-        <div class="stat-card-8 card-purple">
-            <div class="stat-icon"><i class="fas fa-prescription"></i></div>
+        <!-- 6. ALL DISCOUNT - GOLD -->
+        <div class="stat-card-8 card-gold">
+            <div class="stat-icon"><i class="fas fa-tag"></i></div>
             <div class="stat-content">
-                <p class="stat-label">Prescriptions</p>
-                <p class="stat-number">TSh <?= number_format($financial['prescription_revenue'], 0) ?></p>
-                <p class="stat-sub"><i class="fas fa-pills"></i> From payments</p>
+                <p class="stat-label">All Discount</p>
+                <p class="stat-number">TSh <?= number_format($financial['total_discount'] ?? 0, 0) ?></p>
+                <p class="stat-sub"><i class="fas fa-percent"></i> Pharmacy + Cashier</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
 
-        <!-- 5. Clinical Services - GREEN -->
-        <div class="stat-card-8 card-green">
-            <div class="stat-icon"><i class="fas fa-stethoscope"></i></div>
+        <!-- 7. ALL PREMIUM - GOLD with PULSE -->
+        <div class="stat-card-8 card-gold" style="animation: premiumPulse 2.5s ease-in-out infinite;">
+            <div class="stat-icon"><i class="fas fa-crown"></i></div>
             <div class="stat-content">
-                <p class="stat-label">Clinical Services</p>
-                <p class="stat-number">TSh <?= number_format($financial['clinical_revenue'], 0) ?></p>
-                <p class="stat-sub"><i class="fas fa-notes-medical"></i> Cons + Proc + Equip</p>
+                <p class="stat-label">👑 All Premium</p>
+                <p class="stat-number">TSh <?= number_format($financial['total_premium'] ?? 0, 0) ?></p>
+                <p class="stat-sub"><i class="fas fa-star"></i> Pharmacy + Cashier</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
 
-        <!-- 6. Lab Tests - PURPLE -->
-        <div class="stat-card-8 card-purple">
-            <div class="stat-icon"><i class="fas fa-flask"></i></div>
+        <!-- 8. Pending Bills - ORANGE -->
+        <div class="stat-card-8 card-orange">
+            <div class="stat-icon"><i class="fas fa-clock"></i></div>
             <div class="stat-content">
-                <p class="stat-label">Lab Tests</p>
-                <p class="stat-number">TSh <?= number_format($financial['lab_revenue'], 0) ?></p>
-                <p class="stat-sub"><i class="fas fa-microscope"></i> From payments</p>
-            </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-
-        <!-- 7. Total Expenses - RED -->
-        <div class="stat-card-8 card-red">
-            <div class="stat-icon"><i class="fas fa-receipt"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Total Expenses</p>
-                <p class="stat-number">TSh <?= number_format($financial['total_expenses'], 0) ?></p>
-                <p class="stat-sub"><i class="fas fa-list"></i> <?= number_format($financial['expenses_count']) ?> records</p>
-            </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-
-        <!-- 8. Net Profit - GREEN/RED -->
-        <div class="stat-card-8 <?= $financial['net_profit'] >= 0 ? 'card-green' : 'card-red' ?>">
-            <div class="stat-icon"><i class="fas <?= $financial['net_profit'] >= 0 ? 'fa-chart-line' : 'fa-exclamation-triangle' ?>"></i></div>
-            <div class="stat-content">
-                <p class="stat-label"><?= $financial['net_profit'] >= 0 ? '💰 Net Profit' : '📉 Net Loss' ?></p>
-                <p class="stat-number">TSh <?= number_format(abs($financial['net_profit']), 0) ?></p>
-                <p class="stat-sub"><i class="fas fa-calculator"></i> Revenue - Expenses</p>
+                <p class="stat-label">Pending Bills</p>
+                <p class="stat-number"><?= number_format($financial['pending_bills']) ?></p>
+                <p class="stat-sub"><i class="fas fa-hourglass-half"></i> Awaiting payment</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
@@ -1390,7 +1396,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <!-- Branch Grid -->
     <?php if (count($cashiers) > 0): ?>
         <div class="cashier-grid animate-fade-in-up" style="animation-delay:0.15s;">
-            <?php foreach ($cashiers as $cashier): ?>
+            <?php foreach ($cashiers as $cashier): 
+                $net_profit_branch = ($cashier['total_revenue'] ?? 0) - ($cashier['branch_expenses'] ?? 0);
+            ?>
                 <div class="cashier-card">
                     <div class="card-top">
                         <div>
@@ -1432,7 +1440,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <span class="amount green">TSh <?= number_format($cashier['otc_revenue'] ?? 0, 0) ?></span>
                             </span>
                             <span class="item">
-                                <span class="label">Disc:</span>
+                                <span class="label">💊 Presc:</span>
+                                <span class="amount purple">TSh <?= number_format($cashier['prescription_revenue'] ?? 0, 2, '.', ',') ?></span>
+                            </span>
+                            <span class="item">
+                                <span class="label">🏷️ Disc:</span>
                                 <span class="amount gold">TSh <?= number_format($cashier['branch_discount'] ?? 0, 0) ?></span>
                             </span>
                             <span class="item">
@@ -1445,7 +1457,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             </span>
                             <span class="item" style="font-weight:700;">
                                 <span class="label">Net:</span>
-                                <span class="amount teal">TSh <?= number_format(round_to_50(($cashier['total_revenue'] ?? 0) - ($cashier['branch_expenses'] ?? 0)), 0) ?></span>
+                                <span class="amount teal">TSh <?= number_format($net_profit_branch, 0) ?></span>
                             </span>
                         </div>
                     </div>
@@ -1522,12 +1534,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         });
     }).observe(document.documentElement, { attributes: true });
 
-    console.log('%c💰 Braick - Cashiers Dashboard V13 (PREMIUM & DISCOUNT)', 'font-family: monospace; font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Patient Payments card shows PREMIUM + DISCOUNT', 'font-family: monospace; font-size:13px; color:#F59E0B; font-weight:bold;');
-    console.log('%c✅ FIXED: Font Awesome 6 (icons zinaonekana)', 'font-family: monospace; font-size:13px; color:#10B981; font-weight:bold;');
-    console.log('%c✅ FONT: JetBrains Mono', 'font-family: monospace; font-size:13px; color:#34D399;');
-    console.log('%c✅ 8 CARDS — SAME AS DASHBOARD', 'font-family: monospace; font-size:13px; color:#7C3AED; font-weight:bold;');
-    console.log('%c✅ ALL AMOUNTS ROUNDED TO NEAREST 50', 'font-family: monospace; font-size:13px; color:#F59E0B; font-weight:bold;');
+    console.log('%c💰 Braick - Cashiers Dashboard V13.1 GROSS', 'font-family: monospace; font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ V13.1: Formula breakdown card ya juu imeondolewa', 'font-family: monospace; font-size:13px; color:#10B981; font-weight:bold;');
+    console.log('%c✅ Prescription (GROSS) ipo Card #4 pekee', 'font-family: monospace; font-size:13px; color:#FCD34D; font-weight:bold;');
+    console.log('%c✅ V13: PRESCRIPTION = Medication_RAW (GROSS - bila discount, bila premium)', 'font-family: monospace; font-size:13px; color:#10B981; font-weight:bold;');
+    console.log('%c✅ V13: Prescription BILA round off (exact value, 2 decimal places)', 'font-family: monospace; font-size:13px; color:#FCD34D; font-weight:bold;');
+    console.log('%c✅ SAWA KWA 100% NA AUDIT V13, ADMIN V20', 'font-family: monospace; font-size:13px; color:#FCD34D; font-weight:bold;');
+    console.log('%c💊 Prescription (GROSS): TSh <?= number_format($financial['prescription_revenue'] ?? 0, 2, '.', ',') ?>', 'font-family: monospace; font-size:12px; color:#7C3AED; font-weight:bold;');
 </script>
 
 </body>

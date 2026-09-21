@@ -1,13 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/patient_lab_tests.php
-// AUDIT - ALL LAB TESTS FOR A PATIENT (V2 - VIEW ONLY)
-// ✅ Same as admin/audit/patient_lab_tests.php
-// ✅ NO Edit All button
-// ✅ NO Add Test button
-// ✅ NO Edit button per test
-// ✅ NO Delete button per test
-// ✅ View only — Print + Back + View button
+// AUDIT - ALL LAB TESTS FOR A PATIENT (V4 - VIEW ONLY + ARROWS)
+// ✅ Arrow <> buttons kwenye kila visit table header
+// ✅ Lab Technician column per test (lab_technician_id)
+// ✅ Interpretation column
+// ✅ NO Edit/Add/Delete buttons (audit view-only)
+// ✅ Print + Back + View button only
 // ✅ BLUE THEME
 // ================================================================
 
@@ -88,7 +87,7 @@ if (!$patient) {
 $patient_branch_id = (int)($patient['branch_id'] ?? 0);
 
 // ================================================================
-// GET LAB TEST CATALOG (STRICTLY BRANCH) — For info display only
+// GET LAB TEST CATALOG
 // ================================================================
 $lab_catalog = [];
 try {
@@ -107,7 +106,7 @@ try {
 }
 
 // ================================================================
-// GET ALL LAB TESTS GROUPED BY VISIT
+// GET ALL LAB TESTS WITH LAB TECHNICIAN (lab_technician_id)
 // ================================================================
 $visits_data = [];
 $all_tests = [];
@@ -117,6 +116,10 @@ try {
             lt.*,
             doc.full_name as doctor_name,
             recv.full_name as received_by_name,
+            recv.role as received_by_role,
+            tech.full_name as technician_name,
+            tech.role as technician_role,
+            tech.specialty as technician_specialty,
             v.visit_number,
             v.visit_date,
             v.diagnosis,
@@ -125,6 +128,7 @@ try {
         FROM lab_tests lt
         LEFT JOIN users doc ON lt.doctor_id = doc.id
         LEFT JOIN users recv ON lt.performed_by = recv.id
+        LEFT JOIN users tech ON lt.lab_technician_id = tech.id
         LEFT JOIN visits v ON lt.visit_id = v.id
         LEFT JOIN branches b ON lt.branch_id = b.id
         WHERE lt.patient_id = ?
@@ -224,6 +228,7 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
     <style>
 :root {
@@ -252,6 +257,8 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
     --purple-bg: #EDE9FE;
     --cyan: #0891B2;
     --cyan-bg: #CFFAFE;
+    --teal: #0D9488;
+    --teal-bg: #CCFBF1;
     
     --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
     --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
@@ -273,6 +280,7 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
     --warning-bg: #3A2A1A;
     --purple-bg: #2D1B4E;
     --cyan-bg: #0E3A47;
+    --teal-bg: #134E4A;
 }
 
 * { font-family: var(--font-primary); -webkit-font-smoothing: antialiased; }
@@ -450,15 +458,61 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     font-family: var(--font-mono); font-weight: 900; font-size: 0.8rem;
 }
 
+/* ✅ SCROLL BUTTONS - Kwenye visit header */
+.scroll-buttons-group {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    margin-left: 8px;
+    padding-left: 10px;
+    border-left: 2px solid rgba(255,255,255,0.2);
+}
+.scroll-btn-header {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.2);
+    color: white;
+    border: 1.5px solid rgba(255,255,255,0.3);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 800;
+    transition: all 0.25s ease;
+    flex-shrink: 0;
+    backdrop-filter: blur(4px);
+}
+.scroll-btn-header:hover {
+    background: rgba(255,255,255,0.4);
+    border-color: rgba(255,255,255,0.6);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+.scroll-btn-header:active {
+    transform: translateY(0) scale(0.95);
+}
+
 /* TABLE */
-.table-wrapper { overflow-x: auto; scroll-behavior: smooth; }
-.table-wrapper::-webkit-scrollbar { height: 6px; }
+.table-wrapper { 
+    overflow-x: auto; 
+    scroll-behavior: smooth; 
+    position: relative;
+}
+.table-wrapper::-webkit-scrollbar { height: 8px; }
 .table-wrapper::-webkit-scrollbar-track { background: var(--border-color); border-radius: 10px; }
-.table-wrapper::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+.table-wrapper::-webkit-scrollbar-thumb { 
+    background: linear-gradient(90deg, #0B5ED7, #3B82F6); 
+    border-radius: 10px; 
+}
+.table-wrapper::-webkit-scrollbar-thumb:hover { 
+    background: linear-gradient(90deg, #0A4CA8, #2563EB); 
+}
 
 .data-table {
     width: 100%; border-collapse: collapse;
-    font-size: 0.78rem; min-width: 900px;
+    font-size: 0.78rem; min-width: 1300px;
 }
 .data-table thead th {
     text-align: left; padding: 10px 12px;
@@ -466,6 +520,9 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     letter-spacing: 0.06em; color: white;
     background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
     white-space: nowrap;
+    position: sticky;
+    top: 0;
+    z-index: 2;
 }
 .data-table tbody td {
     padding: 10px 12px; border-bottom: 1px solid var(--border-color);
@@ -473,6 +530,57 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 }
 .data-table tbody tr:hover td { background: var(--primary-bg); }
 .data-table tbody tr:last-child td { border-bottom: none; }
+
+/* ✅ LAB TECHNICIAN CELL */
+.tech-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.tech-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #0891B2, #22D3EE);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 0.72rem;
+    flex-shrink: 0;
+    text-transform: uppercase;
+    box-shadow: 0 2px 6px rgba(8, 145, 178, 0.3);
+}
+.tech-details {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.tech-name {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+.tech-role {
+    font-size: 0.58rem;
+    font-weight: 800;
+    color: var(--cyan);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.tech-empty {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    font-style: italic;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: var(--bg-body);
+}
 
 /* STATUS BADGE */
 .status-badge {
@@ -486,6 +594,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .status-badge.danger { background: var(--danger-bg); color: var(--danger); }
 .status-badge.info { background: var(--primary-bg); color: var(--primary); }
 .status-badge.purple { background: var(--purple-bg); color: var(--purple); }
+.status-badge.teal { background: var(--teal-bg); color: var(--teal); }
 
 /* ACTION BUTTON — VIEW ONLY */
 .action-group { display: flex; gap: 4px; align-items: center; justify-content: center; }
@@ -578,13 +687,16 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     .patient-avatar-lg { width: 58px; height: 58px; font-size: 1.6rem; }
     .patient-name-lg { font-size: 1.1rem; }
     .visit-header { padding: 12px 14px; }
+    .tech-avatar { width: 28px; height: 28px; font-size: 0.65rem; }
+    .tech-name { font-size: 0.7rem; }
+    .scroll-btn-header { width: 28px; height: 28px; font-size: 0.7rem; }
 }
 @media (max-width: 480px) {
     .stats-grid-4 { grid-template-columns: 1fr; }
 }
 
 @media print {
-    .btn-header, .btn-act { display: none !important; }
+    .btn-header, .btn-act, .scroll-buttons-group { display: none !important; }
     .page-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .view-only-banner { display: none !important; }
 }
@@ -711,11 +823,12 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 
     <!-- VISITS -->
     <?php if (count($visits_array) > 0): ?>
-        <?php foreach ($visits_array as $visit): 
+        <?php foreach ($visits_array as $visit_index => $visit): 
             $vid = $visit['visit_id'];
             $visit_tests = $visit['tests'];
             $test_count = count($visit_tests);
             $visit_total = $visit['total_amount'];
+            $wrapper_id = 'visitTable_' . $visit_index;
         ?>
             <div class="visit-card">
                 <div class="visit-header">
@@ -743,10 +856,24 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                             <i class="fas fa-money-bill-wave"></i>
                             <span class="num"><?= $currency ?> <?= number_format($visit_total, 0) ?></span>
                         </span>
+                        
+                        <!-- ✅ SCROLL ARROW BUTTONS -->
+                        <div class="scroll-buttons-group">
+                            <button type="button" class="scroll-btn-header" 
+                                    onclick="scrollVisitTable('<?= $wrapper_id ?>', 'left')" 
+                                    title="Scroll Left">
+                                <i class="fas fa-chevron-left"></i>
+                            </button>
+                            <button type="button" class="scroll-btn-header" 
+                                    onclick="scrollVisitTable('<?= $wrapper_id ?>', 'right')" 
+                                    title="Scroll Right">
+                                <i class="fas fa-chevron-right"></i>
+                            </button>
+                        </div>
                     </div>
                 </div>
                 
-                <div class="table-wrapper">
+                <div class="table-wrapper" id="<?= $wrapper_id ?>">
                     <table class="data-table">
                         <thead>
                             <tr>
@@ -755,6 +882,8 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                 <th><i class="fas fa-tag"></i> Type</th>
                                 <th><i class="fas fa-vial"></i> Sample</th>
                                 <th><i class="fas fa-file-medical"></i> Result</th>
+                                <th><i class="fas fa-comment-medical"></i> Interpretation</th>
+                                <th><i class="fas fa-user-flask"></i> Lab Technician</th>
                                 <th style="text-align:right;"><i class="fas fa-money-bill-wave"></i> Price</th>
                                 <th style="text-align:center;"><i class="fas fa-info-circle"></i> Status</th>
                                 <th style="text-align:center;"><i class="fas fa-eye"></i> View</th>
@@ -763,6 +892,27 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                         <tbody>
                             <?php $ti = 1; foreach ($visit_tests as $test): 
                                 $badge = getStatusBadge($test['status']);
+                                
+                                // ✅ Lab Technician Info - from lab_technician_id
+                                $tech_name = $test['technician_name'] ?? '';
+                                $tech_role = $test['technician_role'] ?? '';
+                                $tech_initials = '';
+                                if (!empty($tech_name)) {
+                                    $name_parts = explode(' ', trim($tech_name));
+                                    $tech_initials = count($name_parts) >= 2 
+                                        ? strtoupper(substr($name_parts[0], 0, 1) . substr($name_parts[1], 0, 1)) 
+                                        : strtoupper(substr($tech_name, 0, 2));
+                                }
+                                
+                                // Fallback: received_by (performed_by) kama technician_name haipo
+                                if (empty($tech_name) && !empty($test['received_by_name'])) {
+                                    $tech_name = $test['received_by_name'];
+                                    $tech_role = $test['received_by_role'] ?? 'Lab Technician';
+                                    $name_parts = explode(' ', trim($tech_name));
+                                    $tech_initials = count($name_parts) >= 2 
+                                        ? strtoupper(substr($name_parts[0], 0, 1) . substr($name_parts[1], 0, 1)) 
+                                        : strtoupper(substr($tech_name, 0, 2));
+                                }
                             ?>
                                 <tr>
                                     <td style="text-align:center;font-weight:700;color:var(--text-secondary);font-family:var(--font-mono);font-size:0.7rem;">
@@ -797,6 +947,35 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                         <?php else: ?>
                                             <span style="color:var(--text-secondary);font-style:italic;font-size:0.7rem;">
                                                 Waiting...
+                                            </span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td style="max-width:180px;font-size:0.72rem;color:var(--text-secondary);">
+                                        <?php if (!empty($test['interpretation'])): ?>
+                                            <span style="font-weight:600;">
+                                                <?= htmlspecialchars(substr($test['interpretation'], 0, 40)) ?>
+                                                <?= strlen($test['interpretation']) > 40 ? '...' : '' ?>
+                                            </span>
+                                        <?php else: ?>
+                                            <span style="color:var(--text-muted);font-style:italic;">—</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <!-- ✅ LAB TECHNICIAN COLUMN -->
+                                    <td>
+                                        <?php if (!empty($tech_name)): ?>
+                                            <div class="tech-info">
+                                                <div class="tech-avatar"><?= htmlspecialchars($tech_initials) ?></div>
+                                                <div class="tech-details">
+                                                    <span class="tech-name"><?= htmlspecialchars($tech_name) ?></span>
+                                                    <span class="tech-role">
+                                                        <i class="fas fa-user-flask"></i>
+                                                        <?= htmlspecialchars($tech_role ?: 'Lab Technician') ?>
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        <?php else: ?>
+                                            <span class="tech-empty">
+                                                <i class="fas fa-user-slash"></i> Not assigned
                                             </span>
                                         <?php endif; ?>
                                     </td>
@@ -835,12 +1014,25 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 </main>
 
 <script>
+// ================================================================
+// ✅ SCROLL FUNCTION - Kila visit table ina scroll yake
+// ================================================================
+function scrollVisitTable(wrapperId, direction) {
+    var wrapper = document.getElementById(wrapperId);
+    if (!wrapper) return;
+    
+    var amount = 300; // pixels za kusogeza
+    wrapper.scrollBy({
+        left: direction === 'left' ? -amount : amount,
+        behavior: 'smooth'
+    });
+}
+
 console.log('%c🔍 Audit - Patient Lab Tests (VIEW ONLY)', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ Same as admin/audit/patient_lab_tests.php', 'font-size:12px;color:#34D399;');
-console.log('%c❌ NO Edit All button', 'font-size:12px;color:#DC2626;font-weight:bold;');
-console.log('%c❌ NO Add Test button', 'font-size:12px;color:#DC2626;font-weight:bold;');
-console.log('%c❌ NO Edit button per test', 'font-size:12px;color:#DC2626;font-weight:bold;');
-console.log('%c❌ NO Delete button per test', 'font-size:12px;color:#DC2626;font-weight:bold;');
+console.log('%c✅ Arrow <> buttons kwenye kila visit table header', 'font-size:12px;color:#0891B2;font-weight:bold;');
+console.log('%c✅ Lab Technician column per test (lab_technician_id)', 'font-size:12px;color:#0891B2;font-weight:bold;');
+console.log('%c✅ Interpretation column', 'font-size:12px;color:#7C3AED;font-weight:bold;');
+console.log('%c❌ NO Edit/Add/Delete buttons', 'font-size:12px;color:#DC2626;font-weight:bold;');
 console.log('%c✅ Only View button per test', 'font-size:12px;color:#34D399;font-weight:bold;');
 console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:12px;color:#34D399;');
 console.log('%c🏥 Branch: <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?>', 'font-size:12px;color:#34D399;');

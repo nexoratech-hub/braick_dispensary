@@ -3,9 +3,10 @@
 // FILE: frontend/pages/admin/receptions.php
 // SUPER ADMIN - VIEW ALL RECEPTIONS (BRANCHES)
 // BRAICK DISPENSARY - BLUE THEME
-// ✅ Uses SHARED admin_header.php & admin_sidebar.php
-// ✅ Page-specific CSS only (no duplicates)
-// ✅ Dark mode via header toggle
+// ✅ V3: View Reception + Edit Reception
+// ✅ V3: Stats Cards 3 juu, 3 chini (grid 3x2)
+// ✅ V3: CSS nzuri kwa stats cards
+// ✅ V3: Bila Dashboard button, bila Total Revenue
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -47,50 +48,36 @@ try {
     die("Database connection error: " . $e->getMessage());
 }
 
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
+// UNREAD NOTIFICATIONS
 $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
     $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
+} catch (Exception $e) { $unread_notifications = 0; }
 
-// ================================================================
-// GET FILTER PARAMETERS
-// ================================================================
+// FILTERS
 $selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? $_GET['status'] : 'all';
 
-// Redirect if error parameters exist
 if (isset($_GET['error']) || isset($_GET['invalid_id'])) {
     $clean_url = $_SERVER['PHP_SELF'] . '?branch=all';
-    if (!empty($search)) {
-        $clean_url .= '&search=' . urlencode($search);
-    }
-    if ($status_filter !== 'all') {
-        $clean_url .= '&status=' . urlencode($status_filter);
-    }
+    if (!empty($search)) $clean_url .= '&search=' . urlencode($search);
+    if ($status_filter !== 'all') $clean_url .= '&status=' . urlencode($status_filter);
     header('Location: ' . $clean_url);
     exit;
 }
 
-// Validate branch ID
 $branch_id_for_query = null;
 $error_msg = '';
 
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     $branch_id_for_query = (int)$selected_branch_id;
-    
     try {
         $stmt = $db->prepare("SELECT id, status FROM branches WHERE id = ?");
         $stmt->execute([$branch_id_for_query]);
         $branch_exists = $stmt->fetch(PDO::FETCH_ASSOC);
-        
         if (!$branch_exists) {
             $error_msg = 'Branch not found. Showing all branches.';
             $selected_branch_id = 'all';
@@ -103,9 +90,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     }
 }
 
-// ================================================================
 // BUILD QUERY
-// ================================================================
 $query = "
     SELECT 
         b.id, b.name, b.location, b.phone, b.email, b.logo, b.status, b.created_at, b.updated_at,
@@ -113,12 +98,13 @@ $query = "
         COALESCE((SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception'), 0) as total_receptionists,
         COALESCE((SELECT COUNT(*) FROM patients WHERE branch_id = b.id), 0) as total_patients,
         COALESCE((SELECT COUNT(*) FROM patients WHERE branch_id = b.id AND DATE(created_at) = CURDATE()), 0) as today_patients,
+        COALESCE((SELECT COUNT(*) FROM patients WHERE branch_id = b.id AND assigned_doctor_id IS NOT NULL), 0) as assigned_patients,
+        COALESCE((SELECT COUNT(*) FROM visits WHERE branch_id = b.id), 0) as total_visits,
         COALESCE((SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'pending'), 0) as pending_visits,
+        COALESCE((SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND DATE(visit_date) = CURDATE()), 0) as today_visits,
         COALESCE((SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'scheduled'), 0) as scheduled_appointments,
         COALESCE((SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'confirmed'), 0) as confirmed_appointments,
-        COALESCE((SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND DATE(visit_date) = CURDATE()), 0) as today_visits,
-        COALESCE((SELECT COUNT(*) FROM appointments WHERE branch_id = b.id), 0) as total_appointments,
-        COALESCE((SELECT COALESCE(SUM(total_amount), 0) FROM bills WHERE branch_id = b.id AND status = 'paid'), 0) as total_revenue
+        COALESCE((SELECT COUNT(*) FROM appointments WHERE branch_id = b.id), 0) as total_appointments
     FROM branches b
     WHERE 1=1
 ";
@@ -129,12 +115,10 @@ if ($branch_id_for_query !== null && is_numeric($branch_id_for_query)) {
     $query .= " AND b.id = ?";
     $params[] = $branch_id_for_query;
 }
-
 if ($status_filter !== 'all' && in_array($status_filter, ['active', 'inactive'])) {
     $query .= " AND b.status = ?";
     $params[] = $status_filter;
 }
-
 if (!empty($search)) {
     $query .= " AND (b.name LIKE ? OR b.location LIKE ? OR b.phone LIKE ? OR b.email LIKE ?)";
     $search_term = "%$search%";
@@ -143,7 +127,6 @@ if (!empty($search)) {
     $params[] = $search_term;
     $params[] = $search_term;
 }
-
 $query .= " ORDER BY b.name ASC";
 
 $receptions = [];
@@ -156,51 +139,41 @@ try {
     $receptions = [];
 }
 
-// GET BRANCHES FOR FILTER
+// BRANCHES FOR FILTER
 $branches = [];
 try {
     $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $branches = [];
-}
+} catch (Exception $e) { $branches = []; }
 
-// GET SUMMARY STATISTICS
+// SUMMARY STATS
 $total_receptions = count($receptions);
 $total_patients = 0;
+$total_visits = 0;
 $total_appointments = 0;
 $pending_visits = 0;
 $today_visits = 0;
-$total_revenue = 0;
+$assigned_patients = 0;
 
 foreach ($receptions as $r) {
     $total_patients += ($r['total_patients'] ?? 0);
+    $total_visits += ($r['total_visits'] ?? 0);
     $total_appointments += ($r['total_appointments'] ?? 0);
     $pending_visits += ($r['pending_visits'] ?? 0);
     $today_visits += ($r['today_visits'] ?? 0);
-    $total_revenue += ($r['total_revenue'] ?? 0);
+    $assigned_patients += ($r['assigned_patients'] ?? 0);
 }
 
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
-
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
 include_once '../../components/admin_header.php';
 include_once '../../components/admin_sidebar.php';
 ?>
 
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC CSS -->
-<!-- ================================================================ -->
 <style>
-    /* ================================================================
-       PAGE VARIABLES
-       ================================================================ */
     :root {
         --rec-primary: #0B5ED7;
         --rec-primary-dark: #0A4CA8;
@@ -217,6 +190,7 @@ include_once '../../components/admin_sidebar.php';
         --rec-purple: #7C3AED;
         --rec-purple-bg: #EDE9FE;
         --rec-teal: #0D9488;
+        --rec-teal-bg: #CCFBF1;
         --rec-gray-50: #F8FAFC;
         --rec-gray-100: #F1F5F9;
         --rec-gray-200: #E2E8F0;
@@ -238,7 +212,6 @@ include_once '../../components/admin_sidebar.php';
         --rec-shadow: 0 1px 3px rgba(0,0,0,0.08);
         --rec-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
         --rec-shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-        --rec-table-hover: #F8FAFC;
     }
 
     [data-theme="dark"] {
@@ -250,24 +223,12 @@ include_once '../../components/admin_sidebar.php';
         --rec-primary-bg: #1E3A5F;
         --rec-shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
         --rec-shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-        --rec-table-hover: #1E293B;
     }
 
-    /* ================================================================
-       DARK MODE - PAGE YOTE
-       ================================================================ */
-    html[data-theme="dark"] body {
-        background: #0F172A !important;
-    }
+    html[data-theme="dark"] body { background: #0F172A !important; }
+    html[data-theme="dark"] .main-content { background: #0F172A !important; color: #F1F5F9; }
 
-    html[data-theme="dark"] .main-content {
-        background: #0F172A !important;
-        color: #F1F5F9;
-    }
-
-    /* ================================================================
-       PAGE HEADER
-       ================================================================ */
+    /* PAGE HEADER */
     .page-header-rec {
         background: var(--rec-primary-gradient-strong);
         border-radius: var(--rec-radius-lg);
@@ -282,31 +243,24 @@ include_once '../../components/admin_sidebar.php';
         position: relative;
         overflow: hidden;
     }
-
     .page-header-rec::before {
         content: '';
         position: absolute;
-        top: -60%;
-        right: -10%;
-        width: 400px;
-        height: 400px;
+        top: -60%; right: -10%;
+        width: 400px; height: 400px;
         background: rgba(255,255,255,0.05);
         border-radius: 50%;
         pointer-events: none;
     }
-
     .page-header-rec::after {
         content: '';
         position: absolute;
-        bottom: -40%;
-        left: -5%;
-        width: 300px;
-        height: 300px;
+        bottom: -40%; left: -5%;
+        width: 300px; height: 300px;
         background: rgba(255,255,255,0.03);
         border-radius: 50%;
         pointer-events: none;
     }
-
     .page-header-rec .page-title-rec {
         color: white;
         font-size: 1.8rem;
@@ -319,12 +273,7 @@ include_once '../../components/admin_sidebar.php';
         z-index: 1;
         margin: 0;
     }
-
-    .page-header-rec .page-title-rec i {
-        font-size: 2rem;
-        opacity: 0.9;
-    }
-
+    .page-header-rec .page-title-rec i { font-size: 2rem; opacity: 0.9; }
     .page-header-rec .page-subtitle-rec {
         color: rgba(255,255,255,0.85);
         font-size: 0.95rem;
@@ -336,12 +285,7 @@ include_once '../../components/admin_sidebar.php';
         z-index: 1;
         margin-top: 6px;
     }
-
-    .page-header-rec .page-subtitle-rec strong {
-        color: white;
-        font-weight: 600;
-    }
-
+    .page-header-rec .page-subtitle-rec strong { color: white; font-weight: 600; }
     .page-header-rec .role-badge-display-rec {
         background: rgba(255,255,255,0.2);
         color: white;
@@ -353,7 +297,6 @@ include_once '../../components/admin_sidebar.php';
         letter-spacing: 0.05em;
         backdrop-filter: blur(4px);
     }
-
     .page-header-rec .header-badge-rec {
         background: rgba(255,255,255,0.12);
         color: white;
@@ -368,15 +311,12 @@ include_once '../../components/admin_sidebar.php';
         border: 1px solid rgba(255,255,255,0.1);
         transition: all 0.3s ease;
     }
-
     .page-header-rec .header-badge-rec:hover {
         background: rgba(255,255,255,0.2);
         transform: translateY(-1px);
     }
 
-    /* ================================================================
-       ALERT
-       ================================================================ */
+    /* ALERT */
     .alert-rec {
         padding: 14px 20px;
         border-radius: var(--rec-radius);
@@ -388,185 +328,143 @@ include_once '../../components/admin_sidebar.php';
         border: 1px solid transparent;
         animation: slideDown 0.3s ease;
     }
-
     @keyframes slideDown {
         from { opacity: 0; transform: translateY(-10px); }
         to { opacity: 1; transform: translateY(0); }
     }
-
     .alert-warning-rec {
         background: var(--rec-warning-bg);
         color: var(--rec-warning);
         border-color: var(--rec-warning);
     }
-
-    [data-theme="dark"] .alert-warning-rec {
-        background: #3D2E0A;
-        color: #FBBF24;
-    }
+    [data-theme="dark"] .alert-warning-rec { background: #3D2E0A; color: #FBBF24; }
 
     /* ================================================================
-       STATS ROW
+       STATS GRID - 3 JUU, 3 CHINI (GRID 3x2)
        ================================================================ */
-    .stats-row-rec {
+    .stats-grid-rec {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-        gap: 16px;
-        margin-bottom: 24px;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 18px;
+        margin-bottom: 28px;
     }
 
     .stat-card-rec {
         background: var(--rec-bg-card);
-        border-radius: var(--rec-radius);
-        padding: 16px 20px;
+        border-radius: 16px;
+        padding: 22px 24px;
         border: 2px solid var(--rec-border-color);
-        box-shadow: var(--rec-shadow-sm);
-        transition: all 0.3s ease;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
         position: relative;
         overflow: hidden;
+        display: flex;
+        align-items: center;
+        gap: 18px;
     }
 
     .stat-card-rec::before {
         content: '';
         position: absolute;
-        top: 0;
-        left: 0;
-        width: 5px;
-        height: 100%;
-        background: var(--rec-primary-gradient-strong);
-        border-radius: 0 3px 3px 0;
-        opacity: 0.8;
+        top: 0; left: 0;
+        width: 6px; height: 100%;
+        border-radius: 0 4px 4px 0;
+        transition: all 0.3s ease;
     }
 
     .stat-card-rec:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 12px 35px rgba(11, 94, 215, 0.15);
         border-color: var(--rec-primary);
-        transform: translateY(-4px);
-        box-shadow: 0 8px 25px rgba(11, 94, 215, 0.15);
     }
+    .stat-card-rec:hover::before { width: 8px; }
 
-    .stat-card-rec:hover::before {
-        opacity: 1;
-        width: 6px;
-    }
+    /* COLORS */
+    .stat-card-rec.blue::before { background: linear-gradient(180deg, #0B5ED7, #3B82F6); }
+    .stat-card-rec.blue .stat-icon-rec { background: linear-gradient(135deg, #EFF6FF, #DBEAFE); color: #0B5ED7; border-color: rgba(11, 94, 215, 0.2); }
+    .stat-card-rec.blue .stat-value-rec { color: #0B5ED7; }
 
-    .stat-card-rec .stat-icon-wrapper-rec {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 8px;
-    }
+    .stat-card-rec.green::before { background: linear-gradient(180deg, #059669, #34D399); }
+    .stat-card-rec.green .stat-icon-rec { background: linear-gradient(135deg, #ECFDF5, #D1FAE5); color: #059669; border-color: rgba(5, 150, 105, 0.2); }
+    .stat-card-rec.green .stat-value-rec { color: #059669; }
+
+    .stat-card-rec.teal::before { background: linear-gradient(180deg, #0D9488, #14B8A6); }
+    .stat-card-rec.teal .stat-icon-rec { background: linear-gradient(135deg, #F0FDFA, #CCFBF1); color: #0D9488; border-color: rgba(13, 148, 136, 0.2); }
+    .stat-card-rec.teal .stat-value-rec { color: #0D9488; }
+
+    .stat-card-rec.purple::before { background: linear-gradient(180deg, #7C3AED, #A78BFA); }
+    .stat-card-rec.purple .stat-icon-rec { background: linear-gradient(135deg, #F5F3FF, #EDE9FE); color: #7C3AED; border-color: rgba(124, 58, 237, 0.2); }
+    .stat-card-rec.purple .stat-value-rec { color: #7C3AED; }
+
+    .stat-card-rec.orange::before { background: linear-gradient(180deg, #D97706, #F59E0B); }
+    .stat-card-rec.orange .stat-icon-rec { background: linear-gradient(135deg, #FFFBEB, #FEF3C7); color: #D97706; border-color: rgba(217, 119, 6, 0.2); }
+    .stat-card-rec.orange .stat-value-rec { color: #D97706; }
+
+    .stat-card-rec.indigo::before { background: linear-gradient(180deg, #4F46E5, #818CF8); }
+    .stat-card-rec.indigo .stat-icon-rec { background: linear-gradient(135deg, #EEF2FF, #E0E7FF); color: #4F46E5; border-color: rgba(79, 70, 229, 0.2); }
+    .stat-card-rec.indigo .stat-value-rec { color: #4F46E5; }
+
+    /* DARK MODE ICONS */
+    [data-theme="dark"] .stat-card-rec.blue .stat-icon-rec { background: #1E3A5F; color: #3B82F6; }
+    [data-theme="dark"] .stat-card-rec.green .stat-icon-rec { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .stat-card-rec.teal .stat-icon-rec { background: #0F3D3D; color: #5EEAD4; }
+    [data-theme="dark"] .stat-card-rec.purple .stat-icon-rec { background: #2D1B4E; color: #A78BFA; }
+    [data-theme="dark"] .stat-card-rec.orange .stat-icon-rec { background: #3D2E0A; color: #FBBF24; }
+    [data-theme="dark"] .stat-card-rec.indigo .stat-icon-rec { background: #1E1B4B; color: #818CF8; }
 
     .stat-card-rec .stat-icon-rec {
-        width: 44px;
-        height: 44px;
-        border-radius: 10px;
+        width: 58px; height: 58px;
+        border-radius: 14px;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 1.15rem;
+        font-size: 1.5rem;
         flex-shrink: 0;
         border: 2px solid transparent;
         transition: all 0.3s ease;
     }
 
-    .stat-card-rec:hover .stat-icon-rec {
-        transform: scale(1.05);
-    }
+    .stat-card-rec:hover .stat-icon-rec { transform: scale(1.08) rotate(-5deg); }
 
-    .stat-card-rec .stat-icon-rec.blue { 
-        background: var(--rec-primary-bg); 
-        color: var(--rec-primary);
-        border-color: rgba(11, 94, 215, 0.2);
-    }
-    .stat-card-rec .stat-icon-rec.green { 
-        background: #ECFDF5; 
-        color: #059669;
-        border-color: rgba(5, 150, 105, 0.2);
-    }
-    .stat-card-rec .stat-icon-rec.orange { 
-        background: #FFFBEB; 
-        color: #F59E0B;
-        border-color: rgba(245, 158, 11, 0.2);
-    }
-    .stat-card-rec .stat-icon-rec.purple { 
-        background: #F5F3FF; 
-        color: #7C3AED;
-        border-color: rgba(124, 58, 237, 0.2);
-    }
-    .stat-card-rec .stat-icon-rec.teal { 
-        background: #ECFDF5; 
-        color: #0D9488;
-        border-color: rgba(13, 148, 136, 0.2);
-    }
-    .stat-card-rec .stat-icon-rec.red { 
-        background: #FEF2F2; 
-        color: #DC2626;
-        border-color: rgba(220, 38, 38, 0.2);
-    }
-
-    [data-theme="dark"] .stat-card-rec .stat-icon-rec.blue { 
-        background: #1E3A5F; 
-        color: #3B82F6;
-    }
-    [data-theme="dark"] .stat-card-rec .stat-icon-rec.green { 
-        background: #1A3A2A; 
-        color: #34D399;
-    }
-    [data-theme="dark"] .stat-card-rec .stat-icon-rec.orange { 
-        background: #3D2E0A; 
-        color: #FBBF24;
-    }
-    [data-theme="dark"] .stat-card-rec .stat-icon-rec.purple { 
-        background: #2D1B4E; 
-        color: #A78BFA;
-    }
-    [data-theme="dark"] .stat-card-rec .stat-icon-rec.teal { 
-        background: #0F3D3D; 
-        color: #5EEAD4;
+    .stat-card-rec .stat-content-rec {
+        flex: 1;
+        min-width: 0;
     }
 
     .stat-card-rec .stat-label-rec {
-        font-size: 0.6rem;
+        font-size: 0.68rem;
         color: var(--rec-text-secondary);
         font-weight: 700;
         text-transform: uppercase;
-        letter-spacing: 0.06em;
-        margin: 0 0 2px 0;
+        letter-spacing: 0.08em;
+        margin: 0 0 4px 0;
     }
 
     .stat-card-rec .stat-value-rec {
-        font-size: 1.3rem;
-        font-weight: 800;
+        font-size: 1.75rem;
+        font-weight: 900;
         color: var(--rec-text-primary);
         margin: 0;
-        line-height: 1.2;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
     }
 
-    .stat-card-rec .stat-value-rec.blue { color: var(--rec-primary); }
-    .stat-card-rec .stat-value-rec.green { color: #059669; }
-    .stat-card-rec .stat-value-rec.orange { color: #F59E0B; }
-    .stat-card-rec .stat-value-rec.purple { color: #7C3AED; }
-    .stat-card-rec .stat-value-rec.teal { color: #0D9488; }
-
-    .stat-card-rec .stat-change-rec {
-        font-size: 0.6rem;
+    .stat-card-rec .stat-sub-rec {
+        font-size: 0.62rem;
+        color: var(--rec-text-secondary);
         font-weight: 600;
         margin-top: 4px;
-        display: inline-flex;
+        display: flex;
         align-items: center;
-        gap: 3px;
-        padding: 2px 8px;
-        border-radius: 12px;
-        background: var(--rec-bg-body);
+        gap: 4px;
     }
 
-    .stat-card-rec .stat-change-rec.up { color: #059669; }
-    .stat-card-rec .stat-change-rec.down { color: #DC2626; }
-    .stat-card-rec .stat-change-rec.neutral { color: var(--rec-text-secondary); }
+    .stat-card-rec .stat-sub-rec .up { color: #059669; }
+    .stat-card-rec .stat-sub-rec .warn { color: #D97706; }
+    .stat-card-rec .stat-sub-rec .neutral { color: var(--rec-text-secondary); }
 
-    /* ================================================================
-       FILTER BAR
-       ================================================================ */
+    /* FILTER BAR */
     .filter-bar-rec {
         background: var(--rec-bg-card);
         border-radius: var(--rec-radius);
@@ -581,17 +479,13 @@ include_once '../../components/admin_sidebar.php';
         position: relative;
         overflow: hidden;
     }
-
     .filter-bar-rec::before {
         content: '';
         position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
+        top: 0; left: 0; right: 0;
         height: 4px;
         background: var(--rec-primary-gradient-strong);
     }
-
     .filter-bar-rec .filter-label-rec {
         font-size: 0.7rem;
         font-weight: 700;
@@ -599,7 +493,6 @@ include_once '../../components/admin_sidebar.php';
         text-transform: uppercase;
         letter-spacing: 0.06em;
     }
-
     .filter-bar-rec select,
     .filter-bar-rec input {
         background: var(--rec-bg-body);
@@ -612,13 +505,11 @@ include_once '../../components/admin_sidebar.php';
         transition: all 0.3s;
         font-family: inherit;
     }
-
     .filter-bar-rec select:focus,
     .filter-bar-rec input:focus {
         border-color: var(--rec-primary);
         box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.15);
     }
-
     .filter-bar-rec .btn-filter-rec {
         background: var(--rec-primary-gradient-strong);
         color: white;
@@ -631,12 +522,10 @@ include_once '../../components/admin_sidebar.php';
         transition: all 0.3s;
         font-family: inherit;
     }
-
     .filter-bar-rec .btn-filter-rec:hover {
         transform: scale(1.03);
         box-shadow: 0 4px 16px rgba(10, 76, 168, 0.35);
     }
-
     .filter-bar-rec .btn-reset-rec {
         background: transparent;
         color: var(--rec-text-secondary);
@@ -649,21 +538,17 @@ include_once '../../components/admin_sidebar.php';
         transition: all 0.3s;
         text-decoration: none;
     }
-
     .filter-bar-rec .btn-reset-rec:hover {
         border-color: var(--rec-primary);
         color: var(--rec-primary);
     }
 
-    /* ================================================================
-       RECEPTION CARDS
-       ================================================================ */
+    /* RECEPTION CARDS */
     .reception-grid-rec {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
         gap: 20px;
     }
-
     .reception-card-rec {
         background: var(--rec-bg-card);
         border-radius: var(--rec-radius-lg);
@@ -673,13 +558,11 @@ include_once '../../components/admin_sidebar.php';
         box-shadow: var(--rec-shadow-sm);
         position: relative;
     }
-
     .reception-card-rec:hover {
         transform: translateY(-5px);
         box-shadow: 0 12px 35px rgba(11, 94, 215, 0.15);
         border-color: var(--rec-primary);
     }
-
     .reception-card-rec .card-top-rec {
         padding: 16px 18px 12px 18px;
         border-bottom: 2px solid var(--rec-border-color);
@@ -690,19 +573,15 @@ include_once '../../components/admin_sidebar.php';
         position: relative;
         overflow: hidden;
     }
-
     .reception-card-rec .card-top-rec::after {
         content: '';
         position: absolute;
-        top: -50%;
-        right: -20%;
-        width: 200px;
-        height: 200px;
+        top: -50%; right: -20%;
+        width: 200px; height: 200px;
         background: rgba(255,255,255,0.05);
         border-radius: 50%;
         pointer-events: none;
     }
-
     .reception-card-rec .card-top-rec .name-rec {
         font-size: 1.05rem;
         font-weight: 800;
@@ -710,12 +589,10 @@ include_once '../../components/admin_sidebar.php';
         position: relative;
         z-index: 1;
     }
-
     .reception-card-rec .card-top-rec .name-rec i {
         color: rgba(255,255,255,0.85);
         margin-right: 8px;
     }
-
     .reception-card-rec .card-top-rec .location-text-rec {
         font-size: 0.7rem;
         color: rgba(255,255,255,0.75);
@@ -726,12 +603,10 @@ include_once '../../components/admin_sidebar.php';
         position: relative;
         z-index: 1;
     }
-
     .reception-card-rec .card-top-rec .location-text-rec i {
         color: rgba(255,255,255,0.6);
         font-size: 0.65rem;
     }
-
     .reception-card-rec .card-top-rec .status-badge-rec {
         padding: 4px 14px;
         border-radius: 20px;
@@ -743,23 +618,17 @@ include_once '../../components/admin_sidebar.php';
         z-index: 1;
         backdrop-filter: blur(4px);
     }
-
     .reception-card-rec .card-top-rec .status-badge-rec.active {
         background: rgba(255,255,255,0.2);
         color: white;
         border: 1px solid rgba(255,255,255,0.3);
     }
-
     .reception-card-rec .card-top-rec .status-badge-rec.inactive {
         background: rgba(220, 38, 38, 0.3);
         color: #FCA5A5;
         border: 1px solid rgba(220, 38, 38, 0.3);
     }
-
-    .reception-card-rec .card-body-rec {
-        padding: 14px 18px 16px 18px;
-    }
-
+    .reception-card-rec .card-body-rec { padding: 14px 18px 16px 18px; }
     .reception-card-rec .card-body-rec .info-row-rec {
         display: flex;
         align-items: center;
@@ -768,55 +637,43 @@ include_once '../../components/admin_sidebar.php';
         color: var(--rec-text-secondary);
         padding: 4px 0;
     }
-
     .reception-card-rec .card-body-rec .info-row-rec i {
         width: 18px;
         color: var(--rec-primary);
         font-size: 0.75rem;
     }
-
     .reception-card-rec .card-stats-rec {
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: repeat(5, 1fr);
         gap: 4px;
-        padding: 10px 18px;
+        padding: 10px 14px;
         background: var(--rec-bg-body);
         border-top: 2px solid var(--rec-border-color);
         border-bottom: 2px solid var(--rec-border-color);
     }
-
-    [data-theme="dark"] .reception-card-rec .card-stats-rec {
-        background: #0F172A;
-    }
-
+    [data-theme="dark"] .reception-card-rec .card-stats-rec { background: #0F172A; }
     .reception-card-rec .card-stats-rec .stat-item-rec {
         text-align: center;
-        padding: 6px 0;
+        padding: 6px 2px;
         border-radius: 8px;
         transition: all 0.3s ease;
     }
-
     .reception-card-rec .card-stats-rec .stat-item-rec:hover {
         background: var(--rec-primary-bg);
-        transform: scale(1.02);
+        transform: scale(1.05);
     }
-
-    [data-theme="dark"] .reception-card-rec .card-stats-rec .stat-item-rec:hover {
-        background: #1E3A5F;
-    }
-
+    [data-theme="dark"] .reception-card-rec .card-stats-rec .stat-item-rec:hover { background: #1E3A5F; }
     .reception-card-rec .card-stats-rec .stat-item-rec .num-rec {
         font-size: 1rem;
         font-weight: 800;
         color: var(--rec-text-primary);
+        font-family: 'JetBrains Mono', monospace;
     }
-
     .reception-card-rec .card-stats-rec .stat-item-rec .num-rec.blue { color: var(--rec-primary); }
     .reception-card-rec .card-stats-rec .stat-item-rec .num-rec.green { color: #059669; }
     .reception-card-rec .card-stats-rec .stat-item-rec .num-rec.orange { color: #F59E0B; }
     .reception-card-rec .card-stats-rec .stat-item-rec .num-rec.purple { color: #7C3AED; }
     .reception-card-rec .card-stats-rec .stat-item-rec .num-rec.teal { color: #0D9488; }
-
     .reception-card-rec .card-stats-rec .stat-item-rec .label-rec {
         font-size: 0.5rem;
         color: var(--rec-text-secondary);
@@ -824,7 +681,6 @@ include_once '../../components/admin_sidebar.php';
         letter-spacing: 0.04em;
         font-weight: 700;
     }
-
     .reception-card-rec .card-actions-rec {
         padding: 10px 18px;
         display: flex;
@@ -832,11 +688,10 @@ include_once '../../components/admin_sidebar.php';
         justify-content: flex-end;
         flex-wrap: wrap;
     }
-
     .reception-card-rec .card-actions-rec .btn-action-rec {
-        padding: 5px 14px;
+        padding: 6px 16px;
         border-radius: 8px;
-        font-size: 0.65rem;
+        font-size: 0.68rem;
         font-weight: 700;
         text-decoration: none;
         transition: all 0.3s;
@@ -846,21 +701,18 @@ include_once '../../components/admin_sidebar.php';
         cursor: pointer;
         display: inline-flex;
         align-items: center;
-        gap: 4px;
+        gap: 5px;
     }
-
     .reception-card-rec .card-actions-rec .btn-action-rec:hover {
         border-color: var(--rec-primary);
         color: var(--rec-primary);
         transform: translateY(-2px);
     }
-
     .reception-card-rec .card-actions-rec .btn-action-rec.primary {
         background: var(--rec-primary-gradient-strong);
         color: white;
         border-color: var(--rec-primary);
     }
-
     .reception-card-rec .card-actions-rec .btn-action-rec.primary:hover {
         background: var(--rec-primary-dark);
         border-color: var(--rec-primary-dark);
@@ -869,34 +721,25 @@ include_once '../../components/admin_sidebar.php';
         color: white;
     }
 
-    /* ================================================================
-       EMPTY STATE
-       ================================================================ */
+    /* EMPTY STATE */
     .empty-state-rec {
         text-align: center;
         padding: 60px 20px;
         color: var(--rec-text-secondary);
     }
-
     .empty-state-rec i {
         font-size: 4rem;
         color: var(--rec-border-color);
         margin-bottom: 16px;
     }
-
     .empty-state-rec h3 {
         font-size: 1.3rem;
         color: var(--rec-text-primary);
         margin-bottom: 8px;
     }
+    .empty-state-rec p { font-size: 0.9rem; }
 
-    .empty-state-rec p {
-        font-size: 0.9rem;
-    }
-
-    /* ================================================================
-       FOOTER
-       ================================================================ */
+    /* FOOTER */
     .footer-rec {
         padding: 14px 0;
         border-top: 2px solid var(--rec-border-color);
@@ -905,45 +748,42 @@ include_once '../../components/admin_sidebar.php';
         font-size: 0.7rem;
         color: var(--rec-text-secondary);
     }
+    .footer-rec .footer-brand-rec { color: var(--rec-primary); font-weight: 700; }
 
-    .footer-rec .footer-brand-rec {
-        color: var(--rec-primary);
-        font-weight: 700;
-    }
-
-    /* ================================================================
-       ANIMATIONS
-       ================================================================ */
+    /* ANIMATIONS */
     @keyframes fadeInUp {
         from { opacity: 0; transform: translateY(20px); }
         to { opacity: 1; transform: translateY(0); }
     }
-
     .animate-fade-in-up-rec {
         animation: fadeInUp 0.5s ease forwards;
         opacity: 0;
     }
 
-    /* ================================================================
-       RESPONSIVE
-       ================================================================ */
+    /* RESPONSIVE */
+    @media (max-width: 1200px) {
+        .stats-grid-rec { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 900px) {
+        .stats-grid-rec { grid-template-columns: repeat(2, 1fr); }
+    }
     @media (max-width: 768px) {
         .page-header-rec { padding: 16px 18px; }
         .page-header-rec .page-title-rec { font-size: 1.3rem; }
         .reception-grid-rec { grid-template-columns: 1fr; }
-        .stats-row-rec { grid-template-columns: 1fr 1fr; }
+        .stats-grid-rec { grid-template-columns: 1fr 1fr; gap: 12px; }
+        .stat-card-rec { padding: 16px 18px; gap: 12px; }
+        .stat-card-rec .stat-icon-rec { width: 48px; height: 48px; font-size: 1.2rem; }
+        .stat-card-rec .stat-value-rec { font-size: 1.4rem; }
         .filter-bar-rec { flex-direction: column; align-items: stretch; }
+        .reception-card-rec .card-stats-rec { grid-template-columns: repeat(3, 1fr); }
     }
-
     @media (max-width: 480px) {
-        .stats-row-rec { grid-template-columns: 1fr; }
+        .stats-grid-rec { grid-template-columns: 1fr; }
         .page-header-rec { flex-direction: column; align-items: flex-start !important; }
         .reception-card-rec .card-stats-rec { grid-template-columns: repeat(2, 1fr); }
     }
 
-    /* ================================================================
-       PRINT
-       ================================================================ */
     @media print {
         .btn-filter-rec, .btn-reset-rec, .filter-bar-rec, .card-actions-rec { display: none !important; }
         .reception-card-rec { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
@@ -955,9 +795,6 @@ include_once '../../components/admin_sidebar.php';
     }
 </style>
 
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
     <!-- Page Header -->
@@ -975,13 +812,16 @@ include_once '../../components/admin_sidebar.php';
                     <i class="fas fa-users"></i> <?= number_format($total_patients) ?> Patients
                 </span>
                 <span class="header-badge-rec">
+                    <i class="fas fa-user-check"></i> <?= number_format($assigned_patients) ?> Assigned
+                </span>
+                <span class="header-badge-rec">
+                    <i class="fas fa-clipboard-list"></i> <?= number_format($total_visits) ?> Visits
+                </span>
+                <span class="header-badge-rec">
                     <i class="fas fa-calendar-check"></i> <?= number_format($total_appointments) ?> Appointments
                 </span>
                 <span class="header-badge-rec">
                     <i class="fas fa-clock"></i> <?= number_format($pending_visits) ?> Pending
-                </span>
-                <span class="header-badge-rec">
-                    <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($total_revenue, 0) ?> Revenue
                 </span>
             </p>
         </div>
@@ -996,72 +836,72 @@ include_once '../../components/admin_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS ROW -->
+    <!-- STATS GRID - 3 JUU, 3 CHINI -->
     <!-- ================================================================ -->
-    <div class="stats-row-rec animate-fade-in-up-rec" style="animation-delay:0.05s;">
-        <div class="stat-card-rec">
-            <div class="stat-icon-wrapper-rec">
-                <div class="stat-icon-rec blue"><i class="fas fa-headset"></i></div>
-                <span class="stat-change-rec up"><i class="fas fa-arrow-up"></i> +<?= $total_receptions ?></span>
+    <div class="stats-grid-rec animate-fade-in-up-rec" style="animation-delay:0.05s;">
+
+        <!-- ROW 1 -->
+        <div class="stat-card-rec blue">
+            <div class="stat-icon-rec"><i class="fas fa-headset"></i></div>
+            <div class="stat-content-rec">
+                <p class="stat-label-rec">Total Receptions</p>
+                <p class="stat-value-rec"><?= $total_receptions ?></p>
+                <p class="stat-sub-rec"><i class="fas fa-check-circle up"></i> All active branches</p>
             </div>
-            <p class="stat-label-rec">Total Receptions</p>
-            <p class="stat-value-rec blue"><?= $total_receptions ?></p>
         </div>
-        
-        <div class="stat-card-rec">
-            <div class="stat-icon-wrapper-rec">
-                <div class="stat-icon-rec green"><i class="fas fa-users"></i></div>
-                <span class="stat-change-rec up"><i class="fas fa-arrow-up"></i> Active</span>
+
+        <div class="stat-card-rec green">
+            <div class="stat-icon-rec"><i class="fas fa-users"></i></div>
+            <div class="stat-content-rec">
+                <p class="stat-label-rec">Total Patients</p>
+                <p class="stat-value-rec"><?= number_format($total_patients) ?></p>
+                <p class="stat-sub-rec"><i class="fas fa-arrow-up up"></i> Registered patients</p>
             </div>
-            <p class="stat-label-rec">Total Patients</p>
-            <p class="stat-value-rec green"><?= number_format($total_patients) ?></p>
         </div>
-        
-        <div class="stat-card-rec">
-            <div class="stat-icon-wrapper-rec">
-                <div class="stat-icon-rec purple"><i class="fas fa-calendar-check"></i></div>
-                <span class="stat-change-rec neutral"><i class="fas fa-minus"></i> All</span>
+
+        <div class="stat-card-rec teal">
+            <div class="stat-icon-rec"><i class="fas fa-user-check"></i></div>
+            <div class="stat-content-rec">
+                <p class="stat-label-rec">Assigned Patients</p>
+                <p class="stat-value-rec"><?= number_format($assigned_patients) ?></p>
+                <p class="stat-sub-rec"><i class="fas fa-user-md up"></i> With doctor assigned</p>
             </div>
-            <p class="stat-label-rec">Total Appointments</p>
-            <p class="stat-value-rec purple"><?= number_format($total_appointments) ?></p>
         </div>
-        
-        <div class="stat-card-rec">
-            <div class="stat-icon-wrapper-rec">
-                <div class="stat-icon-rec <?= $pending_visits > 0 ? 'orange' : 'green' ?>">
-                    <i class="fas fa-clock"></i>
-                </div>
-                <span class="stat-change-rec <?= $pending_visits > 0 ? 'down' : 'up' ?>">
+
+        <!-- ROW 2 -->
+        <div class="stat-card-rec purple">
+            <div class="stat-icon-rec"><i class="fas fa-clipboard-list"></i></div>
+            <div class="stat-content-rec">
+                <p class="stat-label-rec">Total Visits</p>
+                <p class="stat-value-rec"><?= number_format($total_visits) ?></p>
+                <p class="stat-sub-rec"><i class="fas fa-calendar neutral"></i> All time visits</p>
+            </div>
+        </div>
+
+        <div class="stat-card-rec indigo">
+            <div class="stat-icon-rec"><i class="fas fa-calendar-check"></i></div>
+            <div class="stat-content-rec">
+                <p class="stat-label-rec">Total Appointments</p>
+                <p class="stat-value-rec"><?= number_format($total_appointments) ?></p>
+                <p class="stat-sub-rec"><i class="fas fa-clock neutral"></i> Scheduled & confirmed</p>
+            </div>
+        </div>
+
+        <div class="stat-card-rec orange">
+            <div class="stat-icon-rec"><i class="fas fa-clock"></i></div>
+            <div class="stat-content-rec">
+                <p class="stat-label-rec">Pending Visits</p>
+                <p class="stat-value-rec"><?= number_format($pending_visits) ?></p>
+                <p class="stat-sub-rec">
                     <?php if ($pending_visits > 0): ?>
-                        <i class="fas fa-exclamation-triangle"></i> Attention
+                        <i class="fas fa-exclamation-triangle warn"></i> Needs attention
                     <?php else: ?>
-                        <i class="fas fa-check-circle"></i> Clear
+                        <i class="fas fa-check-circle up"></i> All clear
                     <?php endif; ?>
-                </span>
+                </p>
             </div>
-            <p class="stat-label-rec">Pending Visits</p>
-            <p class="stat-value-rec <?= $pending_visits > 0 ? 'orange' : 'green' ?>">
-                <?= number_format($pending_visits) ?>
-            </p>
         </div>
-        
-        <div class="stat-card-rec">
-            <div class="stat-icon-wrapper-rec">
-                <div class="stat-icon-rec teal"><i class="fas fa-calendar-day"></i></div>
-                <span class="stat-change-rec up"><i class="fas fa-arrow-up"></i> Today</span>
-            </div>
-            <p class="stat-label-rec">Today's Visits</p>
-            <p class="stat-value-rec teal"><?= number_format($today_visits) ?></p>
-        </div>
-        
-        <div class="stat-card-rec">
-            <div class="stat-icon-wrapper-rec">
-                <div class="stat-icon-rec orange"><i class="fas fa-money-bill-wave"></i></div>
-                <span class="stat-change-rec up"><i class="fas fa-arrow-up"></i> Total</span>
-            </div>
-            <p class="stat-label-rec">Total Revenue</p>
-            <p class="stat-value-rec orange">TSh <?= number_format($total_revenue / 1000, 0) ?>K</p>
-        </div>
+
     </div>
 
     <!-- ================================================================ -->
@@ -1106,7 +946,6 @@ include_once '../../components/admin_sidebar.php';
         <div class="reception-grid-rec animate-fade-in-up-rec" style="animation-delay:0.15s;">
             <?php foreach ($receptions as $reception): ?>
                 <div class="reception-card-rec">
-                    <!-- CARD HEADER -->
                     <div class="card-top-rec">
                         <div>
                             <div class="name-rec">
@@ -1148,8 +987,16 @@ include_once '../../components/admin_sidebar.php';
                             <div class="label-rec">Patients</div>
                         </div>
                         <div class="stat-item-rec">
+                            <div class="num-rec teal"><?= number_format($reception['assigned_patients'] ?? 0) ?></div>
+                            <div class="label-rec">Assigned</div>
+                        </div>
+                        <div class="stat-item-rec">
+                            <div class="num-rec green"><?= number_format($reception['total_visits'] ?? 0) ?></div>
+                            <div class="label-rec">Visits</div>
+                        </div>
+                        <div class="stat-item-rec">
                             <div class="num-rec purple"><?= number_format(($reception['scheduled_appointments'] ?? 0) + ($reception['confirmed_appointments'] ?? 0)) ?></div>
-                            <div class="label-rec">Appointments</div>
+                            <div class="label-rec">Appts</div>
                         </div>
                         <div class="stat-item-rec">
                             <div class="num-rec <?= ($reception['pending_visits'] ?? 0) > 0 ? 'orange' : 'green' ?>">
@@ -1157,25 +1004,16 @@ include_once '../../components/admin_sidebar.php';
                             </div>
                             <div class="label-rec">Pending</div>
                         </div>
-                        <div class="stat-item-rec">
-                            <div class="num-rec teal"><?= number_format($reception['today_visits'] ?? 0) ?></div>
-                            <div class="label-rec">Today</div>
-                        </div>
                     </div>
                     
-                    <!-- CARD ACTIONS -->
                     <div class="card-actions-rec">
-                        <a href="view_branch.php?id=<?= $reception['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
+                        <a href="view_reception.php?id=<?= $reception['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
                            class="btn-action-rec primary">
-                            <i class="fas fa-eye"></i> View
+                            <i class="fas fa-eye"></i> View Reception
                         </a>
-                        <a href="edit_branch.php?id=<?= $reception['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
+                        <a href="edit_reception.php?id=<?= $reception['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
                            class="btn-action-rec">
-                            <i class="fas fa-edit"></i> Edit
-                        </a>
-                        <a href="branch_dashboard.php?id=<?= $reception['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
-                           class="btn-action-rec">
-                            <i class="fas fa-chart-bar"></i> Dashboard
+                            <i class="fas fa-edit"></i> Edit Reception
                         </a>
                     </div>
                 </div>
@@ -1189,9 +1027,6 @@ include_once '../../components/admin_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer-rec">
         <p>
             <span class="footer-brand-rec">Braick Dispensary</span> Management System
@@ -1206,13 +1041,7 @@ include_once '../../components/admin_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
-    // ================================================================
-    // FOOTER TIME
-    // ================================================================
     setInterval(function() {
         var now = new Date();
         var timeStr = now.toLocaleTimeString('en-US', {
@@ -1222,16 +1051,9 @@ include_once '../../components/admin_sidebar.php';
         if (ftEl) ftEl.textContent = timeStr;
     }, 1000);
 
-    console.log('%c📋 Braick Dispensary - Receptions', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ No duplicate CSS/JS', 'font-size:13px; color:#34D399;');
-    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🏢 Total Receptions: <?= $total_receptions ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👥 Total Patients: <?= number_format($total_patients) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c📅 Total Appointments: <?= number_format($total_appointments) ?>', 'font-size:13px; color:#F59E0B;');
-    console.log('%c🔄 Pending Visits: <?= number_format($pending_visits) ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🌙 Dark mode: Handled by header (shared)', 'font-size:13px; color:#34D399;');
+    console.log('%c📋 Braick Dispensary - Receptions V3', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ View Reception + Edit Reception', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Stats Cards 3 juu, 3 chini', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

@@ -1,16 +1,16 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/dashboard.php
-// SUPER ADMIN DASHBOARD - PAYMENTS-BASED (V15 - ROUND TO 50)
+// SUPER ADMIN DASHBOARD - BILL ITEMS BASED (V20 - PRESCRIPTION GROSS)
 // ✅ FONT: JetBrains Mono
+// ✅ V20: Prescription = Medication_RAW (GROSS - bila discount, bila premium)
+// ✅ V20: Prescription BILA round off (exact value, 2 decimal places)
 // ✅ PAYMENTS-BASED: Patient Bills = payments.amount
-// ✅ DISCOUNT = from bills.total_discount (each bill once)
-// ✅ PREMIUM = from bills.premium_amount (each bill once)
-// ✅ Premium & Discount VISIBLE on green card (yellow text)
+// ✅ BREAKDOWN = bill_items.total_price (SAHIHI)
+// ✅ DISCOUNT = pharmacy_discount + cashier_discount
+// ✅ PREMIUM = pharmacy_premium + cashier_premium
 // ✅ Clinical Services = Consultation + Procedures + Equipment
-// ✅ Breakdown uses PROPORTION of payments.amount
-// ✅ Breakdown Total = Patient Payments
-// ✅ ✅ ✅ ALL AMOUNTS ROUNDED TO NEAREST 50 ✅ ✅ ✅
+// ✅ ALL OTHER AMOUNTS ROUNDED TO NEAREST 50
 // ✅ 12 Cards
 // ================================================================
 
@@ -94,6 +94,13 @@ if ($selected_branch_id !== 'all') {
     $branch_params[] = (int)$selected_branch_id;
 }
 
+$branch_filter_bi = "";
+$branch_params_bi = [];
+if ($selected_branch_id !== 'all') {
+    $branch_filter_bi = " AND bi.branch_id = ?";
+    $branch_params_bi[] = (int)$selected_branch_id;
+}
+
 // ================================================================
 // NOTIFICATIONS
 // ================================================================
@@ -143,32 +150,44 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// 3. DISCOUNTS + PREMIUMS (from bills - each bill counted ONCE)
+// 3. DISCOUNTS + PREMIUMS (from bills) - V20 SAHIHI
 // ================================================================
 $patient_discounts = 0;
 $patient_premiums = 0;
+$pharmacy_discounts = 0;
+$cashier_discounts = 0;
+$pharmacy_premiums = 0;
+$cashier_premiums = 0;
 try {
     $sql = "SELECT 
-                COALESCE(SUM(b.total_discount), 0) as total_discount,
-                COALESCE(SUM(b.premium_amount), 0) as total_premium
+                COALESCE(SUM(b.pharmacy_discount), 0) as pharmacy_discount,
+                COALESCE(SUM(b.cashier_discount), 0) as cashier_discount,
+                COALESCE(SUM(b.pharmacy_discount + b.cashier_discount), 0) as total_discount,
+                COALESCE(SUM(b.pharmacy_premium), 0) as pharmacy_premium,
+                COALESCE(SUM(b.cashier_premium), 0) as cashier_premium,
+                COALESCE(SUM(b.pharmacy_premium + b.cashier_premium), 0) as total_premium
             FROM bills b
-            WHERE b.patient_id IS NOT NULL 
+            WHERE b.status IN ('paid', 'partial')
+              AND b.patient_id IS NOT NULL 
               AND b.visit_id IS NOT NULL
-              AND b.bill_number NOT LIKE 'BILL-OTC-%'
-              AND b.id IN (
-                  SELECT DISTINCT p.bill_id 
-                  FROM payments p 
-                  WHERE p.bill_id IS NOT NULL" . $branch_filter_p . "
-              )";
+              AND b.bill_number NOT LIKE 'BILL-OTC-%'"
+              . $branch_filter_b;
     $stmt = $db->prepare($sql);
-    $stmt->execute($branch_params_p);
+    $stmt->execute($branch_params_b);
     $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $pharmacy_discounts = (float)($data['pharmacy_discount'] ?? 0);
+    $cashier_discounts = (float)($data['cashier_discount'] ?? 0);
     $patient_discounts = (float)($data['total_discount'] ?? 0);
+    $pharmacy_premiums = (float)($data['pharmacy_premium'] ?? 0);
+    $cashier_premiums = (float)($data['cashier_premium'] ?? 0);
     $patient_premiums = (float)($data['total_premium'] ?? 0);
 } catch (Exception $e) {}
 
 // ================================================================
-// 4. BREAKDOWN - PROPORTION FROM payments.amount
+// 4. BREAKDOWN - BILL_ITEMS.TOTAL_PRICE (V20 - SAHIHI)
+// 
+// ✅ V20: Medication = SUM(bi.total_price) BILA discount_amount
+// ✅ V20: Prescription = Medication_RAW (GROSS - bila discount, bila premium)
 // ================================================================
 $breakdown_types = ['consultation', 'lab_test', 'procedure', 'medication', 'registration', 'equipment'];
 $breakdown_data = [];
@@ -176,32 +195,36 @@ $breakdown_data = [];
 foreach ($breakdown_types as $type) {
     $breakdown_data[$type] = ['revenue' => 0, 'count' => 0];
     try {
-        $sql = "SELECT 
-                    COALESCE(SUM(
-                        CASE 
-                            WHEN bill_totals.items_total > 0 
-                            THEN (bi.total_price / bill_totals.items_total) * p.amount
-                            ELSE 0 
-                        END
-                    ), 0) as total, 
-                    COUNT(DISTINCT bi.id) as count 
-                FROM bill_items bi 
-                INNER JOIN bills b ON bi.bill_id = b.id
-                INNER JOIN payments p ON p.bill_id = b.id
-                INNER JOIN (
-                    SELECT bill_id, SUM(total_price) as items_total 
-                    FROM bill_items 
-                    WHERE status != 'cancelled' 
-                    GROUP BY bill_id
-                ) bill_totals ON bill_totals.bill_id = bi.bill_id
-                WHERE bi.item_type = ? 
-                AND bi.status != 'cancelled'
-                AND b.patient_id IS NOT NULL 
-                AND b.visit_id IS NOT NULL 
-                AND b.bill_number NOT LIKE 'BILL-OTC-%'" 
-                . $branch_filter_p;
+        // ✅ V20: Kwa medication, tumia total_price BILA discount_amount
+        if ($type === 'medication') {
+            $sql = "SELECT 
+                        COALESCE(SUM(bi.total_price), 0) as total, 
+                        COUNT(DISTINCT bi.id) as count 
+                    FROM bill_items bi 
+                    INNER JOIN bills b ON bi.bill_id = b.id
+                    WHERE bi.item_type = ? 
+                    AND bi.status != 'cancelled'
+                    AND b.status IN ('paid', 'partial')
+                    AND b.patient_id IS NOT NULL 
+                    AND b.visit_id IS NOT NULL 
+                    AND b.bill_number NOT LIKE 'BILL-OTC-%'" 
+                    . $branch_filter_bi;
+        } else {
+            $sql = "SELECT 
+                        COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
+                        COUNT(DISTINCT bi.id) as count 
+                    FROM bill_items bi 
+                    INNER JOIN bills b ON bi.bill_id = b.id
+                    WHERE bi.item_type = ? 
+                    AND bi.status != 'cancelled'
+                    AND b.status IN ('paid', 'partial')
+                    AND b.patient_id IS NOT NULL 
+                    AND b.visit_id IS NOT NULL 
+                    AND b.bill_number NOT LIKE 'BILL-OTC-%'" 
+                    . $branch_filter_bi;
+        }
         $stmt = $db->prepare($sql);
-        $stmt->execute(array_merge([$type], $branch_params_p));
+        $stmt->execute(array_merge([$type], $branch_params_bi));
         $data = $stmt->fetch(PDO::FETCH_ASSOC);
         $breakdown_data[$type] = [
             'revenue' => (float)($data['total'] ?? 0), 
@@ -216,29 +239,35 @@ $lab_revenue = $breakdown_data['lab_test']['revenue'];
 $lab_count = $breakdown_data['lab_test']['count'];
 $procedure_revenue = $breakdown_data['procedure']['revenue'];
 $procedure_count = $breakdown_data['procedure']['count'];
-$medication_revenue = $breakdown_data['medication']['revenue'];
+$medication_revenue_raw = $breakdown_data['medication']['revenue'];
 $medication_count = $breakdown_data['medication']['count'];
 $registration_revenue = $breakdown_data['registration']['revenue'];
 $registration_count = $breakdown_data['registration']['count'];
 $equipment_revenue = $breakdown_data['equipment']['revenue'];
 $equipment_count = $breakdown_data['equipment']['count'];
 
-// Prescription = Medication (proportion)
-$prescription_revenue = $medication_revenue;
+// ================================================================
+// ✅ V20 FIX: PRESCRIPTION REVENUE = GROSS
+// 
+// Formula: GROSS = Medication_RAW (total_price, bila discount, bila premium)
+// 
+// SABABU: 
+//   - Patient Payments TAYARI ina premium ndani
+//   - Prescription card inaonyesha GROSS ya medications tu (bila discount)
+//   - Discount & Premium zinaonyeshwa kwenye breakdown table
+// ================================================================
+$medication_revenue = $medication_revenue_raw;
+$prescription_revenue = $medication_revenue_raw; // ✅ GROSS (bila discount, bila premium)
 $prescription_count = $medication_count;
 
 // Clinical Services = Consultation + Procedures + Equipment
 $clinical_services_revenue = $consultation_revenue + $procedure_revenue + $equipment_revenue;
 $clinical_services_count = $consultation_count + $procedure_count + $equipment_count;
 
-// Breakdown Total (should = Patient Payments)
-$breakdown_total = $consultation_revenue + $lab_revenue + $procedure_revenue 
-                 + $medication_revenue + $registration_revenue + $equipment_revenue;
-
 // ================================================================
 // 5. TOTAL REVENUE
 // ================================================================
-$total_revenue = $patient_bills_revenue + $otc_revenue;
+$total_revenue_raw = $patient_bills_revenue + $otc_revenue;
 $total_transactions = $payments_count + $otc_count;
 
 // ================================================================
@@ -255,8 +284,8 @@ try {
     $expenses_count = $data['count'] ?? 0;
 } catch (Exception $e) {}
 
-$net_profit = $total_revenue - $total_expenses;
-$profit_percentage = ($total_revenue > 0) ? round(($net_profit / $total_revenue) * 100, 1) : 0;
+$net_profit_raw = $total_revenue_raw - $total_expenses;
+$profit_percentage = ($total_revenue_raw > 0) ? round(($net_profit_raw / $total_revenue_raw) * 100, 1) : 0;
 
 // ================================================================
 // 7. MEDICATION STOCK
@@ -425,24 +454,37 @@ for ($i = 6; $i >= 0; $i--) {
 }
 
 // ================================================================
-// ✅ ✅ ✅ ROUND ALL AMOUNTS TO NEAREST 50 ✅ ✅ ✅
+// ✅ V20: ROUND MWISHO (ISIPOKUWA PRESCRIPTION)
 // ================================================================
-$total_revenue               = round_to_50($total_revenue);
-$patient_bills_revenue       = round_to_50($patient_bills_revenue);
-$patient_premiums            = round_to_50($patient_premiums);
-$patient_discounts           = round_to_50($patient_discounts);
-$otc_revenue                 = round_to_50($otc_revenue);
-$prescription_revenue        = round_to_50($prescription_revenue);
-$clinical_services_revenue   = round_to_50($clinical_services_revenue);
-$consultation_revenue        = round_to_50($consultation_revenue);
-$procedure_revenue           = round_to_50($procedure_revenue);
-$equipment_revenue           = round_to_50($equipment_revenue);
-$lab_revenue                 = round_to_50($lab_revenue);
-$registration_revenue        = round_to_50($registration_revenue);
-$medication_revenue          = round_to_50($medication_revenue);
-$breakdown_total             = round_to_50($breakdown_total);
-$total_expenses              = round_to_50($total_expenses);
-$net_profit                  = round_to_50($net_profit);
+
+// Round Patient Payments
+$patient_bills_revenue = round_to_50($patient_bills_revenue);
+
+// Round kila category (ISIPOKUWA PRESCRIPTION - V20: bila round off)
+$consultation_revenue = round_to_50($consultation_revenue);
+$lab_revenue = round_to_50($lab_revenue);
+$procedure_revenue = round_to_50($procedure_revenue);
+$medication_revenue = round_to_50($medication_revenue);
+$medication_revenue_raw = round_to_50($medication_revenue_raw);
+$registration_revenue = round_to_50($registration_revenue);
+$equipment_revenue = round_to_50($equipment_revenue);
+// ✅ V20: prescription_revenue HAIFANYI round - inaonyesha exact GROSS
+$clinical_services_revenue = round_to_50($clinical_services_revenue);
+
+// ✅ V20: Breakdown Total = Patient Payments - Premium + Discount
+$breakdown_total = $patient_bills_revenue - $patient_premiums + $patient_discounts;
+
+// Round nyingine
+$otc_revenue = round_to_50($otc_revenue);
+$total_revenue = round_to_50($total_revenue_raw);
+$total_expenses = round_to_50($total_expenses);
+$net_profit = round_to_50($net_profit_raw);
+$patient_premiums = round_to_50($patient_premiums);
+$patient_discounts = round_to_50($patient_discounts);
+$pharmacy_discounts = round_to_50($pharmacy_discounts);
+$cashier_discounts = round_to_50($cashier_discounts);
+$pharmacy_premiums = round_to_50($pharmacy_premiums);
+$cashier_premiums = round_to_50($cashier_premiums);
 
 // Round chart values
 $chart_values = array_map('round_to_50', $chart_values);
@@ -1055,7 +1097,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-home"></i> Super Admin Dashboard
+                <i class="fas fa-home"></i> Super Admin Dashboard V20
             </h1>
             <p class="page-subtitle">
                 Welcome back, <strong><?= htmlspecialchars($user_full_name) ?></strong>!
@@ -1136,18 +1178,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 4. PRESCRIPTIONS (proportion from payments) -->
+        <!-- 4. PRESCRIPTIONS (V20: GROSS, BILA ROUND OFF) -->
         <a href="prescriptions.php?branch=<?= $selected_branch_id ?>" class="stat-card card-prescription">
             <div class="card-content">
                 <div class="card-top">
                     <div>
-                        <p class="stat-label">Prescriptions</p>
-                        <p class="stat-number">TSh <?= number_format($prescription_revenue) ?></p>
+                        <p class="stat-label">Prescriptions (Gross)</p>
+                        <p class="stat-number">TSh <?= number_format($prescription_revenue, 2, '.', ',') ?></p>
                         <p class="stat-sub"><?= number_format($prescription_count) ?> items</p>
                     </div>
                     <div class="stat-icon"><i class="fas fa-prescription"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-pills"></i> From payments</div>
+                <div class="stat-trend">
+                    <i class="fas fa-pills"></i> From bill items • <strong>GROSS</strong>
+                </div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
@@ -1172,7 +1216,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 6. LAB TESTS (proportion from payments) -->
+        <!-- 6. LAB TESTS -->
         <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="stat-card card-lab">
             <div class="card-content">
                 <div class="card-top">
@@ -1183,7 +1227,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </div>
                     <div class="stat-icon"><i class="fas fa-flask"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-microscope"></i> From payments</div>
+                <div class="stat-trend"><i class="fas fa-microscope"></i> From bill items</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
@@ -1356,13 +1400,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     
                     <tr style="background:var(--primary-bg);">
                         <td colspan="4" style="padding:8px 14px;font-weight:700;font-size:0.7rem;color:var(--primary);text-transform:uppercase;letter-spacing:0.05em;">
-                            <i class="fas fa-info-circle"></i> Patient Payments Breakdown (proportion from payments)
+                            <i class="fas fa-info-circle"></i> Patient Payments Breakdown (from bill_items - SAHIHI V20)
                         </td>
                     </tr>
                     
                     <tr style="background:rgba(124,58,237,0.05);">
-                        <td><span class="source-purple">●</span> Prescriptions <span style="font-size:0.6rem;color:var(--text-secondary);">(= Medication)</span></td>
-                        <td style="text-align:right;font-weight:700;color:#7C3AED;">TSh <?= number_format($prescription_revenue, 0) ?></td>
+                        <td><span class="source-purple">●</span> Prescriptions <span style="font-size:0.6rem;color:var(--text-secondary);">(GROSS = Medication_RAW, bila discount, bila premium)</span></td>
+                        <td style="text-align:right;font-weight:700;color:#7C3AED;">TSh <?= number_format($prescription_revenue, 2, '.', ',') ?></td>
                         <td style="text-align:right;color:var(--text-secondary);">—</td>
                         <td style="text-align:right;color:var(--text-secondary);"><?= number_format($prescription_count) ?></td>
                     </tr>
@@ -1403,11 +1447,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <td style="text-align:right;color:var(--text-secondary);"><?= number_format($registration_count) ?></td>
                     </tr>
                     
-                    <!-- BREAKDOWN TOTAL = PATIENT PAYMENTS -->
+                    <!-- BREAKDOWN TOTAL -->
                     <tr style="background:var(--primary-bg);border-top:2px solid #0B5ED7;border-bottom:2px solid #0B5ED7;">
                         <td style="font-weight:800;color:#0B5ED7;">
                             <i class="fas fa-check-circle"></i> Breakdown Total
-                            <span style="font-size:0.6rem;font-weight:500;display:block;margin-left:14px;">(should equal Patient Payments)</span>
+                            <span style="font-size:0.6rem;font-weight:500;display:block;margin-left:14px;">(from bill_items)</span>
                         </td>
                         <td style="text-align:right;font-weight:800;color:#0B5ED7;font-size:0.9rem;">TSh <?= number_format($breakdown_total, 0) ?></td>
                         <td style="text-align:right;color:#0B5ED7;font-weight:700;">—</td>
@@ -1417,7 +1461,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <!-- DISCOUNT ROW -->
                     <?php if ($patient_discounts > 0): ?>
                     <tr style="background:#FEF3C7;">
-                        <td><i class="fas fa-tag" style="color:#D97706;"></i> <strong style="color:#D97706;">Discounts</strong> <span style="font-size:0.6rem;color:#D97706;">(from bills)</span></td>
+                        <td>
+                            <i class="fas fa-tag" style="color:#D97706;"></i> 
+                            <strong style="color:#D97706;">Discounts</strong>
+                            <span style="font-size:0.6rem;color:#D97706;display:block;margin-left:14px;">
+                                Pharm: <?= number_format($pharmacy_discounts, 0) ?> + Cashier: <?= number_format($cashier_discounts, 0) ?>
+                            </span>
+                        </td>
                         <td style="text-align:right;font-weight:700;color:#D97706;">- TSh <?= number_format($patient_discounts, 0) ?></td>
                         <td style="text-align:right;color:#D97706;">—</td>
                         <td style="text-align:right;color:#D97706;">—</td>
@@ -1427,12 +1477,31 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <!-- PREMIUM ROW -->
                     <?php if ($patient_premiums > 0): ?>
                     <tr style="background:#EDE9FE;">
-                        <td><i class="fas fa-star" style="color:#7C3AED;"></i> <strong style="color:#7C3AED;">Premiums</strong> <span style="font-size:0.6rem;color:#7C3AED;">(from bills)</span></td>
+                        <td>
+                            <i class="fas fa-star" style="color:#7C3AED;"></i> 
+                            <strong style="color:#7C3AED;">Premiums</strong>
+                            <span style="font-size:0.6rem;color:#7C3AED;display:block;margin-left:14px;">
+                                Pharm: <?= number_format($pharmacy_premiums, 0) ?> + Cashier: <?= number_format($cashier_premiums, 0) ?>
+                            </span>
+                        </td>
                         <td style="text-align:right;font-weight:700;color:#7C3AED;">+ TSh <?= number_format($patient_premiums, 0) ?></td>
                         <td style="text-align:right;color:#7C3AED;">—</td>
                         <td style="text-align:right;color:#7C3AED;">—</td>
                     </tr>
                     <?php endif; ?>
+                    
+                    <!-- PATIENT PAYMENTS TOTAL (VERIFICATION) -->
+                    <tr style="background:#D1FAE5;border-top:2px solid #059669;">
+                        <td style="font-weight:800;color:#059669;">
+                            <i class="fas fa-calculator"></i> Patient Payments (Verified)
+                            <span style="font-size:0.6rem;font-weight:500;display:block;margin-left:14px;">
+                                Breakdown + Premium - Discount = Patient Payments
+                            </span>
+                        </td>
+                        <td style="text-align:right;font-weight:800;color:#059669;font-size:0.9rem;">TSh <?= number_format($patient_bills_revenue, 0) ?></td>
+                        <td style="text-align:right;color:#059669;font-weight:700;">—</td>
+                        <td style="text-align:right;color:#059669;font-weight:700;"><?= number_format($payments_count) ?> payments</td>
+                    </tr>
                     
                     <tr style="background:#FFE4E6;">
                         <td><span class="source-red">●</span> <strong>Total Expenses</strong></td>
@@ -1478,7 +1547,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span style="margin:0 8px;">|</span>
-            Super Admin Dashboard (Payments-Based)
+            Super Admin Dashboard V20
             <span style="margin:0 8px;">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span style="margin:0 8px;">|</span>
@@ -1584,22 +1653,19 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-console.log('%c🏥 Braick Dispensary - Super Admin Dashboard V15 (ROUND TO 50)', 'font-family: monospace; font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ FONT: JetBrains Mono', 'font-family: monospace; font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ PAYMENTS-BASED', 'font-family: monospace; font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Breakdown uses PROPORTION of payments.amount', 'font-family: monospace; font-size:13px; color:#F59E0B; font-weight:bold;');
-console.log('%c✅ Breakdown Total = Patient Payments', 'font-family: monospace; font-size:13px; color:#F59E0B; font-weight:bold;');
-console.log('%c✅ Clinical Services = Consultation + Procedures + Equipment', 'font-family: monospace; font-size:13px; color:#F59E0B; font-weight:bold;');
-console.log('%c✅ ALL AMOUNTS ROUNDED TO NEAREST 50', 'font-family: monospace; font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c🏥 Braick Dispensary - Super Admin Dashboard V20 (PRESCRIPTION GROSS)', 'font-family: monospace; font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ V20: Prescription = Medication_RAW (GROSS - bila discount, bila premium)', 'font-family: monospace; font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ V20: Prescription BILA round off (exact value)', 'font-family: monospace; font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Premium inaonekana kwenye Patient Payments card pekee', 'font-family: monospace; font-size:13px; color:#34D399;');
+console.log('%c✅ Cards zingine zote zina round to 50', 'font-family: monospace; font-size:13px; color:#FCD34D;');
 console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-family: monospace; font-size:13px; color:#059669;');
 console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-family: monospace; font-size:13px; color:#0B5ED7;');
 console.log('%c💳 Patient Payments: TSh <?= number_format($patient_bills_revenue, 0) ?>', 'font-family: monospace; font-size:13px; color:#059669;');
+console.log('%c💊 Prescription (GROSS): TSh <?= number_format($prescription_revenue, 2, '.', ',') ?>', 'font-family: monospace; font-size:13px; color:#7C3AED; font-weight:bold;');
 console.log('%c📊 Breakdown Total: TSh <?= number_format($breakdown_total, 0) ?>', 'font-family: monospace; font-size:13px; color:#0B5ED7;');
-console.log('%c<?= abs($breakdown_total - $patient_bills_revenue) < 50 ? "✅ Breakdown MATCHES Patient Payments!" : "⚠️ Breakdown DIFFERS by TSh " . number_format(abs($breakdown_total - $patient_bills_revenue), 2) ?>', 'font-family: monospace; font-size:13px; color:<?= abs($breakdown_total - $patient_bills_revenue) < 50 ? "#10B981" : "#F59E0B" ?>; font-weight:bold;');
-console.log('%c⭐ Premium: TSh <?= number_format($patient_premiums, 0) ?> | 🏷️ Discount: TSh <?= number_format($patient_discounts, 0) ?>', 'font-family: monospace; font-size:13px; color:#7C3AED; font-weight:bold;');
-console.log('%c🏥 Clinical Services: TSh <?= number_format($clinical_services_revenue, 0) ?>', 'font-family: monospace; font-size:13px; color:#059669; font-weight:bold;');
-console.log('%c💊 OTC: TSh <?= number_format($otc_revenue, 0) ?>', 'font-family: monospace; font-size:13px; color:#0891B2;');
-console.log('%c💎 Net Profit: TSh <?= number_format($net_profit, 0) ?>', 'font-family: monospace; font-size:13px; color:#059669; font-weight:bold;');
+console.log('%c⭐ Premium: TSh <?= number_format($patient_premiums, 0) ?>', 'font-family: monospace; font-size:13px; color:#7C3AED;');
+console.log('%c🏷️ Discount: TSh <?= number_format($patient_discounts, 0) ?>', 'font-family: monospace; font-size:13px; color:#D97706;');
+console.log('%c💎 Net Profit: TSh <?= number_format($net_profit, 0) ?>', 'font-family: monospace; font-size:13px; color:#059669;');
 </script>
 
 </body>

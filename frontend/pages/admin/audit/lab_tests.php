@@ -5,6 +5,7 @@
 // ✅ Group by Patient → Visit
 // ✅ Table header ina < > buttons kwa kuslide left/right (horizontal scroll)
 // ✅ Blue theme
+// ✅ Column ya "Paid By" imeondolewa
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -137,7 +138,7 @@ if (!empty($quick_date_to)) {
 }
 
 // ================================================================
-// FETCH ALL LAB TESTS
+// FETCH ALL LAB TESTS (received_by_name imeondolewa kwenye SQL)
 // ================================================================
 $sql = "
     SELECT 
@@ -149,7 +150,6 @@ $sql = "
         pat.date_of_birth,
         doc.full_name as doctor_name,
         tech.full_name as lab_technician_name,
-        recv.full_name as received_by_name,
         b.name as branch_name,
         v.visit_number,
         v.visit_date,
@@ -159,7 +159,6 @@ $sql = "
     LEFT JOIN patients pat ON lt.patient_id = pat.id
     LEFT JOIN users doc ON lt.doctor_id = doc.id
     LEFT JOIN users tech ON lt.lab_technician_id = tech.id
-    LEFT JOIN users recv ON lt.performed_by = recv.id
     LEFT JOIN branches b ON lt.branch_id = b.id
     LEFT JOIN visits v ON lt.visit_id = v.id
     $where_clause
@@ -1115,7 +1114,7 @@ body { font-family: var(--font-main) !important; }
     width: 100%;
     border-collapse: collapse;
     font-size: 0.78rem;
-    min-width: 1100px;
+    min-width: 950px;
 }
 
 .data-table thead th {
@@ -1588,7 +1587,6 @@ body { font-family: var(--font-main) !important; }
                                                             <th><i class="fas fa-file-medical"></i> Result</th>
                                                             <th><i class="fas fa-money-bill-wave"></i> Price</th>
                                                             <th><i class="fas fa-info-circle"></i> Status</th>
-                                                            <th><i class="fas fa-user-check"></i> Paid By</th>
                                                             <th><i class="fas fa-cog"></i> Actions</th>
                                                         </tr>
                                                     </thead>
@@ -1658,18 +1656,6 @@ body { font-family: var(--font-main) !important; }
                                                                     <span class="status-badge <?= $status_info['class'] ?>">
                                                                         <?= $status_info['icon'] ?> <?= $status_info['label'] ?>
                                                                     </span>
-                                                                </td>
-                                                                <td>
-                                                                    <?php if (!empty($test['received_by_name'])): ?>
-                                                                        <span class="lab-tech-name" style="color:var(--success);">
-                                                                            <i class="fas fa-check-circle"></i>
-                                                                            <?= htmlspecialchars($test['received_by_name']) ?>
-                                                                        </span>
-                                                                    <?php else: ?>
-                                                                        <span class="lab-tech-name not-assigned">
-                                                                            <i class="fas fa-hourglass"></i> Not paid
-                                                                        </span>
-                                                                    <?php endif; ?>
                                                                 </td>
                                                                 <td>
                                                                     <div class="action-buttons-group">
@@ -1997,6 +1983,7 @@ console.log('%c✅ < > Buttons kwenye TABLE HEADER', 'font-size:12px;color:#34D3
 console.log('%c✅ Slide table left/right kwa kila visit', 'font-size:12px;color:#34D399;');
 console.log('%c✅ Indicator % inaonyesha scroll position', 'font-size:12px;color:#0891B2;');
 console.log('%c✅ Blue theme', 'font-size:12px;color:#0B5ED7;font-weight:bold;');
+console.log('%c✅ Column ya "Paid By" imeondolewa', 'font-size:12px;color:#F59E0B;font-weight:bold;');
 </script>
 
 </body>

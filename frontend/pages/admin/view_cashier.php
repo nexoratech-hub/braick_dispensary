@@ -1,13 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/view_cashier.php
-// ADMIN - VIEW CASHIER BRANCH DETAILS (V13 - 8 CARDS MATCHING CASHIERS)
-// ✅ FIXED: Font Awesome forced with @font-face
+// ADMIN - VIEW CASHIER BRANCH DETAILS (V14 - PRESCRIPTION GROSS)
+// ✅ V14: PRESCRIPTION = Medication_RAW (GROSS - bila discount, bila premium)
+// ✅ V14: Prescription BILA round off (exact value, 2 decimal places)
+// ✅ V14: Formula breakdown card imeondolewa
+// ✅ SAWA KWA 100% NA AUDIT V13, ADMIN V20, CASHIERS V13.1
+// ✅ FIXED: Font Awesome loaded kwa kila page
 // ✅ FIXED: JetBrains Mono font
 // ✅ PAYMENTS-BASED: Patient Bills = payments.amount
-// ✅ 8 CARDS — SAME AS cashiers.php
-// ✅ Patient Payments shows Premium & Discount badges
-// ✅ ALL AMOUNTS ROUNDED TO NEAREST 50
+// ✅ 6 CARDS with icons
 // ✅ Recent Bills with View, Edit, Cancel buttons
 // ================================================================
 
@@ -28,6 +30,7 @@ if ($_SESSION['role'] !== 'admin') {
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'audit': header('Location: ../audit/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
@@ -50,7 +53,7 @@ try {
 }
 
 // ================================================================
-// ✅ ROUND TO NEAREST 50 FUNCTION
+// ✅ V14: ROUND TO NEAREST 50 FUNCTION (kwa cards zingine)
 // ================================================================
 function round_to_50($value) {
     return round($value / 50) * 50;
@@ -162,10 +165,8 @@ try {
 }
 
 // ================================================================
-// REVENUE QUERIES - PAYMENTS-BASED (SAME AS CASHIERS)
+// REVENUE QUERIES - PAYMENTS-BASED
 // ================================================================
-
-// 1. Patient Payments (payments.amount)
 $patient_bills_revenue = 0;
 $payments_count = 0;
 try {
@@ -189,189 +190,86 @@ try {
     $payments_count = 0;
 }
 
-// 2. OTC Revenue
 $otc_revenue = 0;
-$otc_count = 0;
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(total_amount), 0) as otc_revenue,
-               COUNT(*) as otc_count
+        SELECT COALESCE(SUM(total_amount), 0) as otc_revenue
         FROM otc_sales 
         WHERE branch_id = ? 
         AND payment_status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    $otc_revenue = $row['otc_revenue'] ?? 0;
-    $otc_count = $row['otc_count'] ?? 0;
+    $otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['otc_revenue'] ?? 0;
 } catch (Exception $e) {
     $otc_revenue = 0;
-    $otc_count = 0;
 }
 
-// 3. Prescription Revenue (proportion from payments)
-$prescription_revenue = 0;
+// ✅ V14: Medication RAW (GROSS - bila discount)
+$medication_raw = 0;
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(
-            CASE 
-                WHEN bill_totals.items_total > 0 
-                THEN (bi.total_price / bill_totals.items_total) * p.amount
-                ELSE 0 
-            END
-        ), 0) as prescription_revenue
+        SELECT COALESCE(SUM(bi.total_price), 0) as medication_raw
         FROM bill_items bi
         INNER JOIN bills b ON bi.bill_id = b.id
-        INNER JOIN payments p ON p.bill_id = b.id
-        INNER JOIN (
-            SELECT bill_id, SUM(total_price) as items_total 
-            FROM bill_items 
-            WHERE status != 'cancelled' 
-            GROUP BY bill_id
-        ) bill_totals ON bill_totals.bill_id = bi.bill_id
-        WHERE bi.reference_type = 'prescription'
+        WHERE bi.branch_id = ?
         AND bi.item_type = 'medication'
         AND bi.status != 'cancelled'
-        AND b.patient_id IS NOT NULL 
+        AND b.status IN ('paid', 'partial')
+        AND b.patient_id IS NOT NULL
         AND b.visit_id IS NOT NULL
         AND b.bill_number NOT LIKE 'BILL-OTC-%'
-        AND p.branch_id = ?
     ");
     $stmt->execute([$cashier_id]);
-    $prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['prescription_revenue'] ?? 0;
+    $medication_raw = $stmt->fetch(PDO::FETCH_ASSOC)['medication_raw'] ?? 0;
 } catch (Exception $e) {
-    $prescription_revenue = 0;
+    $medication_raw = 0;
 }
 
-// 4. Clinical Services = Consultation + Procedures + Equipment
-$clinical_revenue = 0;
-try {
-    foreach (['consultation', 'procedure', 'equipment'] as $type) {
-        $stmt = $db->prepare("
-            SELECT COALESCE(SUM(
-                CASE 
-                    WHEN bill_totals.items_total > 0 
-                    THEN (bi.total_price / bill_totals.items_total) * p.amount
-                    ELSE 0 
-                END
-            ), 0) as total
-            FROM bill_items bi
-            INNER JOIN bills b ON bi.bill_id = b.id
-            INNER JOIN payments p ON p.bill_id = b.id
-            INNER JOIN (
-                SELECT bill_id, SUM(total_price) as items_total 
-                FROM bill_items 
-                WHERE status != 'cancelled' 
-                GROUP BY bill_id
-            ) bill_totals ON bill_totals.bill_id = bi.bill_id
-            WHERE bi.item_type = ?
-            AND bi.status != 'cancelled'
-            AND b.patient_id IS NOT NULL 
-            AND b.visit_id IS NOT NULL
-            AND b.bill_number NOT LIKE 'BILL-OTC-%'
-            AND p.branch_id = ?
-        ");
-        $stmt->execute([$type, $cashier_id]);
-        $clinical_revenue += (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-    }
-} catch (Exception $e) {
-    $clinical_revenue = 0;
-}
-
-// 5. Lab Tests (proportion from payments)
-$lab_revenue = 0;
+// Pharmacy Discount (info only)
+$pharmacy_discount = 0;
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(
-            CASE 
-                WHEN bill_totals.items_total > 0 
-                THEN (bi.total_price / bill_totals.items_total) * p.amount
-                ELSE 0 
-            END
-        ), 0) as lab_revenue
-        FROM bill_items bi
-        INNER JOIN bills b ON bi.bill_id = b.id
-        INNER JOIN payments p ON p.bill_id = b.id
-        INNER JOIN (
-            SELECT bill_id, SUM(total_price) as items_total 
-            FROM bill_items 
-            WHERE status != 'cancelled' 
-            GROUP BY bill_id
-        ) bill_totals ON bill_totals.bill_id = bi.bill_id
-        WHERE bi.item_type = 'lab_test'
-        AND bi.status != 'cancelled'
-        AND b.patient_id IS NOT NULL 
+        SELECT COALESCE(SUM(b.pharmacy_discount), 0) as pharmacy_discount
+        FROM bills b
+        WHERE b.branch_id = ?
+        AND b.status IN ('paid', 'partial')
+        AND b.patient_id IS NOT NULL
         AND b.visit_id IS NOT NULL
         AND b.bill_number NOT LIKE 'BILL-OTC-%'
-        AND p.branch_id = ?
+        AND b.pharmacy_discount > 0
     ");
     $stmt->execute([$cashier_id]);
-    $lab_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['lab_revenue'] ?? 0;
+    $pharmacy_discount = $stmt->fetch(PDO::FETCH_ASSOC)['pharmacy_discount'] ?? 0;
 } catch (Exception $e) {
-    $lab_revenue = 0;
+    $pharmacy_discount = 0;
 }
 
-// 6. Total Revenue
+// ✅ V14: PRESCRIPTION REVENUE = Medication_RAW (GROSS - bila discount, bila premium, bila round)
+$prescription_revenue = (float)$medication_raw;
+
+// Round cards zingine (bila Prescription)
+$patient_bills_revenue = round_to_50($patient_bills_revenue);
+$otc_revenue = round_to_50($otc_revenue);
+$medication_raw = round_to_50($medication_raw);
+$pharmacy_discount = round_to_50($pharmacy_discount);
+
 $total_revenue = $patient_bills_revenue + $otc_revenue;
 
-// 7. Expenses
 $total_expenses = 0;
-$expenses_count = 0;
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(amount), 0) as total_expenses,
-               COUNT(*) as expenses_count
+        SELECT COALESCE(SUM(amount), 0) as total_expenses
         FROM expenses 
         WHERE branch_id = ? AND status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_expenses = $row['total_expenses'] ?? 0;
-    $expenses_count = $row['expenses_count'] ?? 0;
+    $total_expenses = $stmt->fetch(PDO::FETCH_ASSOC)['total_expenses'] ?? 0;
 } catch (Exception $e) {
     $total_expenses = 0;
-    $expenses_count = 0;
 }
+$total_expenses = round_to_50($total_expenses);
 
-// 8. Net Profit
 $net_profit = $total_revenue - $total_expenses;
-
-// 9. Premium & Discount (from bills)
-$total_premium = 0;
-$total_discount = 0;
-try {
-    $stmt = $db->prepare("
-        SELECT 
-            COALESCE(SUM(b.total_discount), 0) as total_discount,
-            COALESCE(SUM(b.premium_amount), 0) as total_premium
-        FROM bills b
-        WHERE b.branch_id = ?
-        AND b.bill_number NOT LIKE 'BILL-OTC-%'
-        AND b.patient_id IS NOT NULL
-        AND b.visit_id IS NOT NULL
-    ");
-    $stmt->execute([$cashier_id]);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_discount = $row['total_discount'] ?? 0;
-    $total_premium = $row['total_premium'] ?? 0;
-} catch (Exception $e) {
-    $total_premium = 0;
-    $total_discount = 0;
-}
-
-// ================================================================
-// ✅ ROUND ALL AMOUNTS TO NEAREST 50
-// ================================================================
-$total_revenue               = round_to_50($total_revenue);
-$patient_bills_revenue       = round_to_50($patient_bills_revenue);
-$otc_revenue                 = round_to_50($otc_revenue);
-$prescription_revenue        = round_to_50($prescription_revenue);
-$clinical_revenue            = round_to_50($clinical_revenue);
-$lab_revenue                 = round_to_50($lab_revenue);
-$total_expenses              = round_to_50($total_expenses);
-$net_profit                  = round_to_50($net_profit);
-$total_premium               = round_to_50($total_premium);
-$total_discount              = round_to_50($total_discount);
 
 // ================================================================
 // GET STAFF FOR THIS BRANCH
@@ -441,7 +339,6 @@ try {
             b.subtotal,
             b.discount_amount,
             b.total_discount,
-            b.premium_amount,
             b.total_amount,
             b.paid_amount,
             b.balance,
@@ -521,53 +418,26 @@ include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
-<!-- ================================================================ -->
-<!-- FONT AWESOME 6 + JETBRAINS MONO -->
-<!-- ================================================================ -->
+<!-- ================================================================
+     ✅ FONT AWESOME 6 - LOADED DIRECTLY
+     ================================================================ -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+<!-- ✅ JETBRAINS MONO -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
 <style>
-    @font-face {
-        font-family: 'Font Awesome 6 Free';
-        font-style: normal;
-        font-weight: 900;
-        font-display: block;
-        src: url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/webfonts/fa-solid-900.woff2") format("woff2"),
-             url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/webfonts/fa-solid-900.ttf") format("truetype");
-    }
-    
-    @font-face {
-        font-family: 'Font Awesome 6 Free';
-        font-style: normal;
-        font-weight: 400;
-        font-display: block;
-        src: url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/webfonts/fa-regular-400.woff2") format("woff2"),
-             url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/webfonts/fa-regular-400.ttf") format("truetype");
-    }
-    
-    @font-face {
-        font-family: 'Font Awesome 6 Brands';
-        font-style: normal;
-        font-weight: 400;
-        font-display: block;
-        src: url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/webfonts/fa-brands-400.woff2") format("woff2"),
-             url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/webfonts/fa-brands-400.ttf") format("truetype");
-    }
-</style>
-
-<style>
     :root {
         --font-mono: 'JetBrains Mono', 'Courier New', monospace;
-        --page-bg-body: #F0FDF4;
+        --page-bg-body: #F1F5F9;
         --page-bg-card: #FFFFFF;
         --page-text-primary: #1E293B;
         --page-text-secondary: #64748B;
         --page-text-muted: #94A3B8;
-        --page-border: #D1FAE5;
-        --page-hover: #ECFDF5;
+        --page-border: #E2E8F0;
+        --page-hover: #F1F5F9;
     }
 
     [data-theme="dark"] {
@@ -577,48 +447,56 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         --page-text-secondary: #94A3B8;
         --page-text-muted: #64748B;
         --page-border: #334155;
-        --page-hover: #1A3A2A;
+        --page-hover: #1E3A5F;
     }
 
-    /* ✅ FORCE FONT AWESOME */
+    /* ══════════════════════════════════════════════════════════════
+       ✅ FORCE FONT AWESOME ICONS
+       ══════════════════════════════════════════════════════════════ */
     i.fas, i.far, i.fab, i.fa,
     .fas, .far, .fab, .fa,
-    i[class*="fa-"], span[class*="fa-"] {
+    i[class*="fa-"],
+    span[class*="fa-"] {
         font-family: 'Font Awesome 6 Free', 'Font Awesome 6 Brands', 'FontAwesome' !important;
         font-weight: 900 !important;
         font-style: normal !important;
         font-variant: normal !important;
         text-rendering: auto !important;
         -webkit-font-smoothing: antialiased !important;
-        -moz-osx-font-smoothing: grayscale !important;
         display: inline-block !important;
         line-height: 1 !important;
-        speak: never !important;
     }
     
     i.far, .far { font-family: 'Font Awesome 6 Free' !important; font-weight: 400 !important; }
     i.fab, .fab { font-family: 'Font Awesome 6 Brands' !important; font-weight: 400 !important; }
 
-    .stat-number, .stat-label, .stat-sub, .stat-card-8,
-    .stat-card-8 *, .header-badge, .badge-custom,
-    .data-table-custom, .data-table-custom *,
+    /* ✅ JetBrains Mono kwa namba */
+    .detail-value-custom,
+    .detail-label-custom,
+    .card-amount-custom,
+    .card-label-custom,
+    .card-sub-custom,
+    .stat-number-mini,
+    .stat-label-mini,
+    .data-table-custom,
+    .badge-custom,
     .status-badge-pending, .status-badge-paid, .status-badge-partial, .status-badge-cancelled,
-    .flash-message-custom, .bill-action-btn,
-    .revenue-card-custom, .revenue-card-custom *,
-    .stat-mini-custom, .stat-mini-custom * {
+    .header-badge,
+    .page-subtitle,
+    .flash-message-custom,
+    .bill-action-btn {
         font-family: var(--font-mono) !important;
         font-variant-numeric: tabular-nums;
-        letter-spacing: -0.02em;
     }
 
-    body { background: var(--page-bg-body, #F0FDF4); }
+    body { background: var(--page-bg-body); }
     html[data-theme="dark"] body { background: #0F172A !important; }
-    .main-content { background: var(--page-bg-body, #F0FDF4); }
+    .main-content { background: var(--page-bg-body); }
     html[data-theme="dark"] .main-content { background: #0F172A !important; color: #F1F5F9; }
 
     /* PAGE HEADER */
     .page-header-custom {
-        background: linear-gradient(135deg, #047857 0%, #065F46 100%);
+        background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #083C8A 100%);
         border-radius: 18px;
         padding: 28px 36px;
         margin-bottom: 24px;
@@ -627,7 +505,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         justify-content: space-between;
         align-items: center;
         gap: 16px;
-        box-shadow: 0 8px 32px rgba(4, 120, 87, 0.35);
+        box-shadow: 0 8px 32px rgba(11, 94, 215, 0.35);
         position: relative;
         overflow: hidden;
     }
@@ -655,7 +533,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         margin: 0;
     }
 
-    .page-header-custom .page-title i { font-size: 2rem; opacity: 0.9; }
+    .page-header-custom .page-title i { 
+        font-size: 2rem; 
+        opacity: 0.9;
+        font-family: 'Font Awesome 6 Free' !important;
+        font-weight: 900 !important;
+    }
 
     .page-header-custom .page-subtitle {
         color: rgba(255,255,255,0.9);
@@ -670,14 +553,41 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     .page-header-custom .role-badge-display {
-        background: rgba(255,255,255,0.25);
-        color: white;
+        background: linear-gradient(135deg, #FCD34D, #F59E0B);
+        color: #78350F;
         padding: 4px 14px;
         border-radius: 20px;
         font-size: 0.65rem;
-        font-weight: 700;
+        font-weight: 800;
         text-transform: uppercase;
         letter-spacing: 0.05em;
+    }
+
+    .v14-badge {
+        background: rgba(252,211,77,0.25);
+        color: #FCD34D;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.62rem;
+        font-weight: 800;
+        border: 1px solid rgba(252,211,77,0.4);
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .pulse-dot {
+        display: inline-block;
+        width: 6px; height: 6px;
+        border-radius: 50%;
+        background: currentColor;
+        margin-right: 4px;
+        animation: pulseDot 1.5s infinite;
+    }
+
+    @keyframes pulseDot {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
     }
 
     .page-header-custom .header-badge {
@@ -691,6 +601,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         align-items: center;
         gap: 6px;
         border: 1px solid rgba(255,255,255,0.2);
+    }
+
+    .page-header-custom .header-badge i { 
+        font-size: 0.75rem;
+        font-family: 'Font Awesome 6 Free' !important;
+        font-weight: 900 !important;
     }
 
     .page-header-custom .btn-outline-light {
@@ -716,184 +632,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         color: white;
     }
 
-    /* ================================================================
-       ✅ 8 CARDS GRID — SAME AS cashiers.php
-       ================================================================ */
-    .stats-grid-8 {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 16px;
-        margin-bottom: 24px;
-    }
-
-    .stat-card-8 {
-        border-radius: 16px;
-        border: none;
-        display: flex;
-        flex-direction: column;
-        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-        color: white;
-        position: relative;
-        overflow: hidden;
-        cursor: default;
-        min-height: 140px;
-        padding: 18px 20px;
-    }
-
-    .stat-card-8::before {
-        content: '';
-        position: absolute;
-        top: -50%; right: -20%;
-        width: 160px; height: 160px;
-        background: rgba(255,255,255,0.06);
-        border-radius: 50%;
-        pointer-events: none;
-        transition: all 0.5s ease;
-    }
-
-    .stat-card-8::after {
-        content: '';
-        position: absolute;
-        bottom: -40%; left: -10%;
-        width: 120px; height: 120px;
-        background: rgba(255,255,255,0.04);
-        border-radius: 50%;
-        pointer-events: none;
-        transition: all 0.5s ease;
-    }
-
-    .stat-card-8:hover {
-        transform: translateY(-6px) scale(1.02);
-        box-shadow: 0 12px 36px rgba(0,0,0,0.2);
-    }
-
-    .stat-card-8:hover::before { transform: scale(1.3); right: -10%; }
-    .stat-card-8:hover::after { transform: scale(1.4); bottom: -30%; }
-
-    .stat-card-8 .stat-icon {
-        width: 46px; height: 46px;
-        border-radius: 12px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.2rem;
-        flex-shrink: 0;
-        background: rgba(255,255,255,0.18);
-        color: white;
-        border: 1px solid rgba(255,255,255,0.12);
-        backdrop-filter: blur(8px);
-        transition: all 0.3s ease;
-        margin-bottom: 10px;
-        position: relative;
-        z-index: 1;
-    }
-
-    .stat-card-8 .stat-icon i {
-        font-size: 1.2rem;
-        color: white;
-    }
-
-    .stat-card-8:hover .stat-icon {
-        transform: scale(1.1) rotate(-3deg);
-        background: rgba(255,255,255,0.3);
-    }
-
-    .stat-card-8 .stat-content {
-        position: relative;
-        z-index: 1;
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-    }
-
-    .stat-card-8 .stat-label {
-        font-size: 0.62rem;
-        color: rgba(255,255,255,0.85);
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        margin: 0 0 4px 0;
-    }
-
-    .stat-card-8 .stat-number {
-        font-size: 1.65rem;
-        font-weight: 800;
-        color: white;
-        margin: 0;
-        line-height: 1.1;
-        letter-spacing: -0.03em;
-        word-break: break-word;
-    }
-
-    .stat-card-8 .stat-sub {
-        font-size: 0.6rem;
-        color: rgba(255,255,255,0.85);
-        margin-top: 4px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        flex-wrap: wrap;
-    }
-
-    .stat-card-8 .stat-sub .premium-badge {
-        color: #FCD34D;
-        font-weight: 800;
-        text-shadow: 0 0 8px rgba(252, 211, 77, 0.5);
-    }
-
-    .stat-card-8 .stat-sub .discount-badge {
-        color: #FEF08A;
-        font-weight: 800;
-        text-shadow: 0 0 8px rgba(254, 240, 138, 0.5);
-    }
-
-    .stat-card-8 .stat-arrow {
-        position: absolute;
-        right: 14px;
-        bottom: 14px;
-        color: rgba(255,255,255,0.15);
-        font-size: 0.9rem;
-        transition: all 0.3s ease;
-        z-index: 1;
-    }
-
-    .stat-card-8:hover .stat-arrow {
-        transform: translateX(8px);
-        color: rgba(255,255,255,0.5);
-    }
-
-    /* Card Colors — SAME AS cashiers.php */
-    .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-    .card-blue:hover { box-shadow: 0 12px 36px rgba(11, 94, 215, 0.4); }
-
-    .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-    .card-red:hover { box-shadow: 0 12px 36px rgba(220, 38, 38, 0.4); }
-
-    .card-green { background: linear-gradient(135deg, #059669, #047857); }
-    .card-green:hover { box-shadow: 0 12px 36px rgba(5, 150, 105, 0.4); }
-
-    .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
-    .card-orange:hover { box-shadow: 0 12px 36px rgba(217, 119, 6, 0.4); }
-
-    .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-    .card-purple:hover { box-shadow: 0 12px 36px rgba(124, 58, 237, 0.4); }
-
-    .card-gold { background: linear-gradient(135deg, #F59E0B, #D97706); }
-    .card-gold:hover { box-shadow: 0 12px 36px rgba(245, 158, 11, 0.4); }
-
-    .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
-    .card-teal:hover { box-shadow: 0 12px 36px rgba(13, 148, 136, 0.4); }
-
-    .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
-    .card-cyan:hover { box-shadow: 0 12px 36px rgba(8, 145, 178, 0.4); }
-
     /* CASHIER INFO CARD */
     .detail-card-custom {
         background: var(--page-bg-card, #FFFFFF);
         border-radius: 16px;
-        border: 2px solid var(--page-border, #D1FAE5);
+        border: 2px solid var(--page-border, #E2E8F0);
         padding: 20px 24px;
         margin-bottom: 24px;
         box-shadow: 0 2px 8px rgba(0,0,0,0.04);
@@ -921,14 +664,401 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     html[data-theme="dark"] .detail-value-custom { color: #F1F5F9; }
 
-    /* BILLS SUMMARY CARDS */
-    .grid-5-cols { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px; }
+    /* REVENUE CARDS */
+    .revenue-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+        margin-bottom: 24px;
+    }
 
+    .revenue-card-custom {
+        border-radius: 14px;
+        padding: 18px 20px;
+        border: 2px solid rgba(255,255,255,0.1);
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+        position: relative;
+        overflow: hidden;
+        text-decoration: none;
+        color: white;
+        display: block;
+        min-height: 140px;
+    }
+
+    .revenue-card-custom::before {
+        content: '';
+        position: absolute;
+        top: -50%; right: -20%;
+        width: 200px; height: 200px;
+        background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+        border-radius: 50%;
+        pointer-events: none;
+        transition: all 0.5s ease;
+    }
+
+    .revenue-card-custom:hover {
+        transform: translateY(-6px) scale(1.02);
+        box-shadow: 0 12px 36px rgba(0,0,0,0.2);
+        color: white;
+    }
+
+    .revenue-card-custom:hover::before {
+        transform: scale(1.3);
+        right: -10%;
+    }
+
+    .revenue-card-custom .card-icon-custom {
+        width: 44px;
+        height: 44px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2rem;
+        margin-bottom: 8px;
+        background: rgba(255,255,255,0.15);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.1);
+        transition: all 0.3s ease;
+    }
+
+    .revenue-card-custom:hover .card-icon-custom {
+        transform: scale(1.1) rotate(-3deg);
+        background: rgba(255,255,255,0.3);
+    }
+
+    .revenue-card-custom .card-icon-custom i {
+        font-size: 1.2rem;
+        color: white;
+        font-family: 'Font Awesome 6 Free' !important;
+        font-weight: 900 !important;
+    }
+
+    .revenue-card-custom .card-amount-custom {
+        font-size: 1.4rem;
+        font-weight: 800;
+        color: white;
+        line-height: 1.2;
+        font-family: var(--font-mono);
+        letter-spacing: -0.02em;
+    }
+
+    .revenue-card-custom .card-label-custom {
+        font-size: 0.6rem;
+        color: rgba(255,255,255,0.7);
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin: 4px 0 2px 0;
+        font-family: var(--font-mono);
+    }
+
+    .revenue-card-custom .card-sub-custom {
+        font-size: 0.65rem;
+        color: rgba(255,255,255,0.6);
+        margin: 0;
+        opacity: 0.8;
+        font-family: var(--font-mono);
+    }
+
+    .revenue-card-custom .card-nav-arrow {
+        position: absolute;
+        bottom: 10px; right: 14px;
+        font-size: 0.7rem;
+        color: rgba(255,255,255,0.4);
+        transition: all 0.3s ease;
+    }
+
+    .revenue-card-custom:hover .card-nav-arrow {
+        opacity: 1;
+        transform: translateX(4px);
+        color: rgba(255,255,255,0.9);
+    }
+
+    /* Card Colors */
+    .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+    .card-blue:hover { box-shadow: 0 12px 36px rgba(11, 94, 215, 0.4); }
+    .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+    .card-red:hover { box-shadow: 0 12px 36px rgba(220, 38, 38, 0.4); }
+    .card-green { background: linear-gradient(135deg, #059669, #047857); }
+    .card-green:hover { box-shadow: 0 12px 36px rgba(5, 150, 105, 0.4); }
+    .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
+    .card-teal:hover { box-shadow: 0 12px 36px rgba(13, 148, 136, 0.4); }
+    .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+    .card-purple:hover { box-shadow: 0 12px 36px rgba(124, 58, 237, 0.4); }
+    .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
+    .card-cyan:hover { box-shadow: 0 12px 36px rgba(8, 145, 178, 0.4); }
+
+    /* TABLE CONTAINER */
+    .table-container-custom {
+        background: var(--page-bg-card, #FFFFFF);
+        border-radius: 16px;
+        border: 2px solid var(--page-border, #E2E8F0);
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        margin-bottom: 24px;
+        transition: all 0.3s ease;
+    }
+
+    .table-container-custom:hover {
+        box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+        border-color: #0B5ED7;
+    }
+
+    html[data-theme="dark"] .table-container-custom {
+        background: #1E293B;
+        border-color: #334155;
+    }
+
+    .table-container-custom .card-header-custom {
+        padding: 14px 20px;
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        border-bottom: 2px solid var(--page-border, #E2E8F0);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .table-container-custom .card-header-custom::before {
+        content: '';
+        position: absolute;
+        top: -50%; right: -10%;
+        width: 300px; height: 300px;
+        background: radial-gradient(circle, rgba(255,255,255,0.06) 0%, transparent 70%);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .table-container-custom .card-header-custom .card-title-custom {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: white;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        position: relative;
+        z-index: 1;
+        font-family: var(--font-mono);
+    }
+
+    .table-container-custom .card-header-custom .card-action-custom {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.7rem;
+        text-decoration: none;
+        transition: all 0.3s;
+        font-weight: 600;
+        position: relative;
+        z-index: 1;
+        font-family: var(--font-mono);
+    }
+
+    .table-container-custom .card-header-custom .card-action-custom:hover {
+        color: white;
+        transform: translateX(2px);
+    }
+
+    /* DATA TABLE */
+    .data-table-custom {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 0.78rem;
+    }
+
+    .data-table-custom thead th {
+        background: var(--page-hover, #F1F5F9);
+        color: var(--page-text-secondary, #64748B);
+        font-weight: 700;
+        padding: 10px 14px;
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-bottom: 2px solid var(--page-border, #E2E8F0);
+        text-align: left;
+        font-family: var(--font-mono);
+    }
+
+    html[data-theme="dark"] .data-table-custom thead th {
+        background: #0F172A;
+        border-bottom-color: #334155;
+    }
+
+    .data-table-custom td {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--page-border, #E2E8F0);
+        color: var(--page-text-primary, #1E293B);
+        vertical-align: middle;
+        font-family: var(--font-mono);
+    }
+
+    html[data-theme="dark"] .data-table-custom td {
+        color: #F1F5F9;
+        border-bottom-color: #334155;
+    }
+
+    .data-table-custom tbody tr:hover td {
+        background: var(--page-hover, #F1F5F9);
+    }
+
+    html[data-theme="dark"] .data-table-custom tbody tr:hover td {
+        background: #1E3A5F;
+    }
+
+    .data-table-custom tbody tr:last-child td {
+        border-bottom: none;
+    }
+
+    /* STATUS BADGES */
+    .status-badge-pending {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.62rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        box-shadow: 0 2px 8px rgba(11, 94, 215, 0.3);
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        font-family: var(--font-mono);
+    }
+
+    .status-badge-paid {
+        background: linear-gradient(135deg, #059669, #047857);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.62rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        font-family: var(--font-mono);
+    }
+
+    .status-badge-partial {
+        background: linear-gradient(135deg, #D97706, #B45309);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.62rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        box-shadow: 0 2px 8px rgba(217, 119, 6, 0.3);
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        font-family: var(--font-mono);
+    }
+
+    .status-badge-cancelled {
+        background: linear-gradient(135deg, #DC2626, #B91C1C);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.62rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        font-family: var(--font-mono);
+    }
+
+    /* BILL ACTIONS */
+    .bill-actions {
+        display: flex;
+        gap: 5px;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+
+    .bill-action-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 12px;
+        border-radius: 6px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        border: none;
+        cursor: pointer;
+        text-decoration: none;
+        transition: all 0.3s ease;
+        white-space: nowrap;
+        font-family: inherit;
+    }
+
+    .bill-btn-view {
+        background: #E8F0FE;
+        color: #0B5ED7;
+        border: 1px solid rgba(11, 94, 215, 0.2);
+    }
+
+    .bill-btn-view:hover {
+        background: #0B5ED7;
+        color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+
+    .bill-btn-edit {
+        background: #FEF3C7;
+        color: #D97706;
+        border: 1px solid rgba(217, 119, 6, 0.2);
+    }
+
+    .bill-btn-edit:hover {
+        background: #D97706;
+        color: white;
+        transform: translateY(-2px);
+    }
+
+    .bill-btn-cancel {
+        background: #FEE2E2;
+        color: #DC2626;
+        border: 1px solid rgba(220, 38, 38, 0.2);
+    }
+
+    .bill-btn-cancel:hover {
+        background: #DC2626;
+        color: white;
+        transform: translateY(-2px);
+    }
+
+    .bill-btn-disabled {
+        background: #F1F5F9;
+        color: #94A3B8;
+        border: 1px solid #E2E8F0;
+        cursor: not-allowed;
+        opacity: 0.5;
+    }
+
+    [data-theme="dark"] .bill-btn-view { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .bill-btn-edit { background: #3A2E1A; color: #FBBF24; }
+    [data-theme="dark"] .bill-btn-cancel { background: #3A1A1A; color: #F87171; }
+    [data-theme="dark"] .bill-btn-disabled { background: #1E293B; color: #64748B; }
+
+    /* STAT MINI */
     .stat-mini-custom {
         background: var(--page-bg-card, #FFFFFF);
         border-radius: 12px;
         padding: 14px 18px;
-        border: 2px solid var(--page-border, #D1FAE5);
+        border: 2px solid var(--page-border, #E2E8F0);
         transition: all 0.3s ease;
         text-decoration: none;
         color: var(--page-text-primary, #1E293B);
@@ -942,9 +1072,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     .stat-mini-custom:hover {
-        border-color: #059669;
+        border-color: #0B5ED7;
         transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.15);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.15);
     }
 
     .stat-mini-custom .stat-label-mini {
@@ -971,198 +1101,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .stat-mini-custom .text-red-600 { color: #DC2626; }
     .stat-mini-custom .text-blue-600 { color: #0B5ED7; }
 
-    /* TABLE CONTAINER */
-    .table-container-custom {
-        background: var(--page-bg-card, #FFFFFF);
-        border-radius: 16px;
-        border: 2px solid var(--page-border, #D1FAE5);
-        overflow: hidden;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-        margin-bottom: 24px;
-    }
-
-    html[data-theme="dark"] .table-container-custom {
-        background: #1E293B;
-        border-color: #334155;
-    }
-
-    .table-container-custom .card-header-custom {
-        padding: 14px 20px;
-        background: linear-gradient(135deg, #047857, #065F46);
-        border-bottom: 2px solid var(--page-border, #D1FAE5);
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 8px;
-    }
-
-    .table-container-custom .card-header-custom .card-title-custom {
-        font-size: 0.85rem;
-        font-weight: 700;
-        color: white;
-        margin: 0;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-
-    .table-container-custom .card-header-custom .card-action-custom {
-        color: rgba(255,255,255,0.85);
-        font-size: 0.7rem;
-        text-decoration: none;
-        transition: all 0.3s;
-        font-weight: 600;
-    }
-
-    .table-container-custom .card-header-custom .card-action-custom:hover {
-        color: white;
-    }
-
-    /* DATA TABLE */
-    .data-table-custom {
-        width: 100%;
-        border-collapse: separate;
-        border-spacing: 0;
-        font-size: 0.78rem;
-    }
-
-    .data-table-custom thead th {
-        background: var(--page-hover, #ECFDF5);
-        color: var(--page-text-secondary, #64748B);
-        font-weight: 700;
-        padding: 10px 14px;
-        font-size: 0.65rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        border-bottom: 2px solid var(--page-border, #D1FAE5);
-        text-align: left;
-    }
-
-    html[data-theme="dark"] .data-table-custom thead th {
-        background: #0F172A;
-        border-bottom-color: #334155;
-    }
-
-    .data-table-custom td {
-        padding: 10px 14px;
-        border-bottom: 1px solid var(--page-border, #D1FAE5);
-        color: var(--page-text-primary, #1E293B);
-        vertical-align: middle;
-    }
-
-    html[data-theme="dark"] .data-table-custom td {
-        color: #F1F5F9;
-        border-bottom-color: #334155;
-    }
-
-    .data-table-custom tbody tr:hover td {
-        background: var(--page-hover, #ECFDF5);
-    }
-
-    html[data-theme="dark"] .data-table-custom tbody tr:hover td {
-        background: #1A3A2A;
-    }
-
-    .data-table-custom tbody tr:last-child td {
-        border-bottom: none;
-    }
-
-    /* STATUS BADGES */
-    .status-badge-pending {
-        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-        color: white; padding: 4px 14px; border-radius: 20px;
-        font-size: 0.62rem; font-weight: 700;
-        display: inline-flex; align-items: center; gap: 5px;
-        box-shadow: 0 2px 8px rgba(11, 94, 215, 0.3);
-        letter-spacing: 0.03em; text-transform: uppercase;
-    }
-
-    .status-badge-paid {
-        background: linear-gradient(135deg, #059669, #047857);
-        color: white; padding: 4px 14px; border-radius: 20px;
-        font-size: 0.62rem; font-weight: 700;
-        display: inline-flex; align-items: center; gap: 5px;
-        box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
-        letter-spacing: 0.03em; text-transform: uppercase;
-    }
-
-    .status-badge-partial {
-        background: linear-gradient(135deg, #D97706, #B45309);
-        color: white; padding: 4px 14px; border-radius: 20px;
-        font-size: 0.62rem; font-weight: 700;
-        display: inline-flex; align-items: center; gap: 5px;
-        box-shadow: 0 2px 8px rgba(217, 119, 6, 0.3);
-        letter-spacing: 0.03em; text-transform: uppercase;
-    }
-
-    .status-badge-cancelled {
-        background: linear-gradient(135deg, #DC2626, #B91C1C);
-        color: white; padding: 4px 14px; border-radius: 20px;
-        font-size: 0.62rem; font-weight: 700;
-        display: inline-flex; align-items: center; gap: 5px;
-        box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
-        letter-spacing: 0.03em; text-transform: uppercase;
-    }
-
-    /* BILL ACTIONS */
-    .bill-actions { display: flex; gap: 5px; justify-content: center; flex-wrap: wrap; }
-
-    .bill-action-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 5px 12px;
-        border-radius: 6px;
-        font-size: 0.65rem;
-        font-weight: 700;
-        border: none;
-        cursor: pointer;
-        text-decoration: none;
-        transition: all 0.3s ease;
-        white-space: nowrap;
-        font-family: inherit;
-    }
-
-    .bill-btn-view {
-        background: #E8F0FE; color: #0B5ED7;
-        border: 1px solid rgba(11, 94, 215, 0.2);
-    }
-    .bill-btn-view:hover {
-        background: #0B5ED7; color: white;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-
-    .bill-btn-edit {
-        background: #FEF3C7; color: #D97706;
-        border: 1px solid rgba(217, 119, 6, 0.2);
-    }
-    .bill-btn-edit:hover {
-        background: #D97706; color: white;
-        transform: translateY(-2px);
-    }
-
-    .bill-btn-cancel {
-        background: #FEE2E2; color: #DC2626;
-        border: 1px solid rgba(220, 38, 38, 0.2);
-    }
-    .bill-btn-cancel:hover {
-        background: #DC2626; color: white;
-        transform: translateY(-2px);
-    }
-
-    .bill-btn-disabled {
-        background: #F1F5F9; color: #94A3B8;
-        border: 1px solid #E2E8F0;
-        cursor: not-allowed; opacity: 0.5;
-    }
-
-    [data-theme="dark"] .bill-btn-view { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .bill-btn-edit { background: #3A2E1A; color: #FBBF24; }
-    [data-theme="dark"] .bill-btn-cancel { background: #3A1A1A; color: #F87171; }
-    [data-theme="dark"] .bill-btn-disabled { background: #1E293B; color: #64748B; }
-
     /* BADGES */
     .badge-custom {
         display: inline-flex;
@@ -1172,6 +1110,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         border-radius: 20px;
         font-size: 0.6rem;
         font-weight: 700;
+        font-family: var(--font-mono);
     }
 
     .badge-blue { background: #E8F0FE; color: #0B5ED7; }
@@ -1193,20 +1132,30 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         font-weight: 600;
         font-size: 0.9rem;
         animation: slideDown 0.5s ease;
+        font-family: var(--font-mono);
     }
 
     .flash-message-custom.success {
-        background: #D1FAE5; color: #065F46;
+        background: #D1FAE5;
+        color: #065F46;
         border-left: 5px solid #059669;
     }
 
     .flash-message-custom.error {
-        background: #FEE2E2; color: #991B1B;
+        background: #FEE2E2;
+        color: #991B1B;
         border-left: 5px solid #DC2626;
     }
 
-    html[data-theme="dark"] .flash-message-custom.success { background: #1A3A2A; color: #34D399; }
-    html[data-theme="dark"] .flash-message-custom.error { background: #3A1A1A; color: #F87171; }
+    html[data-theme="dark"] .flash-message-custom.success {
+        background: #1A3A2A;
+        color: #34D399;
+    }
+
+    html[data-theme="dark"] .flash-message-custom.error {
+        background: #3A1A1A;
+        color: #F87171;
+    }
 
     @keyframes slideDown {
         from { opacity: 0; transform: translateY(-15px); }
@@ -1233,7 +1182,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         max-width: 500px;
         width: 100%;
         padding: 24px 28px;
-        border: 2px solid var(--page-border, #D1FAE5);
+        border: 2px solid var(--page-border, #E2E8F0);
         box-shadow: 0 20px 30px rgba(0,0,0,0.2);
     }
 
@@ -1247,7 +1196,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         justify-content: space-between;
         align-items: center;
         padding-bottom: 12px;
-        border-bottom: 2px solid var(--page-border, #D1FAE5);
+        border-bottom: 2px solid var(--page-border, #E2E8F0);
         margin-bottom: 16px;
     }
 
@@ -1258,6 +1207,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         display: flex;
         align-items: center;
         gap: 8px;
+        font-family: var(--font-mono);
     }
 
     .modal-close-custom {
@@ -1271,12 +1221,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .cancel-reason-textarea {
         width: 100%;
         padding: 10px 14px;
-        border: 2px solid var(--page-border, #D1FAE5);
+        border: 2px solid var(--page-border, #E2E8F0);
         border-radius: 8px;
         font-size: 0.9rem;
         resize: vertical;
         min-height: 80px;
-        background: var(--page-bg-body, #F0FDF4);
+        background: var(--page-bg-body, #F1F5F9);
         color: var(--page-text-primary, #1E293B);
         font-family: inherit;
     }
@@ -1286,36 +1236,36 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         outline: none;
     }
 
-    /* RESPONSIVE */
-    @media (max-width: 1200px) {
-        .stats-grid-8 { grid-template-columns: repeat(4, 1fr); }
+    /* GRID UTILITIES */
+    .grid-5-cols { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px; }
+
+    /* ANIMATIONS */
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .animate-fade-in-up {
+        animation: fadeInUp 0.5s ease forwards;
+        opacity: 0;
     }
 
     @media (max-width: 1024px) {
-        .stats-grid-8 { grid-template-columns: repeat(2, 1fr); }
+        .revenue-grid { grid-template-columns: repeat(2, 1fr); }
         .grid-5-cols { grid-template-columns: repeat(2, 1fr); }
     }
 
     @media (max-width: 768px) {
         .page-header-custom { padding: 18px; }
         .page-header-custom .page-title { font-size: 1.15rem; }
-        .stats-grid-8 { grid-template-columns: 1fr 1fr; gap: 12px; }
-        .stat-card-8 .stat-number { font-size: 1.25rem; }
-        .stat-card-8 .stat-icon { width: 38px; height: 38px; font-size: 1rem; }
+        .revenue-grid { grid-template-columns: 1fr; }
         .grid-5-cols { grid-template-columns: 1fr 1fr; }
         .bill-actions { flex-direction: column; }
         .bill-action-btn { width: 100%; justify-content: center; }
     }
 
-    @media (max-width: 480px) {
-        .stats-grid-8 { grid-template-columns: 1fr; gap: 12px; }
-        .stat-card-8 .stat-number { font-size: 1.2rem; }
-        .stat-card-8 { min-height: 120px; padding: 14px 16px; }
-        .grid-5-cols { grid-template-columns: 1fr; }
-    }
-
     @media print {
-        .page-header-custom { background: #047857 !important; -webkit-print-color-adjust: exact; }
+        .page-header-custom { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; }
         .bill-actions { display: none !important; }
     }
 </style>
@@ -1334,12 +1284,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <?php } ?>
 
     <!-- PAGE HEADER -->
-    <div class="page-header-custom">
+    <div class="page-header-custom animate-fade-in-up">
         <div style="position:relative;z-index:1;">
             <h1 class="page-title">
                 <i class="fas fa-cash-register"></i>
                 Cashier Details
-                <span class="role-badge-display">ADMIN</span>
+                <span class="role-badge-display"><i class="fas fa-user-shield"></i> ADMIN</span>
+                <span class="v14-badge">
+                    <span class="pulse-dot"></span> V14 GROSS
+                </span>
             </h1>
             <p class="page-subtitle">
                 <span><i class="fas fa-store-alt"></i> <strong><?= htmlspecialchars($cashier['name'] ?? 'N/A') ?></strong></span>
@@ -1366,7 +1319,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- CASHIER INFO -->
-    <div class="detail-card-custom">
+    <div class="detail-card-custom animate-fade-in-up" style="animation-delay:0.05s;">
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;">
             <div>
                 <p class="detail-label-custom"><i class="fas fa-map-marker-alt"></i> Location</p>
@@ -1394,111 +1347,62 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================
-         ✅ 8 CARDS — SAME AS cashiers.php
-         ================================================================ -->
-    <div class="stats-grid-8">
-
-        <!-- 1. Total Revenue - BLUE -->
-        <div class="stat-card-8 card-blue">
-            <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Total Revenue</p>
-                <p class="stat-number"><?= formatCurrency($total_revenue) ?></p>
-                <p class="stat-sub"><i class="fas fa-chart-line"></i> Payments + OTC</p>
-            </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-
-        <!-- 2. Patient Payments + Premium + Discount - GREEN -->
-        <div class="stat-card-8 card-green">
-            <div class="stat-icon"><i class="fas fa-hand-holding-usd"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Patient Payments</p>
-                <p class="stat-number"><?= formatCurrency($patient_bills_revenue) ?></p>
-                <p class="stat-sub">
-                    <i class="fas fa-receipt"></i> <?= number_format($payments_count) ?> payments
-                    <?php if ($total_premium > 0): ?>
-                        <span class="premium-badge"> • ⭐ Prem: <?= number_format($total_premium, 0) ?></span>
-                    <?php endif; ?>
-                    <?php if ($total_discount > 0): ?>
-                        <span class="discount-badge"> • 🏷️ Disc: <?= number_format($total_discount, 0) ?></span>
-                    <?php endif; ?>
-                </p>
-            </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-
-        <!-- 3. OTC Sales - CYAN -->
-        <div class="stat-card-8 card-cyan">
-            <div class="stat-icon"><i class="fas fa-cash-register"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">OTC Sales</p>
-                <p class="stat-number"><?= formatCurrency($otc_revenue) ?></p>
-                <p class="stat-sub"><i class="fas fa-shopping-cart"></i> <?= number_format($otc_count) ?> transactions</p>
-            </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-
-        <!-- 4. Prescriptions - PURPLE -->
-        <div class="stat-card-8 card-purple">
-            <div class="stat-icon"><i class="fas fa-prescription"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Prescriptions</p>
-                <p class="stat-number"><?= formatCurrency($prescription_revenue) ?></p>
-                <p class="stat-sub"><i class="fas fa-pills"></i> From payments</p>
-            </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-
-        <!-- 5. Clinical Services - GREEN -->
-        <div class="stat-card-8 card-green">
-            <div class="stat-icon"><i class="fas fa-stethoscope"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Clinical Services</p>
-                <p class="stat-number"><?= formatCurrency($clinical_revenue) ?></p>
-                <p class="stat-sub"><i class="fas fa-notes-medical"></i> Cons + Proc + Equip</p>
-            </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-
-        <!-- 6. Lab Tests - PURPLE -->
-        <div class="stat-card-8 card-purple">
-            <div class="stat-icon"><i class="fas fa-flask"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Lab Tests</p>
-                <p class="stat-number"><?= formatCurrency($lab_revenue) ?></p>
-                <p class="stat-sub"><i class="fas fa-microscope"></i> From payments</p>
-            </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-
-        <!-- 7. Total Expenses - RED -->
-        <div class="stat-card-8 card-red">
-            <div class="stat-icon"><i class="fas fa-receipt"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Total Expenses</p>
-                <p class="stat-number"><?= formatCurrency($total_expenses) ?></p>
-                <p class="stat-sub"><i class="fas fa-list"></i> <?= number_format($expenses_count) ?> records</p>
-            </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-
-        <!-- 8. Net Profit - GREEN/RED -->
-        <div class="stat-card-8 <?= $net_profit >= 0 ? 'card-green' : 'card-red' ?>">
-            <div class="stat-icon"><i class="fas <?= $net_profit >= 0 ? 'fa-chart-line' : 'fa-exclamation-triangle' ?>"></i></div>
-            <div class="stat-content">
-                <p class="stat-label"><?= $net_profit >= 0 ? '💰 Net Profit' : '📉 Net Loss' ?></p>
-                <p class="stat-number"><?= formatCurrency(abs($net_profit)) ?></p>
-                <p class="stat-sub"><i class="fas fa-calculator"></i> Revenue - Expenses</p>
-            </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-
+    <!-- 6 REVENUE CARDS -->
+    <div class="revenue-grid animate-fade-in-up" style="animation-delay:0.1s;">
+        <a href="revenue.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-blue">
+            <div class="card-icon-custom"><i class="fas fa-money-bill-wave"></i></div>
+            <p class="card-amount-custom"><?= formatCurrency($total_revenue) ?></p>
+            <p class="card-label-custom">Total Revenue</p>
+            <p class="card-sub-custom">Payments + OTC Sales</p>
+            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
+        </a>
+        
+        <a href="expenses.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-red">
+            <div class="card-icon-custom"><i class="fas fa-arrow-up"></i></div>
+            <p class="card-amount-custom"><?= formatCurrency($total_expenses) ?></p>
+            <p class="card-label-custom">Total Expenses</p>
+            <p class="card-sub-custom">From expenses (paid)</p>
+            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
+        </a>
+        
+        <a href="profit.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-green">
+            <div class="card-icon-custom"><i class="fas fa-chart-line"></i></div>
+            <p class="card-amount-custom"><?= formatCurrency($net_profit) ?></p>
+            <p class="card-label-custom">Net Profit</p>
+            <p class="card-sub-custom">Revenue - Expenses</p>
+            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
+        </a>
+        
+        <a href="bills.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card-custom card-green">
+            <div class="card-icon-custom"><i class="fas fa-hand-holding-usd"></i></div>
+            <p class="card-amount-custom"><?= formatCurrency($patient_bills_revenue) ?></p>
+            <p class="card-label-custom">Patient Payments</p>
+            <p class="card-sub-custom"><?= number_format($payments_count) ?> payments</p>
+            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
+        </a>
+        
+        <a href="otc_sales.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-teal">
+            <div class="card-icon-custom"><i class="fas fa-cash-register"></i></div>
+            <p class="card-amount-custom"><?= formatCurrency($otc_revenue) ?></p>
+            <p class="card-label-custom">OTC Sales</p>
+            <p class="card-sub-custom">Over-the-counter sales</p>
+            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
+        </a>
+        
+        <!-- ✅ V14: PRESCRIPTION = GROSS (Bila round off) -->
+        <a href="prescriptions.php?branch=<?= $cashier_id ?>" class="revenue-card-custom card-purple">
+            <div class="card-icon-custom"><i class="fas fa-prescription"></i></div>
+            <p class="card-amount-custom" style="font-size:1.25rem;">
+                TSh <?= number_format($prescription_revenue, 2, '.', ',') ?>
+            </p>
+            <p class="card-label-custom">Prescriptions (Gross)</p>
+            <p class="card-sub-custom">GROSS = Medication RAW</p>
+            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
+        </a>
     </div>
 
     <!-- BILLS SUMMARY CARDS -->
-    <div class="grid-5-cols">
+    <div class="grid-5-cols animate-fade-in-up" style="animation-delay:0.15s;">
         <a href="bills.php?branch=<?= $cashier_id ?>" class="stat-mini-custom">
             <p class="stat-label-mini"><i class="fas fa-file-invoice"></i> Total Bills</p>
             <p class="stat-number-mini text-blue-600"><?= number_format($cashier['total_bills'] ?? 0) ?></p>
@@ -1522,7 +1426,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- RECENT BILLS -->
-    <div class="table-container-custom">
+    <div class="table-container-custom animate-fade-in-up" style="animation-delay:0.2s;">
         <div class="card-header-custom">
             <h3 class="card-title-custom">
                 <i class="fas fa-file-invoice"></i>
@@ -1582,7 +1486,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             }
                         ?>
                             <tr>
-                                <td style="font-size:0.7rem;font-weight:700;color:#059669;">
+                                <td style="font-size:0.7rem;font-weight:700;color:#0B5ED7;">
                                     <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
                                 </td>
                                 <td>
@@ -1593,11 +1497,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                         </div>
                                     <?php } ?>
                                 </td>
-                                <td style="font-weight:700;"><?= formatCurrency(round_to_50($bill['total_amount'] ?? 0)) ?></td>
-                                <td style="color:#059669;font-weight:700;"><?= formatCurrency(round_to_50($bill['paid_amount'] ?? 0)) ?></td>
+                                <td style="font-weight:700;"><?= formatCurrency($bill['total_amount'] ?? 0) ?></td>
+                                <td style="color:#059669;font-weight:700;"><?= formatCurrency($bill['paid_amount'] ?? 0) ?></td>
                                 <td>
                                     <?php if ($balance > 0) { ?>
-                                        <span style="color:#DC2626;font-weight:700;"><?= formatCurrency(round_to_50($balance)) ?></span>
+                                        <span style="color:#DC2626;font-weight:700;"><?= formatCurrency($balance) ?></span>
                                     <?php } else { ?>
                                         <span style="color:#059669;font-weight:700;"><?= formatCurrency(0) ?></span>
                                     <?php } ?>
@@ -1654,7 +1558,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- RECENT PAYMENTS -->
-    <div class="table-container-custom">
+    <div class="table-container-custom animate-fade-in-up" style="animation-delay:0.25s;">
         <div class="card-header-custom">
             <h3 class="card-title-custom">
                 <i class="fas fa-credit-card"></i>
@@ -1683,7 +1587,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <td style="font-size:0.7rem;"><?= htmlspecialchars($payment['receipt_number'] ?? 'N/A') ?></td>
                                 <td style="font-size:0.7rem;"><?= htmlspecialchars($payment['bill_number'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($payment['patient_name'] ?? 'N/A') ?></td>
-                                <td style="font-weight:700;color:#059669;"><?= formatCurrency(round_to_50($payment['amount'] ?? 0)) ?></td>
+                                <td style="font-weight:700;color:#059669;"><?= formatCurrency($payment['amount'] ?? 0) ?></td>
                                 <td>
                                     <span class="badge-custom badge-blue">
                                         <?= ucfirst($payment['payment_method'] ?? 'N/A') ?>
@@ -1711,7 +1615,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- STAFF LIST -->
-    <div class="table-container-custom">
+    <div class="table-container-custom animate-fade-in-up" style="animation-delay:0.3s;">
         <div class="card-header-custom">
             <h3 class="card-title-custom">
                 <i class="fas fa-users"></i>
@@ -1832,6 +1736,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
+    // ✅ VERIFY FONT AWESOME LOADED
     (function() {
         var testIcon = document.createElement('i');
         testIcon.className = 'fas fa-check';
@@ -1862,8 +1767,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             if (body) body.style.background = '#0F172A';
             if (mainContent) mainContent.style.background = '#0F172A';
         } else {
-            if (body) body.style.background = '#F0FDF4';
-            if (mainContent) mainContent.style.background = '#F0FDF4';
+            if (body) body.style.background = '#F1F5F9';
+            if (mainContent) mainContent.style.background = '#F1F5F9';
         }
     }
 
@@ -1915,11 +1820,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         if (e.key === 'Escape') closeCancelModal();
     });
 
-    console.log('%c💰 Braick - View Cashier V13 (8 CARDS MATCHING CASHIERS)', 'font-family: monospace; font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c✅ 8 CARDS — SAME AS cashiers.php', 'font-family: monospace; font-size:13px; color:#10B981; font-weight:bold;');
-    console.log('%c✅ Patient Payments shows Premium & Discount badges', 'font-family: monospace; font-size:13px; color:#F59E0B; font-weight:bold;');
-    console.log('%c✅ ALL AMOUNTS ROUNDED TO NEAREST 50', 'font-family: monospace; font-size:13px; color:#F59E0B; font-weight:bold;');
+    console.log('%c💰 Braick - View Cashier V14 GROSS', 'font-family: monospace; font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ V14: PRESCRIPTION = Medication_RAW (GROSS - bila discount, bila premium)', 'font-family: monospace; font-size:13px; color:#10B981; font-weight:bold;');
+    console.log('%c✅ V14: Prescription BILA round off (exact value, 2 decimal places)', 'font-family: monospace; font-size:13px; color:#FCD34D; font-weight:bold;');
+    console.log('%c✅ V14: Formula breakdown card imeondolewa', 'font-family: monospace; font-size:13px; color:#FCD34D;');
+    console.log('%c✅ SAWA KWA 100% NA AUDIT V13, ADMIN V20, CASHIERS V13.1', 'font-family: monospace; font-size:13px; color:#FCD34D; font-weight:bold;');
+    console.log('%c✅ FIXED: Font Awesome forced', 'font-family: monospace; font-size:13px; color:#10B981;');
     console.log('%c✅ FONT: JetBrains Mono', 'font-family: monospace; font-size:13px; color:#34D399;');
+    console.log('%c💰 Prescription (GROSS): TSh <?= number_format($prescription_revenue, 2, '.', ',') ?>', 'font-family: monospace; font-size:12px; color:#7C3AED; font-weight:bold;');
 </script>
 
 </body>

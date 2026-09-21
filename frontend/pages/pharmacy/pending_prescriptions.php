@@ -1,11 +1,14 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/pending_prescriptions.php
-// PHARMACY - PRESCRIPTIONS V6 (FIXED EMPTY PRESCRIPTIONS)
-// ✅ FIXED: PHP parse error karibu na if ($message)
-// ✅ FIXED: Tab "Pending" inaonyesha PENDING TU
-// ✅ FIXED: VIEW button inaenda kwa page tofauti kulingana na status
-// ✅ FIXED: HAIONYESHI prescriptions zenye items 0 (empty/empty after delete)
+// PHARMACY - PRESCRIPTIONS V11 (MEDICATION + PHARMACY ONLY)
+// ================================================================
+// ✅ MEDICATION ITEMS ONLY - Bila consultation
+// ✅ PHARMACY DISCOUNT/PREMIUM ONLY - Bila cashier
+// ✅ Unit Price & Amount kwa kila dawa - SAHIHI
+// ✅ Medication Total row kwenye table - SAHIHI
+// ✅ FIX: bill_items.total_price = qty × unit_price (BILA discount)
+// ✅ FIX: bills.total_amount = medication_total + premium - discount
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -95,6 +98,7 @@ try {
                         $item_total = $unit_price * $item['quantity'];
                         $medication_total += $item_total;
                         
+                        // ✅ SAHIHI: total_price = qty × unit_price (BILA discount)
                         $db->prepare("UPDATE prescription_items SET unit_price = ?, total_price = ? WHERE id = ? AND prescription_id = ?")
                            ->execute([$unit_price, $item_total, $item['id'], $prescription_id]);
                     }
@@ -104,7 +108,8 @@ try {
                     elseif ($discount_amount > 0) $discount_calc = $discount_amount;
                     
                     $stmt_bill = $db->prepare("
-                        SELECT DISTINCT b.id, b.bill_number FROM bills b
+                        SELECT DISTINCT b.id, b.bill_number, b.pharmacy_premium 
+                        FROM bills b
                         JOIN bill_items bi ON b.id = bi.bill_id
                         WHERE bi.reference_id = ? AND bi.reference_type = 'prescription'
                         AND bi.item_type = 'medication' AND b.status != 'cancelled' LIMIT 1
@@ -114,52 +119,58 @@ try {
                     
                     if ($existing_bill) {
                         $bill_id = $existing_bill['id'];
+                        $existing_premium = (float)($existing_bill['pharmacy_premium'] ?? 0);
+                        
                         $stmt_med = $db->prepare("SELECT SUM(total_price) as med_total, COUNT(*) as med_count FROM bill_items WHERE bill_id = ? AND item_type = 'medication' AND status != 'cancelled'");
                         $stmt_med->execute([$bill_id]);
                         $med_data = $stmt_med->fetch(PDO::FETCH_ASSOC);
                         $med_count = $med_data['med_count'] ?? 0;
-                        
-                        $stmt_other = $db->prepare("SELECT SUM(total_price) as other_total FROM bill_items WHERE bill_id = ? AND item_type != 'medication' AND status != 'cancelled'");
-                        $stmt_other->execute([$bill_id]);
-                        $other_total = $stmt_other->fetch(PDO::FETCH_ASSOC)['other_total'] ?? 0;
+                        $current_med_total = (float)($med_data['med_total'] ?? 0);
                         
                         $discount_per_item = ($discount_calc > 0 && $med_count > 0) ? $discount_calc / $med_count : 0;
                         
+                        // ✅ SAHIHI: discount_amount pekee, USIGUSE total_price/final_price
                         $db->prepare("
-                            UPDATE bill_items SET discount_amount = ?, total_price = total_price - ?, final_price = total_price - ?, updated_at = NOW()
+                            UPDATE bill_items SET discount_amount = ?, updated_at = NOW()
                             WHERE bill_id = ? AND item_type = 'medication' AND reference_type = 'prescription' AND reference_id = ?
-                        ")->execute([$discount_per_item, $discount_per_item, $discount_per_item, $bill_id, $prescription_id]);
+                        ")->execute([$discount_per_item, $bill_id, $prescription_id]);
                         
-                        $stmt_new_med = $db->prepare("SELECT SUM(total_price) as med_total, SUM(discount_amount) as med_discount FROM bill_items WHERE bill_id = ? AND item_type = 'medication' AND status != 'cancelled'");
-                        $stmt_new_med->execute([$bill_id]);
-                        $new_med = $stmt_new_med->fetch(PDO::FETCH_ASSOC);
-                        $new_total = ($new_med['med_total'] ?? 0) + $other_total;
+                        // ✅ SAHIHI: total_amount = medication_total + premium - discount
+                        $new_total = $current_med_total + $existing_premium - $discount_calc;
                         
                         $db->prepare("
-                            UPDATE bills SET discount_amount = ?, total_amount = ?, balance = ?, updated_at = NOW(),
-                            notes = CONCAT(COALESCE(notes, ''), ' | Pharmacy discount: ', ?, ' applied ', NOW())
+                            UPDATE bills SET 
+                                pharmacy_discount = ?, 
+                                discount_amount = ?, 
+                                total_amount = ?, 
+                                balance = ? - paid_amount,
+                                updated_at = NOW(),
+                                notes = CONCAT(COALESCE(notes, ''), ' | Pharmacy discount: applied ', NOW())
                             WHERE id = ? AND branch_id = ?
-                        ")->execute([$new_med['med_discount'] ?? 0, $new_total, $new_total, $discount_calc, $bill_id, $user_branch_id]);
+                        ")->execute([$discount_calc, $discount_calc, $new_total, $new_total, $bill_id, $user_branch_id]);
                         
                         $message = "✅ Prescription confirmed! Bill #{$existing_bill['bill_number']} updated.";
                         $message_type = 'success';
                     } else {
                         $bill_number = 'BILL-PRES-' . date('Ymd') . '-' . str_pad($prescription['patient_id'], 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
-                        $final_med_total = $medication_total - $discount_calc;
+                        
+                        // ✅ SAHIHI: total_amount = medication_total + 0 premium - discount
+                        $initial_total = $medication_total - $discount_calc;
                         
                         $db->prepare("
                             INSERT INTO bills (bill_number, patient_id, visit_id, branch_id, created_by,
-                            subtotal, discount_amount, discount_percent, total_amount, paid_amount, balance, status, payment_method, notes, created_at, updated_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'cash', ?, NOW(), NOW())
-                        ")->execute([$bill_number, $prescription['patient_id'], $prescription['visit_id'], $user_branch_id, $user_id, $final_med_total, $discount_calc, $discount_percent, $final_med_total, 0, $final_med_total, "Prescription #{$prescription['prescription_number']} - Confirmed"]);
+                            subtotal, discount_amount, pharmacy_discount, pharmacy_premium, discount_percent, total_discount, total_amount, paid_amount, balance, status, payment_method, notes, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0, ?, 'pending', 'cash', ?, NOW(), NOW())
+                        ")->execute([$bill_number, $prescription['patient_id'], $prescription['visit_id'], $user_branch_id, $user_id, $medication_total, $discount_calc, $discount_calc, $discount_percent, $discount_calc, $initial_total, $initial_total, "Prescription #{$prescription['prescription_number']} - Confirmed"]);
                         $bill_id = $db->lastInsertId();
                         
                         foreach ($items as $item) {
                             $item_total = ($item['unit_price'] ?? 0) * $item['quantity'];
+                            // ✅ SAHIHI: total_price = qty × unit_price (BILA discount), discount_amount = 0
                             $db->prepare("
                                 INSERT INTO bill_items (bill_id, patient_id, branch_id, item_type, item_name, quantity, unit_price, total_price, discount_amount, tax_amount, final_price, reference_id, reference_type, status, created_at, updated_at)
-                                VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, ?, ?, ?, ?, 'prescription', 'pending', NOW(), NOW())
-                            ")->execute([$bill_id, $prescription['patient_id'], $user_branch_id, $item['medication_name'], $item['quantity'], $item['unit_price'] ?? 0, $item_total, 0, 0, $item_total, $prescription_id]);
+                                VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, 0, 0, ?, ?, 'prescription', 'pending', NOW(), NOW())
+                            ")->execute([$bill_id, $prescription['patient_id'], $user_branch_id, $item['medication_name'], $item['quantity'], $item['unit_price'] ?? 0, $item_total, $item_total, $prescription_id]);
                         }
                         
                         $message = "✅ Prescription confirmed! New bill: #{$bill_number}";
@@ -274,8 +285,7 @@ try {
     $search = isset($_GET['search']) ? trim($_GET['search']) : '';
     
     // ================================================================
-    // MAIN QUERY - GROUP BY VISIT
-    // ✅ FIXED: Only include visits with at least 1 prescription_item
+    // MAIN QUERY
     // ================================================================
     $conditions = ["p.branch_id = ?"];
     $params = [$user_branch_id];
@@ -296,7 +306,6 @@ try {
     
     $where_clause = implode(" AND ", $conditions);
     
-    // ✅ FIXED: Add EXISTS check to ensure at least one prescription_item exists
     $sql = "
         SELECT 
             p.visit_id, p.patient_id,
@@ -354,6 +363,7 @@ try {
         
         if (empty($prescriptions)) continue;
         
+        // ✅ ITEM CONDITIONS - MEDICATION ONLY (bila consultation)
         $item_conditions = ["pi.patient_id = ?", "p.branch_id = ?", "p.visit_id = ?", "pi.quantity > 0"];
         $item_params = [$patient_id, $user_branch_id, $visit_id];
         
@@ -366,19 +376,30 @@ try {
         
         $item_where = implode(" AND ", $item_conditions);
         
+        // ✅ SAHIHI: Hesabu total_price = unit_price × quantity (BILA discount)
         $stmt_items = $db->prepare("
-            SELECT pi.*, p.prescription_number, p.status as prescription_status,
-                p.created_at as prescription_created_at, p.updated_at as prescription_updated_at,
-                p.dispensed_at as prescription_dispensed_at
+            SELECT pi.*, 
+                p.prescription_number, 
+                p.status as prescription_status,
+                p.created_at as prescription_created_at, 
+                p.updated_at as prescription_updated_at,
+                p.dispensed_at as prescription_dispensed_at,
+                bi.unit_price as bill_unit_price,
+                bi.discount_amount as bill_item_discount,
+                (COALESCE(bi.unit_price, pi.unit_price, 0) * pi.quantity) as calculated_total_price
             FROM prescription_items pi
             JOIN prescriptions p ON pi.prescription_id = p.id
+            LEFT JOIN bill_items bi ON bi.reference_id = p.id 
+                AND bi.reference_type = 'prescription' 
+                AND bi.item_type = 'medication'
+                AND bi.status != 'cancelled'
+                AND (bi.item_name LIKE CONCAT('%', pi.medication_name, '%') OR bi.item_name = pi.medication_name)
             WHERE $item_where
             ORDER BY pi.created_at DESC
         ");
         $stmt_items->execute($item_params);
         $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
         
-        // ✅ FIXED: Skip visits with NO items
         if (empty($items)) continue;
         
         $total_quantity = 0;
@@ -394,7 +415,6 @@ try {
             if (!empty($item['prescription_created_at'])) $prescription_dates[] = $item['prescription_created_at'];
         }
         
-        // ✅ FIXED: Skip if total_quantity is 0
         if ($total_quantity <= 0 || $medication_count <= 0) continue;
         
         foreach ($prescriptions as $pres) {
@@ -403,7 +423,6 @@ try {
             $prescription_statuses[] = $pres['status'];
         }
         
-        // Determine status
         $patient_status = 'pending';
         $has_pending = in_array('pending', $prescription_statuses);
         $has_confirmed = in_array('confirmed', $prescription_statuses);
@@ -420,26 +439,32 @@ try {
         
         $latest_prescription_date = !empty($prescription_dates) ? max($prescription_dates) : null;
         
-        // Get bill
+        // ================================================================
+        // ✅ GET BILL - PHARMACY ONLY
+        // ✅ SAHIHI: medication_total = SUM(unit_price × quantity)
+        // ================================================================
         $bill_id = null;
         $bill_number = null;
-        $bill_total = 0;
         $bill_status = null;
-        $bill_discount = 0;
+        $bill_pharmacy_discount = 0;
+        $bill_pharmacy_premium = 0;
+        $medication_total = 0;
         
         $prescription_ids = array_column($prescriptions, 'id');
         
         if (!empty($prescription_ids)) {
             $placeholders = implode(',', array_fill(0, count($prescription_ids), '?'));
             $stmt_bill_items = $db->prepare("
-                SELECT bi.bill_id, b.bill_number, b.status as bill_status,
-                    SUM(CASE WHEN bi.item_type = 'medication' THEN bi.total_price ELSE 0 END) as medication_total,
-                    SUM(CASE WHEN bi.item_type != 'medication' THEN bi.total_price ELSE 0 END) as other_total,
-                    SUM(CASE WHEN bi.item_type = 'medication' THEN bi.discount_amount ELSE 0 END) as med_discount
+                SELECT bi.bill_id, 
+                    b.bill_number, 
+                    b.status as bill_status,
+                    b.pharmacy_discount as bill_pharmacy_discount,
+                    b.pharmacy_premium as bill_pharmacy_premium,
+                    SUM(bi.unit_price * bi.quantity) as medication_total
                 FROM bill_items bi
                 JOIN bills b ON bi.bill_id = b.id
                 WHERE bi.patient_id = ? AND bi.branch_id = ? AND bi.reference_type = 'prescription'
-                  AND bi.reference_id IN ($placeholders) AND bi.status != 'cancelled'
+                  AND bi.reference_id IN ($placeholders) AND bi.item_type = 'medication' AND bi.status != 'cancelled'
                 GROUP BY bi.bill_id
                 ORDER BY b.created_at DESC LIMIT 1
             ");
@@ -452,17 +477,19 @@ try {
                 $bill_id = $bill_items_data['bill_id'];
                 $bill_number = $bill_items_data['bill_number'];
                 $bill_status = $bill_items_data['bill_status'] ?? 'pending';
-                $med_total = $bill_items_data['medication_total'] ?? 0;
-                $other_total = $bill_items_data['other_total'] ?? 0;
-                $bill_discount = $bill_items_data['med_discount'] ?? 0;
-                $bill_total = $med_total + $other_total - $bill_discount;
+                $medication_total = (float)($bill_items_data['medication_total'] ?? 0);
+                
+                $bill_pharmacy_discount = (float)($bill_items_data['bill_pharmacy_discount'] ?? 0);
+                $bill_pharmacy_premium = (float)($bill_items_data['bill_pharmacy_premium'] ?? 0);
             }
         }
         
+        // Kama hakuna bill, hesabu kutoka items (unit_price × quantity)
         if (!$bill_id) {
-            $bill_total = 0;
+            $medication_total = 0;
             foreach ($items as $it) {
-                $bill_total += ($it['unit_price'] ?? 0) * $it['quantity'];
+                $unit_price = (float)($it['bill_unit_price'] ?? $it['unit_price'] ?? 0);
+                $medication_total += $unit_price * $it['quantity'];
             }
             $bill_status = 'pending';
             $bill_number = 'Calculated';
@@ -487,9 +514,10 @@ try {
             'items' => $items,
             'bill_id' => $bill_id,
             'bill_number' => $bill_number,
-            'bill_total' => $bill_total,
             'bill_status' => $bill_status,
-            'bill_discount' => $bill_discount,
+            'bill_pharmacy_discount' => $bill_pharmacy_discount,
+            'bill_pharmacy_premium' => $bill_pharmacy_premium,
+            'medication_total' => $medication_total,
             'prescription_count' => count($prescriptions),
             'latest_prescription_date' => $latest_prescription_date,
         ];
@@ -636,6 +664,8 @@ include_once '../../components/pharmacy_sidebar.php';
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
+            --purple: #7C3AED;
+            --purple-bg: #EDE9FE;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
@@ -657,6 +687,7 @@ include_once '../../components/pharmacy_sidebar.php';
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
             --border-color: #334155;
+            --purple-bg: #2D1B4E;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -668,7 +699,7 @@ include_once '../../components/pharmacy_sidebar.php';
             -webkit-font-smoothing: antialiased;
         }
         
-        .mono, .patient-id, .qty-number, .money, .date-mono, .visit-number-badge {
+        .mono, .patient-id, .qty-number, .money, .date-mono, .visit-number-badge, .discount-value, .premium-value {
             font-family: var(--font-mono) !important;
             font-feature-settings: 'tnum';
             font-variant-numeric: tabular-nums;
@@ -681,20 +712,20 @@ include_once '../../components/pharmacy_sidebar.php';
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
-            padding: 28px 32px;
+            padding: 24px 28px;
             min-height: calc(100vh - 68px);
         }
         
         .page-header {
             background: linear-gradient(135deg, #0B5ED7, #0A4CA8, #083C8A);
             border-radius: 16px;
-            padding: 24px 32px;
-            margin-bottom: 20px;
+            padding: 20px 28px;
+            margin-bottom: 16px;
             display: flex;
             flex-wrap: wrap;
             justify-content: space-between;
             align-items: center;
-            gap: 16px;
+            gap: 14px;
             box-shadow: 0 4px 20px rgba(11, 94, 215, 0.3);
             position: relative;
             overflow: hidden;
@@ -712,7 +743,7 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .page-header .page-title {
             color: white;
-            font-size: 1.8rem;
+            font-size: 1.6rem;
             font-weight: 700;
             display: flex;
             align-items: center;
@@ -722,11 +753,11 @@ include_once '../../components/pharmacy_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
+        .page-header .page-title i { font-size: 1.8rem; opacity: 0.9; }
         
         .page-header .page-subtitle {
             color: rgba(255,255,255,0.85);
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             display: flex;
             align-items: center;
             gap: 8px;
@@ -738,9 +769,9 @@ include_once '../../components/pharmacy_sidebar.php';
         .page-header .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
-            padding: 4px 14px;
+            padding: 3px 12px;
             border-radius: 20px;
-            font-size: 0.65rem;
+            font-size: 0.6rem;
             font-weight: 600;
             text-transform: uppercase;
             backdrop-filter: blur(4px);
@@ -751,7 +782,7 @@ include_once '../../components/pharmacy_sidebar.php';
             color: white;
             padding: 2px 12px;
             border-radius: 20px;
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             font-weight: 500;
             display: inline-flex;
             align-items: center;
@@ -763,14 +794,14 @@ include_once '../../components/pharmacy_sidebar.php';
             background: rgba(255,255,255,0.12);
             color: white;
             border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 16px;
+            padding: 7px 14px;
             border-radius: 10px;
             font-weight: 500;
-            font-size: 0.82rem;
+            font-size: 0.78rem;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
             backdrop-filter: blur(4px);
             position: relative;
             z-index: 1;
@@ -781,25 +812,14 @@ include_once '../../components/pharmacy_sidebar.php';
             transform: translateY(-2px);
         }
         
-        .update-badge-light {
-            background: rgba(255,255,255,0.12);
-            color: rgba(255,255,255,0.8);
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            backdrop-filter: blur(4px);
-        }
-        
+        /* FILTER TABS */
         .filter-tabs {
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
             align-items: center;
-            margin-bottom: 16px;
-            padding: 12px 16px;
+            margin-bottom: 14px;
+            padding: 10px 14px;
             background: var(--bg-card);
             border-radius: var(--radius-lg);
             border: 1px solid var(--border-color);
@@ -810,9 +830,9 @@ include_once '../../components/pharmacy_sidebar.php';
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            padding: 8px 18px;
+            padding: 6px 14px;
             border-radius: 10px;
-            font-size: 0.78rem;
+            font-size: 0.72rem;
             font-weight: 700;
             text-decoration: none;
             border: 2px solid var(--border-color);
@@ -834,7 +854,7 @@ include_once '../../components/pharmacy_sidebar.php';
             color: var(--text-secondary);
             padding: 1px 8px;
             border-radius: 10px;
-            font-size: 0.65rem;
+            font-size: 0.62rem;
             font-weight: 800;
             font-family: var(--font-mono);
         }
@@ -854,24 +874,25 @@ include_once '../../components/pharmacy_sidebar.php';
         .filter-tab.confirmed.active { background: linear-gradient(135deg, #3B82F6, #0B5ED7); }
         .filter-tab.dispensed.active { background: linear-gradient(135deg, #059669, #047857); }
         
-        .filter-tab .tab-icon { font-size: 0.9rem; }
+        .filter-tab .tab-icon { font-size: 0.85rem; }
         
+        /* SEARCH TOOLBAR */
         .search-toolbar {
             background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             border-radius: var(--radius-lg);
-            padding: 12px 20px;
-            margin-bottom: 16px;
+            padding: 10px 18px;
+            margin-bottom: 14px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-wrap: wrap;
-            gap: 12px;
+            gap: 10px;
             box-shadow: 0 4px 16px rgba(11, 94, 215, 0.2);
         }
         
         .search-toolbar .toolbar-title {
             color: white;
-            font-size: 0.9rem;
+            font-size: 0.82rem;
             font-weight: 700;
             display: flex;
             align-items: center;
@@ -886,8 +907,8 @@ include_once '../../components/pharmacy_sidebar.php';
             border: 2px solid rgba(255,255,255,0.25);
             border-radius: 10px;
             padding: 0 14px;
-            min-width: 380px;
-            height: 40px;
+            min-width: 340px;
+            height: 36px;
         }
         
         .search-toolbar .search-wrapper:focus-within {
@@ -897,7 +918,7 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .search-toolbar .search-wrapper .search-icon {
             color: rgba(255,255,255,0.8);
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             margin-right: 8px;
         }
         
@@ -907,7 +928,7 @@ include_once '../../components/pharmacy_sidebar.php';
             border: none;
             outline: none;
             color: white;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             font-family: var(--font-primary);
         }
         
@@ -931,7 +952,7 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .search-results-count {
             color: rgba(255,255,255,0.9);
-            font-size: 0.7rem;
+            font-size: 0.68rem;
             font-weight: 600;
             background: rgba(255,255,255,0.2);
             padding: 3px 12px;
@@ -941,15 +962,16 @@ include_once '../../components/pharmacy_sidebar.php';
             font-family: var(--font-mono);
         }
         
+        /* SEARCH INFO BOX */
         .search-info-box {
             display: none;
-            margin-bottom: 16px;
-            padding: 14px 20px;
+            margin-bottom: 14px;
+            padding: 10px 16px;
             border-radius: 12px;
             background: linear-gradient(135deg, #E8F0FE, #D6E4FF);
             border: 2px solid var(--primary);
             align-items: center;
-            gap: 16px;
+            gap: 14px;
             flex-wrap: wrap;
         }
         
@@ -958,35 +980,35 @@ include_once '../../components/pharmacy_sidebar.php';
         .search-info-box.show { display: flex; }
         
         .search-info-box .info-icon {
-            width: 50px; height: 50px;
+            width: 42px; height: 42px;
             border-radius: 50%;
             background: var(--primary);
             color: white;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.3rem;
+            font-size: 1.1rem;
             flex-shrink: 0;
         }
         
-        .search-info-box .info-text { flex: 1; min-width: 180px; }
+        .search-info-box .info-text { flex: 1; min-width: 160px; }
         
         .search-info-box .info-label {
-            font-size: 0.65rem;
+            font-size: 0.6rem;
             color: var(--text-secondary);
             font-weight: 700;
             text-transform: uppercase;
         }
         
         .search-info-box .info-value {
-            font-size: 1.6rem;
+            font-size: 1.3rem;
             font-weight: 800;
             color: var(--primary);
             font-family: var(--font-mono);
         }
         
         .search-info-box .info-value small {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             font-weight: 500;
             color: var(--text-secondary);
             margin-left: 6px;
@@ -995,15 +1017,16 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .search-info-box .info-divider {
             width: 2px;
-            height: 45px;
+            height: 38px;
             background: var(--border-color);
         }
         
+        /* VISIT CARD */
         .visit-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
             border: 2px solid var(--border-color);
-            margin-bottom: 20px;
+            margin-bottom: 14px;
             overflow: hidden;
             box-shadow: var(--shadow);
             transition: all 0.3s ease;
@@ -1011,15 +1034,16 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .visit-card:hover { border-color: var(--primary); box-shadow: var(--shadow-md); }
         
+        /* VISIT HEADER */
         .visit-header {
             background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             color: white;
-            padding: 14px 22px;
+            padding: 10px 16px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-wrap: wrap;
-            gap: 12px;
+            gap: 10px;
             cursor: pointer;
         }
         
@@ -1028,88 +1052,99 @@ include_once '../../components/pharmacy_sidebar.php';
         .visit-header .visit-info {
             display: flex;
             align-items: center;
-            gap: 14px;
+            gap: 10px;
             flex: 1;
-            min-width: 250px;
+            min-width: 220px;
         }
         
         .visit-header .patient-avatar {
-            width: 48px; height: 48px;
+            width: 36px; height: 36px;
             border-radius: 50%;
             background: rgba(255,255,255,0.25);
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: 700;
-            font-size: 1.3rem;
+            font-size: 1rem;
             color: white;
             border: 2px solid rgba(255,255,255,0.4);
             font-family: var(--font-mono);
+            flex-shrink: 0;
         }
         
         .visit-header .patient-name {
             font-weight: 700;
-            font-size: 1.05rem;
+            font-size: 0.88rem;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
             flex-wrap: wrap;
         }
         
         .visit-header .visit-meta {
             display: flex;
-            gap: 14px;
-            font-size: 0.75rem;
+            gap: 10px;
+            font-size: 0.68rem;
             opacity: 0.9;
             flex-wrap: wrap;
-            margin-top: 3px;
+            margin-top: 2px;
         }
         
-        .visit-header .visit-meta span { display: flex; align-items: center; gap: 4px; }
+        .visit-header .visit-meta span { display: flex; align-items: center; gap: 3px; }
         
         .visit-header .visit-badge {
             background: linear-gradient(135deg, #FCD34D, #F59E0B);
             color: #78350F;
-            padding: 3px 12px;
+            padding: 2px 10px;
             border-radius: 8px;
-            font-size: 0.65rem;
+            font-size: 0.6rem;
             font-weight: 800;
             font-family: var(--font-mono);
             display: inline-flex;
             align-items: center;
-            gap: 4px;
+            gap: 3px;
         }
         
         .visit-header .visit-date-badge {
             background: rgba(255,255,255,0.25);
-            padding: 3px 12px;
+            padding: 2px 10px;
             border-radius: 20px;
-            font-size: 0.65rem;
+            font-size: 0.6rem;
             font-weight: 700;
             font-family: var(--font-mono);
             border: 1px solid rgba(255,255,255,0.3);
             display: inline-flex;
             align-items: center;
-            gap: 4px;
+            gap: 3px;
         }
         
         .visit-header .visit-stats {
             display: flex;
-            gap: 10px;
+            gap: 8px;
             align-items: center;
             flex-wrap: wrap;
         }
         
         .visit-header .visit-stats .stat-pill {
             background: rgba(255,255,255,0.2);
-            padding: 5px 14px;
+            padding: 4px 10px;
             border-radius: 20px;
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             font-weight: 600;
             display: inline-flex;
             align-items: center;
-            gap: 5px;
+            gap: 4px;
             border: 1px solid rgba(255,255,255,0.15);
+        }
+        
+        .visit-header .stat-pill.discount-pill {
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.35), rgba(217, 119, 6, 0.35));
+            border: 1px solid rgba(245, 158, 11, 0.5);
+        }
+        
+        .visit-header .stat-pill.premium-pill {
+            background: linear-gradient(135deg, rgba(124, 58, 237, 0.35), rgba(109, 40, 217, 0.35));
+            border: 1px solid rgba(124, 58, 237, 0.5);
         }
         
         .visit-header .stat-pill.date-pill {
@@ -1119,12 +1154,14 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .visit-header .stat-pill .qty-value,
-        .visit-header .stat-pill .money-value {
+        .visit-header .stat-pill .money-value,
+        .visit-header .stat-pill .discount-value,
+        .visit-header .stat-pill .premium-value {
             font-family: var(--font-mono);
             font-weight: 800;
         }
         
-        .visit-header .chevron { font-size: 0.9rem; transition: transform 0.3s ease; }
+        .visit-header .chevron { font-size: 0.85rem; transition: transform 0.3s ease; }
         .visit-header .chevron.rotated { transform: rotate(180deg); }
         
         .visit-body {
@@ -1133,25 +1170,76 @@ include_once '../../components/pharmacy_sidebar.php';
             transition: max-height 0.4s ease, padding 0.3s ease;
         }
         
-        .visit-body.open { max-height: 5000px; padding: 16px 22px 20px; }
+        .visit-body.open { max-height: 8000px; padding: 12px 16px 14px; }
         
+        /* BILL SUMMARY */
+        .bill-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+            gap: 6px;
+            padding: 8px 12px;
+            background: linear-gradient(135deg, #F8FAFC, #F1F5F9);
+            border-radius: 10px;
+            border: 1.5px solid var(--primary-light);
+            margin-bottom: 10px;
+        }
+        
+        [data-theme="dark"] .bill-summary {
+            background: linear-gradient(135deg, #1E293B, #0F172A);
+            border-color: #3B82F6;
+        }
+        
+        .bill-summary-item {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            text-align: center;
+            padding: 3px 6px;
+            border-right: 1px solid var(--border-color);
+            min-height: 45px;
+            justify-content: center;
+        }
+        
+        .bill-summary-item:last-child { border-right: none; }
+        
+        .bill-summary-item .label {
+            font-size: 0.5rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-secondary);
+        }
+        
+        .bill-summary-item .value {
+            font-size: 0.82rem;
+            font-weight: 800;
+            font-family: var(--font-mono);
+            color: var(--primary);
+            line-height: 1.1;
+        }
+        
+        .bill-summary-item .value.discount { color: #D97706; }
+        .bill-summary-item .value.premium { color: #7C3AED; }
+        .bill-summary-item .value.total { color: #059669; }
+        
+        /* VISIT ACTIONS */
         .visit-actions {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            gap: 12px;
-            padding-bottom: 14px;
-            border-bottom: 2px dashed var(--border-color);
-            margin-bottom: 14px;
+            gap: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1.5px dashed var(--border-color);
+            margin-bottom: 10px;
             flex-wrap: wrap;
         }
         
         .visit-actions .visit-actions-info {
-            font-size: 0.8rem;
+            font-size: 0.72rem;
             color: var(--text-secondary);
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
             flex-wrap: wrap;
         }
         
@@ -1161,21 +1249,46 @@ include_once '../../components/pharmacy_sidebar.php';
             color: var(--text-primary);
         }
         
+        .visit-actions .visit-actions-info .info-divider {
+            color: var(--border-color);
+            font-weight: 300;
+        }
+        
+        .visit-actions .visit-actions-info .info-discount {
+            background: var(--warning-bg);
+            color: var(--warning);
+            padding: 2px 8px;
+            border-radius: 8px;
+            font-weight: 800;
+            font-family: var(--font-mono);
+            font-size: 0.65rem;
+        }
+        
+        .visit-actions .visit-actions-info .info-premium {
+            background: var(--purple-bg);
+            color: var(--purple);
+            padding: 2px 8px;
+            border-radius: 8px;
+            font-weight: 800;
+            font-family: var(--font-mono);
+            font-size: 0.65rem;
+        }
+        
         .btn-view-patient {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            gap: 6px;
-            padding: 7px 18px;
+            gap: 5px;
+            padding: 6px 14px;
             border-radius: 8px;
             font-weight: 700;
-            font-size: 0.72rem;
+            font-size: 0.68rem;
             background: linear-gradient(135deg, #059669, #047857);
             color: white;
             border: none;
             cursor: pointer;
             text-decoration: none;
-            min-width: 80px;
+            min-width: 70px;
         }
         
         .btn-view-patient:hover {
@@ -1183,15 +1296,16 @@ include_once '../../components/pharmacy_sidebar.php';
             box-shadow: 0 5px 16px rgba(5, 150, 105, 0.5);
         }
         
-        .table-scroll { overflow-x: auto; border-radius: 10px; }
+        /* TABLE */
+        .table-scroll { overflow-x: auto; border-radius: 8px; }
         
-        .data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        .data-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
         
         .data-table thead th {
             text-align: left;
-            padding: 10px 14px;
+            padding: 8px 10px;
             font-weight: 700;
-            font-size: 0.65rem;
+            font-size: 0.6rem;
             text-transform: uppercase;
             color: #ffffff;
             background: var(--primary);
@@ -1202,10 +1316,11 @@ include_once '../../components/pharmacy_sidebar.php';
         .data-table thead th i { margin-right: 5px; opacity: 0.7; }
         
         .data-table tbody td {
-            padding: 10px 14px;
+            padding: 8px 10px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
+            font-size: 0.72rem;
         }
         
         .data-table tbody tr:hover td { background: var(--primary-bg); }
@@ -1215,16 +1330,16 @@ include_once '../../components/pharmacy_sidebar.php';
         [data-theme="dark"] .data-table tbody tr:nth-child(even) td { background: #1A1A2E; }
         [data-theme="dark"] .data-table tbody tr:hover td { background: #1E3A5F; }
         
-        .date-cell { font-size: 0.7rem; color: var(--text-secondary); white-space: nowrap; }
+        .date-cell { font-size: 0.68rem; color: var(--text-secondary); white-space: nowrap; }
         .date-cell .date-main { font-weight: 600; color: var(--text-primary); font-family: var(--font-mono); }
-        .date-cell .date-time { font-size: 0.65rem; color: var(--text-secondary); display: block; font-family: var(--font-mono); }
-        .date-cell .date-ago { font-size: 0.6rem; color: var(--primary); display: block; font-weight: 600; }
+        .date-cell .date-time { font-size: 0.6rem; color: var(--text-secondary); display: block; font-family: var(--font-mono); }
+        .date-cell .date-ago { font-size: 0.55rem; color: var(--primary); display: block; font-weight: 600; }
         
         .badge-status {
             display: inline-block;
-            padding: 3px 14px;
+            padding: 2px 10px;
             border-radius: 20px;
-            font-size: 0.65rem;
+            font-size: 0.6rem;
             font-weight: 600;
             white-space: nowrap;
         }
@@ -1243,9 +1358,9 @@ include_once '../../components/pharmacy_sidebar.php';
             gap: 4px;
             background: var(--primary-bg);
             color: var(--primary);
-            padding: 3px 10px;
+            padding: 2px 8px;
             border-radius: 12px;
-            font-size: 0.75rem;
+            font-size: 0.68rem;
             font-weight: 700;
             border: 1px solid var(--primary);
             font-family: var(--font-mono);
@@ -1255,7 +1370,7 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .rx-number {
             font-family: var(--font-mono);
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             background: var(--primary-bg);
             color: var(--primary);
             padding: 2px 8px;
@@ -1270,7 +1385,7 @@ include_once '../../components/pharmacy_sidebar.php';
             text-align: center;
             font-weight: 700;
             color: var(--text-secondary);
-            font-size: 0.75rem;
+            font-size: 0.7rem;
         }
         
         mark.search-highlight {
@@ -1344,11 +1459,13 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
         
-        @media (max-width: 1024px) { .main-content { margin-left: 0; padding: 16px; } }
+        @media (max-width: 1024px) { 
+            .main-content { margin-left: 0; padding: 16px; } 
+        }
         
         @media (max-width: 768px) {
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
+            .page-header { padding: 14px 18px; }
+            .page-header .page-title { font-size: 1.2rem; }
             .filter-tabs { flex-direction: column; align-items: stretch; }
             .filter-tab { justify-content: center; }
             .search-toolbar { flex-direction: column; align-items: stretch; }
@@ -1356,6 +1473,7 @@ include_once '../../components/pharmacy_sidebar.php';
             .visit-header { flex-direction: column; align-items: stretch; }
             .visit-actions { flex-direction: column; align-items: stretch; }
             .btn-view-patient { width: 100%; }
+            .bill-summary { grid-template-columns: repeat(2, 1fr); }
         }
     </style>
 </head>
@@ -1370,12 +1488,9 @@ include_once '../../components/pharmacy_sidebar.php';
                 <i class="fas fa-prescription"></i>
                 Prescriptions
                 <span class="role-badge-display">PHARMACY</span>
-                <span class="update-badge-light">
-                    <i class="fas fa-sync-alt fa-spin"></i> Live
-                </span>
             </h1>
             <p class="page-subtitle">
-                Manage prescriptions (Grouped by Visit)
+                Medication Prescriptions Only
                 <span class="branch-tag">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
@@ -1399,7 +1514,7 @@ include_once '../../components/pharmacy_sidebar.php';
 
     <!-- MESSAGE -->
     <?php if (!empty($message)): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800' ?>">
+        <div class="p-3 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800' ?>" style="font-size:0.75rem;">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
             <?= $message ?>
         </div>
@@ -1433,8 +1548,8 @@ include_once '../../components/pharmacy_sidebar.php';
         
         <?php if (!empty($search) || $filter_status !== 'all'): ?>
             <a href="pending_prescriptions.php" 
-               style="margin-left:auto;padding:8px 16px;border-radius:10px;font-size:0.75rem;font-weight:700;background:transparent;color:var(--danger);border:2px solid var(--danger);text-decoration:none;display:inline-flex;align-items:center;gap:6px;">
-                <i class="fas fa-times"></i> Clear All
+               style="margin-left:auto;padding:6px 14px;border-radius:10px;font-size:0.68rem;font-weight:700;background:transparent;color:var(--danger);border:2px solid var(--danger);text-decoration:none;display:inline-flex;align-items:center;gap:5px;">
+                <i class="fas fa-times"></i> Clear
             </a>
         <?php endif; ?>
     </div>
@@ -1443,7 +1558,7 @@ include_once '../../components/pharmacy_sidebar.php';
     <div class="search-toolbar animate-fade-in-up">
         <div class="toolbar-title">
             <i class="fas fa-search"></i> Search Medicines
-            <span style="background:rgba(255,255,255,0.2);padding:2px 10px;border-radius:12px;font-size:0.65rem;font-weight:600;" id="headerCount">
+            <span style="background:rgba(255,255,255,0.2);padding:2px 10px;border-radius:12px;font-size:0.6rem;font-weight:600;" id="headerCount">
                 <?= $total_visits ?> Visits
             </span>
         </div>
@@ -1464,20 +1579,20 @@ include_once '../../components/pharmacy_sidebar.php';
         <div class="info-icon"><i class="fas fa-pills"></i></div>
         <div class="info-text">
             <div class="info-label">Total Quantity for Search</div>
-            <div class="info-search-term">"<strong id="searchTermDisplay"></strong>"</div>
+            <div style="font-size:0.72rem;color:var(--text-secondary);">"<strong id="searchTermDisplay"></strong>"</div>
         </div>
         <div class="info-divider"></div>
-        <div class="info-text" style="text-align:center;min-width:120px;">
+        <div class="info-text" style="text-align:center;min-width:100px;">
             <div class="info-label">Total Quantity</div>
             <div class="info-value" id="totalQtyDisplay">0 <small>units</small></div>
         </div>
         <div class="info-divider"></div>
-        <div class="info-text" style="text-align:center;min-width:100px;">
+        <div class="info-text" style="text-align:center;min-width:90px;">
             <div class="info-label">Visits</div>
             <div class="info-value" id="totalVisitsDisplay">0 <small>visits</small></div>
         </div>
         <div class="info-divider"></div>
-        <div class="info-text" style="text-align:center;min-width:100px;">
+        <div class="info-text" style="text-align:center;min-width:90px;">
             <div class="info-label">Prescriptions</div>
             <div class="info-value" id="totalPrescriptionsDisplay">0 <small>items</small></div>
         </div>
@@ -1498,14 +1613,16 @@ include_once '../../components/pharmacy_sidebar.php';
                 $medication_count = $visit['medication_count'] ?? 0;
                 $doctor_names = implode(', ', $visit['doctor_names'] ?? []);
                 $prescription_count = $visit['prescription_count'] ?? 0;
-                $bill_total = $visit['bill_total'] ?? 0;
-                $bill_discount = $visit['bill_discount'] ?? 0;
                 $items = $visit['items'] ?? [];
                 $latest_date = $visit['latest_prescription_date'] ?? null;
                 $visit_number = $visit['visit_number'] ?? 'N/A';
                 $visit_date = $visit['visit_date'] ?? null;
+                $bill_number = $visit['bill_number'] ?? null;
+                $medication_total = $visit['medication_total'] ?? 0;
                 
-                // DYNAMIC VIEW URL BASED ON STATUS
+                $bill_pharm_discount = $visit['bill_pharmacy_discount'] ?? 0;
+                $bill_pharm_premium = $visit['bill_pharmacy_premium'] ?? 0;
+                
                 $view_url = 'view_patient_prescriptions.php';
                 $view_label = 'VIEW';
                 $view_icon = 'fa-eye';
@@ -1550,7 +1667,7 @@ include_once '../../components/pharmacy_sidebar.php';
                                             <?= date('d M Y', strtotime($visit_date)) ?>
                                         </span>
                                     <?php endif; ?>
-                                    <span class="badge-status <?= $status_class ?>" style="font-size:0.55rem;padding:2px 8px;">
+                                    <span class="badge-status <?= $status_class ?>" style="font-size:0.5rem;padding:2px 6px;">
                                         <?= $status_label ?>
                                     </span>
                                 </div>
@@ -1575,9 +1692,23 @@ include_once '../../components/pharmacy_sidebar.php';
                             <span class="stat-pill" style="background:rgba(255,255,255,0.3);">
                                 <i class="fas fa-pills"></i> Qty: <span class="qty-value"><?= $total_qty ?></span>
                             </span>
+                            
+                            <?php if ($bill_pharm_discount > 0): ?>
+                                <span class="stat-pill discount-pill" title="Pharmacy Discount">
+                                    <i class="fas fa-pills"></i> Pharm Disc: <span class="discount-value">-<?= $currency ?> <?= number_format($bill_pharm_discount, 0) ?></span>
+                                </span>
+                            <?php endif; ?>
+                            
+                            <?php if ($bill_pharm_premium > 0): ?>
+                                <span class="stat-pill premium-pill" title="Pharmacy Premium">
+                                    <i class="fas fa-pills"></i> Pharm Prem: <span class="premium-value">+<?= $currency ?> <?= number_format($bill_pharm_premium, 0) ?></span>
+                                </span>
+                            <?php endif; ?>
+                            
                             <span class="stat-pill" style="background:rgba(255,255,255,0.3);">
-                                <i class="fas fa-money-bill-wave"></i> <span class="money-value"><?= $currency ?> <?= number_format($bill_total, 0) ?></span>
+                                <i class="fas fa-money-bill-wave"></i> <span class="money-value"><?= $currency ?> <?= number_format($medication_total, 0) ?></span>
                             </span>
+                            
                             <?php if (!empty($latest_date)): ?>
                                 <span class="stat-pill date-pill">
                                     <i class="fas fa-clock"></i> <?= formatDate($latest_date) ?>
@@ -1589,15 +1720,63 @@ include_once '../../components/pharmacy_sidebar.php';
                     
                     <div class="visit-body" id="body-<?= $unique_key ?>">
                         
+                        <!-- BILL SUMMARY - PHARMACY ONLY -->
+                        <div class="bill-summary">
+                            <div class="bill-summary-item">
+                                <span class="label">Meds Total</span>
+                                <span class="value"><?= $currency ?> <?= number_format($medication_total, 0) ?></span>
+                            </div>
+                            <div class="bill-summary-item">
+                                <span class="label">Pharm Discount</span>
+                                <span class="value discount">
+                                    <?= $bill_pharm_discount > 0 ? '-' . $currency . ' ' . number_format($bill_pharm_discount, 0) : '—' ?>
+                                </span>
+                            </div>
+                            <div class="bill-summary-item">
+                                <span class="label">Pharm Premium</span>
+                                <span class="value premium">
+                                    <?= $bill_pharm_premium > 0 ? '+' . $currency . ' ' . number_format($bill_pharm_premium, 0) : '—' ?>
+                                </span>
+                            </div>
+                            <div class="bill-summary-item">
+                                <span class="label">Net Total</span>
+                                <span class="value total">
+                                    <?php 
+                                        $net_total = $medication_total + $bill_pharm_premium - $bill_pharm_discount;
+                                        echo $currency . ' ' . number_format($net_total, 0);
+                                    ?>
+                                </span>
+                            </div>
+                            <?php if ($bill_number && $bill_number !== 'Calculated'): ?>
+                            <div class="bill-summary-item">
+                                <span class="label">Bill #</span>
+                                <span class="value" style="font-size:0.62rem;color:var(--text-secondary);"><?= htmlspecialchars($bill_number) ?></span>
+                            </div>
+                            <?php endif; ?>
+                        </div>
+                        
                         <div class="visit-actions">
                             <div class="visit-actions-info">
                                 <i class="fas fa-info-circle" style="color:var(--primary);"></i>
                                 <strong><?= $medication_count ?></strong> medication(s) • Total Qty: <strong><?= $total_qty ?></strong>
-                                <?php if ($bill_discount > 0): ?>
-                                    • Discount: <strong style="color:var(--success);">-<?= $currency ?> <?= number_format($bill_discount, 0) ?></strong>
+                                
+                                <?php if ($bill_pharm_discount > 0): ?>
+                                    <span class="info-divider">•</span>
+                                    <span class="info-discount">
+                                        <i class="fas fa-pills"></i> Pharm Discount: -<?= $currency ?> <?= number_format($bill_pharm_discount, 0) ?>
+                                    </span>
                                 <?php endif; ?>
+                                
+                                <?php if ($bill_pharm_premium > 0): ?>
+                                    <span class="info-divider">•</span>
+                                    <span class="info-premium">
+                                        <i class="fas fa-pills"></i> Pharm Premium: +<?= $currency ?> <?= number_format($bill_pharm_premium, 0) ?>
+                                    </span>
+                                <?php endif; ?>
+                                
                                 <?php if (!empty($latest_date)): ?>
-                                    • <i class="fas fa-calendar-alt"></i> Latest: <strong><?= formatDate($latest_date) ?></strong>
+                                    <span class="info-divider">•</span>
+                                    <i class="fas fa-calendar-alt"></i> Latest: <strong><?= formatDate($latest_date) ?></strong>
                                 <?php endif; ?>
                             </div>
                             <a href="<?= $view_url ?>" 
@@ -1612,22 +1791,31 @@ include_once '../../components/pharmacy_sidebar.php';
                             <table class="data-table">
                                 <thead>
                                     <tr>
-                                        <th style="width:50px;">#</th>
+                                        <th style="width:40px;text-align:center;">#</th>
                                         <th><i class="fas fa-pills"></i> Medication</th>
-                                        <th><i class="fas fa-sort-numeric-up"></i> Qty</th>
+                                        <th style="text-align:center;"><i class="fas fa-sort-numeric-up"></i> Qty</th>
+                                        <th style="text-align:right;"><i class="fas fa-coins"></i> Unit Price</th>
+                                        <th style="text-align:right;"><i class="fas fa-money-bill"></i> Amount</th>
                                         <th><i class="fas fa-prescription"></i> Dosage</th>
-                                        <th><i class="fas fa-clock"></i> Frequency</th>
-                                        <th><i class="fas fa-route"></i> Route</th>
                                         <th><i class="fas fa-prescription"></i> Rx #</th>
                                         <th><i class="fas fa-calendar-alt"></i> Date</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <?php $i = 1; foreach ($items as $item): 
+                                    <?php 
+                                    $i = 1; 
+                                    $visit_med_total_calc = 0;
+                                    foreach ($items as $item): 
                                         $med_name = $item['medication_name'] ?? 'N/A';
                                         $med_qty = $item['quantity'] ?? 0;
                                         $pres_num = $item['prescription_number'] ?? 'N/A';
                                         $item_date = $item['prescription_created_at'] ?? ($item['created_at'] ?? null);
+                                        
+                                        // ✅ SAHIHI: unit_price × quantity (BILA discount)
+                                        $item_unit_price = (float)($item['bill_unit_price'] ?? $item['unit_price'] ?? 0);
+                                        $item_total_price = $item_unit_price * $med_qty;
+                                        
+                                        $visit_med_total_calc += $item_total_price;
                                     ?>
                                         <tr class="med-row"
                                             data-search="<?= htmlspecialchars(strtolower($med_name . ' ' . $visit['patient_name'] . ' ' . $visit['patient_code'] . ' ' . $pres_num . ' ' . $visit['phone'] . ' ' . $visit_number)) ?>"
@@ -1635,18 +1823,22 @@ include_once '../../components/pharmacy_sidebar.php';
                                             data-qty="<?= $med_qty ?>">
                                             <td class="row-number"><?= $i++ ?></td>
                                             <td>
-                                                <div style="font-weight:600;font-size:0.85rem;" data-searchable>
+                                                <div style="font-weight:600;font-size:0.78rem;" data-searchable>
                                                     <?= htmlspecialchars($med_name) ?>
                                                 </div>
                                             </td>
-                                            <td>
+                                            <td style="text-align:center;">
                                                 <span class="qty-badge" data-searchable>
-                                                    <i class="fas fa-pills"></i> <?= number_format($med_qty) ?>
+                                                    <?= number_format($med_qty) ?>
                                                 </span>
                                             </td>
-                                            <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['dosage'] ?? '—') ?></td>
-                                            <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['frequency'] ?? '—') ?></td>
-                                            <td style="font-size:0.75rem;" data-searchable><?= htmlspecialchars($item['route'] ?? '—') ?></td>
+                                            <td style="text-align:right;font-size:0.72rem;color:var(--text-secondary);font-family:var(--font-mono);" data-searchable>
+                                                <?= $currency ?> <?= number_format($item_unit_price, 0) ?>
+                                            </td>
+                                            <td style="text-align:right;font-weight:700;font-family:var(--font-mono);color:var(--primary);font-size:0.75rem;" data-searchable>
+                                                <?= $currency ?> <?= number_format($item_total_price, 0) ?>
+                                            </td>
+                                            <td style="font-size:0.7rem;" data-searchable><?= htmlspecialchars($item['dosage'] ?? '—') ?></td>
                                             <td>
                                                 <span class="rx-number" data-searchable><?= htmlspecialchars($pres_num) ?></span>
                                             </td>
@@ -1654,13 +1846,23 @@ include_once '../../components/pharmacy_sidebar.php';
                                                 <?php if (!empty($item_date)): ?>
                                                     <span class="date-main"><?= date('d M Y', strtotime($item_date)) ?></span>
                                                     <span class="date-time"><?= date('H:i', strtotime($item_date)) ?></span>
-                                                    <span class="date-ago"><?= timeAgo($item_date) ?></span>
                                                 <?php else: ?>
                                                     <span style="color:var(--text-secondary);">N/A</span>
                                                 <?php endif; ?>
                                             </td>
                                         </tr>
                                     <?php endforeach; ?>
+                                    
+                                    <!-- ✅ MEDICATION TOTAL ROW - SAHIHI -->
+                                    <tr style="background:linear-gradient(135deg, #E8F0FE, #D6E4FF);font-weight:700;border-top:2px solid var(--primary);">
+                                        <td colspan="4" style="text-align:right;padding:10px 12px;font-size:0.75rem;color:var(--primary);">
+                                            <i class="fas fa-pills"></i> MEDICATION TOTAL:
+                                        </td>
+                                        <td style="text-align:right;padding:10px 12px;font-size:0.88rem;color:var(--primary);font-family:var(--font-mono);font-weight:800;">
+                                            <?= $currency ?> <?= number_format($visit_med_total_calc, 0) ?>
+                                        </td>
+                                        <td colspan="3"></td>
+                                    </tr>
                                 </tbody>
                             </table>
                         </div>
@@ -1701,7 +1903,7 @@ include_once '../../components/pharmacy_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Prescriptions (Grouped by Visit)
+            Prescriptions V11 (Medication + Pharmacy Only - FIXED)
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
         </p>
@@ -1977,11 +2179,12 @@ include_once '../../components/pharmacy_sidebar.php';
         }, 500);
     <?php endif; ?>
     
-    console.log('%c💊 Braick - Prescriptions V6 (FIXED EMPTY)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Empty prescriptions (qty 0) zimeondolewa', 'font-size:13px; color:#059669; font-weight:bold;');
-    console.log('%c✅ Pending → view_patient_prescriptions.php', 'font-size:13px; color:#D97706; font-weight:bold;');
-    console.log('%c✅ Confirmed → view_confirmed_prescriptions.php', 'font-size:13px; color:#3B82F6; font-weight:bold;');
-    console.log('%c✅ Dispensed → view_dispensed_prescriptions.php', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c💊 Braick - Prescriptions V11 (FIXED)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ MEDICATION ONLY (bila consultation)', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ PHARMACY DISCOUNT/PREMIUM ONLY', 'font-size:13px; color:#7C3AED; font-weight:bold;');
+    console.log('%c✅ FIX: bill_items.total_price = qty × unit_price', 'font-size:12px; color:#D97706;');
+    console.log('%c✅ FIX: bills.total_amount = medication_total + premium - discount', 'font-size:12px; color:#059669;');
+    console.log('%c✅ FIX: Medication Total = SUM(unit_price × quantity)', 'font-size:12px; color:#3B82F6;');
 </script>
 
 </body>

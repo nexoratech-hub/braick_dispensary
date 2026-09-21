@@ -1,12 +1,19 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/view_patient_prescriptions.php
-// PHARMACY - VIEW PATIENT PRESCRIPTIONS V4 (PENDING + VISIT-STRICT)
+// PHARMACY - VIEW PATIENT PRESCRIPTIONS V6 (CLEAN BILL_ITEMS)
+// ✅ V6 FIXED: HAKUNA discount_amount kwenye bill_items (0.00)
+// ✅ V6 FIXED: HAKUNA final_price adjustment (final_price = total_price)
+// ✅ V6 FIXED: Discount/Premium zinabaki kwenye bills table PEKEE
+// ✅ V6 FIXED: bills.subtotal = SUM(bill_items.total_price) - GROSS
+// ✅ V6 FIXED: bills.total_amount = subtotal + premium - discount
 // ✅ FIXED: Inachukua PENDING TU (sio confirmed/dispensed)
 // ✅ FIXED: Inafilter kwa visit_id STRICT
 // ✅ FIXED: Haichanganyi dawa za visits tofauti
-// ✅ FIXED: Premium CUMULATIVE
-// ✅ FIXED: Discount applied correctly
+// ✅ FIXED: Pharmacy Premium CUMULATIVE (kivyake)
+// ✅ FIXED: Pharmacy Discount CUMULATIVE (kivyake)
+// ✅ NEW: pharmacy_premium & pharmacy_discount zinatumika
+// ✅ NEW: cashier_premium & cashier_discount hazigusiwi
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -86,7 +93,8 @@ try {
     $currency = $settings['currency'] ?? 'TSh';
     
     // ================================================================
-    // ✅ HANDLE SAVE - Premium & Discount (VISIT-SPECIFIC)
+    // ✅ HANDLE SAVE - Pharmacy Premium & Pharmacy Discount
+    // ✅ V6 FIXED: HAKUNA discount_amount kwenye bill_items
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'save_and_confirm') {
         $patient_id = isset($_POST['patient_id']) ? (int)$_POST['patient_id'] : 0;
@@ -94,7 +102,8 @@ try {
         $premium_amount = isset($_POST['premium_amount']) ? (float)str_replace(',', '', $_POST['premium_amount']) : 0;
         $discount_amount = isset($_POST['discount_amount']) ? (float)str_replace(',', '', $_POST['discount_amount']) : 0;
         
-        // Update each item with editable fields
+        // Update each item with editable fields (dosage, frequency, route, duration, instructions)
+        // ✅ HAKUNA discount_amount kwenye bill_items
         if (isset($_POST['items'])) {
             foreach ($_POST['items'] as $item_id => $item_data) {
                 $dosage = trim($item_data['dosage'] ?? '');
@@ -152,7 +161,10 @@ try {
                 // ================================================================
                 $stmt = $db->prepare("
                     SELECT id, total_amount, paid_amount, balance, discount_amount, 
-                           total_discount, subtotal, premium_amount, premium_note
+                           total_discount, subtotal, premium_amount, premium_note,
+                           pharmacy_discount, cashier_discount, 
+                           pharmacy_premium, cashier_premium,
+                           pharmacy_premium_note, cashier_premium_note
                     FROM bills 
                     WHERE patient_id = ? 
                       AND visit_id = ? 
@@ -166,14 +178,24 @@ try {
                 $bill_id = null;
                 
                 if ($existing_bill) {
+                    // ================================================================
+                    // ✅ UPDATE EXISTING BILL - V6 FIXED
+                    // ✅ HAKUNA update ya bill_items
+                    // ✅ Discount/Premium zinabaki kwenye bills table PEKEE
+                    // ================================================================
                     $bill_id = $existing_bill['id'];
-                    $current_subtotal = (float)$existing_bill['subtotal'];
                     $current_paid = (float)$existing_bill['paid_amount'];
                     $current_total_discount = (float)$existing_bill['total_discount'];
-                    $current_discount_amount = (float)$existing_bill['discount_amount'];
                     $current_premium = (float)($existing_bill['premium_amount'] ?? 0);
                     
-                    // Get medication total FROM BILL_ITEMS
+                    // ✅ PHARMACY-SPECIFIC VALUES
+                    $current_pharmacy_discount = (float)($existing_bill['pharmacy_discount'] ?? 0);
+                    $current_pharmacy_premium  = (float)($existing_bill['pharmacy_premium'] ?? 0);
+                    
+                    // ================================================================
+                    // ✅ Chukua med_total (GROSS - bila discount) kutoka bill_items
+                    // ✅ HAKUNA discount_amount kwenye bill_items
+                    // ================================================================
                     $stmt_med = $db->prepare("
                         SELECT SUM(total_price) as med_total, COUNT(*) as med_count
                         FROM bill_items
@@ -181,56 +203,47 @@ try {
                     ");
                     $stmt_med->execute([$bill_id]);
                     $med_data = $stmt_med->fetch(PDO::FETCH_ASSOC);
-                    $med_count = $med_data['med_count'] ?? 0;
+                    $med_total = (float)($med_data['med_total'] ?? 0);
+                    $med_count = (int)($med_data['med_count'] ?? 0);
                     
-                    // Get other items total
+                    // ================================================================
+                    // ✅ Chukua other items total (GROSS - bila discount)
+                    // ================================================================
                     $stmt_other = $db->prepare("
                         SELECT SUM(total_price) as other_total
                         FROM bill_items
                         WHERE bill_id = ? AND item_type != 'medication' AND status != 'cancelled'
                     ");
                     $stmt_other->execute([$bill_id]);
-                    $other_total = $stmt_other->fetch(PDO::FETCH_ASSOC)['other_total'] ?? 0;
+                    $other_total = (float)($stmt_other->fetch(PDO::FETCH_ASSOC)['other_total'] ?? 0);
                     
-                    // ✅ CUMULATIVE PREMIUM
+                    // ================================================================
+                    // ✅ CUMULATIVE - Pharmacy kivyake
+                    // ================================================================
+                    $new_pharmacy_premium  = $current_pharmacy_premium + $premium_amount;
+                    $new_pharmacy_discount = $current_pharmacy_discount + $discount_amount;
+                    
+                    // Total premium (pharmacy + cashier)
                     $new_premium_amount = $current_premium + $premium_amount;
                     
-                    // Apply NEW premium and discount
-                    $premium_per_item = ($premium_amount > 0 && $med_count > 0) 
-                        ? $premium_amount / $med_count : 0;
-                    $discount_per_item = ($discount_amount > 0 && $med_count > 0) 
-                        ? $discount_amount / $med_count : 0;
-                    
-                    $stmt_update_items = $db->prepare("
-                        UPDATE bill_items 
-                        SET discount_amount = discount_amount + ?,
-                            total_price = total_price + ? - ?,
-                            final_price = total_price + ? - ?,
-                            updated_at = NOW()
-                        WHERE bill_id = ? AND item_type = 'medication' AND status != 'cancelled'
-                    ");
-                    $stmt_update_items->execute([
-                        $discount_per_item,
-                        $premium_per_item, $discount_per_item,
-                        $premium_per_item, $discount_per_item,
-                        $bill_id
-                    ]);
-                    
-                    // Get new med total
-                    $stmt_new_med = $db->prepare("
-                        SELECT SUM(total_price) as med_total, SUM(discount_amount) as med_discount
-                        FROM bill_items
-                        WHERE bill_id = ? AND item_type = 'medication' AND status != 'cancelled'
-                    ");
-                    $stmt_new_med->execute([$bill_id]);
-                    $new_med_data = $stmt_new_med->fetch(PDO::FETCH_ASSOC);
-                    $new_med_total = $new_med_data['med_total'] ?? 0;
-                    $new_med_discount = $new_med_data['med_discount'] ?? 0;
-                    
-                    $new_total = $new_med_total + $other_total;
+                    // Total discount (pharmacy + cashier)
                     $new_total_discount = $current_total_discount + $discount_amount;
-                    $new_discount_amount = $current_discount_amount + $discount_amount;
-                    $new_balance = $new_total - $current_paid;
+                    
+                    // ================================================================
+                    // ✅ SUBTOTAL = GROSS ya items zote (bila discount)
+                    // ================================================================
+                    $new_subtotal = $med_total + $other_total;
+                    
+                    // ================================================================
+                    // ✅ TOTAL AMOUNT = Subtotal + Premium - Discount
+                    // ================================================================
+                    $new_total_amount = $new_subtotal + $new_premium_amount - $new_total_discount;
+                    if ($new_total_amount < 0) $new_total_amount = 0;
+                    
+                    // ================================================================
+                    // ✅ BALANCE = Total Amount - Paid
+                    // ================================================================
+                    $new_balance = $new_total_amount - $current_paid;
                     if ($new_balance < 0) $new_balance = 0;
                     
                     if ($new_balance <= 0) {
@@ -241,24 +254,46 @@ try {
                         $new_status = 'pending';
                     }
                     
+                    // ================================================================
+                    // ✅ UPDATE BILL PEKEE (bila kugusa bill_items)
+                    // ✅ HAKUNA discount_amount kwenye bill_items
+                    // ✅ HAKUNA final_price adjustment kwenye bill_items
+                    // ================================================================
                     $stmt_update_bill = $db->prepare("
                         UPDATE bills 
-                        SET discount_amount = ?, total_discount = ?, premium_amount = ?,
-                            total_amount = ?, balance = ?, status = ?, updated_at = NOW(),
+                        SET subtotal              = ?,
+                            discount_amount       = ?,
+                            total_discount        = ?,
+                            premium_amount        = ?,
+                            pharmacy_discount     = ?,
+                            pharmacy_premium      = ?,
+                            pharmacy_premium_note = ?,
+                            total_amount          = ?,
+                            balance               = ?,
+                            status                = ?,
+                            updated_at            = NOW(),
                             notes = CONCAT(
                                 COALESCE(notes, ''), 
                                 ' | Pharmacy: Premium +TSh ', ?, 
-                                ' (Total Premium: TSh ', ?, ')', 
+                                ' (Total Pharmacy Premium: TSh ', ?, ')', 
                                 ' Discount TSh ', ?, 
                                 ' at ', NOW()
                             )
                         WHERE id = ? AND patient_id = ? AND visit_id = ?
                     ");
                     $stmt_update_bill->execute([
-                        $new_discount_amount, $new_total_discount,
-                        $new_premium_amount, $new_total, $new_balance, $new_status,
+                        $new_subtotal,
+                        $new_pharmacy_discount,      // discount_amount = pharmacy_discount
+                        $new_total_discount,         // total_discount = pharmacy + cashier
+                        $new_premium_amount,         // premium_amount = pharmacy + cashier
+                        $new_pharmacy_discount,      // pharmacy_discount
+                        $new_pharmacy_premium,       // pharmacy_premium
+                        'Pharmacy Premium: ' . number_format($new_pharmacy_premium, 0),
+                        $new_total_amount,
+                        $new_balance,
+                        $new_status,
                         number_format($premium_amount, 0),
-                        number_format($new_premium_amount, 0),
+                        number_format($new_pharmacy_premium, 0),
                         number_format($discount_amount, 0),
                         $bill_id, $patient_id, $visit_id
                     ]);
@@ -268,13 +303,15 @@ try {
                     
                 } else {
                     // ================================================================
-                    // CREATE NEW BILL FOR THIS VISIT
+                    // ✅ CREATE NEW BILL FOR THIS VISIT - V6 FIXED
+                    // ✅ bill_items inapata GROSS price PEKEE
+                    // ✅ HAKUNA discount_amount kwenye bill_items
                     // ================================================================
                     $bill_number = 'BILL-PRES-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
                     
-                    // ✅ Get items FOR THIS VISIT ONLY (PENDING)
+                    // ✅ Get items FOR THIS VISIT ONLY (PENDING) - GROSS total
                     $stmt_items = $db->prepare("
-                        SELECT SUM(pi.total_price) as med_total
+                        SELECT SUM(pi.total_price) as med_total, COUNT(*) as med_count
                         FROM prescription_items pi
                         JOIN prescriptions p ON pi.prescription_id = p.id
                         WHERE pi.patient_id = ? 
@@ -283,30 +320,65 @@ try {
                           AND p.status = 'pending'
                     ");
                     $stmt_items->execute([$patient_id, $user_branch_id, $visit_id]);
-                    $med_total = $stmt_items->fetch(PDO::FETCH_ASSOC)['med_total'] ?? 0;
+                    $med_data = $stmt_items->fetch(PDO::FETCH_ASSOC);
+                    $med_total = (float)($med_data['med_total'] ?? 0);
+                    $med_count = (int)($med_data['med_count'] ?? 0);
                     
-                    $final_total = $med_total + $premium_amount - $discount_amount;
+                    // ================================================================
+                    // ✅ SUBTOTAL = GROSS ya medications (bila discount)
+                    // ================================================================
+                    $subtotal = $med_total;
+                    
+                    // ================================================================
+                    // ✅ TOTAL AMOUNT = Subtotal + Premium - Discount
+                    // ================================================================
+                    $final_total = $subtotal + $premium_amount - $discount_amount;
                     if ($final_total < 0) $final_total = 0;
                     
+                    // ================================================================
+                    // ✅ INSERT BILL - V6 FIXED
+                    // ✅ subtotal = GROSS (bila discount)
+                    // ✅ discount_amount = pharmacy_discount
+                    // ✅ total_discount = pharmacy_discount + cashier_discount (0)
+                    // ✅ premium_amount = pharmacy_premium + cashier_premium (0)
+                    // ================================================================
                     $stmt = $db->prepare("
                         INSERT INTO bills (
                             bill_number, patient_id, visit_id, branch_id, created_by,
-                            subtotal, discount_amount, total_discount, premium_amount, premium_note,
+                            subtotal, 
+                            discount_amount, total_discount, 
+                            premium_amount, premium_note,
+                            pharmacy_discount, cashier_discount,
+                            pharmacy_premium, cashier_premium,
+                            pharmacy_premium_note, cashier_premium_note,
                             total_amount, paid_amount, balance, status, payment_method, notes,
                             created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'cash', ?, NOW(), NOW())
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'cash', ?, NOW(), NOW())
                     ");
                     $stmt->execute([
                         $bill_number, $patient_id, $visit_id, $user_branch_id, $user_id,
-                        $med_total, $discount_amount, $discount_amount,
-                        $premium_amount,
-                        'Premium added by Pharmacy: ' . number_format($premium_amount, 0),
-                        $final_total, 0, $final_total,
-                        "Prescription confirmed - Premium: " . number_format($premium_amount, 2) . " Discount: " . number_format($discount_amount, 2)
+                        $subtotal,                  // ✅ GROSS (bila discount)
+                        $discount_amount,           // ✅ pharmacy_discount
+                        $discount_amount,           // ✅ total_discount (pharmacy + cashier=0)
+                        $premium_amount,            // ✅ premium_amount (pharmacy + cashier=0)
+                        'Pharmacy Premium: ' . number_format($premium_amount, 0),
+                        $discount_amount,           // ✅ pharmacy_discount
+                        0.00,                       // ✅ cashier_discount
+                        $premium_amount,            // ✅ pharmacy_premium
+                        0.00,                       // ✅ cashier_premium
+                        'Pharmacy Premium: ' . number_format($premium_amount, 0), // ✅ pharmacy_premium_note
+                        NULL,                       // ✅ cashier_premium_note
+                        $final_total,
+                        0,
+                        $final_total,
+                        "Prescription confirmed - Pharmacy Premium: " . number_format($premium_amount, 2) 
+                            . " Pharmacy Discount: " . number_format($discount_amount, 2)
                     ]);
                     $bill_id = $db->lastInsertId();
                     
-                    // ✅ Get items FOR THIS VISIT ONLY (PENDING)
+                    // ================================================================
+                    // ✅ GET items FOR THIS VISIT ONLY (PENDING)
+                    // ================================================================
                     $stmt_items = $db->prepare("
                         SELECT pi.*, p.prescription_number 
                         FROM prescription_items pi
@@ -319,14 +391,15 @@ try {
                     $stmt_items->execute([$patient_id, $user_branch_id, $visit_id]);
                     $items_for_bill = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
                     
-                    $total_items_bill = count($items_for_bill);
-                    
+                    // ================================================================
+                    // ✅ INSERT BILL_ITEMS - V6 FIXED
+                    // ✅ total_price = unit_price × quantity (GROSS)
+                    // ✅ discount_amount = 0.00 (HAKUNA discount kwenye bill_items)
+                    // ✅ final_price = total_price (GROSS)
+                    // ================================================================
                     foreach ($items_for_bill as $item) {
-                        $premium_per_item = ($premium_amount > 0 && $total_items_bill > 0) 
-                            ? $premium_amount / $total_items_bill : 0;
-                        $discount_per_item = ($discount_amount > 0 && $total_items_bill > 0) 
-                            ? $discount_amount / $total_items_bill : 0;
-                        $final_price = $item['total_price'] + $premium_per_item - $discount_per_item;
+                        // ✅ GROSS price = unit_price × quantity
+                        $gross_price = (float)$item['unit_price'] * (int)$item['quantity'];
                         
                         $stmt = $db->prepare("
                             INSERT INTO bill_items (
@@ -334,13 +407,14 @@ try {
                                 quantity, unit_price, total_price, discount_amount,
                                 tax_amount, final_price, reference_id, reference_type,
                                 status, created_at, updated_at
-                            ) VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, ?, ?, ?, ?, 'prescription', 'pending', NOW(), NOW())
+                            ) VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, 0.00, 0.00, ?, ?, 'prescription', 'pending', NOW(), NOW())
                         ");
                         $stmt->execute([
                             $bill_id, $patient_id, $user_branch_id,
                             $item['medication_name'] . ' (' . ($item['dosage'] ?? '') . ')',
-                            $item['quantity'], $item['unit_price'], $item['total_price'],
-                            $discount_per_item, 0, $final_price, $item['id']
+                            $item['quantity'], $item['unit_price'], $gross_price,
+                            $gross_price,  // ✅ final_price = gross_price (bila discount)
+                            $item['id']
                         ]);
                     }
                     
@@ -378,7 +452,6 @@ try {
     
     // ================================================================
     // ✅ GET VISIT INFORMATION (STRICT)
-    // Kama visit_id haipo URL, chukua latest visit yenye PENDING TU
     // ================================================================
     if ($visit_id <= 0) {
         $stmt_v = $db->prepare("
@@ -530,10 +603,38 @@ $profile_pic_url = !empty($profile_pic)
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// Existing premium for pre-fill
+// ================================================================
+// ✅ EXISTING PHARMACY PREMIUM & DISCOUNT (KIVYAKE)
+// ================================================================
 $existing_premium = 0;
-if ($bill && isset($bill['premium_amount'])) {
-    $existing_premium = (float)$bill['premium_amount'];
+$existing_pharmacy_premium = 0;
+$existing_cashier_premium = 0;
+$existing_pharmacy_discount = 0;
+$existing_cashier_discount = 0;
+
+if ($bill) {
+    // ✅ Pharmacy premium
+    $existing_pharmacy_premium = (float)($bill['pharmacy_premium'] ?? 0);
+    $existing_cashier_premium  = (float)($bill['cashier_premium'] ?? 0);
+    
+    // Fallback kwa records za zamani (kama pharmacy_premium = 0 na premium_amount > 0)
+    if ($existing_pharmacy_premium == 0 && $existing_cashier_premium == 0 
+        && !empty($bill['premium_amount'])) {
+        $existing_pharmacy_premium = (float)$bill['premium_amount'];
+    }
+    
+    // Total premium = pharmacy + cashier
+    $existing_premium = $existing_pharmacy_premium + $existing_cashier_premium;
+    
+    // ✅ Pharmacy discount
+    $existing_pharmacy_discount = (float)($bill['pharmacy_discount'] ?? 0);
+    $existing_cashier_discount  = (float)($bill['cashier_discount'] ?? 0);
+    
+    // Fallback kwa records za zamani
+    if ($existing_pharmacy_discount == 0 && $existing_cashier_discount == 0 
+        && !empty($bill['discount_amount'])) {
+        $existing_pharmacy_discount = (float)$bill['discount_amount'];
+    }
 }
 
 include_once '../../components/pharmacy_header.php';
@@ -614,7 +715,6 @@ include_once '../../components/pharmacy_sidebar.php';
             -webkit-font-smoothing: antialiased;
         }
         
-        /* MONO FONTS */
         .mono, .money, .money-value, .date-mono, .stat-value,
         .visit-number-badge, .patient-id, .qty-number, .total-qty,
         .summary-number, .item-price {
@@ -685,7 +785,6 @@ include_once '../../components/pharmacy_sidebar.php';
             transform: translateY(-2px);
         }
         
-        /* VISIT BADGE */
         .visit-badge {
             background: linear-gradient(135deg, #FCD34D, #F59E0B);
             color: #78350F;
@@ -715,7 +814,6 @@ include_once '../../components/pharmacy_sidebar.php';
             gap: 4px;
         }
         
-        /* ✅ VISIT INFO CARD */
         .visit-info-card {
             background: linear-gradient(135deg, var(--bg-card) 0%, var(--primary-bg) 100%);
             border-radius: var(--radius-lg);
@@ -743,10 +841,7 @@ include_once '../../components/pharmacy_sidebar.php';
             flex-shrink: 0;
         }
         
-        .visit-info-card .visit-details {
-            flex: 1;
-            min-width: 150px;
-        }
+        .visit-info-card .visit-details { flex: 1; min-width: 150px; }
         
         .visit-info-card .visit-label {
             font-size: 0.6rem;
@@ -771,7 +866,6 @@ include_once '../../components/pharmacy_sidebar.php';
             font-family: 'JetBrains Mono', monospace;
         }
         
-        /* PATIENT CARD */
         .patient-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -785,9 +879,7 @@ include_once '../../components/pharmacy_sidebar.php';
             box-shadow: var(--shadow);
         }
         
-        .patient-card:hover {
-            border-color: var(--primary-light);
-        }
+        .patient-card:hover { border-color: var(--primary-light); }
         
         .patient-avatar {
             width: 64px;
@@ -803,11 +895,7 @@ include_once '../../components/pharmacy_sidebar.php';
             font-family: 'JetBrains Mono', monospace;
         }
         
-        .patient-info h2 {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: var(--text-primary);
-        }
+        .patient-info h2 { font-size: 1.2rem; font-weight: 700; color: var(--text-primary); }
         
         .patient-info .patient-details {
             display: flex;
@@ -824,7 +912,6 @@ include_once '../../components/pharmacy_sidebar.php';
             gap: 4px;
         }
         
-        /* ITEMS GRID */
         .items-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
@@ -851,9 +938,7 @@ include_once '../../components/pharmacy_sidebar.php';
         .item-card::before {
             content: '';
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
+            top: 0; left: 0; right: 0;
             height: 4px;
             background: linear-gradient(90deg, var(--primary), var(--primary-light));
             border-radius: var(--radius-lg) var(--radius-lg) 0 0;
@@ -868,11 +953,7 @@ include_once '../../components/pharmacy_sidebar.php';
             gap: 4px;
         }
         
-        .item-card .item-name {
-            font-size: 1rem;
-            font-weight: 700;
-            color: var(--primary);
-        }
+        .item-card .item-name { font-size: 1rem; font-weight: 700; color: var(--primary); }
         
         .item-card .item-prescription {
             font-size: 0.6rem;
@@ -890,10 +971,7 @@ include_once '../../components/pharmacy_sidebar.php';
             margin: 8px 0;
         }
         
-        .item-card .item-detail {
-            display: flex;
-            flex-direction: column;
-        }
+        .item-card .item-detail { display: flex; flex-direction: column; }
         
         .item-card .item-detail .label {
             font-size: 0.55rem;
@@ -970,9 +1048,7 @@ include_once '../../components/pharmacy_sidebar.php';
             outline: none;
         }
         
-        .item-card .item-detail .field-wrapper select:focus {
-            box-shadow: none;
-        }
+        .item-card .item-detail .field-wrapper select:focus { box-shadow: none; }
         
         .item-card .item-detail .field-wrapper input {
             flex: 1;
@@ -1077,7 +1153,6 @@ include_once '../../components/pharmacy_sidebar.php';
             font-family: 'JetBrains Mono', monospace;
         }
         
-        /* SUMMARY */
         .summary-section {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -1095,10 +1170,7 @@ include_once '../../components/pharmacy_sidebar.php';
             box-shadow: var(--shadow);
         }
         
-        .summary-card:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-md);
-        }
+        .summary-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
         
         .summary-card .summary-number {
             font-size: 1.8rem;
@@ -1120,7 +1192,6 @@ include_once '../../components/pharmacy_sidebar.php';
         .summary-card.qty .summary-number { color: var(--warning); }
         .summary-card.amount .summary-number { color: var(--success); }
         
-        /* DISCOUNT SECTION */
         .discount-section {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -1140,9 +1211,7 @@ include_once '../../components/pharmacy_sidebar.php';
             margin-bottom: 16px;
         }
         
-        .discount-section .discount-title i {
-            color: var(--warning);
-        }
+        .discount-section .discount-title i { color: var(--warning); }
         
         .discount-grid {
             display: grid;
@@ -1162,10 +1231,7 @@ include_once '../../components/pharmacy_sidebar.php';
             gap: 14px;
         }
         
-        .discount-grid-card:hover {
-            border-color: var(--primary-light);
-            box-shadow: var(--shadow-md);
-        }
+        .discount-grid-card:hover { border-color: var(--primary-light); box-shadow: var(--shadow-md); }
         
         .discount-grid-card .card-icon {
             width: 44px;
@@ -1303,7 +1369,6 @@ include_once '../../components/pharmacy_sidebar.php';
         .final-item.final-total .final-label { color: rgba(255,255,255,0.8); }
         .final-item.final-total .final-value { color: white; font-size: 1.3rem; }
         
-        /* BUTTONS */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1353,7 +1418,6 @@ include_once '../../components/pharmacy_sidebar.php';
             border-top: 2px solid var(--border-color);
         }
         
-        /* BADGES */
         .badge-status {
             display: inline-block;
             padding: 3px 12px;
@@ -1373,7 +1437,6 @@ include_once '../../components/pharmacy_sidebar.php';
         [data-theme="dark"] .badge-success { background: #1A3A2A; color: #34D399; border-color: #059669; }
         [data-theme="dark"] .badge-danger { background: #3A1A1A; color: #F87171; border-color: #DC2626; }
         
-        /* ✅ EMPTY STATE */
         .empty-state {
             text-align: center;
             padding: 80px 20px;
@@ -1394,7 +1457,6 @@ include_once '../../components/pharmacy_sidebar.php';
         .empty-state p { font-size: 1.1rem; font-weight: 600; color: var(--text-primary); }
         .empty-state .sub { font-size: 0.85rem; color: var(--text-secondary); margin-top: 6px; font-weight: 400; }
         
-        /* TOAST */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1431,7 +1493,6 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* PDF MODAL */
         .pdf-modal-overlay {
             display: none;
             position: fixed;
@@ -1519,7 +1580,6 @@ include_once '../../components/pharmacy_sidebar.php';
             box-shadow: 0 2px 8px rgba(0,0,0,0.06);
         }
         
-        /* RESPONSIVE */
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 14px; }
             .items-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
@@ -1663,7 +1723,7 @@ include_once '../../components/pharmacy_sidebar.php';
         </div>
         <div class="summary-card amount">
             <span class="summary-number" id="totalAmountDisplay"><?= $currency ?> <?= formatMoney($total_amount) ?></span>
-            <span class="summary-label">💰 Subtotal</span>
+            <span class="summary-label">💰 Subtotal (GROSS)</span>
         </div>
     </div>
 
@@ -1795,7 +1855,7 @@ include_once '../../components/pharmacy_sidebar.php';
                     </div>
                     
                     <div class="item-price" id="itemPrice_<?= $item['id'] ?>">
-                        <span class="label">Total Price: </span>
+                        <span class="label">Total Price (GROSS): </span>
                         <?= $currency ?> <?= formatMoney($item['total_price'] ?? 0) ?>
                     </div>
                 </div>
@@ -1806,9 +1866,9 @@ include_once '../../components/pharmacy_sidebar.php';
         <div class="discount-section">
             <div class="discount-title">
                 <i class="fas fa-tag"></i>
-                Premium & Discount
+                Pharmacy Premium & Pharmacy Discount
                 <span style="font-size:0.55rem;font-weight:400;color:var(--text-secondary);margin-left:8px;">
-                    (Premium is CUMULATIVE)
+                    (Both are CUMULATIVE — zinabaki kwenye BILLS table pekee)
                 </span>
             </div>
             
@@ -1816,19 +1876,25 @@ include_once '../../components/pharmacy_sidebar.php';
                 <div class="discount-grid-card premium-card">
                     <div class="card-icon"><i class="fas fa-star"></i></div>
                     <div class="card-content">
-                        <div class="card-label">⭐ Premium Amount</div>
+                        <div class="card-label">⭐ Pharmacy Premium</div>
                         <div class="card-input-group">
                             <span class="currency-symbol"><?= $currency ?></span>
                             <input type="text" class="premium-input" id="premiumAmount" 
                                    placeholder="0" value="0" 
                                    oninput="calculateFinal()">
                         </div>
-                        <div class="card-help">Additional charge (adds to existing)</div>
+                        <div class="card-help">Additional charge (adds to existing pharmacy premium)</div>
                         
-                        <?php if ($existing_premium > 0): ?>
+                        <?php if ($existing_pharmacy_premium > 0): ?>
                             <div class="existing-premium-note">
                                 <i class="fas fa-info-circle"></i>
-                                Existing: <?= $currency ?> <?= formatMoney($existing_premium) ?>
+                                Existing Pharmacy: <?= $currency ?> <?= formatMoney($existing_pharmacy_premium) ?>
+                            </div>
+                        <?php endif; ?>
+                        <?php if ($existing_cashier_premium > 0): ?>
+                            <div class="existing-premium-note" style="background:rgba(11,94,215,0.1);color:#0B5ED7;border-color:rgba(11,94,215,0.2);">
+                                <i class="fas fa-info-circle"></i>
+                                Existing Cashier: <?= $currency ?> <?= formatMoney($existing_cashier_premium) ?>
                             </div>
                         <?php endif; ?>
                     </div>
@@ -1837,7 +1903,7 @@ include_once '../../components/pharmacy_sidebar.php';
                 <div class="discount-grid-card discount-card">
                     <div class="card-icon"><i class="fas fa-percentage"></i></div>
                     <div class="card-content">
-                        <div class="card-label">🎯 Discount Amount</div>
+                        <div class="card-label">🎯 Pharmacy Discount</div>
                         <div class="card-input-group">
                             <span class="currency-symbol"><?= $currency ?></span>
                             <input type="text" class="discount-input" id="discountAmount" 
@@ -1845,21 +1911,28 @@ include_once '../../components/pharmacy_sidebar.php';
                                    oninput="calculateFinal()">
                         </div>
                         <div class="card-help">Discount applied to subtotal</div>
+                        
+                        <?php if ($existing_pharmacy_discount > 0): ?>
+                            <div class="existing-premium-note" style="background:rgba(11,94,215,0.1);color:#0B5ED7;border-color:rgba(11,94,215,0.2);">
+                                <i class="fas fa-info-circle"></i>
+                                Existing Pharmacy: <?= $currency ?> <?= formatMoney($existing_pharmacy_discount) ?>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 </div>
             </div>
             
             <div class="final-row">
                 <div class="final-item">
-                    <span class="final-label">💰 Subtotal</span>
+                    <span class="final-label">💰 Subtotal (GROSS)</span>
                     <span class="final-value" id="subtotalDisplay"><?= $currency ?> <?= formatMoney($total_amount) ?></span>
                 </div>
                 <div class="final-item">
-                    <span class="final-label">➕ Premium (New)</span>
+                    <span class="final-label">➕ Pharmacy Premium</span>
                     <span class="final-value premium-value" id="premiumDisplay"><?= $currency ?> 0</span>
                 </div>
                 <div class="final-item">
-                    <span class="final-label">➖ Discount</span>
+                    <span class="final-label">➖ Pharmacy Discount</span>
                     <span class="final-value discount-value" id="discountDisplay"><?= $currency ?> 0</span>
                 </div>
                 <div class="final-item final-total">
@@ -1870,10 +1943,17 @@ include_once '../../components/pharmacy_sidebar.php';
             
             <div style="text-align:center;margin-top:12px;padding:8px 16px;background:var(--bg-body);border-radius:var(--radius);font-size:0.75rem;color:var(--text-secondary);">
                 <i class="fas fa-calculator" style="color:var(--primary);"></i>
-                <strong>New Premium</strong> will be added to existing:
-                <?= $currency ?> <span id="existingPremiumDisplay" class="mono"><?= formatMoney($existing_premium) ?></span>
+                <strong>Pharmacy Premium</strong> (cumulative):
+                <?= $currency ?> <span id="existingPremiumDisplay" class="mono"><?= formatMoney($existing_pharmacy_premium) ?></span>
                 + <?= $currency ?> <span id="newPremiumDisplay" class="mono">0</span>
-                = <strong style="color:#D97706;"><?= $currency ?> <span id="totalPremiumDisplay" class="mono"><?= formatMoney($existing_premium) ?></span></strong>
+                = <strong style="color:#D97706;"><?= $currency ?> <span id="totalPremiumDisplay" class="mono"><?= formatMoney($existing_pharmacy_premium) ?></span></strong>
+            </div>
+            
+            <!-- ✅ V6 INFO: bill_items hazitakuwa na discount -->
+            <div style="text-align:center;margin-top:8px;padding:6px 12px;background:rgba(5,150,105,0.08);border-radius:var(--radius);font-size:0.65rem;color:var(--success);border:1px dashed var(--success);">
+                <i class="fas fa-info-circle"></i>
+                <strong>V6 FIXED:</strong> Discount & Premium zinabaki kwenye <strong>BILLS table PEKEE</strong>. 
+                <code>bill_items</code> inabaki na GROSS price (bila discount).
             </div>
         </div>
 
@@ -1889,7 +1969,7 @@ include_once '../../components/pharmacy_sidebar.php';
     </form>
 
     <?php else: ?>
-        <!-- ✅ EMPTY STATE - PENDING HAKUNA -->
+        <!-- ✅ EMPTY STATE -->
         <div class="empty-state">
             <i class="fas fa-check-circle"></i>
             <p>Hakuna pending prescriptions kwa visit hii</p>
@@ -1912,7 +1992,7 @@ include_once '../../components/pharmacy_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Pending Prescriptions (Visit-Specific)
+            Pending Prescriptions V6 (Clean bill_items)
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1989,7 +2069,11 @@ include_once '../../components/pharmacy_sidebar.php';
     function formatMoney(amount) { return Number(amount).toLocaleString('en-US'); }
     function unformatMoney(str) { return parseFloat(String(str).replace(/,/g, '')) || 0; }
     
-    var existingPremium = <?= (float)$existing_premium ?>;
+    // ✅ PHARMACY-SPECIFIC VARIABLES
+    var existingPremium         = <?= (float)$existing_premium ?>;
+    var existingPharmacyPremium = <?= (float)$existing_pharmacy_premium ?>;
+    var existingCashierPremium  = <?= (float)$existing_cashier_premium ?>;
+    var existingPharmacyDiscount = <?= (float)$existing_pharmacy_discount ?>;
     
     // SYNC FIELDS
     function syncField(selectSelector, inputSelector, dataAttr) {
@@ -2038,7 +2122,7 @@ include_once '../../components/pharmacy_sidebar.php';
         calculateFinal();
     }
     
-    // CALCULATE FINAL
+    // ✅ CALCULATE FINAL
     function calculateFinal() {
         var totalAmount = parseFloat(document.getElementById('totalAmountHidden').value) || 0;
         var premiumValue = unformatMoney(document.getElementById('premiumAmount').value);
@@ -2047,7 +2131,8 @@ include_once '../../components/pharmacy_sidebar.php';
         if (premiumValue < 0) { premiumValue = 0; document.getElementById('premiumAmount').value = '0'; }
         if (discountValue < 0) { discountValue = 0; document.getElementById('discountAmount').value = '0'; }
         
-        var totalPremium = existingPremium + premiumValue;
+        var totalPharmacyPremium = existingPharmacyPremium + premiumValue;
+        
         var finalAmount = totalAmount + premiumValue - discountValue;
         if (finalAmount < 0) finalAmount = 0;
         
@@ -2059,9 +2144,9 @@ include_once '../../components/pharmacy_sidebar.php';
         document.getElementById('discountDisplay').textContent = '<?= $currency ?> ' + formatMoney(discountValue);
         document.getElementById('finalAmount').textContent = '<?= $currency ?> ' + formatMoney(finalAmount);
         
-        document.getElementById('existingPremiumDisplay').textContent = formatMoney(existingPremium);
+        document.getElementById('existingPremiumDisplay').textContent = formatMoney(existingPharmacyPremium);
         document.getElementById('newPremiumDisplay').textContent = formatMoney(premiumValue);
-        document.getElementById('totalPremiumDisplay').textContent = formatMoney(totalPremium);
+        document.getElementById('totalPremiumDisplay').textContent = formatMoney(totalPharmacyPremium);
     }
     
     // CONFIRM
@@ -2074,23 +2159,24 @@ include_once '../../components/pharmacy_sidebar.php';
         var finalAmount = document.getElementById('finalAmount').textContent;
         var premiumValue = unformatMoney(document.getElementById('premiumAmount').value);
         var discountValue = unformatMoney(document.getElementById('discountAmount').value);
-        var totalPremium = existingPremium + premiumValue;
+        var totalPharmacyPremium = existingPharmacyPremium + premiumValue;
         
         var message = 'Confirm this prescription?\n\n';
         message += '📅 Visit: ' + visitNumber + '\n';
         message += '👤 Patient: ' + patientName + '\n';
         message += '📦 Total Items: ' + totalItems + '\n';
         message += '📊 Total Quantity: ' + totalQty + '\n';
-        message += '💰 Subtotal: ' + subtotal + '\n';
+        message += '💰 Subtotal (GROSS): ' + subtotal + '\n';
         if (premiumValue > 0) {
-            message += '⭐ New Premium: <?= $currency ?> ' + formatMoney(premiumValue) + '\n';
-            message += '📊 Total Premium: <?= $currency ?> ' + formatMoney(totalPremium) + '\n';
+            message += '⭐ New Pharmacy Premium: <?= $currency ?> ' + formatMoney(premiumValue) + '\n';
+            message += '📊 Total Pharmacy Premium: <?= $currency ?> ' + formatMoney(totalPharmacyPremium) + '\n';
         }
         if (discountValue > 0) {
-            message += '🎯 Discount: <?= $currency ?> ' + formatMoney(discountValue) + '\n';
+            message += '🎯 Pharmacy Discount: <?= $currency ?> ' + formatMoney(discountValue) + '\n';
         }
         message += '✅ Final Amount: ' + finalAmount + '\n\n';
-        message += '⚠️ Premium is CUMULATIVE';
+        message += '⚠️ V6 FIXED: Discount/Premium zinabaki kwenye BILLS table PEKEE\n';
+        message += '⚠️ bill_items inabaki na GROSS price (bila discount)';
         
         return confirm(message);
     }
@@ -2117,7 +2203,6 @@ include_once '../../components/pharmacy_sidebar.php';
         syncField('.duration-select', '.duration-manual', 'data-item-id');
         syncField('.route-select', '.route-manual', 'data-item-id');
         
-        // Premium input
         var premiumInput = document.getElementById('premiumAmount');
         if (premiumInput) {
             premiumInput.addEventListener('input', function() {
@@ -2130,7 +2215,6 @@ include_once '../../components/pharmacy_sidebar.php';
             premiumInput.addEventListener('focus', function() { this.select(); });
         }
         
-        // Discount input
         var discountInput = document.getElementById('discountAmount');
         if (discountInput) {
             discountInput.addEventListener('input', function() {
@@ -2143,7 +2227,6 @@ include_once '../../components/pharmacy_sidebar.php';
             discountInput.addEventListener('focus', function() { this.select(); });
         }
         
-        // Preselect instructions
         <?php foreach ($items as $item): ?>
             var instrInput<?= $item['id'] ?> = document.getElementById('instr_input_<?= $item['id'] ?>');
             var instrSelect<?= $item['id'] ?> = document.getElementById('instr_select_<?= $item['id'] ?>');
@@ -2221,7 +2304,7 @@ include_once '../../components/pharmacy_sidebar.php';
                             <span style="color:#1E293B;">${instructions}</span>
                         </div>
                         <div style="grid-column:span 2;text-align:right;font-weight:700;color:#059669;font-size:15px;font-family:monospace;">
-                            Total: <?= $currency ?> ${formatMoney(price)}
+                            Total (GROSS): <?= $currency ?> ${formatMoney(price)}
                         </div>
                     </div>
                 </div>
@@ -2230,7 +2313,7 @@ include_once '../../components/pharmacy_sidebar.php';
         
         var premiumValue = unformatMoney(document.getElementById('premiumAmount')?.value);
         var discountValue = unformatMoney(document.getElementById('discountAmount')?.value);
-        var totalPremium = existingPremium + premiumValue;
+        var totalPharmacyPremium = existingPharmacyPremium + premiumValue;
         var finalAmount = totalAmount + premiumValue - discountValue;
         if (finalAmount < 0) finalAmount = 0;
         
@@ -2280,18 +2363,18 @@ include_once '../../components/pharmacy_sidebar.php';
                         <div style="font-size:1.2rem;font-weight:700;color:#D97706;font-family:monospace;">${totalQty}</div>
                     </div>
                     <div style="text-align:center;">
-                        <div style="font-size:0.6rem;font-weight:600;color:#64748B;text-transform:uppercase;">Subtotal</div>
+                        <div style="font-size:0.6rem;font-weight:600;color:#64748B;text-transform:uppercase;">Subtotal (GROSS)</div>
                         <div style="font-size:1.2rem;font-weight:700;color:#0B5ED7;font-family:monospace;"><?= $currency ?> ${formatMoney(totalAmount)}</div>
                     </div>
                     <div style="text-align:center;">
-                        <div style="font-size:0.6rem;font-weight:600;color:#64748B;text-transform:uppercase;">${premiumValue > 0 ? '⭐ New Premium' : 'Premium'}</div>
+                        <div style="font-size:0.6rem;font-weight:600;color:#64748B;text-transform:uppercase;">${premiumValue > 0 ? '⭐ New Pharmacy Premium' : 'Pharmacy Premium'}</div>
                         <div style="font-size:1.2rem;font-weight:700;color:#D97706;font-family:monospace;"><?= $currency ?> ${formatMoney(premiumValue)}</div>
-                        ${premiumValue > 0 ? `<div style="font-size:0.5rem;color:#64748B;">Total: <?= $currency ?> ${formatMoney(totalPremium)}</div>` : ''}
+                        ${premiumValue > 0 ? `<div style="font-size:0.5rem;color:#64748B;">Total Pharmacy: <?= $currency ?> ${formatMoney(totalPharmacyPremium)}</div>` : ''}
                     </div>
                     <div style="text-align:center;">
                         <div style="font-size:0.6rem;font-weight:600;color:#64748B;text-transform:uppercase;">💰 Final Amount</div>
                         <div style="font-size:1.2rem;font-weight:700;color:#059669;font-family:monospace;"><?= $currency ?> ${formatMoney(finalAmount)}</div>
-                        ${discountValue > 0 ? `<div style="font-size:0.6rem;color:#0B5ED7;">Discount: <?= $currency ?> ${formatMoney(discountValue)}</div>` : ''}
+                        ${discountValue > 0 ? `<div style="font-size:0.6rem;color:#0B5ED7;">Pharmacy Discount: <?= $currency ?> ${formatMoney(discountValue)}</div>` : ''}
                     </div>
                 </div>
                 
@@ -2342,11 +2425,16 @@ include_once '../../components/pharmacy_sidebar.php';
         if (e.target === this) closePDFModal();
     });
 
-    console.log('%c💊 Braick - Pending Prescriptions (VISIT-SPECIFIC)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ FIXED: Inachukua PENDING TU', 'font-size:13px; color:#34D399; font-weight:bold;');
-    console.log('%c✅ FIXED: Visit filter STRICT', 'font-size:13px; color:#FCD34D;');
+    console.log('%c💊 Braick - Pending Prescriptions V6 (CLEAN bill_items)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ HAKUNA discount_amount kwenye bill_items (0.00)', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ HAKUNA final_price adjustment (final_price = total_price)', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ Discount/Premium zinabaki kwenye BILLS table PEKEE', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ bills.subtotal = SUM(bill_items.total_price) - GROSS', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ bills.total_amount = subtotal + premium - discount', 'font-size:13px; color:#34D399; font-weight:bold;');
     console.log('%c📅 Visit ID: <?= $visit_id ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c⭐ Existing Pharmacy Premium: <?= formatMoney($existing_pharmacy_premium) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c🎯 Existing Pharmacy Discount: <?= formatMoney($existing_pharmacy_discount) ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

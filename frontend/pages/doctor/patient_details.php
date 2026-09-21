@@ -1,11 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/patient_details.php
-// DOCTOR - PATIENT DETAILS WITH FULL REDESIGN V2
-// FIXED: Uses database from dispensary_db
+// DOCTOR - PATIENT DETAILS WITH FULL REDESIGN V5
+// FIXED: Paid card inatumia paid_amount column (sio total_amount)
+// FIXED: Pending card inatumia balance column
+// REMOVED: Discount & Premium cards kwenye summary (zipo kwenye bill table)
 // NEW FLOW: Patient Info → Visit Info → Vital Signs (7 signs) → 
-// Clinical Assessment Table (Symptoms, Complaints, Notes, HPI, Physical Exam) → 
-// Lab Tests → Diagnosis → Prescriptions → Procedures/Equipment → Appointments → Bills
+// Clinical Assessment Table → Lab Tests → Diagnosis → Prescriptions → 
+// Procedures/Equipment → Appointments → Bills (REDESIGNED V5)
 // WITH OXYGEN SATURATION (SpO2) - 7 VITAL SIGNS
 // BRAICK DISPENSARY
 // ================================================================
@@ -109,14 +111,30 @@ $stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE patient_id = ?"
 $stmt->execute([$patient_id]);
 $total_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Total Bills
+// ================================================================
+// ✅ FIXED: Total Bills - Inatumia paid_amount & balance columns
+// ================================================================
 $stmt = $db->prepare("
     SELECT 
         COUNT(*) as total,
         COALESCE(SUM(total_amount), 0) as total_amount,
-        COALESCE(SUM(CASE WHEN status = 'paid' THEN total_amount ELSE 0 END), 0) as paid_amount,
-        COALESCE(SUM(CASE WHEN status = 'pending' THEN total_amount ELSE 0 END), 0) as pending_amount,
-        COALESCE(SUM(CASE WHEN status = 'cancelled' THEN total_amount ELSE 0 END), 0) as cancelled_amount
+        -- ✅ FIXED: Paid inatumia paid_amount column (actual kilicholipwa)
+        COALESCE(SUM(paid_amount), 0) as paid_amount,
+        -- ✅ FIXED: Pending inatumia balance column (kinachodaiwa)
+        COALESCE(SUM(balance), 0) as pending_amount,
+        -- Subtotal, Discount, Premium (kwa bill table pekee)
+        COALESCE(SUM(subtotal), 0) as total_subtotal,
+        COALESCE(SUM(pharmacy_discount), 0) as total_pharmacy_discount,
+        COALESCE(SUM(cashier_discount), 0) as total_cashier_discount,
+        COALESCE(SUM(total_discount), 0) as total_discount,
+        COALESCE(SUM(pharmacy_premium), 0) as total_pharmacy_premium,
+        COALESCE(SUM(cashier_premium), 0) as total_cashier_premium,
+        COALESCE(SUM(premium_amount), 0) as total_premium,
+        -- Count by status
+        COALESCE(SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END), 0) as count_paid,
+        COALESCE(SUM(CASE WHEN status = 'partial' THEN 1 ELSE 0 END), 0) as count_partial,
+        COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as count_pending,
+        COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as count_cancelled
     FROM bills 
     WHERE patient_id = ? AND status != 'cancelled'
 ");
@@ -126,7 +144,22 @@ $total_bills = $bills_stats['total'] ?? 0;
 $total_bill_amount = $bills_stats['total_amount'] ?? 0;
 $paid_bill_amount = $bills_stats['paid_amount'] ?? 0;
 $pending_bill_amount = $bills_stats['pending_amount'] ?? 0;
-$cancelled_bill_amount = $bills_stats['cancelled_amount'] ?? 0;
+$cancelled_bill_amount = 0;
+
+// ✅ NEW: Discount & Premium variables (kwa bill table pekee)
+$total_subtotal = $bills_stats['total_subtotal'] ?? 0;
+$total_pharmacy_discount = $bills_stats['total_pharmacy_discount'] ?? 0;
+$total_cashier_discount = $bills_stats['total_cashier_discount'] ?? 0;
+$total_discount_all = $bills_stats['total_discount'] ?? 0;
+$total_pharmacy_premium = $bills_stats['total_pharmacy_premium'] ?? 0;
+$total_cashier_premium = $bills_stats['total_cashier_premium'] ?? 0;
+$total_premium_all = $bills_stats['total_premium'] ?? 0;
+
+// Count by status
+$count_paid = $bills_stats['count_paid'] ?? 0;
+$count_partial = $bills_stats['count_partial'] ?? 0;
+$count_pending = $bills_stats['count_pending'] ?? 0;
+$count_cancelled = $bills_stats['count_cancelled'] ?? 0;
 
 // Total Prescriptions
 $stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions WHERE patient_id = ?");
@@ -516,7 +549,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         /* ================================================================ */
-        /* SECTION DIVIDER */
+        /* SECTION TITLE */
         /* ================================================================ */
         .section-divider {
             border: none;
@@ -719,9 +752,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             padding: 8px 12px !important;
             border-bottom: 3px solid var(--primary-dark) !important;
             white-space: nowrap !important;
-            position: sticky;
-            top: 0;
-            z-index: 5;
+            text-align: left !important;
         }
         
         .table-blue thead th:first-child { border-radius: 8px 0 0 0 !important; }
@@ -804,7 +835,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         /* ================================================================ */
-        /* VITAL SIGNS CARDS - 4 COLUMNS (for 7 signs) */
+        /* VITAL SIGNS CARDS - 4 COLUMNS */
         /* ================================================================ */
         .vital-grid {
             display: grid;
@@ -877,7 +908,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .vital-card.indigo::before { background: linear-gradient(90deg, #4F46E5, #818CF8); }
         .vital-card.indigo .vital-value { color: #4F46E5; }
         
-        /* SpO2 SPECIAL STYLING - SKY BLUE */
         .vital-card.sky::before { background: linear-gradient(90deg, #0EA5E9, #38BDF8); }
         .vital-card.sky .vital-value { color: #0EA5E9; }
         .vital-card.sky {
@@ -901,7 +931,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         [data-theme="dark"] .vital-card.sky { background: #0C2A3A; border-color: #0EA5E9; }
         [data-theme="dark"] .vital-card.sky .vital-value { color: #7DD3FC; }
         
-        /* SpO2 value indicator */
         .spo2-normal { color: #059669 !important; }
         .spo2-warning { color: #D97706 !important; }
         .spo2-danger { color: #DC2626 !important; }
@@ -1006,79 +1035,347 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         /* ================================================================ */
-        /* BILL SUMMARY CARDS */
+        /* ✅ BILL SUMMARY CARDS - v5.0 */
         /* ================================================================ */
         .bill-summary-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 12px;
             margin-top: 12px;
+            margin-bottom: 20px;
         }
         
         .bill-summary-card {
             background: var(--bg-card);
             border-radius: 12px;
-            padding: 14px 16px;
+            padding: 16px 18px;
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 14px;
             border: 2px solid var(--border-color);
             transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .bill-summary-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
         }
         
         .bill-summary-card:hover {
             transform: translateY(-3px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.1);
         }
         
         .bill-summary-card .bill-icon {
-            width: 42px;
-            height: 42px;
-            border-radius: 10px;
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.1rem;
+            font-size: 1.3rem;
             flex-shrink: 0;
         }
         
         .bill-summary-card .bill-content { flex: 1; }
         .bill-summary-card .bill-label {
             font-size: 0.6rem;
-            font-weight: 600;
+            font-weight: 700;
             color: var(--text-secondary);
             text-transform: uppercase;
-            letter-spacing: 0.04em;
+            letter-spacing: 0.05em;
             display: block;
         }
         .bill-summary-card .bill-value {
-            font-size: 1.1rem;
-            font-weight: 700;
+            font-size: 1.15rem;
+            font-weight: 800;
             display: block;
-            margin-top: 2px;
+            margin-top: 3px;
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: -0.02em;
+        }
+        .bill-summary-card .bill-sub {
+            font-size: 0.6rem;
+            font-weight: 500;
+            display: block;
+            margin-top: 3px;
+            opacity: 0.85;
         }
         
+        /* Subtotal Card */
+        .bill-summary-card.subtotal-card { border-color: #64748B; }
+        .bill-summary-card.subtotal-card::before { background: linear-gradient(90deg, #64748B, #94A3B8); }
+        .bill-summary-card.subtotal-card .bill-icon { background: #F1F5F9; color: #475569; }
+        .bill-summary-card.subtotal-card .bill-value { color: #475569; }
+        
+        /* Total Card */
         .bill-summary-card.total-card { border-color: var(--primary); }
+        .bill-summary-card.total-card::before { background: linear-gradient(90deg, #0B5ED7, #1A73E8); }
         .bill-summary-card.total-card .bill-icon { background: var(--primary-bg); color: var(--primary); }
         .bill-summary-card.total-card .bill-value { color: var(--primary); }
         
+        /* Paid Card */
         .bill-summary-card.paid-card { border-color: var(--success); }
+        .bill-summary-card.paid-card::before { background: linear-gradient(90deg, #059669, #10B981); }
         .bill-summary-card.paid-card .bill-icon { background: var(--success-bg); color: var(--success); }
         .bill-summary-card.paid-card .bill-value { color: var(--success); }
         
+        /* Pending Card */
         .bill-summary-card.pending-card { border-color: var(--warning); }
+        .bill-summary-card.pending-card::before { background: linear-gradient(90deg, #D97706, #F59E0B); }
         .bill-summary-card.pending-card .bill-icon { background: var(--warning-bg); color: var(--warning); }
         .bill-summary-card.pending-card .bill-value { color: var(--warning); }
         
-        .bill-summary-card.cancelled-card { border-color: var(--danger); }
-        .bill-summary-card.cancelled-card .bill-icon { background: var(--danger-bg); color: var(--danger); }
-        .bill-summary-card.cancelled-card .bill-value { color: var(--danger); }
-        
         [data-theme="dark"] .bill-summary-card { background: #1E293B; border-color: #334155; }
-        [data-theme="dark"] .bill-summary-card.total-card { border-color: #6EA8FE; }
-        [data-theme="dark"] .bill-summary-card.paid-card { border-color: #34D399; }
-        [data-theme="dark"] .bill-summary-card.pending-card { border-color: #FBBF24; }
-        [data-theme="dark"] .bill-summary-card.cancelled-card { border-color: #F87171; }
+        [data-theme="dark"] .bill-summary-card.subtotal-card .bill-icon { background: #334155; color: #94A3B8; }
+        [data-theme="dark"] .bill-summary-card.total-card .bill-icon { background: #1E3A5F; color: #6EA8FE; }
+        [data-theme="dark"] .bill-summary-card.paid-card .bill-icon { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .bill-summary-card.pending-card .bill-icon { background: #3D2E0A; color: #FBBF24; }
+        
+        /* ================================================================ */
+        /* BILLS BLOCK */
+        /* ================================================================ */
+        .bill-block {
+            background: var(--bg-card);
+            border-radius: 14px;
+            border: 2px solid var(--border-color);
+            margin-bottom: 20px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+            transition: all 0.3s ease;
+        }
+        
+        .bill-block:hover {
+            border-color: var(--primary);
+            box-shadow: 0 6px 20px rgba(11, 94, 215, 0.1);
+        }
+        
+        .bill-block-header {
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            color: white;
+            padding: 14px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        
+        .bill-header-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .bill-header-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .bill-number-badge {
+            background: rgba(255,255,255,0.2);
+            padding: 5px 14px;
+            border-radius: 20px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            font-family: monospace;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .bill-status-badge {
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        
+        .bill-date-badge {
+            background: rgba(255,255,255,0.15);
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            backdrop-filter: blur(4px);
+        }
+        
+        .bill-total-badge,
+        .bill-paid-badge,
+        .bill-balance-badge {
+            padding: 5px 14px;
+            border-radius: 20px;
+            font-size: 0.72rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+        
+        .bill-total-badge { background: rgba(255,255,255,0.18); }
+        .bill-total-badge strong { font-family: monospace; font-size: 0.82rem; }
+        
+        .bill-paid-badge {
+            background: rgba(16, 185, 129, 0.3);
+            border-color: rgba(16, 185, 129, 0.4);
+        }
+        .bill-paid-badge strong { font-family: monospace; font-size: 0.82rem; color: #6EE7B7; }
+        
+        .bill-balance-badge.has-balance {
+            background: rgba(239, 68, 68, 0.3);
+            border-color: rgba(239, 68, 68, 0.4);
+        }
+        .bill-balance-badge.has-balance strong { font-family: monospace; font-size: 0.82rem; color: #FCA5A5; }
+        
+        .bill-balance-badge.no-balance {
+            background: rgba(16, 185, 129, 0.3);
+            border-color: rgba(16, 185, 129, 0.4);
+        }
+        .bill-balance-badge.no-balance strong { font-family: monospace; font-size: 0.82rem; color: #6EE7B7; }
+        
+        /* Bill Items Table */
+        .bill-items-wrap { overflow-x: auto; }
+        
+        .bill-items-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+            min-width: 700px;
+        }
+        
+        .bill-items-table thead th {
+            background: linear-gradient(135deg, #064E3B, #065F46);
+            color: #FFFFFF;
+            font-weight: 700;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            padding: 10px 12px;
+            border-bottom: 3px solid #047857;
+            white-space: nowrap;
+            text-align: left;
+        }
+        
+        .bill-items-table tbody td {
+            padding: 9px 12px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+            vertical-align: middle;
+        }
+        
+        .bill-items-table tbody tr:hover td {
+            background: var(--primary-bg);
+        }
+        
+        [data-theme="dark"] .bill-items-table tbody tr:hover td {
+            background: #1A3A5F;
+        }
+        
+        .item-name {
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+        
+        .item-type-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            background: var(--gray-100);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+        }
+        
+        [data-theme="dark"] .item-type-badge {
+            background: #334155;
+            color: #94A3B8;
+        }
+        
+        .item-status-badge {
+            display: inline-block;
+            padding: 3px 12px;
+            border-radius: 12px;
+            font-size: 0.62rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        
+        /* Summary Rows */
+        .bill-subtotal-row td {
+            background: var(--gray-50);
+            padding: 10px 12px;
+            border-top: 2px solid var(--border-color);
+            font-size: 0.82rem;
+        }
+        [data-theme="dark"] .bill-subtotal-row td { background: #0F172A; }
+        
+        .bill-discount-row td {
+            background: #FEF3C7;
+            padding: 8px 12px;
+            border-top: 1px dashed #D97706;
+            font-size: 0.78rem;
+        }
+        [data-theme="dark"] .bill-discount-row td { background: #3D2E0A; }
+        
+        .bill-premium-row td {
+            background: #EDE9FE;
+            padding: 8px 12px;
+            border-top: 1px dashed #7C3AED;
+            font-size: 0.78rem;
+        }
+        [data-theme="dark"] .bill-premium-row td { background: #2D1B5E; }
+        
+        .bill-total-row td {
+            background: var(--primary-bg);
+            padding: 12px;
+            border-top: 3px double var(--primary);
+            font-size: 0.85rem;
+        }
+        [data-theme="dark"] .bill-total-row td { background: #1A3A5F; }
+        
+        .bill-paid-row td {
+            background: #D1FAE5;
+            padding: 10px 12px;
+            border-top: 2px solid #059669;
+            font-size: 0.82rem;
+        }
+        [data-theme="dark"] .bill-paid-row td { background: #1A3A2A; }
+        
+        .bill-balance-row td {
+            background: #FEE2E2;
+            padding: 10px 12px;
+            border-top: 2px solid #DC2626;
+            font-size: 0.82rem;
+        }
+        .bill-balance-row.no-balance td {
+            background: #D1FAE5;
+            border-top-color: #059669;
+        }
+        [data-theme="dark"] .bill-balance-row td { background: #3A1A1A; }
+        [data-theme="dark"] .bill-balance-row.no-balance td { background: #1A3A2A; }
         
         /* ================================================================ */
         /* CONTENT BLOCK */
@@ -1264,6 +1561,15 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .table-blue thead th, .table-blue tbody td { padding: 4px 8px !important; }
             .clinical-table { font-size: 0.7rem; }
             .clinical-table thead th, .clinical-table tbody td { padding: 6px 8px !important; }
+            
+            .bill-block-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .bill-header-left, .bill-header-right { width: 100%; }
+            .bill-number-badge { font-size: 0.7rem; }
+            .bill-items-table { font-size: 0.7rem; min-width: 600px; }
+            .bill-items-table thead th, .bill-items-table tbody td { padding: 6px 8px; }
         }
         
         @media (max-width: 480px) {
@@ -1336,7 +1642,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
             <div class="flex gap-2 flex-wrap no-print">
-                <!-- View PDF Button -->
                 <button onclick="window.location.href='view_patient_pdf.php?id=<?= $patient['id'] ?>'" class="btn-pdf">
                     <i class="fas fa-file-pdf"></i> View PDF
                 </button>
@@ -1523,7 +1828,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 3. VITAL SIGNS - 7 SIGNS (4 per row) -->
+    <!-- 3. VITAL SIGNS - 7 SIGNS -->
     <!-- ================================================================ -->
     <div class="section-title">
         <i class="fas fa-heartbeat" style="color:#EC4899;"></i> Vital Signs
@@ -1531,30 +1836,25 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
     <div class="card">
         <?php if ($latest_vital_signs): ?>
-            <!-- Row 1: Temperature, Blood Pressure, Pulse Rate, Oxygen Saturation -->
             <div class="vital-grid mb-3">
-                <!-- 1. Temperature -->
                 <div class="vital-card blue">
                     <div class="vital-icon"><i class="fas fa-thermometer-half"></i></div>
                     <div class="vital-value"><?= $latest_vital_signs['temperature'] ?? '--' ?> <span class="vital-unit">°C</span></div>
                     <div class="vital-label">Temperature</div>
                 </div>
                 
-                <!-- 2. Blood Pressure -->
                 <div class="vital-card red">
                     <div class="vital-icon"><i class="fas fa-heart"></i></div>
                     <div class="vital-value"><?= ($latest_vital_signs['blood_pressure_systolic'] ?? '--') . '/' . ($latest_vital_signs['blood_pressure_diastolic'] ?? '--') ?> <span class="vital-unit">mmHg</span></div>
                     <div class="vital-label">Blood Pressure</div>
                 </div>
                 
-                <!-- 3. Pulse Rate -->
                 <div class="vital-card pink">
                     <div class="vital-icon"><i class="fas fa-heartbeat"></i></div>
                     <div class="vital-value"><?= $latest_vital_signs['pulse_rate'] ?? '--' ?> <span class="vital-unit">bpm</span></div>
                     <div class="vital-label">Pulse Rate</div>
                 </div>
                 
-                <!-- 4. OXYGEN SATURATION (SpO2) - MPYA -->
                 <div class="vital-card sky">
                     <div class="vital-icon"><i class="fas fa-lungs"></i></div>
                     <div class="vital-value <?php 
@@ -1571,30 +1871,25 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
             
-            <!-- Row 2: Weight, Height, BMI (3 signs) -->
             <div class="vital-grid">
-                <!-- 5. Weight -->
                 <div class="vital-card purple">
                     <div class="vital-icon"><i class="fas fa-weight"></i></div>
                     <div class="vital-value"><?= $latest_vital_signs['weight'] ?? '--' ?> <span class="vital-unit">kg</span></div>
                     <div class="vital-label">Weight</div>
                 </div>
                 
-                <!-- 6. Height -->
                 <div class="vital-card green">
                     <div class="vital-icon"><i class="fas fa-ruler-vertical"></i></div>
                     <div class="vital-value"><?= $latest_vital_signs['height'] ?? '--' ?> <span class="vital-unit">cm</span></div>
                     <div class="vital-label">Height</div>
                 </div>
                 
-                <!-- 7. BMI -->
                 <div class="vital-card indigo">
                     <div class="vital-icon"><i class="fas fa-calculator"></i></div>
                     <div class="vital-value"><?= $latest_vital_signs['bmi'] ?? '--' ?></div>
                     <div class="vital-label">BMI</div>
                 </div>
                 
-                <!-- Empty slot for grid alignment (optional) -->
                 <div style="visibility:hidden;"></div>
             </div>
             
@@ -1925,104 +2220,314 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 10. BILLS -->
+    <!-- 10. BILLS - REDESIGNED V5 -->
     <!-- ================================================================ -->
     <div class="section-title">
         <i class="fas fa-receipt" style="color:#0B5ED7;"></i> Bills & Payments
         <span class="badge-count"><?= $total_bills ?> bills</span>
     </div>
     
-    <!-- Bill Summary Cards -->
+    <!-- ================================================================ -->
+    <!-- ✅ BILL SUMMARY CARDS - v5.0 FIXED (Paid inatumia paid_amount) -->
+    <!-- ================================================================ -->
     <div class="bill-summary-grid">
-        <div class="bill-summary-card total-card">
+        
+        <!-- Subtotal Card -->
+        <div class="bill-summary-card subtotal-card">
             <div class="bill-icon"><i class="fas fa-file-invoice"></i></div>
+            <div class="bill-content">
+                <span class="bill-label">📋 Subtotal</span>
+                <span class="bill-value">TSh <?= number_format($total_subtotal, 0) ?></span>
+                <span class="bill-sub">Bill amount</span>
+            </div>
+        </div>
+        
+        <!-- Total Bills Card -->
+        <div class="bill-summary-card total-card">
+            <div class="bill-icon"><i class="fas fa-coins"></i></div>
             <div class="bill-content">
                 <span class="bill-label">💰 Total Bills</span>
                 <span class="bill-value">TSh <?= number_format($total_bill_amount, 0) ?></span>
+                <span class="bill-sub"><?= $total_bills ?> bill<?= $total_bills != 1 ? 's' : '' ?></span>
             </div>
         </div>
+        
+        <!-- ✅ Paid Card - FIXED: Inatumia paid_amount column -->
         <div class="bill-summary-card paid-card">
             <div class="bill-icon"><i class="fas fa-check-circle"></i></div>
             <div class="bill-content">
                 <span class="bill-label">✅ Paid</span>
                 <span class="bill-value">TSh <?= number_format($paid_bill_amount, 0) ?></span>
+                <span class="bill-sub">
+                    <?php 
+                        $paid_percent = $total_bill_amount > 0 ? ($paid_bill_amount / $total_bill_amount) * 100 : 0;
+                        echo number_format($paid_percent, 1) . '%';
+                    ?>
+                </span>
             </div>
         </div>
+        
+        <!-- ✅ Pending Card - FIXED: Inatumia balance column -->
         <div class="bill-summary-card pending-card">
             <div class="bill-icon"><i class="fas fa-clock"></i></div>
             <div class="bill-content">
                 <span class="bill-label">⏳ Pending</span>
                 <span class="bill-value">TSh <?= number_format($pending_bill_amount, 0) ?></span>
+                <span class="bill-sub">
+                    <?php 
+                        $pending_percent = $total_bill_amount > 0 ? ($pending_bill_amount / $total_bill_amount) * 100 : 0;
+                        echo number_format($pending_percent, 1) . '%';
+                    ?>
+                </span>
             </div>
         </div>
-        <div class="bill-summary-card cancelled-card">
-            <div class="bill-icon"><i class="fas fa-times-circle"></i></div>
-            <div class="bill-content">
-                <span class="bill-label">❌ Cancelled</span>
-                <span class="bill-value">TSh <?= number_format($cancelled_bill_amount, 0) ?></span>
-            </div>
-        </div>
+        
     </div>
 
-    <!-- Bill Items Table -->
-    <div class="card mt-3">
-        <?php if (count($bills) > 0): ?>
-            <div class="overflow-x-auto">
-                <table class="table-blue">
+    <!-- ================================================================ -->
+    <!-- BILLS LIST - EACH BILL HAS ITS OWN TABLE -->
+    <!-- ================================================================ -->
+    <?php if (count($bills) > 0): ?>
+        <?php foreach ($bills as $bill_index => $bill): 
+            $items = $bill_items_data[$bill['id']] ?? [];
+            $bill_total = (float)($bill['total_amount'] ?? 0);
+            $bill_paid = (float)($bill['paid_amount'] ?? 0);
+            $bill_balance = (float)($bill['balance'] ?? 0);
+            $bill_status = $bill['status'] ?? 'pending';
+            
+            // Status colors
+            $status_styles = [
+                'paid' => ['bg' => '#D1FAE5', 'color' => '#059669', 'icon' => 'fa-check-circle'],
+                'partial' => ['bg' => '#DBEAFE', 'color' => '#2563EB', 'icon' => 'fa-credit-card'],
+                'pending' => ['bg' => '#FEF3C7', 'color' => '#D97706', 'icon' => 'fa-clock'],
+                'cancelled' => ['bg' => '#FEE2E2', 'color' => '#DC2626', 'icon' => 'fa-times-circle']
+            ];
+            $sc = $status_styles[$bill_status] ?? $status_styles['pending'];
+        ?>
+        
+        <div class="bill-block">
+            <!-- Bill Header -->
+            <div class="bill-block-header">
+                <div class="bill-header-left">
+                    <span class="bill-number-badge">
+                        <i class="fas fa-file-invoice"></i>
+                        <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
+                    </span>
+                    <span class="bill-status-badge" style="background:<?= $sc['bg'] ?>;color:<?= $sc['color'] ?>;">
+                        <i class="fas <?= $sc['icon'] ?>"></i>
+                        <?= ucfirst($bill_status) ?>
+                    </span>
+                    <span class="bill-date-badge">
+                        <i class="fas fa-calendar-alt"></i>
+                        <?= formatDateShort($bill['created_at'] ?? '') ?>
+                    </span>
+                </div>
+                <div class="bill-header-right">
+                    <span class="bill-total-badge">
+                        <i class="fas fa-coins"></i>
+                        Total: <strong>TSh <?= number_format($bill_total, 0) ?></strong>
+                    </span>
+                    <span class="bill-paid-badge">
+                        <i class="fas fa-check-circle"></i>
+                        Paid: <strong>TSh <?= number_format($bill_paid, 0) ?></strong>
+                    </span>
+                    <span class="bill-balance-badge <?= $bill_balance > 0 ? 'has-balance' : 'no-balance' ?>">
+                        <i class="fas fa-balance-scale"></i>
+                        Balance: <strong>TSh <?= number_format($bill_balance, 0) ?></strong>
+                    </span>
+                </div>
+            </div>
+            
+            <!-- Bill Items Table -->
+            <div class="bill-items-wrap">
+                <table class="bill-items-table">
                     <thead>
                         <tr>
-                            <th>Bill #</th>
-                            <th>Items</th>
-                            <th>Total Amount</th>
-                            <th>Paid Amount</th>
-                            <th>Balance</th>
-                            <th>Status</th>
-                            <th>Date</th>
+                            <th style="width:40px;text-align:center;">#</th>
+                            <th>Item Name</th>
+                            <th style="width:110px;text-align:center;">Type</th>
+                            <th style="width:60px;text-align:center;">Qty</th>
+                            <th style="width:120px;text-align:right;">Unit Price</th>
+                            <th style="width:130px;text-align:right;">Total</th>
+                            <th style="width:100px;text-align:center;">Status</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($bills as $bill): 
-                            $items = $bill_items_data[$bill['id']] ?? [];
-                        ?>
+                        <?php if (count($items) > 0): ?>
+                            <?php 
+                            $row_num = 1;
+                            $items_subtotal = 0;
+                            foreach ($items as $item): 
+                                $item_price = (float)($item['total_price'] ?? 0);
+                                $item_unit = (float)($item['unit_price'] ?? 0);
+                                $item_qty = (int)($item['quantity'] ?? 1);
+                                $item_status = $item['status'] ?? 'pending';
+                                $item_type = $item['item_type'] ?? 'item';
+                                $items_subtotal += $item_price;
+                                
+                                if ($item_unit <= 0 && $item_qty > 0) {
+                                    $item_unit = $item_price / $item_qty;
+                                }
+                                
+                                $item_status_style = [
+                                    'paid' => 'background:#D1FAE5;color:#059669;',
+                                    'partial' => 'background:#DBEAFE;color:#2563EB;',
+                                    'pending' => 'background:#FEF3C7;color:#D97706;',
+                                    'cancelled' => 'background:#FEE2E2;color:#DC2626;'
+                                ][$item_status] ?? 'background:#F1F5F9;color:#64748B;';
+                                
+                                $type_icons = [
+                                    'medication' => '💊',
+                                    'lab_test' => '🧪',
+                                    'procedure' => '💉',
+                                    'consultation' => '🩺',
+                                    'equipment' => '🔧',
+                                    'item' => '📦'
+                                ];
+                                $type_icon = $type_icons[$item_type] ?? '📦';
+                            ?>
                             <tr>
-                                <td class="font-mono text-xs"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></td>
+                                <td style="text-align:center;color:var(--text-secondary);font-weight:600;"><?= $row_num++ ?></td>
                                 <td>
-                                    <?php if (count($items) > 0): ?>
-                                        <?php foreach ($items as $item): ?>
-                                            <div class="text-xs" style="padding:1px 0;border-bottom:1px solid var(--border-color);">
-                                                <?= htmlspecialchars($item['item_name'] ?? '') ?>
-                                                <span class="text-gray-400">x<?= $item['quantity'] ?? 1 ?></span>
-                                                <span class="float-right">TSh <?= number_format($item['total_price'] ?? 0, 0) ?></span>
-                                            </div>
-                                        <?php endforeach; ?>
-                                    <?php else: ?>
-                                        <span class="text-gray-400 text-xs">No items</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td class="font-semibold">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></td>
-                                <td>TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
-                                <td class="font-semibold <?= ($bill['balance'] ?? 0) > 0 ? 'text-red-600' : 'text-green-600' ?>">
-                                    TSh <?= number_format($bill['balance'] ?? 0, 0) ?>
-                                </td>
-                                <td>
-                                    <span class="badge <?= getStatusBadgeClass($bill['status']) ?>">
-                                        <i class="fas <?= getStatusIcon($bill['status']) ?>"></i>
-                                        <?= ucfirst($bill['status'] ?? 'Pending') ?>
+                                    <span class="item-name">
+                                        <?= htmlspecialchars($item['item_name'] ?? 'N/A') ?>
                                     </span>
                                 </td>
-                                <td class="text-xs"><?= formatDateShort($bill['created_at']) ?></td>
+                                <td style="text-align:center;">
+                                    <span class="item-type-badge">
+                                        <?= $type_icon ?> <?= ucfirst(str_replace('_', ' ', $item_type)) ?>
+                                    </span>
+                                </td>
+                                <td style="text-align:center;font-weight:700;">
+                                    <?= $item_qty ?>
+                                </td>
+                                <td style="text-align:right;font-family:monospace;">
+                                    TSh <?= number_format($item_unit, 0) ?>
+                                </td>
+                                <td style="text-align:right;font-family:monospace;font-weight:700;color:var(--primary);">
+                                    TSh <?= number_format($item_price, 0) ?>
+                                </td>
+                                <td style="text-align:center;">
+                                    <span class="item-status-badge" style="<?= $item_status_style ?>">
+                                        <?= ucfirst($item_status) ?>
+                                    </span>
+                                </td>
                             </tr>
-                        <?php endforeach; ?>
+                            <?php endforeach; ?>
+                            
+                            <!-- Subtotal Row -->
+                            <tr class="bill-subtotal-row">
+                                <td colspan="5" style="text-align:right;font-weight:700;color:var(--text-secondary);">
+                                    <i class="fas fa-calculator"></i> SUBTOTAL:
+                                </td>
+                                <td style="text-align:right;font-family:monospace;font-weight:700;color:var(--primary);">
+                                    TSh <?= number_format($items_subtotal, 0) ?>
+                                </td>
+                                <td></td>
+                            </tr>
+                            
+                            <!-- Discount Row (kama ipo) -->
+                            <?php 
+                            $pharm_disc = (float)($bill['pharmacy_discount'] ?? 0);
+                            $cashier_disc = (float)($bill['cashier_discount'] ?? 0);
+                            $total_disc = $pharm_disc + $cashier_disc;
+                            if ($total_disc > 0): 
+                            ?>
+                            <tr class="bill-discount-row">
+                                <td colspan="5" style="text-align:right;font-weight:600;color:#D97706;">
+                                    <i class="fas fa-tag"></i> DISCOUNT:
+                                    <?php if ($pharm_disc > 0): ?>
+                                        <small>(Pharm: TSh <?= number_format($pharm_disc, 0) ?>)</small>
+                                    <?php endif; ?>
+                                    <?php if ($cashier_disc > 0): ?>
+                                        <small>(Cashier: TSh <?= number_format($cashier_disc, 0) ?>)</small>
+                                    <?php endif; ?>
+                                </td>
+                                <td style="text-align:right;font-family:monospace;font-weight:700;color:#D97706;">
+                                    - TSh <?= number_format($total_disc, 0) ?>
+                                </td>
+                                <td></td>
+                            </tr>
+                            <?php endif; ?>
+                            
+                            <!-- Premium Row (kama ipo) -->
+                            <?php 
+                            $pharm_prem = (float)($bill['pharmacy_premium'] ?? 0);
+                            $cashier_prem = (float)($bill['cashier_premium'] ?? 0);
+                            $total_prem = $pharm_prem + $cashier_prem;
+                            if ($total_prem > 0): 
+                            ?>
+                            <tr class="bill-premium-row">
+                                <td colspan="5" style="text-align:right;font-weight:600;color:#7C3AED;">
+                                    <i class="fas fa-crown"></i> PREMIUM:
+                                    <?php if ($pharm_prem > 0): ?>
+                                        <small>(Pharm: TSh <?= number_format($pharm_prem, 0) ?>)</small>
+                                    <?php endif; ?>
+                                    <?php if ($cashier_prem > 0): ?>
+                                        <small>(Cashier: TSh <?= number_format($cashier_prem, 0) ?>)</small>
+                                    <?php endif; ?>
+                                </td>
+                                <td style="text-align:right;font-family:monospace;font-weight:700;color:#7C3AED;">
+                                    + TSh <?= number_format($total_prem, 0) ?>
+                                </td>
+                                <td></td>
+                            </tr>
+                            <?php endif; ?>
+                            
+                            <!-- Total Row -->
+                            <tr class="bill-total-row">
+                                <td colspan="5" style="text-align:right;font-weight:800;color:var(--text-primary);font-size:0.85rem;">
+                                    <i class="fas fa-coins"></i> TOTAL:
+                                </td>
+                                <td style="text-align:right;font-family:monospace;font-weight:800;color:var(--success);font-size:0.9rem;">
+                                    TSh <?= number_format($bill_total, 0) ?>
+                                </td>
+                                <td></td>
+                            </tr>
+                            
+                            <!-- Paid Row -->
+                            <tr class="bill-paid-row">
+                                <td colspan="5" style="text-align:right;font-weight:700;color:var(--success);">
+                                    <i class="fas fa-check-circle"></i> PAID:
+                                </td>
+                                <td style="text-align:right;font-family:monospace;font-weight:800;color:var(--success);">
+                                    TSh <?= number_format($bill_paid, 0) ?>
+                                </td>
+                                <td></td>
+                            </tr>
+                            
+                            <!-- Balance Row -->
+                            <tr class="bill-balance-row <?= $bill_balance > 0 ? 'has-balance' : 'no-balance' ?>">
+                                <td colspan="5" style="text-align:right;font-weight:700;<?= $bill_balance > 0 ? 'color:#DC2626;' : 'color:#059669;' ?>">
+                                    <i class="fas fa-balance-scale"></i> BALANCE:
+                                </td>
+                                <td style="text-align:right;font-family:monospace;font-weight:800;<?= $bill_balance > 0 ? 'color:#DC2626;' : 'color:#059669;' ?>">
+                                    TSh <?= number_format($bill_balance, 0) ?>
+                                </td>
+                                <td></td>
+                            </tr>
+                            
+                        <?php else: ?>
+                            <tr>
+                                <td colspan="7" style="text-align:center;padding:16px;color:var(--text-secondary);font-style:italic;">
+                                    <i class="fas fa-inbox"></i> No items in this bill
+                                </td>
+                            </tr>
+                        <?php endif; ?>
                     </tbody>
                 </table>
             </div>
-        <?php else: ?>
+        </div>
+        
+        <?php endforeach; ?>
+    <?php else: ?>
+        <div class="card">
             <div class="text-center py-4 text-gray-400">
                 <i class="fas fa-receipt text-2xl block mb-2" style="color:#0B5ED7;"></i>
                 <p>No bills found</p>
             </div>
-        <?php endif; ?>
-    </div>
+        </div>
+    <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
@@ -2031,7 +2536,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Patient Details
+            Patient Details v5.0
             <span class="text-gray-300 mx-2">|</span>
             Dr. <?= htmlspecialchars($doctor_name) ?>
             <span class="text-gray-300 mx-2">|</span>
@@ -2058,9 +2563,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE - SYNC WITH HEADER
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -2069,30 +2571,27 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     var savedDarkMode = localStorage.getItem('darkMode');
     if (savedDarkMode === 'true') {
         htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
+        if (darkIcon) darkIcon.className = 'fas fa-sun';
+        if (darkText) darkText.textContent = 'Light';
     }
     
     darkModeToggle?.addEventListener('click', function() {
         var isDark = htmlElement.getAttribute('data-theme') === 'dark';
         if (isDark) {
             htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
+            if (darkIcon) darkIcon.className = 'fas fa-moon';
+            if (darkText) darkText.textContent = 'Dark';
             localStorage.setItem('darkMode', 'false');
             document.cookie = "dark_mode=false; path=/";
         } else {
             htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
+            if (darkIcon) darkIcon.className = 'fas fa-sun';
+            if (darkText) darkText.textContent = 'Light';
             localStorage.setItem('darkMode', 'true');
             document.cookie = "dark_mode=true; path=/";
         }
     });
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
@@ -2101,16 +2600,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     });
     
     document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
+        if (window.innerWidth <= 1024 && sidebar) {
             if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
                 sidebar.classList.remove('open');
             }
         }
     });
 
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -2129,9 +2625,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -2148,18 +2641,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏥 Braick Dispensary - Patient Details (7 Vital Signs)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Flow: Patient Info → Visit Info → Vital Signs (7) → Clinical Assessment → Lab Tests → Diagnosis → Prescriptions → Procedures → Appointments → Bills', 'font-size:12px; color:#059669;');
-    console.log('%c❤️ 7 Vital Signs: Temperature, BP, Pulse Rate, SpO2, Weight, Height, BMI', 'font-size:13px; color:#EC4899;');
-    console.log('%c🫁 SpO2 (Oxygen Saturation): Normal 95-100%', 'font-size:13px; color:#0EA5E9;');
+    console.log('%c🏥 Braick Dispensary - Patient Details v5.0 (Paid FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ FIXED: Paid card inatumia paid_amount column', 'font-size:13px; color:#059669;');
+    console.log('%c✅ FIXED: Pending card inatumia balance column', 'font-size:13px; color:#059669;');
+    console.log('%c✅ REMOVED: Discount & Premium cards kwenye summary', 'font-size:13px; color:#D97706;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name']) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📋 ID: <?= htmlspecialchars($patient['patient_id']) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c❤️ Vital Signs: <?= $total_vital_signs ?> records', 'font-size:13px; color:#EC4899;');
-    console.log('%c🫁 SpO2 Value: <?= $latest_vital_signs['oxygen_saturation'] ?? 'N/A' ?>%', 'font-size:13px; color:#0EA5E9;');
-    console.log('%c💰 Bills: <?= $total_bills ?> | Total: TSh <?= number_format($total_bill_amount, 0) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Diagnosis: <?= count($diagnosis_history) ?> records', 'font-size:13px; color:#7C3AED;');
-    console.log('%c💊 Prescriptions: <?= $total_prescriptions ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🔬 Lab Tests: <?= $total_lab_tests ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c💰 Bills: <?= $total_bills ?> | Subtotal: TSh <?= number_format($total_subtotal, 0) ?> | Total: TSh <?= number_format($total_bill_amount, 0) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Paid: TSh <?= number_format($paid_bill_amount, 0) ?> | Pending: TSh <?= number_format($pending_bill_amount, 0) ?>', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

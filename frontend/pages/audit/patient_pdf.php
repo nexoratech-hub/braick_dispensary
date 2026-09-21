@@ -1,11 +1,11 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/admin/audit/patient_pdf.php
-// PATIENT PDF - V3 (Na Official Stamp / Muhuli)
-// ✅ Logo + Jina + Slogan + Simu za Admin
+// FILE: C:\xampp\htdocs\dispensary_system\frontend\pages\audit\patient_pdf.php
+// AUDIT - PATIENT PDF (V2 FULL - FULL PATHS + LOGO DETECTION)
+// ✅ Full absolute paths (hakuna ../../../)
+// ✅ Logo detection + Base64 + SVG fallback
 // ✅ Kila Visit na Card yake (Blue Margin)
-// ✅ Space kati ya visit na visit
-// ✅ Official Stamp section chini ya PDF
+// ✅ Official Stamp / Muhuli section chini
 // ✅ Fonts: Inter + JetBrains Mono
 // ================================================================
 
@@ -13,15 +13,21 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
+$allowed_roles = ['admin', 'audit'];
+
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || !in_array($_SESSION['role'], $allowed_roles)) {
     header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
 
 $user_id = $_SESSION['user_id'] ?? 0;
-$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_full_name = $_SESSION['full_name'] ?? 'Audit User';
+$user_role = $_SESSION['role'] ?? 'audit';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+
+$is_admin = ($user_role === 'admin');
+$is_audit = ($user_role === 'audit');
 
 $patient_id = (int)($_GET['id'] ?? 0);
 $selected_branch_id = $_GET['branch'] ?? 'all';
@@ -30,13 +36,91 @@ if ($patient_id <= 0) {
     die("Invalid patient ID");
 }
 
-require_once __DIR__ . '/../../../../backend/config/database.php';
+// ================================================================
+// ✅ ABSOLUTE PATHS (Full Paths)
+// ================================================================
+$document_root = $_SERVER['DOCUMENT_ROOT'] ?? 'C:/xampp/htdocs';
+$system_root = $document_root . '/dispensary_system';
+
+// ✅ DATABASE - Full Path
+require_once $system_root . '/backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
     $db->exec("SET time_zone = '+03:00'");
 } catch (Exception $e) {
     die("Database connection failed: " . $e->getMessage());
+}
+
+// ================================================================
+// ✅ LOGO DETECTION - Full Paths + Base64
+// ================================================================
+$logo_base64 = '';
+$logo_found_path = '';
+$logo_found = false;
+
+// Full paths za kuangalia
+$possible_logo_paths = [
+    // 1. Main Braick logo (uploads/profiles)
+    $system_root . '/frontend/assets/uploads/profiles/braick_logo.png',
+    $system_root . '/frontend/assets/uploads/profiles/Braick_logo.png',
+    $system_root . '/frontend/assets/uploads/profiles/BRAICK_LOGO.png',
+    
+    // 2. Generic logo names
+    $system_root . '/frontend/assets/uploads/profiles/logo.png',
+    $system_root . '/frontend/assets/uploads/profiles/Logo.png',
+    
+    // 3. assets/images folder
+    $system_root . '/frontend/assets/images/braick_logo.png',
+    $system_root . '/frontend/assets/images/logo.png',
+    
+    // 4. Root assets folder
+    $system_root . '/assets/uploads/profiles/braick_logo.png',
+    $system_root . '/assets/images/logo.png',
+    $system_root . '/assets/logo.png',
+    
+    // 5. Fallback - page folder
+    $system_root . '/frontend/pages/audit/braick_logo.png',
+    $system_root . '/frontend/pages/audit/logo.png',
+    $system_root . '/frontend/pages/admin/audit/braick_logo.png',
+    
+    // 6. System root
+    $system_root . '/braick_logo.png',
+    $system_root . '/logo.png',
+];
+
+foreach ($possible_logo_paths as $path) {
+    if (file_exists($path) && is_readable($path)) {
+        $logo_found_path = $path;
+        $logo_found = true;
+        
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        $mime = 'image/png';
+        if ($ext === 'jpg' || $ext === 'jpeg') $mime = 'image/jpeg';
+        elseif ($ext === 'gif') $mime = 'image/gif';
+        elseif ($ext === 'svg') $mime = 'image/svg+xml';
+        elseif ($ext === 'webp') $mime = 'image/webp';
+        
+        $logo_data = file_get_contents($path);
+        if ($logo_data !== false && strlen($logo_data) > 0) {
+            $logo_base64 = 'data:' . $mime . ';base64,' . base64_encode($logo_data);
+        }
+        break;
+    }
+}
+
+// Fallback SVG (Braick "B" logo)
+if (!$logo_found || empty($logo_base64)) {
+    $svg_logo = '<svg xmlns="http://www.w3.org/2000/svg" width="90" height="90" viewBox="0 0 90 90">' .
+        '<defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">' .
+        '<stop offset="0%" style="stop-color:#0B5ED7"/>' .
+        '<stop offset="100%" style="stop-color:#7C3AED"/>' .
+        '</linearGradient></defs>' .
+        '<rect width="90" height="90" rx="12" fill="url(#g)"/>' .
+        '<text x="45" y="62" text-anchor="middle" fill="white" font-size="48" font-weight="900" font-family="Arial,sans-serif">B</text>' .
+        '</svg>';
+    
+    $logo_base64 = 'data:image/svg+xml;base64,' . base64_encode($svg_logo);
 }
 
 // ================================================================
@@ -235,9 +319,6 @@ try {
     }
 } catch (Exception $e) {}
 
-// ================================================================
-// PRESCRIPTION ITEMS BY PRESCRIPTION
-// ================================================================
 $prescription_items_by_prescription = [];
 try {
     $stmt = $db->prepare("
@@ -335,13 +416,6 @@ function hasVitalValue($value) {
     return true;
 }
 
-$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-$logo_file_system = __DIR__ . '/../../../../frontend/assets/uploads/profiles/braick_logo.png';
-
-if (!file_exists($logo_file_system)) {
-    $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
-}
-
 $print_date = date('d M Y, H:i:s');
 $print_by = $user_full_name;
 ?>
@@ -352,7 +426,6 @@ $print_by = $user_full_name;
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Patient Report - <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?> - <?= htmlspecialchars($site_name) ?></title>
     
-    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -424,7 +497,7 @@ body {
 }
 
 /* ================================================================
-   HEADER - LOGO + JINA + SLOGAN + SIMU
+   HEADER
    ================================================================ */
 .report-header {
     display: flex;
@@ -443,6 +516,7 @@ body {
     flex: 1;
 }
 
+/* ✅ LOGO STYLES */
 .header-logo {
     width: 90px;
     height: 90px;
@@ -452,6 +526,7 @@ body {
     padding: 5px;
     background: white;
     flex-shrink: 0;
+    display: block;
 }
 
 .header-info {
@@ -630,7 +705,7 @@ body {
 .stat-box.balance .stat-value { color: var(--danger); }
 
 /* ================================================================
-   VISIT SECTION - WITH BLUE MARGIN
+   VISIT SECTION - BLUE MARGIN
    ================================================================ */
 .visits-container {
     display: flex;
@@ -876,7 +951,7 @@ body {
     margin-left: 2px;
 }
 
-/* Diagnosis */
+/* Diagnosis Boxes */
 .diagnosis-box {
     background: rgba(124, 58, 237, 0.08);
     border: 2px solid var(--purple);
@@ -1160,7 +1235,7 @@ body {
 .status-badge.secondary { background: #E2E8F0; color: var(--text-secondary); border: 1px solid var(--border-color); }
 
 /* ================================================================
-   ✅ V3: OFFICIAL STAMP SECTION (Chini ya PDF)
+   OFFICIAL STAMP SECTION
    ================================================================ */
 .stamp-section {
     margin-top: 40px;
@@ -1176,7 +1251,6 @@ body {
     align-items: end;
 }
 
-/* Left side - Certification text */
 .stamp-certification {
     padding: 15px 0;
 }
@@ -1235,7 +1309,6 @@ body {
     font-family: var(--font-mono);
 }
 
-/* Right side - Official Stamp / Muhuli area */
 .stamp-area {
     display: flex;
     flex-direction: column;
@@ -1244,7 +1317,6 @@ body {
     padding: 10px 0;
 }
 
-/* The stamp box - big empty area for physical stamp */
 .stamp-box {
     width: 220px;
     height: 140px;
@@ -1273,7 +1345,6 @@ body {
     pointer-events: none;
 }
 
-/* Corner decorations for stamp box */
 .stamp-corner {
     position: absolute;
     width: 18px;
@@ -1282,33 +1353,10 @@ body {
     border-style: solid;
 }
 
-.stamp-corner.tl {
-    top: 5px;
-    left: 5px;
-    border-width: 2px 0 0 2px;
-    border-radius: 6px 0 0 0;
-}
-
-.stamp-corner.tr {
-    top: 5px;
-    right: 5px;
-    border-width: 2px 2px 0 0;
-    border-radius: 0 6px 0 0;
-}
-
-.stamp-corner.bl {
-    bottom: 5px;
-    left: 5px;
-    border-width: 0 0 2px 2px;
-    border-radius: 0 0 0 6px;
-}
-
-.stamp-corner.br {
-    bottom: 5px;
-    right: 5px;
-    border-width: 0 2px 2px 0;
-    border-radius: 0 0 6px 0;
-}
+.stamp-corner.tl { top: 5px; left: 5px; border-width: 2px 0 0 2px; border-radius: 6px 0 0 0; }
+.stamp-corner.tr { top: 5px; right: 5px; border-width: 2px 2px 0 0; border-radius: 0 6px 0 0; }
+.stamp-corner.bl { bottom: 5px; left: 5px; border-width: 0 0 2px 2px; border-radius: 0 0 0 6px; }
+.stamp-corner.br { bottom: 5px; right: 5px; border-width: 0 2px 2px 0; border-radius: 0 0 6px 0; }
 
 .stamp-icon {
     font-size: 32px;
@@ -1514,11 +1562,9 @@ body {
         page-break-inside: avoid;
     }
     
-    /* ✅ Stamp section isivunjike */
     .stamp-section {
         page-break-inside: avoid;
         break-inside: avoid;
-        page-break-before: auto;
     }
     
     .stamp-box {
@@ -1572,11 +1618,14 @@ body {
 
 <div class="pdf-page">
     
-    <!-- HEADER -->
+    <!-- ================================================================
+         HEADER - NA LOGO
+         ================================================================ -->
     <div class="report-header">
         <div class="header-left">
-            <img src="<?= $logo_path ?>" alt="<?= htmlspecialchars($site_name) ?>" class="header-logo" 
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2290%22 height=%2290%22%3E%3Crect width=%2290%22 height=%2290%22 fill=%22%230B5ED7%22 rx=%2212%22/%3E%3Ctext x=%2245%22 y=%2260%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2240%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $logo_base64 ?>" 
+                 alt="<?= htmlspecialchars($site_name) ?>" 
+                 class="header-logo">
             
             <div class="header-info">
                 <div class="header-title"><?= htmlspecialchars($site_name) ?></div>
@@ -1617,7 +1666,9 @@ body {
         </div>
     </div>
     
-    <!-- PATIENT INFORMATION -->
+    <!-- ================================================================
+         PATIENT INFORMATION
+         ================================================================ -->
     <div class="patient-box">
         <div class="patient-box-title">
             <i class="fas fa-user-injured"></i>
@@ -1681,7 +1732,9 @@ body {
         </div>
     </div>
     
-    <!-- STATS -->
+    <!-- ================================================================
+         STATS
+         ================================================================ -->
     <div class="stats-row">
         <div class="stat-box visits">
             <div class="stat-label">Total Visits</div>
@@ -1704,7 +1757,9 @@ body {
         </div>
     </div>
     
-    <!-- VISITS -->
+    <!-- ================================================================
+         VISITS
+         ================================================================ -->
     <?php if (count($visits) > 0): ?>
         <div class="visits-container">
             <?php foreach ($visits as $visit_index => $visit): 
@@ -2311,7 +2366,7 @@ body {
     <?php endif; ?>
     
     <!-- ================================================================
-         ✅ V3: OFFICIAL STAMP / MUHULI SECTION
+         OFFICIAL STAMP / MUHULI SECTION
          ================================================================ -->
     <div class="stamp-section">
         <div class="stamp-container">
@@ -2349,7 +2404,6 @@ body {
             <!-- RIGHT: Stamp / Muhuli Area -->
             <div class="stamp-area">
                 <div class="stamp-box">
-                    <!-- Corner decorations -->
                     <div class="stamp-corner tl"></div>
                     <div class="stamp-corner tr"></div>
                     <div class="stamp-corner bl"></div>
@@ -2379,7 +2433,9 @@ body {
         </div>
     </div>
     
-    <!-- FOOTER -->
+    <!-- ================================================================
+         FOOTER
+         ================================================================ -->
     <div class="report-footer">
         <div class="footer-brand"><?= htmlspecialchars($site_name) ?></div>
         <div class="footer-slogan">
@@ -2418,10 +2474,16 @@ body {
 </div>
 
 <script>
-console.log('%c📄 Patient PDF V3 - Na Official Stamp', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Official Stamp / Muhuli section chini ya PDF', 'font-size:12px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Space ya kugonga muhuli wa dispensary', 'font-size:12px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Certification text + Signature line', 'font-size:12px; color:#7C3AED; font-weight:bold;');
+console.log('%c📄 Audit Patient PDF - FULL PATHS + LOGO', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ Role: <?= $user_role ?>', 'font-size:12px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Document Root: <?= htmlspecialchars($document_root) ?>', 'font-size:12px; color:#7C3AED;');
+console.log('%c✅ System Root: <?= htmlspecialchars($system_root) ?>', 'font-size:12px; color:#7C3AED;');
+console.log('%c✅ Logo Found: <?= $logo_found ? 'YES' : 'NO (using SVG fallback)' ?>', 'font-size:12px; color:<?= $logo_found ? '#34D399' : '#FBBF24' ?>; font-weight:bold;');
+<?php if ($logo_found): ?>
+console.log('%c✅ Logo Path: <?= htmlspecialchars($logo_found_path) ?>', 'font-size:11px; color:#34D399;');
+<?php endif; ?>
+console.log('%c✅ Kila Visit na Card yake (Blue Margin)', 'font-size:12px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Official Stamp / Muhuli section chini', 'font-size:12px; color:#34D399; font-weight:bold;');
 </script>
 
 </body>

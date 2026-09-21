@@ -1,13 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/inventory.php
-// ADMIN/AUDIT - INVENTORY, EQUIPMENT & PHARMACY SALES (V4 FIXED)
-// ✅ Medicines tab: NO action buttons (view-only)
-// ✅ Equipment tab: NO action buttons (view-only)
-// ✅ Pharmacy tab: View/Edit/Delete kwenye visit header
-// ✅ Allow both admin and audit roles
-// ✅ FIXED: Prescription amounts - ONLY medication items (not consultation/lab)
-// ✅ FIXED: Received By - ONLY show when prescription is PAID
+// ADMIN/AUDIT - INVENTORY, EQUIPMENT & PHARMACY SALES (V14)
+// ✅ V14: Prescription = 436,000 (GROSS - sawa na revenue.php V47)
+// ✅ V13: OTC section - CARD per Sale (design sawa na revenue.php)
+// ✅ Premium + Discount per patient + per visit
+// ✅ Tab + Sub-tab zinabaki baada ya filter
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -32,6 +30,16 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 $is_admin = ($user_role === 'admin');
 
 $selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
+
+$active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'medicines';
+if (!in_array($active_tab, ['medicines', 'equipment', 'pharmacy'])) {
+    $active_tab = 'medicines';
+}
+
+$active_sub_tab = isset($_GET['sub_tab']) ? $_GET['sub_tab'] : 'prescriptions';
+if (!in_array($active_sub_tab, ['prescriptions', 'otc'])) {
+    $active_sub_tab = 'prescriptions';
+}
 
 require_once __DIR__ . '/../../../../backend/config/database.php';
 
@@ -66,7 +74,7 @@ function calculateAge($dob) {
 }
 
 // ================================================================
-// HANDLE DELETE ACTIONS (Only OTC from admin)
+// HANDLE DELETE ACTIONS
 // ================================================================
 $alert_message = '';
 $alert_type = '';
@@ -149,48 +157,68 @@ $date_to = $_GET['date_to'] ?? date('Y-m-d');
 $date_label = "";
 $date_cond_os = "";
 $date_cond_bi = "";
+$date_cond_b  = "";
+$date_cond_p  = "";
 
 switch ($quick_filter) {
     case 'today':
         $date_cond_os = " AND DATE(os.created_at) = CURDATE()";
         $date_cond_bi = " AND DATE(bi.created_at) = CURDATE()";
+        $date_cond_b  = " AND DATE(b.created_at) = CURDATE()";
+        $date_cond_p  = " AND DATE(p.received_at) = CURDATE()";
         $date_label = "Today"; break;
     case '1w':
         $date_cond_os = " AND os.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
         $date_cond_bi = " AND bi.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+        $date_cond_b  = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+        $date_cond_p  = " AND p.received_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
         $date_label = "Last 1 Week"; break;
     case '1m':
         $date_cond_os = " AND os.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         $date_cond_bi = " AND bi.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_cond_b  = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_cond_p  = " AND p.received_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         $date_label = "Last 1 Month"; break;
     case '3m':
         $date_cond_os = " AND os.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
         $date_cond_bi = " AND bi.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
+        $date_cond_b  = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
+        $date_cond_p  = " AND p.received_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
         $date_label = "Last 3 Months"; break;
     case '6m':
         $date_cond_os = " AND os.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
         $date_cond_bi = " AND bi.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
+        $date_cond_b  = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
+        $date_cond_p  = " AND p.received_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
         $date_label = "Last 6 Months"; break;
     case '1y':
         $date_cond_os = " AND os.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
         $date_cond_bi = " AND bi.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
+        $date_cond_b  = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
+        $date_cond_p  = " AND p.received_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
         $date_label = "Last 1 Year"; break;
     case 'all':
         $date_label = "All Time"; break;
     case 'custom':
         $date_cond_os = " AND DATE(os.created_at) BETWEEN ? AND ?";
         $date_cond_bi = " AND DATE(bi.created_at) BETWEEN ? AND ?";
+        $date_cond_b  = " AND DATE(b.created_at) BETWEEN ? AND ?";
+        $date_cond_p  = " AND DATE(p.received_at) BETWEEN ? AND ?";
         $date_label = date('d M Y', strtotime($date_from)) . ' - ' . date('d M Y', strtotime($date_to)); break;
     default:
         $date_cond_os = " AND os.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         $date_cond_bi = " AND bi.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_cond_b  = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_cond_p  = " AND p.received_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         $date_label = "Last 1 Month";
 }
 
 $date_params = [];
 if ($quick_filter === 'custom') $date_params = [$date_from, $date_to];
 
+// ================================================================
 // TAB 1: MEDICINES
+// ================================================================
 $med_query = "
     SELECT 
         MIN(m.id) as id,
@@ -283,38 +311,122 @@ foreach ($equipment as $e) {
 $total_inventory_value = $med_value + $eq_value;
 
 // ================================================================
-// TAB 3A: PRESCRIPTIONS - ONLY MEDICATION ITEMS
+// ✅ V14: PRESCRIPTIONS - GROSS PEKEE (436,000)
 // ================================================================
+$presc_total_items_amount = 0;
+$presc_total_items_count = 0;
+
+try {
+    // ✅ GROSS = SUM(bi.total_price) - bila discount kwenye bill_items
+    $sql = "
+        SELECT 
+            COALESCE(SUM(bi.total_price), 0) as total_amount,
+            COUNT(DISTINCT bi.id) as total_items
+        FROM bill_items bi 
+        INNER JOIN bills b ON bi.bill_id = b.id
+        WHERE bi.reference_type = 'prescription'
+        AND bi.item_type = 'medication'
+        AND bi.status != 'cancelled'
+        AND b.patient_id IS NOT NULL 
+        AND b.visit_id IS NOT NULL 
+        AND b.bill_number NOT LIKE 'BILL-OTC-%' 
+        AND b.status IN ('paid', 'partial')
+        AND b.id IN (
+            SELECT DISTINCT p.bill_id 
+            FROM payments p 
+            WHERE p.bill_id IS NOT NULL
+            $branch_cond_p $date_cond_p
+        )
+        $branch_cond_bi $date_cond_bi
+    ";
+    $stmt = $db->prepare($sql);
+    $stmt->execute(array_merge(
+        $branch_params, $date_params,
+        $branch_params, $date_params
+    ));
+    $presc_result = $stmt->fetch(PDO::FETCH_ASSOC);
+    $presc_total_items_amount = (float)($presc_result['total_amount'] ?? 0);
+    $presc_total_items_count = (int)($presc_result['total_items'] ?? 0);
+} catch (Exception $e) {}
+
+// Pharmacy discount & premium (for display - si kwa hesabu ya GROSS)
+$presc_pharmacy_discount = 0;
+$presc_pharmacy_premium = 0;
+
+try {
+    $sql = "
+        SELECT 
+            COALESCE(SUM(b.pharmacy_discount), 0) as pharmacy_discount,
+            COALESCE(SUM(b.pharmacy_premium), 0) as pharmacy_premium
+        FROM bills b
+        WHERE b.patient_id IS NOT NULL 
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
+        AND b.status IN ('paid', 'partial')
+        AND b.id IN (
+            SELECT DISTINCT p.bill_id 
+            FROM payments p 
+            WHERE p.bill_id IS NOT NULL
+            $branch_cond_p $date_cond_p
+        )
+        $branch_cond_b $date_cond_b
+    ";
+    $stmt = $db->prepare($sql);
+    $stmt->execute(array_merge(
+        $branch_params, $date_params,
+        $branch_params, $date_params
+    ));
+    $presc_disc_result = $stmt->fetch(PDO::FETCH_ASSOC);
+    $presc_pharmacy_discount = (float)($presc_disc_result['pharmacy_discount'] ?? 0);
+    $presc_pharmacy_premium = (float)($presc_disc_result['pharmacy_premium'] ?? 0);
+} catch (Exception $e) {}
+
+// ✅ V14: PRESCRIPTION = GROSS PEKEE (436,000)
+$presc_gross = $presc_total_items_amount;
+$presc_discount = $presc_pharmacy_discount;
+$presc_premium = $presc_pharmacy_premium;
+$presc_final_revenue = $presc_gross;  // ✅ GROSS pekee (bila discount/premium)
+
+// Get patient-level data for prescriptions
 $grouped_prescriptions = [];
 $visits_map = [];
 
 try {
-    // ✅ FIXED: Only get patients with MEDICATION prescription items
     $sql = "
-        SELECT 
+        SELECT DISTINCT
             pat.id as patient_id,
             pat.full_name as patient_name,
             pat.patient_id as patient_number,
             pat.phone as patient_phone,
             pat.gender as patient_gender,
             pat.date_of_birth,
-            MAX(bi.created_at) as last_prescription_date,
-            COUNT(DISTINCT bi.bill_id) as prescription_count,
-            COUNT(DISTINCT b.visit_id) as visit_count
+            MAX(bi.created_at) as last_prescription_date
         FROM bill_items bi
         INNER JOIN bills b ON bi.bill_id = b.id
         INNER JOIN patients pat ON b.patient_id = pat.id
-        LEFT JOIN visits v ON b.visit_id = v.id
         WHERE bi.reference_type = 'prescription'
         AND bi.item_type = 'medication'
+        AND bi.status != 'cancelled'
         AND b.patient_id IS NOT NULL
-        $branch_cond_b $date_cond_bi
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
+        AND b.status IN ('paid', 'partial')
+        AND b.id IN (
+            SELECT DISTINCT p.bill_id 
+            FROM payments p 
+            WHERE p.bill_id IS NOT NULL
+            $branch_cond_p $date_cond_p
+        )
+        $branch_cond_bi $date_cond_bi
         GROUP BY pat.id, pat.full_name, pat.patient_id, pat.phone, pat.gender, pat.date_of_birth
         ORDER BY last_prescription_date DESC
         LIMIT 200
     ";
     $stmt = $db->prepare($sql);
-    $stmt->execute(array_merge($branch_params, $date_params));
+    $stmt->execute(array_merge(
+        $branch_params, $date_params,
+        $branch_params, $date_params
+    ));
     $grouped_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     $patient_ids = array_column($grouped_prescriptions, 'patient_id');
@@ -322,36 +434,20 @@ try {
     if (!empty($patient_ids)) {
         $placeholders = implode(',', array_fill(0, count($patient_ids), '?'));
         
-        // ✅ FIXED: Only MEDICATION items from prescriptions
-        // Calculate totals ONLY from medication items (not consultation/lab/etc)
         $stmt = $db->prepare("
             SELECT 
-                bi.id as item_id,
-                bi.bill_id,
-                bi.item_name,
-                bi.quantity,
-                bi.unit_price,
-                bi.total_price,
-                bi.discount_amount,
-                bi.final_price,
-                bi.status as item_status,
-                bi.reference_id as prescription_id,
-                bi.created_at as item_created_at,
-                b.id as bill_id,
-                b.bill_number,
-                b.visit_id,
-                b.patient_id,
-                b.created_by as bill_created_by,
-                b.status as bill_status,
-                b.updated_at as bill_updated_at,
-                v.visit_number,
-                v.visit_date,
+                bi.id as item_id, bi.bill_id, bi.item_name, bi.quantity, bi.unit_price,
+                bi.total_price, bi.discount_amount, bi.final_price, bi.status as item_status,
+                bi.reference_id as prescription_id, bi.created_at as item_created_at,
+                b.id as bill_id, b.bill_number, b.visit_id, b.patient_id, 
+                b.created_by as bill_created_by, b.status as bill_status,
+                b.updated_at as bill_updated_at, b.paid_amount as bill_paid,
+                b.premium_amount, b.total_discount, b.pharmacy_discount, b.pharmacy_premium,
+                v.visit_number, v.visit_date,
                 u_doctor.full_name as doctor_name,
-                u_cashier.full_name as cashier_name,
-                u_cashier.role as cashier_role,
+                u_cashier.full_name as cashier_name, u_cashier.role as cashier_role,
                 u_cashier.profile_pic as cashier_pic,
-                p.prescription_number,
-                p.status as prescription_status
+                p.prescription_number, p.status as prescription_status
             FROM bill_items bi
             INNER JOIN bills b ON bi.bill_id = b.id
             LEFT JOIN visits v ON b.visit_id = v.id
@@ -360,7 +456,9 @@ try {
             LEFT JOIN prescriptions p ON bi.reference_id = p.id
             WHERE bi.reference_type = 'prescription'
             AND bi.item_type = 'medication'
+            AND bi.status != 'cancelled'
             AND b.patient_id IN ($placeholders)
+            AND b.status IN ('paid', 'partial')
             ORDER BY b.visit_id DESC, bi.created_at DESC, bi.id ASC
         ");
         $stmt->execute($patient_ids);
@@ -380,24 +478,14 @@ try {
                     'visit_id' => $vid,
                     'visit_number' => $item['visit_number'] ?? ($vid > 0 ? 'VIS-' . $vid : 'NO-VISIT'),
                     'visit_date' => $item['visit_date'] ?? $item['item_created_at'],
-                    'doctor_names' => [],
-                    'cashier_names' => [],
-                    'items' => [],
-                    'statuses' => [],
-                    'bill_statuses' => [],
-                    'dates' => [],
-                    'total_qty' => 0,
-                    'medication_count' => 0,
-                    'total_amount' => 0,
-                    'paid_amount' => 0,
-                    'pending_amount' => 0,
-                    'premium_amount' => 0,
-                    'discount_amount' => 0,
+                    'doctor_names' => [], 'cashier_names' => [],
+                    'items' => [], 'statuses' => [], 'bill_statuses' => [], 'dates' => [],
+                    'total_qty' => 0, 'medication_count' => 0,
+                    'total_amount' => 0, 'paid_amount' => 0, 'pending_amount' => 0,
+                    'premium_amount' => 0, 'discount_amount' => 0,
                     'bill_ids' => [],
-                    'received_by' => null,
-                    'received_by_role' => null,
-                    'received_by_pic' => null,
-                    'payment_received_at' => null,
+                    'received_by' => null, 'received_by_role' => null,
+                    'received_by_pic' => null, 'payment_received_at' => null,
                 ];
             }
             
@@ -405,7 +493,6 @@ try {
                 $visits_map[$pid][$vid]['doctor_names'][] = $item['doctor_name'];
             }
             
-            // ✅ FIXED: Only show cashier name when BILL is PAID
             if ($bill_status === 'paid' || $item_status === 'paid') {
                 if (!empty($item['cashier_name']) && !in_array($item['cashier_name'], $visits_map[$pid][$vid]['cashier_names'])) {
                     $visits_map[$pid][$vid]['cashier_names'][] = $item['cashier_name'];
@@ -419,12 +506,13 @@ try {
             $visits_map[$pid][$vid]['statuses'][] = $item_status;
             $visits_map[$pid][$vid]['bill_statuses'][] = $bill_status;
             
-            // ✅ FIXED: Track bill for this visit - but ONLY ONCE per bill
             if (!isset($visits_map[$pid][$vid]['bill_ids'][$bill_id])) {
                 $visits_map[$pid][$vid]['bill_ids'][$bill_id] = [
-                    'total' => 0,        // Will be calculated from medication items only
+                    'total' => 0,
                     'paid' => (float)($item['bill_paid'] ?? 0),
                     'status' => $bill_status,
+                    'premium' => (float)($item['pharmacy_premium'] ?? 0),
+                    'discount' => (float)($item['pharmacy_discount'] ?? 0),
                 ];
             }
             
@@ -432,16 +520,10 @@ try {
                 $visits_map[$pid][$vid]['dates'][] = $item['item_created_at'];
             }
             
-            // ✅ FIXED: Calculate item total - use final_price if available, else total_price - discount
+            // ✅ V14: GROSS price (bila discount kwenye item)
             $item_total_price = (float)($item['total_price'] ?? 0);
             $item_discount = (float)($item['discount_amount'] ?? 0);
-            $item_final = (float)($item['final_price'] ?? 0);
-            
-            // If final_price is 0 but total_price > 0, calculate: total - discount
-            if ($item_final == 0 && $item_total_price > 0) {
-                $item_final = $item_total_price - $item_discount;
-                if ($item_final < 0) $item_final = 0;
-            }
+            $item_final = $item_total_price;  // ✅ GROSS pekee
             
             $visits_map[$pid][$vid]['items'][] = [
                 'item_id' => (int)($item['item_id'] ?? 0),
@@ -451,7 +533,7 @@ try {
                 'unit_price' => (float)($item['unit_price'] ?? 0),
                 'total_price' => $item_total_price,
                 'discount_amount' => $item_discount,
-                'final_price' => $item_final,
+                'final_price' => $item_final,  // ✅ GROSS
                 'status' => $item_status,
                 'bill_status' => $bill_status,
                 'prescription_id' => (int)($item['prescription_id'] ?? 0),
@@ -461,15 +543,10 @@ try {
             
             $visits_map[$pid][$vid]['total_qty'] += (int)($item['quantity'] ?? 0);
             $visits_map[$pid][$vid]['medication_count']++;
-            
-            // ✅ FIXED: Only add MEDICATION item price to total
             $visits_map[$pid][$vid]['total_amount'] += $item_final;
-            
-            // ✅ FIXED: Add to bill total (only medication items)
             $visits_map[$pid][$vid]['bill_ids'][$bill_id]['total'] += $item_final;
         }
         
-        // Calculate overall status and paid amounts per visit
         foreach ($visits_map as $pid => $patient_visits) {
             if (!is_array($patient_visits)) continue;
             foreach ($patient_visits as $vid => $visit) {
@@ -478,7 +555,6 @@ try {
                 $statuses = (isset($visit['statuses']) && is_array($visit['statuses'])) ? $visit['statuses'] : [];
                 $bill_statuses = (isset($visit['bill_statuses']) && is_array($visit['bill_statuses'])) ? $visit['bill_statuses'] : [];
                 
-                // Overall status: prioritize pending > confirmed > dispensed > paid
                 $overall = 'pending';
                 if (in_array('pending', $statuses)) $overall = 'pending';
                 elseif (in_array('confirmed', $statuses)) $overall = 'confirmed';
@@ -486,7 +562,6 @@ try {
                 elseif (in_array('cancelled', $statuses)) $overall = 'cancelled';
                 elseif (in_array('paid', $statuses)) $overall = 'paid';
                 
-                // Check if ALL bill_statuses are paid
                 $all_paid = !empty($bill_statuses) && !in_array('pending', $bill_statuses) && !in_array('partial', $bill_statuses);
                 if ($all_paid && !in_array('cancelled', $statuses)) {
                     $overall = 'paid';
@@ -494,23 +569,23 @@ try {
                 
                 $visits_map[$pid][$vid]['overall_status'] = $overall;
                 
-                // ✅ FIXED: Calculate paid amount from MEDICATION items only
-                $total_bill = 0;
-                $paid_bill = 0;
+                $total_bill = 0; $paid_bill = 0;
+                $visit_premium = 0; $visit_discount = 0;
                 if (isset($visit['bill_ids']) && is_array($visit['bill_ids'])) {
                     foreach ($visit['bill_ids'] as $bill_data) {
                         $total_bill += (float)($bill_data['total'] ?? 0);
                         $paid_bill += (float)($bill_data['paid'] ?? 0);
+                        $visit_premium += (float)($bill_data['premium'] ?? 0);
+                        $visit_discount += (float)($bill_data['discount'] ?? 0);
                     }
                 }
                 
-                // ✅ FIXED: If bill is paid, paid = total amount (of medication items)
-                if ($overall === 'paid') {
-                    $paid_bill = $total_bill;
-                }
+                if ($overall === 'paid') $paid_bill = $total_bill;
                 
                 $visits_map[$pid][$vid]['paid_amount'] = $paid_bill;
                 $visits_map[$pid][$vid]['pending_amount'] = max(0, $total_bill - $paid_bill);
+                $visits_map[$pid][$vid]['premium_amount'] = $visit_premium;
+                $visits_map[$pid][$vid]['discount_amount'] = $visit_discount;
                 
                 $dates = (isset($visit['dates']) && is_array($visit['dates'])) ? $visit['dates'] : [];
                 rsort($dates);
@@ -526,6 +601,7 @@ try {
         
         $total_qty = 0; $medication_count = 0; $total_amount = 0;
         $paid_amount = 0; $pending_amount = 0;
+        $patient_premium = 0; $patient_discount = 0;
         $all_doctors = [];
         
         foreach ($patient_visits as $visit) {
@@ -535,6 +611,8 @@ try {
             $total_amount += (float)($visit['total_amount'] ?? 0);
             $paid_amount += (float)($visit['paid_amount'] ?? 0);
             $pending_amount += (float)($visit['pending_amount'] ?? 0);
+            $patient_premium += (float)($visit['premium_amount'] ?? 0);
+            $patient_discount += (float)($visit['discount_amount'] ?? 0);
             
             if (isset($visit['doctor_names']) && is_array($visit['doctor_names'])) {
                 foreach ($visit['doctor_names'] as $doc) {
@@ -549,6 +627,8 @@ try {
         $group['total_amount'] = $total_amount;
         $group['paid_amount'] = $paid_amount;
         $group['pending_amount'] = $pending_amount;
+        $group['patient_premium'] = $patient_premium;
+        $group['patient_discount'] = $patient_discount;
         $group['doctor_names_array'] = $all_doctors;
     }
     unset($group);
@@ -557,13 +637,16 @@ try {
     error_log("Prescriptions error: " . $e->getMessage());
 }
 
-// TAB 3B: OTC SALES
+// ================================================================
+// OTC SALES - V14
+// ================================================================
 $otc_sales = [];
 try {
     $sql = "SELECT 
-        os.id, os.sale_number, os.customer_name, os.customer_phone,
-        os.subtotal, os.discount_amount, os.premium_amount, os.total_amount,
-        os.payment_method, os.payment_status, os.created_at, os.updated_at, os.notes,
+        os.id as sale_id, os.sale_number, os.customer_name, os.customer_phone,
+        os.subtotal, os.discount_amount, os.premium_amount, os.premium_note, 
+        os.total_amount, os.payment_method, os.payment_status, os.created_at, 
+        os.updated_at, os.notes, os.bill_id,
         COALESCE(u.full_name, 'N/A') as sold_by_name,
         COALESCE(u.role, 'user') as sold_by_role,
         COALESCE(b.name, 'N/A') as branch_name,
@@ -583,27 +666,36 @@ try {
     error_log("OTC error: " . $e->getMessage());
 }
 
+// Fetch items for each OTC sale
 $otc_items_by_sale = [];
 if (!empty($otc_sales)) {
     try {
-        $sale_ids = array_column($otc_sales, 'id');
+        $sale_ids = array_column($otc_sales, 'sale_id');
         $placeholders = implode(',', array_fill(0, count($sale_ids), '?'));
-        $stmt = $db->prepare("SELECT osi.* FROM otc_sale_items osi WHERE osi.sale_id IN ($placeholders) ORDER BY osi.id ASC");
+        $stmt = $db->prepare("SELECT * FROM otc_sale_items WHERE sale_id IN ($placeholders) ORDER BY id ASC");
         $stmt->execute($sale_ids);
         $all_otc_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         foreach ($all_otc_items as $item) {
             $otc_items_by_sale[$item['sale_id']][] = $item;
         }
+        
+        foreach ($otc_sales as &$sale) {
+            $sale['items'] = $otc_items_by_sale[$sale['sale_id']] ?? [];
+        }
+        unset($sale);
     } catch (Exception $e) {}
 }
 
-// STATS - PRESCRIPTIONS
-$presc_total = 0; $presc_total_amount = 0; $presc_paid_amount = 0;
-$presc_pending_amount = 0; $presc_premium = 0; $presc_discount = 0;
+// ================================================================
+// STATS - PRESCRIPTIONS (V14: GROSS PEKEE)
+// ================================================================
+$presc_total_amount = $presc_gross;  // ✅ GROSS = 436,000
+$presc_paid_amount = 0;
+$presc_pending_amount = 0;
+$presc_premium = 0;   // ✅ Haijajumuishwa kwenye GROSS
+$presc_discount = 0;  // ✅ Haijajumuishwa kwenye GROSS
 
 foreach ($grouped_prescriptions as $group) {
-    $presc_total += (int)($group['prescription_count'] ?? 0);
-    $presc_total_amount += (float)($group['total_amount'] ?? 0);
     $presc_paid_amount += (float)($group['paid_amount'] ?? 0);
     $presc_pending_amount += (float)($group['pending_amount'] ?? 0);
 }
@@ -626,8 +718,8 @@ foreach ($otc_sales as $sale) {
 }
 
 $total_paid = $presc_paid_amount + $otc_paid_amount;
-$total_discount = $presc_discount + $otc_discount;
-$total_premium = $presc_premium + $otc_premium;
+$total_discount = $otc_discount;   // ✅ Prescription discount haijajumuishwa
+$total_premium = $otc_premium;     // ✅ Prescription premium haijajumuishwa
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 $profile_pic_url = !empty($profile_pic) 
@@ -649,6 +741,7 @@ include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
     <style>
 :root {
@@ -673,28 +766,36 @@ include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
     --purple-bg: #EDE9FE;
     --cyan: #0891B2;
     --cyan-bg: #CFFAFE;
+    --teal: #0D9488;
+    --teal-bg: #CCFBF1;
     --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
     --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
     --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
     --shadow-xl: 0 20px 50px rgba(0,0,0,0.15);
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-xl: 20px;
+    --radius-full: 9999px;
 }
 [data-theme="dark"] {
-    --bg-body: #0F172A;
-    --bg-card: #1E293B;
+    --bg-body: #0B1220;
+    --bg-card: #111C33;
     --text-primary: #F1F5F9;
     --text-secondary: #94A3B8;
-    --border-color: #334155;
+    --border-color: #1E2E4A;
     --primary: #3B82F6;
     --primary-dark: #2563EB;
     --primary-light: #60A5FA;
-    --primary-bg: #1E3A5F;
-    --success-bg: #1A3A2A;
-    --danger-bg: #3A1A1A;
-    --warning-bg: #3A2A1A;
-    --purple-bg: #2D1B4E;
-    --cyan-bg: #0E3A47;
+    --primary-bg: #12294A;
+    --success-bg: #0F2E22;
+    --danger-bg: #3A1414;
+    --warning-bg: #3A2A0F;
+    --purple-bg: #2A1A4A;
+    --cyan-bg: #0A2E3A;
+    --teal-bg: #0A2E2A;
 }
-* { font-family: var(--font-primary); -webkit-font-smoothing: antialiased; }
+* { font-family: var(--font-primary); -webkit-font-smoothing: antialiased; margin: 0; padding: 0; box-sizing: border-box; }
 html, body { font-family: var(--font-primary); background: var(--bg-body); color: var(--text-primary); }
 .money-number, .stat-value, .money-cell, .font-mono, .mono, .rx-number, .items-count-badge {
     font-family: var(--font-mono) !important;
@@ -704,14 +805,9 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 }
 
 .alert {
-    padding: 12px 18px;
-    border-radius: 12px;
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-weight: 600;
-    font-size: 0.82rem;
+    padding: 12px 18px; border-radius: 12px; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 10px;
+    font-weight: 600; font-size: 0.82rem;
     animation: slideDown 0.4s ease;
 }
 @keyframes slideDown {
@@ -752,14 +848,9 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1);
 }
 .branch-tag.filter-tag { background: linear-gradient(135deg, #10B981, #059669); font-weight: 700; }
-.branch-tag.admin-tag {
-    background: linear-gradient(135deg, #FCD34D, #F59E0B);
-    color: #78350F; font-weight: 800;
-}
-.branch-tag.audit-tag {
-    background: linear-gradient(135deg, #0EA5E9, #0284C7);
-    font-weight: 800;
-}
+.branch-tag.admin-tag { background: linear-gradient(135deg, #FCD34D, #F59E0B); color: #78350F; font-weight: 800; }
+.branch-tag.audit-tag { background: linear-gradient(135deg, #0EA5E9, #0284C7); font-weight: 800; }
+
 .btn-header {
     background: rgba(255,255,255,0.15); color: white;
     border: 1px solid rgba(255,255,255,0.25);
@@ -1045,19 +1136,8 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     color: var(--text-primary); vertical-align: middle; font-weight: 500;
 }
 .data-table tbody tr:hover td { background: var(--primary-bg); }
-[data-theme="dark"] .data-table tbody tr:hover td { background: #0A2E5C; }
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table tbody tr.hidden-row { display: none !important; }
-.data-table tbody tr.medication-row td {
-    border-bottom: 1px dashed var(--border-color);
-    background: rgba(232, 240, 254, 0.3);
-}
-[data-theme="dark"] .data-table tbody tr.medication-row td {
-    background: rgba(30, 58, 95, 0.3);
-}
-.data-table tbody tr.medication-row:hover td { background: var(--primary-bg); }
-.data-table tbody tr.sale-first-row td { border-top: 2px solid var(--primary-light); }
-.data-table tbody tr.sale-last-row td { border-bottom: 2px solid var(--primary-light); }
 
 .medication-name-cell {
     font-weight: 700; color: var(--primary);
@@ -1072,7 +1152,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     color: white; font-weight: 800; font-size: 0.72rem;
     font-family: var(--font-mono); min-width: 36px;
 }
-.items-count-badge i { font-size: 0.65rem; }
 .money-cell {
     font-family: var(--font-mono); font-weight: 800;
     font-size: 0.8rem; color: var(--success);
@@ -1113,7 +1192,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 }
 .payment-badge { background: var(--primary-bg); color: var(--primary); }
 
-/* ✅ Received By badge - only shown when paid */
 .received-by-badge {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 3px 9px; border-radius: 8px;
@@ -1121,7 +1199,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     background: var(--success-bg); color: var(--success);
     border: 1px solid var(--success);
 }
-.received-by-badge i { font-size: 0.6rem; }
 .received-by-empty {
     display: inline-flex; align-items: center; gap: 3px;
     font-size: 0.65rem; color: var(--text-secondary);
@@ -1129,13 +1206,26 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     padding: 3px 8px; border-radius: 6px;
     background: var(--bg-body);
 }
+.premium-badge {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 3px 9px; border-radius: 8px;
+    font-size: 0.62rem; font-weight: 800;
+    background: var(--purple-bg); color: var(--purple);
+    border: 1px solid rgba(124, 58, 237, 0.3);
+    font-family: var(--font-mono);
+}
+.discount-badge {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 3px 9px; border-radius: 8px;
+    font-size: 0.62rem; font-weight: 800;
+    background: var(--warning-bg); color: var(--warning);
+    border: 1px solid rgba(217, 119, 6, 0.3);
+    font-family: var(--font-mono);
+}
 
 .action-buttons {
-    display: flex;
-    gap: 4px;
-    justify-content: center;
-    align-items: center;
-    flex-wrap: nowrap;
+    display: flex; gap: 4px; justify-content: center;
+    align-items: center; flex-wrap: nowrap;
 }
 .btn-action {
     width: 32px; height: 32px; border-radius: 8px;
@@ -1151,6 +1241,292 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .btn-action.edit:hover { background: #F59E0B; color: white; box-shadow: 0 4px 10px rgba(245, 158, 11, 0.4); }
 .btn-action.delete { background: rgba(220, 38, 38, 0.12); color: #DC2626; }
 .btn-action.delete:hover { background: #DC2626; color: white; box-shadow: 0 4px 10px rgba(220, 38, 38, 0.4); }
+
+/* ================================================================
+   OTC SALE CARD
+   ================================================================ */
+.otc-sale-card {
+    background: var(--bg-card);
+    border: 2px solid var(--cyan);
+    border-radius: var(--radius-lg);
+    margin: 16px;
+    overflow: hidden;
+    box-shadow: 0 4px 16px rgba(8, 145, 178, 0.1);
+    transition: all 0.3s ease;
+}
+.otc-sale-card:hover {
+    box-shadow: 0 8px 28px rgba(8, 145, 178, 0.2);
+    border-color: #22D3EE;
+}
+
+.otc-sale-header {
+    background: linear-gradient(135deg, #0891B2, #0E7490);
+    padding: 14px 20px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    color: white;
+}
+
+.otc-header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    flex: 1;
+    min-width: 300px;
+}
+
+.otc-sale-id-badge {
+    background: rgba(255,255,255,0.2);
+    backdrop-filter: blur(10px);
+    border: 1.5px solid rgba(255,255,255,0.4);
+    color: white;
+    padding: 6px 14px;
+    border-radius: var(--radius-sm);
+    font-size: 0.78rem;
+    font-weight: 900;
+    font-family: var(--font-mono);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.otc-customer-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.otc-customer-name {
+    font-size: 0.88rem;
+    font-weight: 900;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: white;
+}
+
+.otc-customer-phone {
+    font-size: 0.68rem;
+    color: rgba(255,255,255,0.85);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.otc-header-middle {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.otc-stat-chip {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 14px;
+    border-radius: var(--radius-md);
+    min-width: 110px;
+    border: 1.5px solid rgba(255,255,255,0.3);
+    background: rgba(255,255,255,0.15);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+.otc-stat-chip .stat-chip-label {
+    font-size: 0.55rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: rgba(255,255,255,0.85);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.otc-stat-chip .stat-chip-value {
+    font-size: 0.95rem;
+    font-weight: 900;
+    font-family: var(--font-mono);
+    color: white;
+}
+.otc-stat-chip.discount {
+    background: linear-gradient(135deg, rgba(217, 119, 6, 0.4), rgba(217, 119, 6, 0.2));
+    border-color: rgba(251, 191, 36, 0.6);
+}
+.otc-stat-chip.discount .stat-chip-value { color: #FEF3C7; }
+.otc-stat-chip.premium {
+    background: linear-gradient(135deg, rgba(124, 58, 237, 0.4), rgba(124, 58, 237, 0.2));
+    border-color: rgba(167, 139, 250, 0.6);
+}
+.otc-stat-chip.premium .stat-chip-value { color: #EDE9FE; }
+.otc-stat-chip.grand-total {
+    background: linear-gradient(135deg, rgba(5, 150, 105, 0.5), rgba(5, 150, 105, 0.3));
+    border-color: rgba(52, 211, 153, 0.7);
+    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+}
+.otc-stat-chip.grand-total .stat-chip-value { color: #D1FAE5; font-size: 1.05rem; }
+
+.otc-header-right {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.otc-action-btn {
+    padding: 8px 14px;
+    border-radius: var(--radius-sm);
+    font-weight: 800;
+    font-size: 0.68rem;
+    border: 1.5px solid rgba(255,255,255,0.3);
+    cursor: pointer;
+    transition: all 0.25s;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    text-decoration: none;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+}
+.otc-action-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.25); }
+.otc-action-btn.view { background: rgba(255,255,255,0.2); color: white; }
+.otc-action-btn.view:hover { background: rgba(255,255,255,0.35); }
+.otc-action-btn.delete { background: linear-gradient(135deg, #DC2626, #B91C1C); color: white; border-color: transparent; }
+.otc-action-btn.delete:hover { background: linear-gradient(135deg, #B91C1C, #991B1B); }
+
+.otc-scroll-buttons {
+    display: flex;
+    gap: 5px;
+    margin-left: 8px;
+}
+.otc-scroll-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    border: 1.5px solid rgba(255,255,255,0.4);
+    background: rgba(255,255,255,0.2);
+    color: white;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    font-weight: 700;
+    transition: all 0.25s;
+    backdrop-filter: blur(10px);
+    flex-shrink: 0;
+}
+.otc-scroll-btn:hover { background: rgba(255,255,255,0.4); transform: translateY(-2px); border-color: rgba(255,255,255,0.6); }
+
+.otc-items-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+}
+.otc-items-table thead th {
+    text-align: left;
+    padding: 10px 14px;
+    font-weight: 800;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: white;
+    background: linear-gradient(135deg, #0891B2, #0E7490);
+    white-space: nowrap;
+}
+.otc-items-table tbody td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary);
+    vertical-align: middle;
+    font-weight: 500;
+}
+.otc-items-table tbody tr:hover td { background: var(--cyan-bg); }
+.otc-items-table tbody tr:last-child td { border-bottom: none; }
+
+.otc-item-name-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.otc-item-name-cell .item-icon {
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    background: linear-gradient(135deg, #0891B2, #22D3EE);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.7rem;
+    flex-shrink: 0;
+}
+
+.otc-qty-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 36px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--cyan-bg);
+    color: var(--cyan);
+    font-family: var(--font-mono);
+    font-weight: 800;
+    font-size: 0.78rem;
+    border: 1.5px solid rgba(8, 145, 178, 0.3);
+}
+
+.otc-sale-footer {
+    background: linear-gradient(135deg, rgba(8, 145, 178, 0.08), rgba(8, 145, 178, 0.03));
+    padding: 10px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    border-top: 2px dashed var(--cyan);
+}
+.otc-footer-info {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.otc-footer-stat {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+}
+.otc-footer-stat strong {
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    font-weight: 900;
+}
+
+.otc-cards-container {
+    overflow-x: auto;
+    scroll-behavior: smooth;
+    padding: 8px 0;
+    min-width: 100%;
+}
 
 .patient-card {
     background: var(--bg-card); border-radius: 14px;
@@ -1271,48 +1647,26 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     font-family: var(--font-mono); font-weight: 800;
     color: var(--primary);
 }
-
 .visit-header-actions {
-    display: inline-flex;
-    gap: 6px;
-    align-items: center;
-    margin-left: 4px;
-    padding-left: 10px;
+    display: inline-flex; gap: 6px; align-items: center;
+    margin-left: 4px; padding-left: 10px;
     border-left: 2px solid rgba(11, 94, 215, 0.2);
 }
-
 .visit-action-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 6px 14px;
-    border-radius: 20px;
-    font-size: 0.72rem;
-    font-weight: 800;
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 6px 14px; border-radius: 20px;
+    font-size: 0.72rem; font-weight: 800;
     text-decoration: none;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     border: 2px solid rgba(255,255,255,0.25);
-    white-space: nowrap;
-    cursor: pointer;
-    position: relative;
-    overflow: hidden;
+    white-space: nowrap; cursor: pointer;
+    position: relative; overflow: hidden;
     font-family: var(--font-primary);
 }
-.visit-action-btn::before {
-    content: '';
-    position: absolute;
-    top: 0; left: -100%;
-    width: 100%; height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-    transition: left 0.5s ease;
-}
-.visit-action-btn:hover::before { left: 100%; }
 .visit-action-btn:hover { transform: translateY(-2px) scale(1.05); }
-.visit-action-btn:active { transform: translateY(0) scale(0.98); }
 .visit-action-btn i { font-size: 0.75rem; }
-
 .visit-action-btn.view {
     background: linear-gradient(135deg, #7C3AED, #6D28D9);
     color: white !important;
@@ -1331,15 +1685,13 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     box-shadow: 0 6px 20px rgba(245, 158, 11, 0.6);
     background: linear-gradient(135deg, #D97706, #B45309);
 }
-
 .visit-section-body {
     padding: 14px 18px 16px;
     background: var(--bg-card);
 }
 
 .empty-state {
-    text-align: center;
-    padding: 50px 20px;
+    text-align: center; padding: 50px 20px;
     color: var(--text-secondary);
 }
 .empty-state i {
@@ -1350,8 +1702,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .empty-state p { font-weight: 600; }
 
 .modal-overlay {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
     background: rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(6px);
     z-index: 99999;
@@ -1441,6 +1792,9 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     .visit-action-btn i { font-size: 0.85rem; }
     .visit-header-actions { padding-left: 6px; }
     .action-buttons { flex-wrap: wrap; }
+    .otc-sale-header { flex-direction: column; align-items: stretch; }
+    .otc-stat-chip { min-width: auto; flex: 1; }
+    .otc-header-right { justify-content: space-between; }
 }
 @media (max-width: 480px) { .stats-grid { grid-template-columns: 1fr; } }
     </style>
@@ -1449,7 +1803,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 
 <main class="main-content">
 
-    <!-- ALERT -->
     <?php if (!empty($alert_message)): ?>
         <div class="alert <?= $alert_type ?>" id="alertBox">
             <i class="fas fa-<?= $alert_type === 'success' ? 'check-circle' : 'exclamation-triangle' ?>"></i>
@@ -1513,31 +1866,34 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             <i class="fas fa-bolt"></i> Quick Filters
         </div>
         <div class="quick-filters">
-            <a href="?branch=<?= $selected_branch_id ?>&quick=today" class="quick-btn <?= $quick_filter === 'today' ? 'active' : '' ?>">
+            <a href="#" onclick="applyQuickFilter('today'); return false;" class="quick-btn <?= $quick_filter === 'today' ? 'active' : '' ?>">
                 <i class="fas fa-calendar-day"></i> Today
             </a>
-            <a href="?branch=<?= $selected_branch_id ?>&quick=1w" class="quick-btn <?= $quick_filter === '1w' ? 'active' : '' ?>">
+            <a href="#" onclick="applyQuickFilter('1w'); return false;" class="quick-btn <?= $quick_filter === '1w' ? 'active' : '' ?>">
                 <i class="fas fa-calendar-week"></i> 1W
             </a>
-            <a href="?branch=<?= $selected_branch_id ?>&quick=1m" class="quick-btn <?= $quick_filter === '1m' ? 'active' : '' ?>">
+            <a href="#" onclick="applyQuickFilter('1m'); return false;" class="quick-btn <?= $quick_filter === '1m' ? 'active' : '' ?>">
                 <i class="fas fa-calendar-alt"></i> 1M
             </a>
-            <a href="?branch=<?= $selected_branch_id ?>&quick=3m" class="quick-btn <?= $quick_filter === '3m' ? 'active' : '' ?>">
+            <a href="#" onclick="applyQuickFilter('3m'); return false;" class="quick-btn <?= $quick_filter === '3m' ? 'active' : '' ?>">
                 <i class="fas fa-calendar-alt"></i> 3M
             </a>
-            <a href="?branch=<?= $selected_branch_id ?>&quick=6m" class="quick-btn <?= $quick_filter === '6m' ? 'active' : '' ?>">
+            <a href="#" onclick="applyQuickFilter('6m'); return false;" class="quick-btn <?= $quick_filter === '6m' ? 'active' : '' ?>">
                 <i class="fas fa-calendar-alt"></i> 6M
             </a>
-            <a href="?branch=<?= $selected_branch_id ?>&quick=1y" class="quick-btn <?= $quick_filter === '1y' ? 'active' : '' ?>">
+            <a href="#" onclick="applyQuickFilter('1y'); return false;" class="quick-btn <?= $quick_filter === '1y' ? 'active' : '' ?>">
                 <i class="fas fa-calendar"></i> 1Y
             </a>
-            <a href="?branch=<?= $selected_branch_id ?>&quick=all" class="quick-btn <?= $quick_filter === 'all' ? 'active' : '' ?>">
+            <a href="#" onclick="applyQuickFilter('all'); return false;" class="quick-btn <?= $quick_filter === 'all' ? 'active' : '' ?>">
                 <i class="fas fa-infinity"></i> All
             </a>
         </div>
 
-        <form method="GET">
+        <form method="GET" id="filterForm">
+            <input type="hidden" name="tab" id="filterTabInput" value="<?= htmlspecialchars($active_tab) ?>">
+            <input type="hidden" name="sub_tab" id="filterSubTabInput" value="<?= htmlspecialchars($active_sub_tab) ?>">
             <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
+            
             <div class="filter-form">
                 <div class="filter-group">
                     <label><i class="fas fa-filter"></i> Date Range</label>
@@ -1577,21 +1933,22 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 
     <!-- MAIN TABS -->
     <div class="tabs-container">
-        <button class="tab-btn active" onclick="switchTab('medicines')" id="tabBtnMed">
+        <button class="tab-btn <?= $active_tab === 'medicines' ? 'active' : '' ?>" 
+                onclick="switchTab('medicines')" id="tabBtnMed">
             <i class="fas fa-pills"></i> Medicines <span class="badge"><?= $med_total ?></span>
         </button>
-        <button class="tab-btn" onclick="switchTab('equipment')" id="tabBtnEq">
+        <button class="tab-btn <?= $active_tab === 'equipment' ? 'active' : '' ?>" 
+                onclick="switchTab('equipment')" id="tabBtnEq">
             <i class="fas fa-tools"></i> Equipment <span class="badge"><?= $eq_total ?></span>
         </button>
-        <button class="tab-btn" onclick="switchTab('pharmacy')" id="tabBtnPharm">
+        <button class="tab-btn <?= $active_tab === 'pharmacy' ? 'active' : '' ?>" 
+                onclick="switchTab('pharmacy')" id="tabBtnPharm">
             <i class="fas fa-shopping-cart"></i> Pharmacy Sales <span class="badge"><?= count($grouped_prescriptions) + $otc_total ?></span>
         </button>
     </div>
 
-    <!-- ============================================================ -->
     <!-- TAB 1: MEDICINES -->
-    <!-- ============================================================ -->
-    <div id="tab-medicines" class="tab-content active">
+    <div id="tab-medicines" class="tab-content <?= $active_tab === 'medicines' ? 'active' : '' ?>">
         <div class="stats-grid">
             <div class="stat-card blue">
                 <div class="stat-icon"><i class="fas fa-pills"></i></div>
@@ -1750,10 +2107,8 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
         </div>
     </div>
 
-    <!-- ============================================================ -->
     <!-- TAB 2: EQUIPMENT -->
-    <!-- ============================================================ -->
-    <div id="tab-equipment" class="tab-content">
+    <div id="tab-equipment" class="tab-content <?= $active_tab === 'equipment' ? 'active' : '' ?>">
         <div class="stats-grid">
             <div class="stat-card purple">
                 <div class="stat-icon"><i class="fas fa-tools"></i></div>
@@ -1912,10 +2267,8 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
         </div>
     </div>
 
-    <!-- ============================================================ -->
     <!-- TAB 3: PHARMACY SALES -->
-    <!-- ============================================================ -->
-    <div id="tab-pharmacy" class="tab-content">
+    <div id="tab-pharmacy" class="tab-content <?= $active_tab === 'pharmacy' ? 'active' : '' ?>">
         
         <div class="section-label">
             <i class="fas fa-chart-pie" style="color:var(--primary);"></i> Sales Summary
@@ -1932,14 +2285,15 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                 <div class="stat-sub"><i class="fas fa-check"></i> Paid only</div>
             </div>
             
+            <!-- ✅ V14: PRESCRIPTION = GROSS PEKEE (436,000) -->
             <div class="stat-card purple">
                 <div class="stat-icon"><i class="fas fa-prescription"></i></div>
-                <div class="stat-label">Prescription Meds</div>
+                <div class="stat-label">Prescription (GROSS)</div>
                 <div class="stat-value">
                     <span class="currency-symbol"><?= $currency ?></span>
-                    <span class="money-number"><?= number_format($presc_paid_amount, 0) ?></span>
+                    <span class="money-number"><?= number_format($presc_total_amount, 0) ?></span>
                 </div>
-                <div class="stat-sub"><i class="fas fa-check"></i> Paid meds only</div>
+                <div class="stat-sub"><i class="fas fa-cube"></i> Gross Only (bila disc/prem)</div>
             </div>
             
             <div class="stat-card orange">
@@ -1964,22 +2318,22 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             
             <div class="stat-card red">
                 <div class="stat-icon"><i class="fas fa-percent"></i></div>
-                <div class="stat-label">Discount</div>
+                <div class="stat-label">OTC Discount</div>
                 <div class="stat-value">
                     <span class="currency-symbol"><?= $currency ?></span>
-                    <span class="money-number"><?= number_format($total_discount, 0) ?></span>
+                    <span class="money-number"><?= number_format($otc_discount, 0) ?></span>
                 </div>
-                <div class="stat-sub"><i class="fas fa-arrow-down"></i> Total deducted</div>
+                <div class="stat-sub"><i class="fas fa-arrow-down"></i> OTC only</div>
             </div>
             
             <div class="stat-card purple">
                 <div class="stat-icon"><i class="fas fa-star"></i></div>
-                <div class="stat-label">Premium</div>
+                <div class="stat-label">OTC Premium</div>
                 <div class="stat-value">
                     <span class="currency-symbol"><?= $currency ?></span>
-                    <span class="money-number"><?= number_format($total_premium, 0) ?></span>
+                    <span class="money-number"><?= number_format($otc_premium, 0) ?></span>
                 </div>
-                <div class="stat-sub"><i class="fas fa-arrow-up"></i> Total added</div>
+                <div class="stat-sub"><i class="fas fa-arrow-up"></i> OTC only</div>
             </div>
             
             <div class="stat-card paid-total">
@@ -1989,22 +2343,24 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                     <span class="currency-symbol"><?= $currency ?></span>
                     <span class="money-number"><?= number_format($total_paid, 0) ?></span>
                 </div>
-                <div class="stat-sub"><i class="fas fa-check"></i> Rx Meds + OTC Paid</div>
+                <div class="stat-sub"><i class="fas fa-check"></i> Rx + OTC Paid</div>
             </div>
             
         </div>
 
         <div class="sub-tabs">
-            <button class="sub-tab-btn active" onclick="switchSubTab('prescriptions')" id="subTabBtnPresc">
+            <button class="sub-tab-btn <?= $active_sub_tab === 'prescriptions' ? 'active' : '' ?>" 
+                    onclick="switchSubTab('prescriptions')" id="subTabBtnPresc">
                 <i class="fas fa-prescription"></i> Prescriptions (<?= count($grouped_prescriptions) ?> patients)
             </button>
-            <button class="sub-tab-btn" onclick="switchSubTab('otc')" id="subTabBtnOtc">
+            <button class="sub-tab-btn <?= $active_sub_tab === 'otc' ? 'active' : '' ?>" 
+                    onclick="switchSubTab('otc')" id="subTabBtnOtc">
                 <i class="fas fa-shopping-cart"></i> OTC Sales (<?= $otc_total ?>)
             </button>
         </div>
 
         <!-- SUB-TAB: PRESCRIPTIONS -->
-        <div id="subtab-prescriptions" class="sub-tab-content active">
+        <div id="subtab-prescriptions" class="sub-tab-content <?= $active_sub_tab === 'prescriptions' ? 'active' : '' ?>">
             <div class="table-toolbar" style="border-radius:14px 14px 0 0;background:linear-gradient(135deg,#0B5ED7,#0A4CA8);">
                 <div class="table-toolbar-left">
                     <div class="search-box" style="max-width:450px;">
@@ -2031,6 +2387,8 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                         $total_qty = (int)($patient['total_qty'] ?? 0);
                         $medication_count = (int)($patient['medication_count'] ?? 0);
                         $total_amount = (float)($patient['total_amount'] ?? 0);
+                        $patient_premium = (float)($patient['patient_premium'] ?? 0);
+                        $patient_discount = (float)($patient['patient_discount'] ?? 0);
                         $doctor_names = (isset($patient['doctor_names_array']) && is_array($patient['doctor_names_array'])) 
                             ? implode(', ', array_slice($patient['doctor_names_array'], 0, 2)) : '';
                     ?>
@@ -2065,6 +2423,18 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                     <span class="stat-pill" style="background:rgba(255,255,255,0.3);">
                                         <i class="fas fa-money-bill-wave"></i> <span class="mono"><?= $currency ?> <?= number_format($total_amount, 0) ?></span>
                                     </span>
+                                    
+                                    <?php if ($patient_premium > 0): ?>
+                                        <span class="premium-badge" style="background:rgba(255,255,255,0.25);color:#FCD34D;border-color:rgba(252,211,77,0.4);">
+                                            <i class="fas fa-star"></i> Prem: <?= number_format($patient_premium, 0) ?>
+                                        </span>
+                                    <?php endif; ?>
+                                    <?php if ($patient_discount > 0): ?>
+                                        <span class="discount-badge" style="background:rgba(255,255,255,0.25);color:#FEF08A;border-color:rgba(254,240,138,0.4);">
+                                            <i class="fas fa-tag"></i> Disc: <?= number_format($patient_discount, 0) ?>
+                                        </span>
+                                    <?php endif; ?>
+                                    
                                     <i class="fas fa-chevron-down chevron" id="chevron-<?= $patient_id ?>"></i>
                                 </div>
                             </div>
@@ -2085,17 +2455,13 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                         $visit_qty = isset($visit['total_qty']) ? (int)$visit['total_qty'] : 0;
                                         $visit_meds = isset($visit['medication_count']) ? (int)$visit['medication_count'] : 0;
                                         $visit_amount = isset($visit['total_amount']) ? (float)$visit['total_amount'] : 0;
+                                        $visit_premium = isset($visit['premium_amount']) ? (float)$visit['premium_amount'] : 0;
+                                        $visit_discount = isset($visit['discount_amount']) ? (float)$visit['discount_amount'] : 0;
                                         $visit_items = (isset($visit['items']) && is_array($visit['items'])) ? $visit['items'] : [];
                                         
-                                        // ✅ FIXED: Get received_by only if status is paid
                                         $visit_received_by = null;
-                                        $visit_received_by_role = null;
-                                        $visit_payment_received_at = null;
-                                        
                                         if ($visit_status === 'paid' && isset($visit['received_by']) && !empty($visit['received_by'])) {
                                             $visit_received_by = $visit['received_by'];
-                                            $visit_received_by_role = $visit['received_by_role'] ?? 'cashier';
-                                            $visit_payment_received_at = $visit['payment_received_at'] ?? null;
                                         }
                                         
                                         $visit_primary_prescription_id = 0;
@@ -2126,6 +2492,17 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                                 <span class="visit-mini-stat"><i class="fas fa-pills"></i> Meds: <span class="stat-value"><?= $visit_meds ?></span></span>
                                                 <span class="visit-mini-stat"><i class="fas fa-sort-numeric-up"></i> Qty: <span class="stat-value"><?= $visit_qty ?></span></span>
                                                 <span class="visit-mini-stat"><i class="fas fa-money-bill-wave"></i> <span class="stat-value"><?= $currency ?> <?= number_format($visit_amount, 0) ?></span></span>
+                                                
+                                                <?php if ($visit_premium > 0): ?>
+                                                    <span class="visit-mini-stat" style="background:rgba(124,58,237,0.15);color:#7C3AED;border:1px solid rgba(124,58,237,0.3);">
+                                                        <i class="fas fa-star"></i> Prem: <span class="stat-value" style="color:#7C3AED;"><?= number_format($visit_premium, 0) ?></span>
+                                                    </span>
+                                                <?php endif; ?>
+                                                <?php if ($visit_discount > 0): ?>
+                                                    <span class="visit-mini-stat" style="background:rgba(217,119,6,0.15);color:#D97706;border:1px solid rgba(217,119,6,0.3);">
+                                                        <i class="fas fa-tag"></i> Disc: <span class="stat-value" style="color:#D97706;"><?= number_format($visit_discount, 0) ?></span>
+                                                    </span>
+                                                <?php endif; ?>
                                                 
                                                 <?php if ($visit_primary_prescription_id > 0): ?>
                                                     <div class="visit-header-actions">
@@ -2173,12 +2550,11 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                                                 if (!is_array($item)) continue;
                                                                 $med_name = $item['medication_name'] ?? 'N/A';
                                                                 $med_qty = (int)($item['quantity'] ?? 0);
-                                                                $med_price = (float)($item['final_price'] ?? $item['total_price'] ?? 0);
+                                                                $med_price = (float)($item['final_price'] ?? 0);  // ✅ GROSS
                                                                 $pres_num = $item['prescription_number'] ?? 'N/A';
                                                                 $item_status = strtolower($item['status'] ?? $visit_status);
                                                                 $bill_status = strtolower($item['bill_status'] ?? '');
                                                                 
-                                                                // ✅ FIXED: Only show received by if item is PAID
                                                                 $item_is_paid = ($item_status === 'paid' || $item_status === 'dispensed' || $bill_status === 'paid');
                                                                 $item_received_by = $item_is_paid ? $visit_received_by : null;
                                                         ?>
@@ -2242,178 +2618,203 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
         </div>
 
         <!-- SUB-TAB: OTC SALES -->
-        <div id="subtab-otc" class="sub-tab-content">
-            <div class="table-card">
-                <div class="table-header">
-                    <span class="title"><i class="fas fa-shopping-cart"></i> OTC Sales Report</span>
-                    <span class="count"><?= count($otc_sales) ?> sales</span>
-                </div>
-                
-                <div class="table-toolbar">
-                    <div class="table-toolbar-left">
-                        <div class="search-box" id="otcSearchBox">
-                            <i class="fas fa-search search-icon"></i>
-                            <input type="text" id="otcSearch" 
-                                   placeholder="Search by medicine name, sale #, customer..."
-                                   oninput="performOtcSearch(this.value)">
-                            <button type="button" class="search-clear" onclick="clearOtcSearch()">
-                                <i class="fas fa-times"></i>
-                            </button>
+        <div id="subtab-otc" class="sub-tab-content <?= $active_sub_tab === 'otc' ? 'active' : '' ?>">
+            <div class="table-card" style="background:var(--bg-body);">
+                <div class="table-header" style="background:linear-gradient(135deg, #0891B2, #0E7490);">
+                    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                        <span class="title"><i class="fas fa-cash-register" style="color:#67E8F9;"></i> OTC Sales (Over-The-Counter)</span>
+                        <span class="count"><i class="fas fa-list"></i> <?= count($otc_sales) ?> sales • Total: <?= $currency ?> <?= number_format($otc_paid_amount, 0) ?></span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <div class="otc-scroll-buttons">
+                            <button type="button" class="otc-scroll-btn" onclick="scrollOtcContainer('left')" title="Scroll Left"><i class="fas fa-chevron-left"></i></button>
+                            <button type="button" class="otc-scroll-btn" onclick="scrollOtcContainer('right')" title="Scroll Right"><i class="fas fa-chevron-right"></i></button>
                         </div>
-                        <span class="search-count" id="otcCount">
-                            <i class="fas fa-list"></i>
-                            <span class="count-text"><?= count($otc_sales) ?> records</span>
-                        </span>
-                    </div>
-                    <div class="table-toolbar-right">
-                        <button type="button" class="scroll-btn" onclick="scrollTable('otcWrapper', 'left')">
-                            <i class="fas fa-chevron-left"></i>
-                        </button>
-                        <button type="button" class="scroll-btn" onclick="scrollTable('otcWrapper', 'right')">
-                            <i class="fas fa-chevron-right"></i>
-                        </button>
                     </div>
                 </div>
                 
-                <div class="table-scroll-wrapper" id="otcWrapper">
-                    <table class="data-table" id="otcTable" style="min-width:1600px;">
-                        <thead>
-                            <tr>
-                                <th style="width:40px;">#</th>
-                                <th style="width:140px;">Sale #</th>
-                                <th style="width:160px;">Customer</th>
-                                <th style="width:100px;text-align:center;">Items</th>
-                                <th style="width:240px;">Medication</th>
-                                <th style="width:130px;">Payment</th>
-                                <th style="width:100px;text-align:center;">Status</th>
-                                <th style="width:160px;">Received By</th>
-                                <th style="width:130px;">Branch</th>
-                                <th style="width:130px;text-align:right;">Amount</th>
-                                <th style="width:140px;">Date & Time</th>
-                                <th style="width:110px;text-align:center;">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php if (count($otc_sales) > 0): ?>
-                                <?php $row_num = 1; foreach ($otc_sales as $sale): 
-                                    $status = strtolower($sale['payment_status'] ?? 'pending');
-                                    $status_class = ($status === 'paid') ? 'paid' : (($status === 'cancelled') ? 'cancelled' : 'pending');
+                <?php if (count($otc_sales) > 0): ?>
+                    <div id="otcCardsContainer" class="otc-cards-container">
+                        <?php foreach ($otc_sales as $sale): 
+                            $status = strtolower($sale['payment_status'] ?? 'pending');
+                            $status_class = ($status === 'paid') ? 'paid' : (($status === 'cancelled') ? 'cancelled' : 'pending');
+                            
+                            $sale_id = (int)($sale['sale_id'] ?? 0);
+                            $customer = !empty($sale['customer_name']) ? $sale['customer_name'] : 'Walk-in Customer';
+                            $sale_number = $sale['sale_number'] ?? 'N/A';
+                            $items = $sale['items'] ?? [];
+                            $item_count = count($items);
+                            
+                            $sold_by_name = $sale['sold_by_name'] ?? 'N/A';
+                            $sold_by_role = strtolower($sale['sold_by_role'] ?? 'user');
+                            $name_parts = explode(' ', trim($sold_by_name));
+                            $initials = count($name_parts) >= 2 
+                                ? strtoupper(substr($name_parts[0], 0, 1) . substr($name_parts[1], 0, 1)) 
+                                : strtoupper(substr($sold_by_name, 0, 2));
+                        ?>
+                            <div class="otc-sale-card">
+                                
+                                <div class="otc-sale-header">
+                                    <div class="otc-header-left">
+                                        <span class="otc-sale-id-badge">
+                                            <i class="fas fa-receipt"></i> <?= htmlspecialchars($sale_number) ?>
+                                        </span>
+                                        <div class="otc-customer-info">
+                                            <div class="otc-customer-name">
+                                                <i class="fas fa-user-circle"></i>
+                                                <?= htmlspecialchars($customer) ?>
+                                            </div>
+                                            <?php if (!empty($sale['customer_phone'])): ?>
+                                                <div class="otc-customer-phone">
+                                                    <i class="fas fa-phone"></i> <?= htmlspecialchars($sale['customer_phone']) ?>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
                                     
-                                    $sale_id = (int)($sale['id'] ?? 0);
-                                    $customer = !empty($sale['customer_name']) ? $sale['customer_name'] : 'Walk-in';
-                                    $sale_number = $sale['sale_number'] ?? 'N/A';
-                                    
-                                    $sale_items = isset($otc_items_by_sale[$sale_id]) && is_array($otc_items_by_sale[$sale_id]) 
-                                        ? $otc_items_by_sale[$sale_id] : [];
-                                    
-                                    $item_count = count($sale_items);
-                                    if ($item_count == 0) $item_count = (int)($sale['item_count'] ?? 0);
-                                    $row_span = max(1, $item_count);
-                                    
-                                    // ✅ For OTC, received by only if paid
-                                    $otc_received_by = ($status === 'paid') ? ($sale['sold_by_name'] ?? 'N/A') : null;
-                                ?>
-                                    <?php if ($item_count > 0): ?>
-                                        <?php foreach ($sale_items as $idx => $oitem): 
-                                            $med_name = $oitem['item_name'] ?? ($oitem['medicine_name'] ?? 'N/A');
-                                            $med_qty = (int)($oitem['quantity'] ?? 0);
-                                            $is_first = ($idx === 0);
-                                            $is_last = ($idx === $item_count - 1);
-                                        ?>
-                                            <tr class="otc-sale-row medication-row <?= $is_first ? 'sale-first-row' : '' ?> <?= $is_last ? 'sale-last-row' : '' ?>"
-                                                data-med-name="<?= htmlspecialchars(strtolower($med_name)) ?>"
-                                                data-qty="<?= $med_qty ?>"
-                                                data-sale-id="<?= $sale_id ?>">
-                                                
-                                                <?php if ($is_first): ?>
-                                                    <td rowspan="<?= $row_span ?>" style="text-align:center;font-weight:700;color:var(--text-secondary);vertical-align:middle;"><?= $row_num++ ?></td>
-                                                    <td rowspan="<?= $row_span ?>" style="vertical-align:middle;" class="searchable-cell">
-                                                        <span class="rx-number"><?= htmlspecialchars($sale_number) ?></span>
-                                                    </td>
-                                                    <td rowspan="<?= $row_span ?>" style="vertical-align:middle;" class="searchable-cell">
-                                                        <div style="font-weight:600;font-size:0.75rem;"><?= htmlspecialchars($customer) ?></div>
-                                                    </td>
-                                                    <td rowspan="<?= $row_span ?>" style="text-align:center;vertical-align:middle;" class="searchable-cell">
-                                                        <span class="items-count-badge">
-                                                            <i class="fas fa-cube"></i> <?= $item_count ?>
-                                                        </span>
-                                                    </td>
+                                    <div class="otc-header-middle">
+                                        <div class="otc-stat-chip discount">
+                                            <span class="stat-chip-label"><i class="fas fa-tag"></i> Discount</span>
+                                            <span class="stat-chip-value">
+                                                <?php if ((float)($sale['discount_amount'] ?? 0) > 0): ?>
+                                                    -<?= $currency ?> <?= number_format((float)$sale['discount_amount'], 0) ?>
+                                                <?php else: ?>
+                                                    <?= $currency ?> 0
                                                 <?php endif; ?>
-                                                
-                                                <td class="searchable-cell" style="vertical-align:middle;">
-                                                    <div class="medication-name-cell">
-                                                        <i class="fas fa-pills"></i>
-                                                        <span><?= htmlspecialchars($med_name) ?></span>
-                                                        <span class="rx-number" style="margin-left:6px;">
-                                                            <i class="fas fa-cube"></i> Qty: <?= number_format($med_qty) ?>
-                                                        </span>
-                                                    </div>
-                                                </td>
-                                                
-                                                <?php if ($is_first): ?>
-                                                    <td rowspan="<?= $row_span ?>" style="vertical-align:middle;" class="searchable-cell">
-                                                        <span class="payment-badge">
-                                                            <i class="fas fa-credit-card"></i>
-                                                            <?= htmlspecialchars(ucfirst(str_replace('_', ' ', $sale['payment_method'] ?? 'Cash'))) ?>
-                                                        </span>
-                                                    </td>
-                                                    <td rowspan="<?= $row_span ?>" style="text-align:center;vertical-align:middle;" class="searchable-cell">
-                                                        <span class="status-badge <?= $status_class ?>">
-                                                            <?= strtoupper($status) ?>
-                                                        </span>
-                                                    </td>
-                                                    <td rowspan="<?= $row_span ?>" style="vertical-align:middle;" class="searchable-cell">
-                                                        <?php if ($otc_received_by): ?>
-                                                            <span class="received-by-badge">
-                                                                <i class="fas fa-user-check"></i>
-                                                                <?= htmlspecialchars($otc_received_by) ?>
-                                                            </span>
-                                                        <?php else: ?>
-                                                            <span class="received-by-empty">
-                                                                <i class="fas fa-clock" style="font-size:0.6rem;"></i>
-                                                                Not paid yet
-                                                            </span>
-                                                        <?php endif; ?>
-                                                    </td>
-                                                    <td rowspan="<?= $row_span ?>" style="vertical-align:middle;" class="searchable-cell">
-                                                        <span style="font-size:0.7rem;color:var(--text-secondary);">
-                                                            <i class="fas fa-store-alt"></i> <?= htmlspecialchars($sale['branch_name'] ?? 'N/A') ?>
-                                                        </span>
-                                                    </td>
-                                                    <td rowspan="<?= $row_span ?>" class="money-cell" style="vertical-align:middle;">
-                                                        <span class="currency-prefix"><?= $currency ?></span><?= number_format((float)($sale['total_amount'] ?? 0), 0) ?>
-                                                    </td>
-                                                    <td rowspan="<?= $row_span ?>" style="vertical-align:middle;">
-                                                        <div style="font-size:0.68rem;font-weight:600;"><?= date('H:i', strtotime($sale['created_at'])) ?></div>
-                                                        <div style="font-size:0.58rem;color:var(--text-secondary);"><?= date('d M Y', strtotime($sale['created_at'])) ?></div>
-                                                    </td>
-                                                    <td rowspan="<?= $row_span ?>" style="text-align:center;vertical-align:middle;">
-                                                        <div class="action-buttons">
-                                                            <a href="/dispensary_system/frontend/pages/admin/audit/view_otc.php?id=<?= $sale_id ?>&branch=<?= $selected_branch_id ?>" 
-                                                               class="btn-action view" title="View Details" target="_blank">
-                                                                <i class="fas fa-eye"></i>
-                                                            </a>
-                                                            <a href="/dispensary_system/frontend/pages/admin/audit/edit_otc.php?id=<?= $sale_id ?>&branch=<?= $selected_branch_id ?>" 
-                                                               class="btn-action edit" title="Edit Sale">
-                                                                <i class="fas fa-edit"></i>
-                                                            </a>
-                                                            <button type="button" class="btn-action delete" title="Delete Sale"
-                                                                    onclick="confirmDeleteOtc(<?= $sale_id ?>, '<?= htmlspecialchars(addslashes($sale_number)) ?>')">
-                                                                <i class="fas fa-trash"></i>
-                                                            </button>
-                                                        </div>
-                                                    </td>
+                                            </span>
+                                        </div>
+                                        
+                                        <div class="otc-stat-chip premium">
+                                            <span class="stat-chip-label"><i class="fas fa-star"></i> Premium</span>
+                                            <span class="stat-chip-value">
+                                                <?php if ((float)($sale['premium_amount'] ?? 0) > 0): ?>
+                                                    +<?= $currency ?> <?= number_format((float)$sale['premium_amount'], 0) ?>
+                                                <?php else: ?>
+                                                    <?= $currency ?> 0
                                                 <?php endif; ?>
+                                            </span>
+                                        </div>
+                                        
+                                        <div class="otc-stat-chip grand-total">
+                                            <span class="stat-chip-label"><i class="fas fa-calculator"></i> Grand Total</span>
+                                            <span class="stat-chip-value"><?= $currency ?> <?= number_format((float)($sale['total_amount'] ?? 0), 0) ?></span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="otc-header-right">
+                                        <a href="/dispensary_system/frontend/pages/admin/audit/view_otc.php?id=<?= $sale_id ?>&branch=<?= $selected_branch_id ?>" 
+                                           class="otc-action-btn view" title="View OTC Sale" target="_blank">
+                                            <i class="fas fa-eye"></i> View
+                                        </a>
+                                        <?php if ($is_admin): ?>
+                                            <button type="button" class="otc-action-btn delete" title="Delete OTC Sale" 
+                                                    onclick="confirmDeleteOtc(<?= $sale_id ?>, '<?= htmlspecialchars(addslashes($sale_number)) ?>')">
+                                                <i class="fas fa-trash"></i> Delete
+                                            </button>
+                                        <?php endif; ?>
+                                        <div class="otc-scroll-buttons">
+                                            <button type="button" class="otc-scroll-btn" onclick="scrollOtcCard(this, 'left')" title="Scroll Left"><i class="fas fa-chevron-left"></i></button>
+                                            <button type="button" class="otc-scroll-btn" onclick="scrollOtcCard(this, 'right')" title="Scroll Right"><i class="fas fa-chevron-right"></i></button>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div style="overflow-x:auto; scroll-behavior:smooth;" class="otc-items-wrapper">
+                                    <table class="otc-items-table" style="min-width:1100px;">
+                                        <thead>
+                                            <tr>
+                                                <th style="width:40px;">#</th>
+                                                <th>Item Name</th>
+                                                <th style="text-align:center;">Qty</th>
+                                                <th style="text-align:right;">Unit Price</th>
+                                                <th style="text-align:right;">Total Price</th>
+                                                <th>Sold By</th>
+                                                <th>Payment Method</th>
+                                                <th>Date & Time</th>
                                             </tr>
-                                        <?php endforeach; ?>
-                                    <?php endif; ?>
-                                <?php endforeach; ?>
-                            <?php else: ?>
-                                <tr><td colspan="12" class="empty-state"><i class="fas fa-shopping-cart"></i><p>No OTC sales found</p></td></tr>
-                            <?php endif; ?>
-                        </tbody>
-                    </table>
-                </div>
+                                        </thead>
+                                        <tbody>
+                                            <?php if ($item_count > 0): ?>
+                                                <?php $item_num = 1; foreach ($items as $item): ?>
+                                                    <tr>
+                                                        <td style="text-align:center;font-weight:700;color:var(--text-secondary);"><?= $item_num++ ?></td>
+                                                        <td>
+                                                            <div class="otc-item-name-cell">
+                                                                <span class="item-icon"><i class="fas fa-capsules"></i></span>
+                                                                <?= htmlspecialchars($item['item_name'] ?? 'N/A') ?>
+                                                            </div>
+                                                        </td>
+                                                        <td style="text-align:center;">
+                                                            <span class="otc-qty-badge"><?= (int)($item['quantity'] ?? 0) ?></span>
+                                                        </td>
+                                                        <td class="money-cell" style="color:#0891B2;font-size:0.78rem;">
+                                                            <span class="currency-prefix"><?= $currency ?></span><?= number_format((float)($item['unit_price'] ?? 0), 0) ?>
+                                                        </td>
+                                                        <td class="money-cell" style="font-size:0.78rem;font-weight:900;">
+                                                            <span class="currency-prefix"><?= $currency ?></span><?= number_format((float)($item['total_price'] ?? 0), 0) ?>
+                                                        </td>
+                                                        <td>
+                                                            <div style="display:flex; align-items:center; gap:8px;">
+                                                                <div style="width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#0891B2,#22D3EE);color:white;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.68rem;text-transform:uppercase;">
+                                                                    <?= htmlspecialchars($initials) ?>
+                                                                </div>
+                                                                <div style="display:flex; flex-direction:column; gap:2px;">
+                                                                    <span style="font-size:0.72rem; font-weight:700; color:var(--text-primary);">
+                                                                        <?= htmlspecialchars($sold_by_name) ?>
+                                                                    </span>
+                                                                    <span style="font-size:0.55rem; font-weight:800; color:var(--text-secondary); text-transform:uppercase;">
+                                                                        <?= htmlspecialchars(strtoupper($sold_by_role)) ?>
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        </td>
+                                                        <td>
+                                                            <span class="payment-badge"><i class="fas fa-credit-card"></i> <?= htmlspecialchars(ucfirst(str_replace('_', ' ', $sale['payment_method'] ?? 'Cash'))) ?></span>
+                                                        </td>
+                                                        <td>
+                                                            <div style="font-size:0.68rem;font-weight:600;"><?= date('d M Y', strtotime($sale['created_at'] ?? 'now')) ?></div>
+                                                            <div style="font-size:0.58rem;color:var(--text-secondary);"><?= date('H:i', strtotime($sale['created_at'] ?? 'now')) ?></div>
+                                                        </td>
+                                                    </tr>
+                                                <?php endforeach; ?>
+                                            <?php else: ?>
+                                                <tr>
+                                                    <td colspan="8" style="text-align:center;color:var(--text-secondary);font-style:italic;padding:20px;">No items recorded for this sale</td>
+                                                </tr>
+                                            <?php endif; ?>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                
+                                <div class="otc-sale-footer">
+                                    <div class="otc-footer-info">
+                                        <span class="otc-footer-stat">
+                                            <i class="fas fa-list-ul" style="color:#0891B2;"></i>
+                                            Items: <strong><?= $item_count ?></strong>
+                                        </span>
+                                        <span class="otc-footer-stat">
+                                            <i class="fas fa-store-alt" style="color:var(--primary);"></i>
+                                            Branch: <strong><?= htmlspecialchars($sale['branch_name'] ?? 'N/A') ?></strong>
+                                        </span>
+                                        <span class="otc-footer-stat">
+                                            <i class="fas fa-credit-card" style="color:var(--primary);"></i>
+                                            Subtotal: <strong><?= $currency ?> <?= number_format((float)($sale['subtotal'] ?? 0), 0) ?></strong>
+                                        </span>
+                                    </div>
+                                    <div class="otc-footer-info">
+                                        <span class="status-badge <?= $status_class ?>"><i class="fas fa-<?= $status_class === 'paid' ? 'check-circle' : ($status_class === 'cancelled' ? 'times-circle' : 'clock') ?>"></i> <?= strtoupper($status) ?></span>
+                                    </div>
+                                </div>
+                                
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php else: ?>
+                    <div class="empty-state">
+                        <i class="fas fa-cash-register"></i>
+                        <p>No OTC sales found for this period</p>
+                    </div>
+                <?php endif; ?>
             </div>
         </div>
 
@@ -2438,6 +2839,10 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
         <form method="POST" id="deleteForm">
             <input type="hidden" name="action" id="deleteAction" value="">
             <input type="hidden" name="sale_id" id="deleteSaleId" value="">
+            <input type="hidden" name="tab" value="<?= htmlspecialchars($active_tab) ?>">
+            <input type="hidden" name="sub_tab" value="<?= htmlspecialchars($active_sub_tab) ?>">
+            <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
+            <input type="hidden" name="quick" value="<?= htmlspecialchars($quick_filter) ?>">
             <div class="modal-actions">
                 <button type="button" class="modal-btn cancel" onclick="closeDeleteModal()">
                     <i class="fas fa-times"></i> Cancel
@@ -2451,7 +2856,22 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 </div>
 
 <script>
+// ================================================================
+// TAB STATE MANAGEMENT
+// ================================================================
+function updateTabState(key, value) {
+    var url = new URL(window.location.href);
+    url.searchParams.set(key, value);
+    window.history.replaceState({}, '', url.toString());
+    
+    var inputId = (key === 'tab') ? 'filterTabInput' : 'filterSubTabInput';
+    var input = document.getElementById(inputId);
+    if (input) input.value = value;
+}
+
 function switchTab(tab) {
+    updateTabState('tab', tab);
+    
     document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
     
@@ -2463,6 +2883,8 @@ function switchTab(tab) {
 }
 
 function switchSubTab(tab) {
+    updateTabState('sub_tab', tab);
+    
     document.querySelectorAll('.sub-tab-content').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.sub-tab-btn').forEach(el => el.classList.remove('active'));
     
@@ -2471,6 +2893,26 @@ function switchSubTab(tab) {
     if (tab === 'prescriptions') document.getElementById('subTabBtnPresc')?.classList.add('active');
     else if (tab === 'otc') document.getElementById('subTabBtnOtc')?.classList.add('active');
 }
+
+function applyQuickFilter(quickValue) {
+    var url = new URL(window.location.href);
+    url.searchParams.set('quick', quickValue);
+    url.searchParams.delete('date_from');
+    url.searchParams.delete('date_to');
+    
+    if (!url.searchParams.has('tab')) {
+        url.searchParams.set('tab', '<?= htmlspecialchars($active_tab) ?>');
+    }
+    if (!url.searchParams.has('sub_tab')) {
+        url.searchParams.set('sub_tab', '<?= htmlspecialchars($active_sub_tab) ?>');
+    }
+    
+    window.location.href = url.toString();
+}
+
+// ================================================================
+// OTHER FUNCTIONS
+// ================================================================
 
 function togglePatient(patientId) {
     var body = document.getElementById('body-' + patientId);
@@ -2540,55 +2982,20 @@ function scrollTable(wrapperId, direction) {
     wrapper.scrollBy({ left: direction === 'left' ? -300 : 300, behavior: 'smooth' });
 }
 
-function performOtcSearch(query) {
-    var input = document.getElementById('otcSearch');
-    if (!input) return;
-    
-    var q = query.toLowerCase().trim();
-    var parentBox = input.closest('.search-box');
-    if (parentBox) parentBox.classList.toggle('has-value', q.length > 0);
-    
-    var allRows = document.querySelectorAll('#otcTable tbody tr.otc-sale-row');
-    var matchedSaleIds = new Set();
-    
-    allRows.forEach(function(row) {
-        var medName = row.getAttribute('data-med-name') || '';
-        var saleId = row.getAttribute('data-sale-id') || '';
-        if (q === '' || medName.includes(q)) matchedSaleIds.add(saleId);
-    });
-    
-    allRows.forEach(function(row) {
-        var saleId = row.getAttribute('data-sale-id') || '';
-        if (q === '' || matchedSaleIds.has(saleId)) {
-            row.style.display = '';
-        } else {
-            row.style.display = 'none';
-        }
-    });
-    
-    var countEl = document.getElementById('otcCount');
-    if (countEl) {
-        var countText = countEl.querySelector('.count-text');
-        var salesCount = matchedSaleIds.size;
-        if (q === '') {
-            countEl.className = 'search-count';
-            if (countText) countText.textContent = salesCount + ' records';
-        } else if (salesCount > 0) {
-            countEl.className = 'search-count has-results';
-            if (countText) countText.textContent = salesCount + ' sale(s) found';
-        } else {
-            countEl.className = 'search-count no-results';
-            if (countText) countText.textContent = 'No results';
-        }
-    }
+function scrollOtcContainer(direction) {
+    var container = document.getElementById('otcCardsContainer');
+    if (!container) return;
+    var amount = 500;
+    container.scrollBy({ left: direction === 'left' ? -amount : amount, behavior: 'smooth' });
 }
 
-function clearOtcSearch() {
-    var input = document.getElementById('otcSearch');
-    if (input) {
-        input.value = '';
-        performOtcSearch('');
-    }
+function scrollOtcCard(btn, direction) {
+    var card = btn.closest('.otc-sale-card');
+    if (!card) return;
+    var wrapper = card.querySelector('.otc-items-wrapper');
+    if (!wrapper) return;
+    var amount = 400;
+    wrapper.scrollBy({ left: direction === 'left' ? -amount : amount, behavior: 'smooth' });
 }
 
 function performPrescSearch() {
@@ -2699,9 +3106,10 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-console.log('%c📦 Inventory V4 FIXED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ FIXED: Prescription amounts = ONLY medication items', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ FIXED: Received By = ONLY shown when PAID', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c📦 Inventory V14 - PRESCRIPTION GROSS = 436,000', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ Prescription: GROSS pekee (436,000) - sawa na revenue.php V47', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ OTC: CARD per Sale (design sawa na revenue)', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Premium + Discount per patient + per visit', 'font-size:13px; color:#34D399; font-weight:bold;');
 </script>
 
 </body>
