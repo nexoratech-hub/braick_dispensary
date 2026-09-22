@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/components/admin_audit_sidebar.php
-// ADMIN AUDIT - SIDEBAR (V16 - OTHER SERVICES = "All" BADGE)
+// ADMIN AUDIT - SIDEBAR (V17 - STOCK MOVEMENT ADDED)
+// ✅ NEW: Stock Movement link + badge (medications sold, equipment used, added, removed)
 // ✅ FIXED: Revenue badge = Payments + OTC (LEO TU)
 // ✅ FIXED: Auto-detect date column (received_at/created_at)
 // ✅ FIXED: Other Services badge = "All" (static, haibadiliki)
@@ -52,6 +53,7 @@ if (!isset($_SESSION['sidebar_last_date']) || $_SESSION['sidebar_last_date'] !==
     unset($_SESSION['cached_revenue_today']);
     unset($_SESSION['cached_bills_today']);
     unset($_SESSION['cached_otc_today']);
+    unset($_SESSION['cached_stock_movements_today']);
 }
 
 // ================================================================
@@ -91,6 +93,13 @@ if ($selected_branch_id !== 'all') {
     $branch_params_o[] = (int)$selected_branch_id;
 }
 
+$branch_cond_sm = "";
+$branch_params_sm = [];
+if ($selected_branch_id !== 'all') {
+    $branch_cond_sm = " AND sm.branch_id = ?";
+    $branch_params_sm[] = (int)$selected_branch_id;
+}
+
 // ================================================================
 // GET BADGE DATA
 // ================================================================
@@ -109,6 +118,13 @@ $total_audit_logs = 0;
 $today_audit_logs = 0;
 $total_branches = 0;
 $total_lab_tests = 0;
+
+// ✅ STOCK MOVEMENT COUNTS
+$stock_movements_today = 0;
+$medications_sold_today = 0;
+$equipment_used_today = 0;
+$stock_added_today = 0;
+$stock_removed_today = 0;
 
 $today = date('Y-m-d');
 
@@ -217,6 +233,108 @@ if ($db !== null) {
             $stmt = $db->prepare($sql); $stmt->execute($branch_params);
             $total_lab_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         } catch (Exception $e2) {}
+    }
+    
+    // ============================================================
+    // ✅ STOCK MOVEMENTS (LEO TU)
+    // Inahesabu: medications sold, equipment used, stock added, stock removed
+    // ============================================================
+    try {
+        // Angalia kama table ya stock_movements ipo
+        $check_sm = $db->query("SHOW TABLES LIKE 'stock_movements'");
+        $has_stock_movements = ($check_sm && $check_sm->rowCount() > 0);
+        
+        if ($has_stock_movements) {
+            // Total movements zote leo
+            $sql = "SELECT COUNT(*) as count 
+                    FROM stock_movements sm
+                    WHERE DATE(sm.created_at) = CURDATE()
+                    $branch_cond_sm";
+            $stmt = $db->prepare($sql);
+            $stmt->execute($branch_params_sm);
+            $stock_movements_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // Medications sold (movement_type = 'sale' au 'dispensed')
+            try {
+                $sql = "SELECT COUNT(*) as count 
+                        FROM stock_movements sm
+                        WHERE DATE(sm.created_at) = CURDATE()
+                        AND sm.movement_type IN ('sale', 'dispensed', 'sold', 'otc_sale')
+                        $branch_cond_sm";
+                $stmt = $db->prepare($sql);
+                $stmt->execute($branch_params_sm);
+                $medications_sold_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            } catch (Exception $e) {}
+            
+            // Equipment used for test (movement_type = 'equipment_use' au 'test_use')
+            try {
+                $sql = "SELECT COUNT(*) as count 
+                        FROM stock_movements sm
+                        WHERE DATE(sm.created_at) = CURDATE()
+                        AND sm.movement_type IN ('equipment_use', 'test_use', 'equipment', 'lab_use')
+                        $branch_cond_sm";
+                $stmt = $db->prepare($sql);
+                $stmt->execute($branch_params_sm);
+                $equipment_used_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            } catch (Exception $e) {}
+            
+            // Stock added (movement_type = 'in', 'added', 'purchase', 'restock')
+            try {
+                $sql = "SELECT COUNT(*) as count 
+                        FROM stock_movements sm
+                        WHERE DATE(sm.created_at) = CURDATE()
+                        AND sm.movement_type IN ('in', 'added', 'purchase', 'restock', 'received')
+                        $branch_cond_sm";
+                $stmt = $db->prepare($sql);
+                $stmt->execute($branch_params_sm);
+                $stock_added_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            } catch (Exception $e) {}
+            
+            // Stock removed (movement_type = 'out', 'removed', 'damaged', 'expired', 'adjustment')
+            try {
+                $sql = "SELECT COUNT(*) as count 
+                        FROM stock_movements sm
+                        WHERE DATE(sm.created_at) = CURDATE()
+                        AND sm.movement_type IN ('out', 'removed', 'damaged', 'expired', 'adjustment', 'transfer')
+                        $branch_cond_sm";
+                $stmt = $db->prepare($sql);
+                $stmt->execute($branch_params_sm);
+                $stock_removed_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            } catch (Exception $e) {}
+        } else {
+            // Fallback: kama table haipo, tumia bill_items + otc_sale_items
+            // Medications sold leo
+            try {
+                $sql = "SELECT COUNT(*) as count 
+                        FROM bill_items bi
+                        INNER JOIN bills b ON bi.bill_id = b.id
+                        WHERE DATE(b.created_at) = CURDATE()
+                        AND bi.item_type IN ('medication', 'medicine', 'drug')
+                        " . ($selected_branch_id !== 'all' ? " AND b.branch_id = ?" : "");
+                $params = ($selected_branch_id !== 'all') ? [(int)$selected_branch_id] : [];
+                $stmt = $db->prepare($sql);
+                $stmt->execute($params);
+                $medications_sold_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            } catch (Exception $e) {}
+            
+            // OTC sales leo
+            try {
+                $sql = "SELECT COUNT(*) as count 
+                        FROM otc_sale_items osi
+                        INNER JOIN otc_sales o ON osi.otc_sale_id = o.id
+                        WHERE DATE(o.created_at) = CURDATE()
+                        AND o.payment_status = 'paid'
+                        " . ($selected_branch_id !== 'all' ? " AND o.branch_id = ?" : "");
+                $params = ($selected_branch_id !== 'all') ? [(int)$selected_branch_id] : [];
+                $stmt = $db->prepare($sql);
+                $stmt->execute($params);
+                $medications_sold_today += (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            } catch (Exception $e) {}
+            
+            $stock_movements_today = $medications_sold_today + $equipment_used_today + $stock_added_today + $stock_removed_today;
+        }
+    } catch (Exception $e) {
+        error_log("Stock movements error: " . $e->getMessage());
     }
     
     // ============================================================
@@ -554,6 +672,15 @@ i.fab, .fab { font-family: 'Font Awesome 6 Brands' !important; font-weight: 400 
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+}
+
+/* ✅ NEW: STOCK MOVEMENT BADGE */
+.sidebar-link .badge.badge-stock {
+    background: linear-gradient(135deg, #F97316, #EA580C) !important;
+    box-shadow: 0 2px 8px rgba(249, 115, 22, 0.6);
+    font-size: 0.58rem;
+    padding: 2px 8px;
+    font-weight: 700;
 }
 
 .sidebar-link:hover .badge {
@@ -910,6 +1037,17 @@ i.fab, .fab { font-family: 'Font Awesome 6 Brands' !important; font-weight: 400 
             <?php endif; ?>
         </a>
         
+        <!-- ✅ NEW: STOCK MOVEMENT -->
+        <a href="/dispensary_system/frontend/pages/admin/audit/stock_movement.php?branch=<?= $selected_branch_id ?>" 
+           class="sidebar-link <?= isActive('stock_movement.php') || isAdminAuditPage(['stock_movement_details.php', 'stock_in.php', 'stock_out.php', 'medication_movement.php', 'equipment_usage.php']) ? 'active' : '' ?>">
+            <i class="fas fa-exchange-alt"></i>
+            <span class="link-text">Stock Movement</span>
+            <span class="badge badge-stock" id="badgeStockMovement"><?= number_format($stock_movements_today) ?></span>
+            <?php if ($medications_sold_today > 0): ?>
+                <span class="badge badge-new" id="badgeStockToday">+<?= $medications_sold_today ?></span>
+            <?php endif; ?>
+        </a>
+        
         <!-- LAB TESTS -->
         <a href="/dispensary_system/frontend/pages/admin/audit/lab_tests.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('lab_tests.php') || isAdminAuditPage(['lab_test_details.php', 'view_lab_test.php', 'edit_lab_test.php']) ? 'active' : '' ?>">
@@ -1188,6 +1326,12 @@ function switchBranch(branchId) {
                         invBadge.textContent = data.total_inventory_items;
                     }
                     
+                    // ✅ STOCK MOVEMENT BADGE UPDATE
+                    var stockBadge = document.getElementById('badgeStockMovement');
+                    if (stockBadge && data.stock_movements_today !== undefined) {
+                        stockBadge.textContent = Number(data.stock_movements_today).toLocaleString();
+                    }
+                    
                     var labBadge = document.getElementById('badgeLabTests');
                     if (labBadge && data.total_lab_tests !== undefined) {
                         labBadge.textContent = Number(data.total_lab_tests).toLocaleString();
@@ -1220,12 +1364,19 @@ function switchBranch(branchId) {
     
     console.log('%c🔄 Sidebar badge auto-refresh active', 'color:#10B981;font-size:12px;');
     console.log('%c📌 Other Services badge ni STATIC "All" - haibadiliki', 'color:#0891B2;font-size:11px;');
+    console.log('%c📦 Stock Movement badge inaonyesha movements za leo', 'color:#F97316;font-size:11px;');
 })();
 
-console.log('%c👑 Admin Audit Sidebar V16 - OTHER SERVICES = "All"', 'font-size:16px; font-weight:bold; color:#0B4EA8;');
+console.log('%c👑 Admin Audit Sidebar V17 - STOCK MOVEMENT ADDED', 'font-size:16px; font-weight:bold; color:#0B4EA8;');
 console.log('%c✅ Revenue = Payments + OTC (LEO TU)', 'font-size:13px; color:#10B981; font-weight:bold;');
 console.log('%c✅ Other Services Badge = "All" (STATIC)', 'font-size:13px; color:#0891B2; font-weight:bold;');
+console.log('%c✅ Stock Movement = Meds Sold + Equipment Used + Stock In/Out', 'font-size:13px; color:#F97316; font-weight:bold;');
 console.log('%c💰 Payments Today: TSh <?= number_format($bills_today, 0) ?>', 'font-size:13px; color:#0B5ED7;');
 console.log('%c💊 OTC Today: TSh <?= number_format($otc_today, 0) ?>', 'font-size:13px; color:#0891B2;');
 console.log('%c📊 TOTAL TODAY: TSh <?= number_format($total_revenue_today, 0) ?>', 'font-size:14px; color:#10B981; font-weight:bold;');
+console.log('%c📦 Stock Movements Today: <?= number_format($stock_movements_today) ?>', 'font-size:13px; color:#F97316; font-weight:bold;');
+console.log('%c   💊 Medications Sold: <?= number_format($medications_sold_today) ?>', 'font-size:12px; color:#EA580C;');
+console.log('%c   🔬 Equipment Used: <?= number_format($equipment_used_today) ?>', 'font-size:12px; color:#EA580C;');
+console.log('%c   📥 Stock Added: <?= number_format($stock_added_today) ?>', 'font-size:12px; color:#EA580C;');
+console.log('%c   📤 Stock Removed: <?= number_format($stock_removed_today) ?>', 'font-size:12px; color:#EA580C;');
 </script>

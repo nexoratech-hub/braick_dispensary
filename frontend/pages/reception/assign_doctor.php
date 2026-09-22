@@ -1,10 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/assign_doctor.php
-// RECEPTION - ASSIGN / CHANGE / REASSIGN DOCTOR & LAB TESTS (V12)
+// RECEPTION - ASSIGN / CHANGE / REASSIGN DOCTOR & LAB TESTS (V13)
 // ✅ Assigned By: Reception HAONI, Admin ANAONA
 // ✅ Data inahifadhiwa database (assigned_by_id)
 // ✅ CSS nzuri kwenye modals zote
+// ✅ V13: Search Filter kwa kila status (with HIGHLIGHT)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -1653,7 +1654,175 @@ $profile_pic_url = !empty($profile_pic)
         }
         
         /* ============================================================
-           ✅ EMPTY LIST STATE - CSS NZURI
+           ✅ V13: SEARCH FILTER KWA KILA STATUS
+           ============================================================ */
+        .list-search-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+            max-width: 340px;
+            min-width: 180px;
+        }
+        
+        .list-search-wrapper .list-search-icon {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-secondary);
+            font-size: 0.82rem;
+            pointer-events: none;
+            z-index: 2;
+            transition: color 0.3s ease;
+        }
+        
+        .list-search-wrapper.focused .list-search-icon {
+            color: var(--primary);
+        }
+        
+        .list-search-input {
+            width: 100%;
+            padding: 9px 36px 9px 38px;
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            font-size: 0.82rem;
+            font-weight: 500;
+            outline: none;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            font-family: inherit;
+        }
+        
+        .list-search-input::placeholder {
+            color: var(--text-secondary);
+            font-size: 0.78rem;
+            font-weight: 400;
+        }
+        
+        .list-search-input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
+        }
+        
+        .list-search-clear {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--gray-200);
+            border: none;
+            color: var(--text-secondary);
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.65rem;
+            transition: all 0.25s ease;
+            z-index: 2;
+        }
+        
+        [data-theme="dark"] .list-search-clear {
+            background: #334155;
+        }
+        
+        .list-search-clear:hover {
+            background: var(--danger);
+            color: white;
+            transform: translateY(-50%) scale(1.1);
+        }
+        
+        .list-search-clear.visible {
+            display: flex;
+        }
+        
+        .list-search-count {
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: var(--primary);
+            background: var(--primary-bg);
+            padding: 4px 10px;
+            border-radius: 20px;
+            white-space: nowrap;
+            font-family: 'JetBrains Mono', monospace;
+            display: none;
+            border: 1px solid rgba(11, 94, 215, 0.2);
+        }
+        
+        .list-search-count.visible {
+            display: inline-block;
+        }
+        
+        .list-search-count.no-results {
+            color: var(--danger);
+            background: var(--danger-bg);
+            border-color: rgba(220, 38, 38, 0.2);
+        }
+        
+        /* ✅ HIGHLIGHT MATCHES */
+        .search-highlight {
+            background: linear-gradient(180deg, transparent 50%, #FEF3C7 50%);
+            color: inherit;
+            font-weight: 900;
+            padding: 0 2px;
+            border-radius: 3px;
+            box-shadow: 0 0 0 1px rgba(217, 119, 6, 0.15);
+        }
+        
+        [data-theme="dark"] .search-highlight {
+            background: linear-gradient(180deg, transparent 50%, rgba(251, 191, 36, 0.4) 50%);
+            color: #FCD34D;
+        }
+        
+        /* ✅ HIGHLIGHT kwa row nzima wakati ina match */
+        .patient-list-table tbody tr.search-match {
+            background: linear-gradient(90deg, rgba(254, 243, 199, 0.3), rgba(254, 243, 199, 0.05));
+            box-shadow: inset 4px 0 0 var(--warning);
+        }
+        
+        [data-theme="dark"] .patient-list-table tbody tr.search-match {
+            background: linear-gradient(90deg, rgba(251, 191, 36, 0.1), transparent);
+        }
+        
+        .patient-list-table tbody tr.search-match:hover {
+            background: linear-gradient(90deg, rgba(254, 243, 199, 0.5), rgba(254, 243, 199, 0.15));
+        }
+        
+        /* ✅ Empty search state */
+        .search-empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-secondary);
+            background: var(--bg-card);
+        }
+        
+        .search-empty-state i {
+            font-size: 2.5rem;
+            color: var(--warning);
+            opacity: 0.5;
+            display: block;
+            margin-bottom: 12px;
+        }
+        
+        .search-empty-state p {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+        
+        .search-empty-state small {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        
+        /* ============================================================
+           ✅ EMPTY LIST STATE
            ============================================================ */
         .empty-list-state {
             text-align: center;
@@ -1923,7 +2092,7 @@ $profile_pic_url = !empty($profile_pic)
             box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
         }
         
-        /* ✅ PATIENT LIST CONTAINER - CSS NZURI */
+        /* ✅ PATIENT LIST CONTAINER */
         .patient-list-container {
             max-height: 320px;
             overflow-y: auto;
@@ -2010,7 +2179,6 @@ $profile_pic_url = !empty($profile_pic)
             flex-wrap: wrap;
         }
         
-        /* Status Badges (for list) */
         .status-badge-dropdown {
             display: inline-block;
             font-size: 0.65rem;
@@ -2029,8 +2197,6 @@ $profile_pic_url = !empty($profile_pic)
         [data-theme="dark"] .status-badge-dropdown.pending { background: rgba(217, 119, 6, 0.15); color: #FCD34D; }
         [data-theme="dark"] .status-badge-dropdown.assigned { background: rgba(5, 150, 105, 0.15); color: #6EE7B7; }
         [data-theme="dark"] .status-badge-dropdown.lab_only { background: rgba(124, 58, 237, 0.15); color: #C4B5FD; }
-        [data-theme="dark"] .status-badge-dropdown.prescribed { background: rgba(5, 150, 105, 0.15); color: #6EE7B7; }
-        [data-theme="dark"] .status-badge-dropdown.waiting { background: rgba(217, 119, 6, 0.15); color: #FCD34D; }
         
         /* FORM CONTROLS */
         .form-control-modern {
@@ -2427,6 +2593,17 @@ $profile_pic_url = !empty($profile_pic)
             .btn-action-mini .btn-text { display: none; }
             .btn-action-mini i { font-size: 0.8rem; }
             .actions-cell { width: 90px; padding: 8px 6px !important; }
+            
+            .list-search-wrapper {
+                max-width: 100%;
+                margin-top: 8px;
+                width: 100%;
+            }
+            
+            .modern-card .card-header {
+                flex-direction: column;
+                align-items: stretch;
+            }
         }
         
         @media (max-width: 480px) {
@@ -2604,9 +2781,32 @@ $profile_pic_url = !empty($profile_pic)
                 <span id="listTitle">Assigned Patients (With Doctor)</span>
                 <span class="card-badge" style="background:var(--success-bg);color:var(--success);" id="listCountBadge"><?= $assigned_count ?></span>
             </div>
-            <div style="display:flex;align-items:center;gap:6px;">
-                <span style="font-size:0.7rem;color:var(--text-secondary);" id="listUpdateTime">(Auto-updated <?= date('h:i:s A') ?>)</span>
-                <span style="font-size:0.7rem;color:var(--success);">
+            
+            <div style="display:flex;align-items:center;gap:10px;flex:1;justify-content:flex-end;flex-wrap:wrap;">
+                <!-- ✅ V13: SEARCH FILTER -->
+                <div class="list-search-wrapper" id="listSearchWrapper">
+                    <i class="fas fa-search list-search-icon"></i>
+                    <input type="text" 
+                           class="list-search-input" 
+                           id="listSearchInput" 
+                           placeholder="Search patients... (name, ID, phone, doctor)"
+                           oninput="performListSearch(this.value)"
+                           onfocus="document.getElementById('listSearchWrapper').classList.add('focused')"
+                           onblur="document.getElementById('listSearchWrapper').classList.remove('focused')">
+                    <button type="button" 
+                            class="list-search-clear" 
+                            id="listSearchClear" 
+                            onclick="clearListSearch()"
+                            title="Clear search">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                
+                <!-- ✅ V13: SEARCH COUNT -->
+                <span class="list-search-count" id="listSearchCount"></span>
+                
+                <span style="font-size:0.7rem;color:var(--text-secondary);white-space:nowrap;" id="listUpdateTime">(Auto-updated <?= date('h:i:s A') ?>)</span>
+                <span style="font-size:0.7rem;color:var(--success);white-space:nowrap;">
                     <span class="live-indicator-modern"></span> Live
                 </span>
             </div>
@@ -3186,7 +3386,7 @@ $profile_pic_url = !empty($profile_pic)
     }
 
     // ============================================================
-    // FILTER PATIENT LIST
+    // FILTER PATIENT LIST (dropdown)
     // ============================================================
     function filterPatientList(query) {
         var searchTerm = query.toLowerCase().trim();
@@ -3436,13 +3636,27 @@ $profile_pic_url = !empty($profile_pic)
     }
 
     // ============================================================
-    // FILTER BY STATUS
+    // ✅ V13: FILTER BY STATUS (na reset search)
     // ============================================================
+    var currentListStatus = 'assigned';
+    var currentSearchQuery = '';
+    var originalTableHTML = '';
+
     function filterByStatus(status) {
         document.querySelectorAll('.status-toggle-btn').forEach(function(btn) {
             btn.classList.remove('active');
             if (btn.dataset.status === status) btn.classList.add('active');
         });
+        
+        // ✅ Reset search kila status inabadilika
+        var searchInput = document.getElementById('listSearchInput');
+        if (searchInput) searchInput.value = '';
+        var clearBtn = document.getElementById('listSearchClear');
+        if (clearBtn) clearBtn.classList.remove('visible');
+        var countBadge = document.getElementById('listSearchCount');
+        if (countBadge) countBadge.classList.remove('visible', 'no-results');
+        currentSearchQuery = '';
+        currentListStatus = status;
         
         var titles = {
             'assigned': { title: 'Assigned Patients (With Doctor)', icon: 'fa-user-check', color: 'var(--success)', bg: 'var(--success-bg)' },
@@ -3476,6 +3690,9 @@ $profile_pic_url = !empty($profile_pic)
         fetchFilteredList(status);
     }
 
+    // ============================================================
+    // ✅ V13: FETCH FILTERED LIST (na save original HTML)
+    // ============================================================
     function fetchFilteredList(status) {
         var container = document.getElementById('patientsListContainer');
         if (!container) return;
@@ -3491,13 +3708,197 @@ $profile_pic_url = !empty($profile_pic)
             .then(function(data) {
                 if (data.success && data.html) {
                     container.innerHTML = data.html;
+                    originalTableHTML = data.html;
+                    
+                    // ✅ Kama kuna search query, re-apply
+                    if (currentSearchQuery) {
+                        setTimeout(function() { performListSearch(currentSearchQuery); }, 100);
+                    }
                 } else {
                     container.innerHTML = '<div class="empty-list-state"><i class="fas fa-inbox"></i><p>No patients found</p></div>';
+                    originalTableHTML = '';
                 }
             })
             .catch(function() {
                 container.innerHTML = '<div class="empty-list-state"><i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i><p>Error loading data</p></div>';
             });
+    }
+
+    // ============================================================
+    // ✅ V13: PERFORM LIST SEARCH (na HIGHLIGHT)
+    // ============================================================
+    function performListSearch(query) {
+        currentSearchQuery = query;
+        
+        var searchTerm = query.toLowerCase().trim();
+        var clearBtn = document.getElementById('listSearchClear');
+        var countBadge = document.getElementById('listSearchCount');
+        var container = document.getElementById('patientsListContainer');
+        
+        // ✅ Show/hide clear button
+        if (clearBtn) {
+            if (searchTerm.length > 0) {
+                clearBtn.classList.add('visible');
+            } else {
+                clearBtn.classList.remove('visible');
+            }
+        }
+        
+        // ✅ Kama search ni tupu, rudisha original HTML
+        if (searchTerm.length === 0) {
+            if (container && originalTableHTML) {
+                container.innerHTML = originalTableHTML;
+            }
+            if (countBadge) countBadge.classList.remove('visible', 'no-results');
+            return;
+        }
+        
+        if (!container) return;
+        
+        var rows = container.querySelectorAll('.patient-list-table tbody tr');
+        
+        // ✅ Kama rows hazipo, subiri kidogo
+        if (rows.length === 0) {
+            setTimeout(function() { performListSearch(query); }, 300);
+            return;
+        }
+        
+        var matchCount = 0;
+        var hasAnyMatch = false;
+        
+        rows.forEach(function(row) {
+            // ✅ Reset highlights za awali
+            row.querySelectorAll('.search-highlight').forEach(function(el) {
+                var parent = el.parentNode;
+                parent.replaceChild(document.createTextNode(el.textContent), el);
+                parent.normalize();
+            });
+            
+            // ✅ Chukua text kutoka row
+            var rowText = row.textContent || '';
+            var patientName = row.querySelector('.patient-name-cell')?.textContent || '';
+            var patientId = row.querySelector('.patient-id-pill')?.textContent || '';
+            var doctorPill = row.querySelector('.doctor-pill')?.textContent || '';
+            var serviceCell = row.querySelector('.patient-service-cell')?.textContent || '';
+            var assignedBy = row.querySelector('.assigned-by-cell')?.textContent || '';
+            
+            var searchableText = (rowText + ' ' + patientName + ' ' + patientId + ' ' + doctorPill + ' ' + serviceCell + ' ' + assignedBy).toLowerCase();
+            
+            if (searchableText.indexOf(searchTerm) !== -1) {
+                hasAnyMatch = true;
+                matchCount++;
+                row.style.display = '';
+                row.classList.add('search-match');
+                
+                // ✅ HIGHLIGHT matches
+                highlightTextInRow(row, query);
+            } else {
+                row.style.display = 'none';
+                row.classList.remove('search-match');
+            }
+        });
+        
+        // ✅ Update count badge
+        if (countBadge) {
+            if (matchCount > 0) {
+                countBadge.textContent = '🔍 ' + matchCount + ' match' + (matchCount !== 1 ? 'es' : '');
+                countBadge.classList.remove('no-results');
+                countBadge.classList.add('visible');
+            } else {
+                countBadge.textContent = '❌ No matches';
+                countBadge.classList.add('no-results', 'visible');
+            }
+        }
+        
+        // ✅ Onyesha empty state kama hakuna match
+        var existingEmpty = container.querySelector('.search-empty-state');
+        if (!hasAnyMatch) {
+            if (!existingEmpty) {
+                var emptyState = document.createElement('div');
+                emptyState.className = 'search-empty-state';
+                emptyState.innerHTML = '<i class="fas fa-search"></i><p>No patients found</p><small>Try a different search term</small>';
+                container.appendChild(emptyState);
+            }
+        } else {
+            if (existingEmpty) existingEmpty.remove();
+        }
+    }
+
+    // ============================================================
+    // ✅ V13: HIGHLIGHT TEXT IN ROW
+    // ============================================================
+    function highlightTextInRow(row, query) {
+        if (!query || query.length < 1) return;
+        
+        var walker = document.createTreeWalker(
+            row,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: function(node) {
+                    if (node.parentNode.nodeName === 'SCRIPT' || node.parentNode.nodeName === 'STYLE') {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                    if (!node.textContent.trim()) {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                    return NodeFilter.FILTER_ACCEPT;
+                }
+            }
+        );
+        
+        var textNodes = [];
+        var node;
+        while (node = walker.nextNode()) {
+            textNodes.push(node);
+        }
+        
+        var regex = new RegExp('(' + escapeRegex(query) + ')', 'gi');
+        
+        textNodes.forEach(function(textNode) {
+            var text = textNode.textContent;
+            if (!regex.test(text)) return;
+            
+            var span = document.createElement('span');
+            span.innerHTML = text.replace(regex, '<mark class="search-highlight">$1</mark>');
+            textNode.parentNode.replaceChild(span, textNode);
+        });
+    }
+
+    // ============================================================
+    // ✅ V13: ESCAPE REGEX
+    // ============================================================
+    function escapeRegex(str) {
+        return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    // ============================================================
+    // ✅ V13: CLEAR LIST SEARCH
+    // ============================================================
+    function clearListSearch() {
+        var searchInput = document.getElementById('listSearchInput');
+        var clearBtn = document.getElementById('listSearchClear');
+        var countBadge = document.getElementById('listSearchCount');
+        var container = document.getElementById('patientsListContainer');
+        
+        if (searchInput) searchInput.value = '';
+        if (clearBtn) clearBtn.classList.remove('visible');
+        if (countBadge) countBadge.classList.remove('visible', 'no-results');
+        
+        currentSearchQuery = '';
+        
+        // ✅ Rudisha original HTML
+        if (container && originalTableHTML) {
+            container.innerHTML = originalTableHTML;
+        }
+        
+        // ✅ Ondoa empty state
+        var emptyState = container?.querySelector('.search-empty-state');
+        if (emptyState) emptyState.remove();
+        
+        // ✅ Focus search input
+        if (searchInput) searchInput.focus();
+        
+        showToast('🔄 Search Cleared', 'Showing all patients', 'info');
     }
 
     // ============================================================
@@ -3585,6 +3986,11 @@ $profile_pic_url = !empty($profile_pic)
         var now = new Date();
         var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         document.getElementById('listUpdateTime').textContent = '(Auto-updated ' + timeStr + ')';
+        
+        // ✅ V13: Re-apply search baada ya count update
+        if (currentSearchQuery) {
+            setTimeout(function() { performListSearch(currentSearchQuery); }, 100);
+        }
     }
 
     function startLiveUpdate() {
@@ -3674,12 +4080,36 @@ $profile_pic_url = !empty($profile_pic)
         var btn = document.getElementById('patientToggleBtn');
         if (content && btn) { content.classList.add('open'); btn.classList.add('active'); }
         <?php endif; ?>
+        
+        // ✅ V13: Keyboard Shortcuts kwa search
+        document.addEventListener('keydown', function(e) {
+            // Ctrl+K au Cmd+K
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                var searchInput = document.getElementById('listSearchInput');
+                if (searchInput) searchInput.focus();
+            }
+            // / (slash) - kama hauko kwenye input
+            if (e.key === '/' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+                e.preventDefault();
+                var searchInput = document.getElementById('listSearchInput');
+                if (searchInput) searchInput.focus();
+            }
+            // Escape - clear search
+            if (e.key === 'Escape') {
+                var searchInput = document.getElementById('listSearchInput');
+                if (searchInput && document.activeElement === searchInput) {
+                    clearListSearch();
+                }
+            }
+        });
     });
 
-    console.log('%c👨‍⚕️ Braick - Assign Doctor V12', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c👨‍⚕️ Braick - Assign Doctor V13', 'font-size:18px; font-weight:bold; color:#2563EB;');
     console.log('%c✅ Assigned By: <?= $show_assigned_by ? "INAONEKANA (Admin)" : "IMEFICHWA (Reception)" ?>', 'font-size:13px; color:#059669; font-weight:bold;');
     console.log('%c✅ Data inahifadhiwa database (assigned_by_id)', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ CSS nzuri kwenye modals zote', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ V13: Search Filter kwa kila status (with HIGHLIGHT)', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c💡 Shortcuts: Ctrl+K au / kufungua search, ESC kufunga', 'font-size:12px; color:#7C3AED; font-weight:bold;');
 </script>
 
 </body>

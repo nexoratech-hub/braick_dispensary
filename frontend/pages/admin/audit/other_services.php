@@ -1,12 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/other_services.php
-// ADMIN AUDIT - OTHER SERVICES (V16 FINAL - CATEGORY <> ARROWS)
-// ✅ View/Edit/Delete kwa KILA ITEM
-// ✅ <> Arrow buttons kwenye KILA visit table header
-// ✅ <> Arrow buttons kwenye KILA ITEM CATEGORY table (All Bills tab)
-// ✅ All Bills: 6 SUMMARY CARDS (3+3) + PATIENT CARDS
-// ✅ OTC tab: CARD PER SALE
+// ADMIN AUDIT - OTHER SERVICES (V17 - FIXED ALL BILLS + SEARCH POSITION)
+// ================================================================
+// ✅ V17: All Bills inaonyesha bills zenye patient_id TU
+// ✅ V17: Search bar imehamishwa CHINI ya summary cards
+// ✅ V16: View/Edit/Delete kwa KILA ITEM
+// ✅ V16: <> Arrow buttons kwenye KILA visit table header
+// ✅ V16: <> Arrow buttons kwenye KILA ITEM CATEGORY table (All Bills tab)
+// ✅ V16: All Bills: 6 SUMMARY CARDS (3+3) + PATIENT CARDS
+// ✅ V16: OTC tab: CARD PER SALE
 // ✅ Auto stock restore kwa medications
 // ✅ Auto recalculate bill baada ya delete
 // ================================================================
@@ -188,7 +191,7 @@ function recalculateBill($db, $bill_id, $user_id, $item_info = []) {
 }
 
 // ================================================================
-// ✅ HANDLE DELETE BILL ITEM (ALL TYPES)
+// HANDLE DELETE BILL ITEM (ALL TYPES)
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete_bill_item_all') {
     try {
@@ -891,7 +894,7 @@ if ($active_tab === 'consultations') {
 }
 
 // ================================================================
-// TAB 3: ALL BILLS
+// TAB 3: ALL BILLS - ✅ V17: ONLY BILLS WITH patient_id
 // ================================================================
 $bills_data = [];
 $bills_array = [];
@@ -901,8 +904,12 @@ $bills_stats = ['total_bills'=>0, 'paid'=>0, 'pending'=>0, 'partial'=>0,
                 'total_billed_amt'=>0, 'paid_percentage'=>0];
 
 if ($active_tab === 'all_bills') {
-    $where = " WHERE 1=1";
+    // ✅ V17: LAZIMISHA patient_id + visit_id + NOT BILL-OTC-%
+    $where = " WHERE b.patient_id IS NOT NULL 
+               AND b.visit_id IS NOT NULL
+               AND b.bill_number NOT LIKE 'BILL-OTC-%'";
     $params = [];
+    
     if (!empty($search)) {
         $where .= " AND (b.bill_number LIKE ? OR pat.full_name LIKE ? OR pat.patient_id LIKE ?)";
         $sp = "%$search%";
@@ -920,7 +927,7 @@ if ($active_tab === 'all_bills') {
                br.name as branch_name, v.visit_number, v.visit_date, v.diagnosis,
                doc.full_name as doctor_name, rec.full_name as receptionist_name
         FROM bills b
-        LEFT JOIN patients pat ON b.patient_id = pat.id
+        INNER JOIN patients pat ON b.patient_id = pat.id
         LEFT JOIN branches br ON b.branch_id = br.id
         LEFT JOIN visits v ON b.visit_id = v.id
         LEFT JOIN users doc ON v.doctor_id = doc.id
@@ -1027,37 +1034,37 @@ if ($active_tab === 'all_bills') {
     }
     unset($p);
     
-    $stmt = $db->prepare("SELECT COUNT(*) as c, COALESCE(SUM(total_amount),0) as s FROM bills b LEFT JOIN patients pat ON b.patient_id = pat.id " . $where);
+    $stmt = $db->prepare("SELECT COUNT(*) as c, COALESCE(SUM(total_amount),0) as s FROM bills b INNER JOIN patients pat ON b.patient_id = pat.id " . $where);
     $stmt->execute($params);
     $r = $stmt->fetch(PDO::FETCH_ASSOC);
     $bills_stats['total_bills'] = $r['c'] ?? 0;
     $bills_stats['total_billed_amt'] = $r['s'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COUNT(*) as c, COALESCE(SUM(paid_amount),0) as s FROM bills b LEFT JOIN patients pat ON b.patient_id = pat.id " . $where . " AND b.status = 'paid'");
+    $stmt = $db->prepare("SELECT COUNT(*) as c, COALESCE(SUM(paid_amount),0) as s FROM bills b INNER JOIN patients pat ON b.patient_id = pat.id " . $where . " AND b.status = 'paid'");
     $stmt->execute($params);
     $r = $stmt->fetch(PDO::FETCH_ASSOC);
     $bills_stats['paid'] = $r['c'] ?? 0;
     $bills_stats['total_paid_amt'] = $r['s'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COUNT(*) as c, COALESCE(SUM(total_amount),0) as s FROM bills b LEFT JOIN patients pat ON b.patient_id = pat.id " . $where . " AND b.status = 'pending'");
+    $stmt = $db->prepare("SELECT COUNT(*) as c, COALESCE(SUM(total_amount),0) as s FROM bills b INNER JOIN patients pat ON b.patient_id = pat.id " . $where . " AND b.status = 'pending'");
     $stmt->execute($params);
     $r = $stmt->fetch(PDO::FETCH_ASSOC);
     $bills_stats['pending'] = $r['c'] ?? 0;
     $bills_stats['total_pending_amt'] = $r['s'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COUNT(*) as c FROM bills b LEFT JOIN patients pat ON b.patient_id = pat.id " . $where . " AND b.status = 'partial'");
+    $stmt = $db->prepare("SELECT COUNT(*) as c FROM bills b INNER JOIN patients pat ON b.patient_id = pat.id " . $where . " AND b.status = 'partial'");
     $stmt->execute($params);
     $bills_stats['partial'] = $stmt->fetch(PDO::FETCH_ASSOC)['c'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COALESCE(SUM(premium_amount),0) as s FROM bills b LEFT JOIN patients pat ON b.patient_id = pat.id " . $where);
+    $stmt = $db->prepare("SELECT COALESCE(SUM(premium_amount),0) as s FROM bills b INNER JOIN patients pat ON b.patient_id = pat.id " . $where);
     $stmt->execute($params);
     $bills_stats['total_premium'] = $stmt->fetch(PDO::FETCH_ASSOC)['s'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COALESCE(SUM(total_discount),0) as s FROM bills b LEFT JOIN patients pat ON b.patient_id = pat.id " . $where);
+    $stmt = $db->prepare("SELECT COALESCE(SUM(total_discount),0) as s FROM bills b INNER JOIN patients pat ON b.patient_id = pat.id " . $where);
     $stmt->execute($params);
     $bills_stats['total_discount'] = $stmt->fetch(PDO::FETCH_ASSOC)['s'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COALESCE(SUM(paid_amount),0) as s FROM bills b LEFT JOIN patients pat ON b.patient_id = pat.id " . $where);
+    $stmt = $db->prepare("SELECT COALESCE(SUM(paid_amount),0) as s FROM bills b INNER JOIN patients pat ON b.patient_id = pat.id " . $where);
     $stmt->execute($params);
     $total_paid_all = $stmt->fetch(PDO::FETCH_ASSOC)['s'] ?? 0;
     
@@ -1168,6 +1175,7 @@ include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
 <style>
+/* CSS yote ni sawa - copy from original file */
 :root {
     --font-mono: 'JetBrains Mono', 'Courier New', monospace;
     --font-main: 'Inter', -apple-system, sans-serif;
@@ -1279,19 +1287,12 @@ body { font-family: var(--font-main) !important; }
     background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
     color: white; box-shadow: 0 3px 10px rgba(11, 94, 215, 0.3);
 }
-.tab-btn .tab-count {
-    background: rgba(255,255,255,0.25); padding: 2px 8px;
-    border-radius: 10px; font-size: 0.6rem; font-weight: 800;
-}
-.tab-btn:not(.active) .tab-count {
-    background: var(--primary-bg); color: var(--primary);
-}
 
 .stats-grid-6 {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 16px;
-    margin-bottom: 24px;
+    margin-bottom: 18px;
 }
 
 .stat-card-custom {
@@ -1393,6 +1394,58 @@ body { font-family: var(--font-main) !important; }
     box-shadow: 0 0 10px rgba(110, 231, 183, 0.5);
 }
 
+/* ✅ V17: SEARCH - CHINI YA CARDS */
+.search-section-wrapper {
+    margin-bottom: 16px;
+}
+.med-search-panel {
+    background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+    border-radius: 12px; padding: 12px 16px; margin-bottom: 12px;
+    box-shadow: 0 3px 12px rgba(11, 94, 215, 0.2);
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.med-search-panel .search-label {
+    color: white; font-size: 0.72rem; font-weight: 700;
+    display: flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.med-search-panel .search-box {
+    position: relative; display: flex; align-items: center;
+    background: rgba(255,255,255,0.18);
+    border: 2px solid rgba(255,255,255,0.3);
+    border-radius: 8px; padding: 0 12px;
+    height: 38px; flex: 1; min-width: 200px;
+}
+.med-search-panel .search-box input {
+    flex: 1; background: transparent; border: none;
+    outline: none; color: white; font-size: 0.82rem;
+    font-weight: 500; font-family: var(--font-mono);
+}
+.med-search-panel .search-box input::placeholder { color: rgba(255,255,255,0.65); }
+
+.quick-filters {
+    display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+    background: var(--bg-card); border-radius: 12px;
+    padding: 10px 16px; border: 1px solid var(--border-color);
+    margin-bottom: 14px;
+}
+.quick-filter-btn {
+    padding: 5px 12px; border-radius: 18px;
+    font-size: 0.68rem; font-weight: 700;
+    border: 2px solid var(--border-color);
+    background: var(--bg-card); color: var(--text-secondary);
+    cursor: pointer; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 4px;
+    white-space: nowrap;
+}
+.quick-filter-btn:hover {
+    border-color: var(--primary); color: var(--primary);
+    background: var(--primary-bg);
+}
+.quick-filter-btn.active {
+    background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+    border-color: var(--primary); color: white;
+}
+
 .patient-card {
     background: var(--bg-card);
     border-radius: 16px;
@@ -1411,6 +1464,7 @@ body { font-family: var(--font-main) !important; }
     border-color: #7C3AED;
     box-shadow: 0 8px 30px rgba(124, 58, 237, 0.15), 0 0 0 1px rgba(124, 58, 237, 0.1);
 }
+.patient-card.filtered-out { display: none; }
 
 .patient-header {
     background: linear-gradient(135deg, #0B5ED7, #0A4CA8, #7C3AED);
@@ -1419,12 +1473,6 @@ body { font-family: var(--font-main) !important; }
     align-items: center; flex-wrap: wrap;
     gap: 14px; cursor: pointer;
     position: relative; overflow: hidden;
-}
-.patient-header::before {
-    content: ''; position: absolute;
-    top: -50%; right: -10%; width: 280px; height: 280px;
-    background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
-    border-radius: 50%; pointer-events: none;
 }
 .patient-header.has-partial { 
     background: linear-gradient(135deg, #7C3AED, #6D28D9, #5B21B6);
@@ -1666,13 +1714,7 @@ body { font-family: var(--font-main) !important; }
 [data-theme="dark"] .visit-mini-stat { background: rgba(255,255,255,0.12); }
 .visit-mini-stat.stat-paid { background: rgba(16,185,129,0.2); color: #047857; }
 .visit-mini-stat.stat-balance { background: rgba(220,38,38,0.15); color: #B91C1C; }
-.visit-mini-stat.stat-partial { background: rgba(124,58,237,0.15); color: #6D28D9; }
-.visit-mini-stat.stat-discount { background: rgba(217,119,6,0.15); color: #B45309; }
-.visit-mini-stat.stat-premium { background: rgba(124,58,237,0.15); color: #6D28D9; }
 
-/* ================================================================
-   ✅ SCROLL <> BUTTONS - Kwenye Visit Header & Category Header
-   ================================================================ */
 .table-nav-group {
     display: inline-flex; align-items: center; gap: 2px;
     background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
@@ -1692,9 +1734,6 @@ body { font-family: var(--font-main) !important; }
 .table-nav-btn:hover:not(:disabled) {
     background: rgba(255,255,255,0.35); transform: scale(1.1);
 }
-.table-nav-btn:active:not(:disabled) {
-    transform: scale(0.92);
-}
 .table-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .table-nav-indicator {
     font-size: 0.6rem; font-weight: 800;
@@ -1706,7 +1745,6 @@ body { font-family: var(--font-main) !important; }
     line-height: 24px; letter-spacing: 0.02em;
 }
 
-/* ✅ Category header ni ndogo, kwa hiyo <> buttons ziwe compact */
 .item-type-header .table-nav-group {
     padding: 1px;
     border-radius: 7px;
@@ -1816,10 +1854,7 @@ body { font-family: var(--font-main) !important; }
 }
 .amount-cell.green { color: var(--success); }
 .amount-cell.red { color: var(--danger); }
-.amount-cell.purple { color: var(--purple); }
-.amount-cell.orange { color: var(--warning); }
 
-/* UNIFIED ACTION BUTTONS */
 .action-buttons-group {
     display: inline-flex;
     gap: 6px;
@@ -1849,22 +1884,6 @@ body { font-family: var(--font-main) !important; }
     font-family: var(--font-main);
     white-space: nowrap;
     box-shadow: 0 2px 6px rgba(0,0,0,0.12);
-    position: relative;
-    overflow: hidden;
-}
-.btn-action-sm::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(255,255,255,0.1);
-    opacity: 0;
-    transition: opacity 0.2s ease;
-}
-.btn-action-sm:hover::before { opacity: 1; }
-.btn-action-sm i {
-    font-size: 0.7rem;
-    width: 12px;
-    text-align: center;
 }
 .btn-action-sm.view {
     background: linear-gradient(135deg, #3B82F6, #0B5ED7);
@@ -1896,7 +1915,6 @@ body { font-family: var(--font-main) !important; }
     box-shadow: 0 6px 16px rgba(220, 38, 38, 0.45);
     color: white;
 }
-
 .delete-form-inline { display: inline; margin: 0; padding: 0; }
 
 .bill-group {
@@ -1966,55 +1984,6 @@ body { font-family: var(--font-main) !important; }
 }
 .footer .footer-brand { color: var(--primary); font-weight: 600; }
 
-.quick-filters {
-    display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
-    background: var(--bg-card); border-radius: 12px;
-    padding: 10px 16px; border: 1px solid var(--border-color);
-    margin-bottom: 14px;
-}
-.quick-filter-btn {
-    padding: 5px 12px; border-radius: 18px;
-    font-size: 0.68rem; font-weight: 700;
-    border: 2px solid var(--border-color);
-    background: var(--bg-card); color: var(--text-secondary);
-    cursor: pointer; text-decoration: none;
-    display: inline-flex; align-items: center; gap: 4px;
-    white-space: nowrap;
-}
-.quick-filter-btn:hover {
-    border-color: var(--primary); color: var(--primary);
-    background: var(--primary-bg);
-}
-.quick-filter-btn.active {
-    background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-    border-color: var(--primary); color: white;
-}
-
-.med-search-panel {
-    background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-    border-radius: 12px; padding: 12px 16px; margin-bottom: 14px;
-    box-shadow: 0 3px 12px rgba(11, 94, 215, 0.2);
-    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-}
-.med-search-panel .search-label {
-    color: white; font-size: 0.72rem; font-weight: 700;
-    display: flex; align-items: center; gap: 6px; white-space: nowrap;
-}
-.med-search-panel .search-box {
-    position: relative; display: flex; align-items: center;
-    background: rgba(255,255,255,0.18);
-    border: 2px solid rgba(255,255,255,0.3);
-    border-radius: 8px; padding: 0 12px;
-    height: 38px; flex: 1; min-width: 200px;
-}
-.med-search-panel .search-box input {
-    flex: 1; background: transparent; border: none;
-    outline: none; color: white; font-size: 0.82rem;
-    font-weight: 500; font-family: var(--font-mono);
-}
-.med-search-panel .search-box input::placeholder { color: rgba(255,255,255,0.65); }
-
-/* OTC SALE CARD */
 .otc-cards-container {
     overflow-x: auto;
     scroll-behavior: smooth;
@@ -2124,9 +2093,7 @@ body { font-family: var(--font-main) !important; }
 .otc-action-btn.view { background: rgba(255,255,255,0.2); color: white; }
 .otc-action-btn.view:hover { background: rgba(255,255,255,0.35); }
 .otc-action-btn.edit { background: linear-gradient(135deg, #F59E0B, #D97706); color: white; border-color: transparent; }
-.otc-action-btn.edit:hover { background: linear-gradient(135deg, #D97706, #B45309); }
 .otc-action-btn.delete { background: linear-gradient(135deg, #DC2626, #B91C1C); color: white; border-color: transparent; }
-.otc-action-btn.delete:hover { background: linear-gradient(135deg, #B91C1C, #991B1B); }
 .otc-scroll-buttons { display: flex; gap: 5px; margin-left: 8px; }
 .otc-scroll-btn {
     width: 32px; height: 32px; border-radius: 8px;
@@ -2138,7 +2105,7 @@ body { font-family: var(--font-main) !important; }
     font-weight: 700; transition: all 0.25s;
     backdrop-filter: blur(10px); flex-shrink: 0;
 }
-.otc-scroll-btn:hover { background: rgba(255,255,255,0.4); transform: translateY(-2px); border-color: rgba(255,255,255,0.6); }
+.otc-scroll-btn:hover { background: rgba(255,255,255,0.4); transform: translateY(-2px); }
 .otc-items-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
 .otc-items-table thead th {
     text-align: left; padding: 10px 14px;
@@ -2229,6 +2196,21 @@ body { font-family: var(--font-main) !important; }
     white-space: nowrap; 
 }
 
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(8px); z-index: 99999; display: none; align-items: center; justify-content: center; padding: 20px; }
+.modal-overlay.active { display: flex; }
+.modal-box { background: var(--bg-card); border-radius: 20px; max-width: 500px; width: 100%; padding: 32px; box-shadow: 0 20px 50px rgba(0,0,0,0.3); text-align: center; }
+.modal-icon { width: 72px; height: 72px; border-radius: 50%; background: var(--danger-bg); color: var(--danger); display: flex; align-items: center; justify-content: center; font-size: 2rem; margin: 0 auto 18px; }
+.modal-title { font-size: 1.25rem; font-weight: 800; margin-bottom: 10px; color: var(--text-primary); }
+.modal-text { font-size: 0.88rem; color: var(--text-secondary); margin-bottom: 24px; line-height: 1.7; }
+.modal-text strong { color: var(--primary); background: var(--primary-bg); padding: 3px 10px; border-radius: 6px; font-family: var(--font-mono); font-weight: 700; display: inline-block; margin: 4px 0; }
+.modal-warning { color: var(--danger); font-weight: 700; display: block; margin-top: 8px; font-size: 0.8rem; }
+.modal-actions { display: flex; gap: 12px; justify-content: center; }
+.modal-btn { padding: 11px 26px; border-radius: 12px; font-weight: 700; font-size: 0.85rem; border: none; cursor: pointer; transition: all 0.25s; display: inline-flex; align-items: center; gap: 8px; }
+.modal-btn.cancel { background: var(--border-color); color: var(--text-primary); }
+.modal-btn.cancel:hover { background: var(--border-color); transform: translateY(-2px); }
+.modal-btn.danger { background: linear-gradient(135deg, #DC2626, #B91C1C); color: white; }
+.modal-btn.danger:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(220, 38, 38, 0.5); }
+
 @media (max-width: 1200px) { 
     .stats-grid-6 { grid-template-columns: repeat(2, 1fr); } 
 }
@@ -2292,6 +2274,7 @@ body { font-family: var(--font-main) !important; }
                 <i class="fas fa-concierge-bell"></i>
                 Other Services
                 <span class="role-badge-display">ADMIN AUDIT</span>
+                <span class="branch-tag" style="background:rgba(16,185,129,0.3);color:#6EE7B7;"><i class="fas fa-check-circle"></i> V17</span>
             </h1>
             <p class="page-subtitle">
                 <span class="branch-tag"><i class="fas fa-th-large"></i> Procedures • Equipments • Consultations • Bills • OTC</span>
@@ -2352,19 +2335,6 @@ body { font-family: var(--font-main) !important; }
         </a>
     </div>
 
-    <!-- SEARCH -->
-    <div class="med-search-panel">
-        <div class="search-label">
-            <i class="fas fa-search"></i>
-            <span>Search</span>
-        </div>
-        <div class="search-box">
-            <i class="fas fa-search" style="color:white;margin-right:8px;"></i>
-            <input type="text" id="pageSearchInput" 
-                   placeholder="Search patient, bill, item..." autocomplete="off">
-        </div>
-    </div>
-
     <!-- TAB 1: PROCEDURES & EQUIPMENTS -->
     <?php if ($active_tab === 'procedures'): ?>
         
@@ -2416,6 +2386,21 @@ body { font-family: var(--font-main) !important; }
                 </div>
                 <p class="stat-number"><?= $procedures_stats['procedure_count'] ?></p>
                 <p class="stat-amount"><i class="fas fa-hand-holding-medical"></i> Procedure Items</p>
+            </div>
+        </div>
+
+        <!-- ✅ V17: SEARCH CHINI YA CARDS -->
+        <div class="search-section-wrapper">
+            <div class="med-search-panel">
+                <div class="search-label">
+                    <i class="fas fa-search"></i>
+                    <span>Search</span>
+                </div>
+                <div class="search-box">
+                    <i class="fas fa-search" style="color:white;margin-right:8px;"></i>
+                    <input type="text" id="pageSearchInput" 
+                           placeholder="Search patient, bill, item..." autocomplete="off">
+                </div>
             </div>
         </div>
         
@@ -2511,17 +2496,14 @@ body { font-family: var(--font-main) !important; }
                                             <i class="fas fa-money-bill-wave"></i>
                                             Total: <strong style="color:var(--primary);"><?= formatTsh($visit['total_amount']) ?></strong>
                                         </span>
-                                        <!-- ✅ <> BUTTONS -->
-                                        <div class="table-nav-group" title="Slide table left / right">
+                                        <div class="table-nav-group">
                                             <button type="button" class="table-nav-btn scroll-left" 
-                                                    onclick="scrollVisitTable('<?= $uid ?>', -1)" 
-                                                    title="Slide Left">
+                                                    onclick="scrollVisitTable('<?= $uid ?>', -1)">
                                                 <i class="fas fa-chevron-left"></i>
                                             </button>
                                             <span class="table-nav-indicator" id="indicator-<?= $uid ?>">0%</span>
                                             <button type="button" class="table-nav-btn scroll-right" 
-                                                    onclick="scrollVisitTable('<?= $uid ?>', 1)" 
-                                                    title="Slide Right">
+                                                    onclick="scrollVisitTable('<?= $uid ?>', 1)">
                                                 <i class="fas fa-chevron-right"></i>
                                             </button>
                                         </div>
@@ -2583,11 +2565,11 @@ body { font-family: var(--font-main) !important; }
                                                             <td style="text-align:center;">
                                                                 <div class="action-buttons-group">
                                                                     <a href="view_procedure.php?id=<?= $reference_id ?>&bill_item_id=<?= $bill_item_id ?>&type=<?= $item['item_type'] ?>&branch=<?= $selected_branch_id ?>" 
-                                                                       class="btn-action-sm view" title="View">
+                                                                       class="btn-action-sm view">
                                                                         <i class="fas fa-eye"></i> View
                                                                     </a>
                                                                     <a href="edit_procedure.php?id=<?= $reference_id ?>&bill_item_id=<?= $bill_item_id ?>&type=<?= $item['item_type'] ?>&branch=<?= $selected_branch_id ?>" 
-                                                                       class="btn-action-sm edit" title="Edit">
+                                                                       class="btn-action-sm edit">
                                                                         <i class="fas fa-edit"></i> Edit
                                                                     </a>
                                                                     <form method="POST" class="delete-form-inline" 
@@ -2597,7 +2579,7 @@ body { font-family: var(--font-main) !important; }
                                                                         <input type="hidden" name="reference_id" value="<?= (int)$reference_id ?>">
                                                                         <input type="hidden" name="item_type" value="<?= htmlspecialchars($item['item_type']) ?>">
                                                                         <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
-                                                                        <button type="submit" class="btn-action-sm delete" title="Delete">
+                                                                        <button type="submit" class="btn-action-sm delete">
                                                                             <i class="fas fa-trash"></i> Delete
                                                                         </button>
                                                                     </form>
@@ -2697,6 +2679,21 @@ body { font-family: var(--font-main) !important; }
                 <p class="stat-amount"><i class="fas fa-chart-pie"></i> Completion Rate</p>
             </div>
         </div>
+
+        <!-- ✅ V17: SEARCH CHINI YA CARDS -->
+        <div class="search-section-wrapper">
+            <div class="med-search-panel">
+                <div class="search-label">
+                    <i class="fas fa-search"></i>
+                    <span>Search</span>
+                </div>
+                <div class="search-box">
+                    <i class="fas fa-search" style="color:white;margin-right:8px;"></i>
+                    <input type="text" id="pageSearchInput" 
+                           placeholder="Search patient, visit, doctor..." autocomplete="off">
+                </div>
+            </div>
+        </div>
         
         <?php if (!empty($consultations_array)): ?>
             <?php foreach ($consultations_array as $patient): 
@@ -2786,17 +2783,14 @@ body { font-family: var(--font-main) !important; }
                                         <span class="status-badge <?= $item_s['class'] ?>" style="font-size:0.58rem;">
                                             <?= $item_s['icon'] ?> <?= $item_s['label'] ?>
                                         </span>
-                                        <!-- ✅ <> BUTTONS -->
-                                        <div class="table-nav-group" title="Slide table left / right">
+                                        <div class="table-nav-group">
                                             <button type="button" class="table-nav-btn scroll-left" 
-                                                    onclick="scrollVisitTable('<?= $uid ?>', -1)" 
-                                                    title="Slide Left">
+                                                    onclick="scrollVisitTable('<?= $uid ?>', -1)">
                                                 <i class="fas fa-chevron-left"></i>
                                             </button>
                                             <span class="table-nav-indicator" id="indicator-<?= $uid ?>">0%</span>
                                             <button type="button" class="table-nav-btn scroll-right" 
-                                                    onclick="scrollVisitTable('<?= $uid ?>', 1)" 
-                                                    title="Slide Right">
+                                                    onclick="scrollVisitTable('<?= $uid ?>', 1)">
                                                 <i class="fas fa-chevron-right"></i>
                                             </button>
                                         </div>
@@ -2833,20 +2827,20 @@ body { font-family: var(--font-main) !important; }
                                                         <td class="amount-cell"><?= formatTsh($visit['consultation_fee']) ?></td>
                                                         <td style="text-align:center;">
                                                             <div class="action-buttons-group">
-                                                                <a href="view_consultation.php?id=<?= $visit['visit_id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-action-sm view" title="View">
+                                                                <a href="view_consultation.php?id=<?= $visit['visit_id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-action-sm view">
                                                                     <i class="fas fa-eye"></i> View
                                                                 </a>
-                                                                <a href="edit_consultation.php?id=<?= $visit['visit_id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-action-sm edit" title="Edit">
+                                                                <a href="edit_consultation.php?id=<?= $visit['visit_id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-action-sm edit">
                                                                     <i class="fas fa-edit"></i> Edit
                                                                 </a>
                                                                 <form method="POST" class="delete-form-inline" 
-                                                                      onsubmit="return confirm('⚠️ Delete this Consultation?\n\nVisit: <?= htmlspecialchars(addslashes($visit['visit_number'])) ?>\nFee: TSh <?= number_format($visit['consultation_fee'], 0) ?>\n\nBill itarekebishwa automatically.');">
+                                                                      onsubmit="return confirm('⚠️ Delete this Consultation?\n\nVisit: <?= htmlspecialchars(addslashes($visit['visit_number'])) ?>\nFee: TSh <?= number_format($visit['consultation_fee'], 0) ?>');">
                                                                     <input type="hidden" name="action" value="delete_bill_item_all">
                                                                     <input type="hidden" name="bill_item_id" value="<?= (int)($visit['bill_item_id'] ?? 0) ?>">
                                                                     <input type="hidden" name="item_type" value="consultation">
                                                                     <input type="hidden" name="redirect_tab" value="consultations">
                                                                     <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
-                                                                    <button type="submit" class="btn-action-sm delete" title="Delete">
+                                                                    <button type="submit" class="btn-action-sm delete">
                                                                         <i class="fas fa-trash"></i> Delete
                                                                     </button>
                                                                 </form>
@@ -2891,9 +2885,7 @@ body { font-family: var(--font-main) !important; }
         <?php endif; ?>
     <?php endif; ?>
 
-    <!-- ================================================================
-         TAB 3: ALL BILLS - ✅ V16: <> ARROWS KWENYE KILA CATEGORY TABLE
-         ================================================================ -->
+    <!-- TAB 3: ALL BILLS -->
     <?php if ($active_tab === 'all_bills'): ?>
         
         <div class="stats-grid-6">
@@ -2955,6 +2947,21 @@ body { font-family: var(--font-main) !important; }
                     <i class="fas fa-check-double"></i> 
                     <?= formatTsh($bills_stats['total_paid_amt']) ?> of <?= formatTsh($bills_stats['total_billed_amt']) ?>
                 </p>
+            </div>
+        </div>
+
+        <!-- ✅ V17: SEARCH CHINI YA CARDS -->
+        <div class="search-section-wrapper">
+            <div class="med-search-panel">
+                <div class="search-label">
+                    <i class="fas fa-search"></i>
+                    <span>Search</span>
+                </div>
+                <div class="search-box">
+                    <i class="fas fa-search" style="color:white;margin-right:8px;"></i>
+                    <input type="text" id="pageSearchInput" 
+                           placeholder="Search patient, bill number, item..." autocomplete="off">
+                </div>
             </div>
         </div>
         
@@ -3049,17 +3056,14 @@ body { font-family: var(--font-main) !important; }
                                             <i class="fas fa-file-invoice"></i>
                                             Bills: <strong style="color:var(--primary);"><?= count($visit['bills']) ?></strong>
                                         </span>
-                                        <!-- ✅ <> BUTTONS - VISIT LEVEL -->
-                                        <div class="table-nav-group" title="Slide bills left / right">
+                                        <div class="table-nav-group">
                                             <button type="button" class="table-nav-btn scroll-left" 
-                                                    onclick="scrollVisitTable('<?= $uid ?>', -1)" 
-                                                    title="Slide Left">
+                                                    onclick="scrollVisitTable('<?= $uid ?>', -1)">
                                                 <i class="fas fa-chevron-left"></i>
                                             </button>
                                             <span class="table-nav-indicator" id="indicator-<?= $uid ?>">0%</span>
                                             <button type="button" class="table-nav-btn scroll-right" 
-                                                    onclick="scrollVisitTable('<?= $uid ?>', 1)" 
-                                                    title="Slide Right">
+                                                    onclick="scrollVisitTable('<?= $uid ?>', 1)">
                                                 <i class="fas fa-chevron-right"></i>
                                             </button>
                                         </div>
@@ -3137,7 +3141,6 @@ body { font-family: var(--font-main) !important; }
                                                         $type_total += $it['total_price'] ?? 0;
                                                     }
                                                     
-                                                    // ✅ UNIQUE ID KWA KILA CATEGORY TABLE
                                                     $cat_uid = $uid . '-b' . $bill['id'] . '-' . $item_type;
                                                 ?>
                                                     <div class="item-type-section">
@@ -3150,17 +3153,14 @@ body { font-family: var(--font-main) !important; }
                                                                 <span class="visit-mini-stat" style="background:rgba(11,94,215,0.15);color:var(--primary);">
                                                                     Total: <strong><?= formatTsh($type_total) ?></strong>
                                                                 </span>
-                                                                <!-- ✅ <> BUTTONS KWA KILA CATEGORY TABLE -->
-                                                                <div class="table-nav-group" title="Slide <?= $tm['label'] ?> table left / right">
+                                                                <div class="table-nav-group">
                                                                     <button type="button" class="table-nav-btn scroll-left" 
-                                                                            onclick="scrollCategoryTable('<?= $cat_uid ?>', -1)" 
-                                                                            title="Slide Left">
+                                                                            onclick="scrollCategoryTable('<?= $cat_uid ?>', -1)">
                                                                         <i class="fas fa-chevron-left"></i>
                                                                     </button>
                                                                     <span class="table-nav-indicator" id="indicator-<?= $cat_uid ?>">0%</span>
                                                                     <button type="button" class="table-nav-btn scroll-right" 
-                                                                            onclick="scrollCategoryTable('<?= $cat_uid ?>', 1)" 
-                                                                            title="Slide Right">
+                                                                            onclick="scrollCategoryTable('<?= $cat_uid ?>', 1)">
                                                                         <i class="fas fa-chevron-right"></i>
                                                                     </button>
                                                                 </div>
@@ -3221,25 +3221,23 @@ body { font-family: var(--font-main) !important; }
                                                                                     <div class="action-buttons-group">
                                                                                         <a href="<?= htmlspecialchars($view_url) ?>" 
                                                                                            class="btn-action-sm view" 
-                                                                                           title="View <?= ucfirst(str_replace('_', ' ', $item_type)) ?>"
                                                                                            target="_blank">
                                                                                             <i class="fas fa-eye"></i> View
                                                                                         </a>
                                                                                         
                                                                                         <a href="<?= htmlspecialchars($edit_url) ?>" 
-                                                                                           class="btn-action-sm edit" 
-                                                                                           title="Edit <?= ucfirst(str_replace('_', ' ', $item_type)) ?>">
+                                                                                           class="btn-action-sm edit">
                                                                                             <i class="fas fa-edit"></i> Edit
                                                                                         </a>
                                                                                         
                                                                                         <form method="POST" class="delete-form-inline" 
-                                                                                              onsubmit="return confirm('⚠️ Delete this <?= ucfirst(str_replace('_', ' ', $item_type)) ?>?\n\n<?= htmlspecialchars(addslashes($it['item_name'])) ?>\nQty: <?= (int)$it['quantity'] ?>\nAmount: TSh <?= number_format($it['total_price'], 0) ?>\n\nBill itarekebishwa automatically.');">
+                                                                                              onsubmit="return confirm('⚠️ Delete this <?= ucfirst(str_replace('_', ' ', $item_type)) ?>?\n\n<?= htmlspecialchars(addslashes($it['item_name'])) ?>\nQty: <?= (int)$it['quantity'] ?>\nAmount: TSh <?= number_format($it['total_price'], 0) ?>');">
                                                                                             <input type="hidden" name="action" value="delete_bill_item_all">
                                                                                             <input type="hidden" name="bill_item_id" value="<?= (int)$it['id'] ?>">
                                                                                             <input type="hidden" name="item_type" value="<?= htmlspecialchars($item_type) ?>">
                                                                                             <input type="hidden" name="redirect_tab" value="all_bills">
                                                                                             <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
-                                                                                            <button type="submit" class="btn-action-sm delete" title="Delete">
+                                                                                            <button type="submit" class="btn-action-sm delete">
                                                                                                 <i class="fas fa-trash"></i> Delete
                                                                                             </button>
                                                                                         </form>
@@ -3301,6 +3299,7 @@ body { font-family: var(--font-main) !important; }
             <div class="empty-state">
                 <i class="fas fa-file-invoice"></i>
                 <p>No bills found</p>
+                <p class="sub">Bills without patient ID are excluded from this view</p>
             </div>
         <?php endif; ?>
     <?php endif; ?>
@@ -3358,6 +3357,21 @@ body { font-family: var(--font-main) !important; }
                 <p class="stat-amount"><i class="fas fa-chart-pie"></i> Completion Rate</p>
             </div>
         </div>
+
+        <!-- ✅ V17: SEARCH CHINI YA CARDS -->
+        <div class="search-section-wrapper">
+            <div class="med-search-panel">
+                <div class="search-label">
+                    <i class="fas fa-search"></i>
+                    <span>Search</span>
+                </div>
+                <div class="search-box">
+                    <i class="fas fa-search" style="color:white;margin-right:8px;"></i>
+                    <input type="text" id="pageSearchInput" 
+                           placeholder="Search customer, sale number..." autocomplete="off">
+                </div>
+            </div>
+        </div>
         
         <div class="table-card" style="background:var(--bg-body); border:2px solid var(--cyan); border-radius:16px;">
             <div class="table-header" style="background:linear-gradient(135deg, #0891B2, #0E7490); padding:14px 20px; border-radius:14px 14px 0 0; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
@@ -3371,8 +3385,8 @@ body { font-family: var(--font-main) !important; }
                 </div>
                 <div style="display:flex; align-items:center; gap:8px;">
                     <div class="otc-scroll-buttons">
-                        <button type="button" class="otc-scroll-btn" onclick="scrollOtcContainer('left')" title="Scroll Left"><i class="fas fa-chevron-left"></i></button>
-                        <button type="button" class="otc-scroll-btn" onclick="scrollOtcContainer('right')" title="Scroll Right"><i class="fas fa-chevron-right"></i></button>
+                        <button type="button" class="otc-scroll-btn" onclick="scrollOtcContainer('left')"><i class="fas fa-chevron-left"></i></button>
+                        <button type="button" class="otc-scroll-btn" onclick="scrollOtcContainer('right')"><i class="fas fa-chevron-right"></i></button>
                     </div>
                 </div>
             </div>
@@ -3442,20 +3456,20 @@ body { font-family: var(--font-main) !important; }
                             
                             <div class="otc-header-right">
                                 <a href="view_otc.php?id=<?= (int)$otc['sale_id'] ?>&branch=<?= $selected_branch_id ?>" 
-                                   class="otc-action-btn view" title="View OTC Sale" target="_blank">
+                                   class="otc-action-btn view" target="_blank">
                                     <i class="fas fa-eye"></i> View
                                 </a>
                                 <a href="edit_otc.php?id=<?= (int)$otc['sale_id'] ?>&branch=<?= $selected_branch_id ?>" 
-                                   class="otc-action-btn edit" title="Edit OTC Sale">
+                                   class="otc-action-btn edit">
                                     <i class="fas fa-edit"></i> Edit
                                 </a>
-                                <button type="button" class="otc-action-btn delete" title="Delete OTC Sale" 
+                                <button type="button" class="otc-action-btn delete" 
                                         onclick="confirmDeleteOtcSale(<?= (int)$otc['sale_id'] ?>, '<?= htmlspecialchars(addslashes($otc['sale_number'] ?? 'N/A')) ?>')">
                                     <i class="fas fa-trash"></i> Delete
                                 </button>
                                 <div class="otc-scroll-buttons">
-                                    <button type="button" class="otc-scroll-btn" onclick="scrollOtcCard(this, 'left')" title="Scroll Left"><i class="fas fa-chevron-left"></i></button>
-                                    <button type="button" class="otc-scroll-btn" onclick="scrollOtcCard(this, 'right')" title="Scroll Right"><i class="fas fa-chevron-right"></i></button>
+                                    <button type="button" class="otc-scroll-btn" onclick="scrollOtcCard(this, 'left')"><i class="fas fa-chevron-left"></i></button>
+                                    <button type="button" class="otc-scroll-btn" onclick="scrollOtcCard(this, 'right')"><i class="fas fa-chevron-right"></i></button>
                                 </div>
                             </div>
                         </div>
@@ -3519,7 +3533,7 @@ body { font-family: var(--font-main) !important; }
                                                             <input type="hidden" name="otc_item_id" value="<?= (int)$item['id'] ?>">
                                                             <input type="hidden" name="sale_id" value="<?= (int)$otc['sale_id'] ?>">
                                                             <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
-                                                            <button type="submit" class="btn-action-sm delete" title="Delete Item">
+                                                            <button type="submit" class="btn-action-sm delete">
                                                                 <i class="fas fa-trash"></i> Delete
                                                             </button>
                                                         </form>
@@ -3574,7 +3588,7 @@ body { font-family: var(--font-main) !important; }
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span style="margin:0 8px;">|</span>
-            Other Services V16
+            Other Services V17
             <span style="margin:0 8px;">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
         </p>
@@ -3583,28 +3597,24 @@ body { font-family: var(--font-main) !important; }
 </main>
 
 <!-- DELETE OTC SALE MODAL -->
-<div class="modal-overlay" id="deleteOtcModal" style="position:fixed; inset:0; background:rgba(0,0,0,0.6); backdrop-filter:blur(8px); z-index:99999; display:none; align-items:center; justify-content:center; padding:20px;">
-    <div style="background:var(--bg-card); border-radius:20px; max-width:500px; width:100%; padding:32px; box-shadow:0 20px 50px rgba(0,0,0,0.3); text-align:center;">
-        <div style="width:72px; height:72px; border-radius:50%; background:var(--danger-bg); color:var(--danger); display:flex; align-items:center; justify-content:center; font-size:2rem; margin:0 auto 18px;">
-            <i class="fas fa-exclamation-triangle"></i>
-        </div>
-        <h3 style="font-size:1.25rem; font-weight:800; margin-bottom:10px; color:var(--text-primary);">Delete OTC Sale?</h3>
-        <p style="font-size:0.88rem; color:var(--text-secondary); margin-bottom:24px; line-height:1.7;">
+<div class="modal-overlay" id="deleteOtcModal">
+    <div class="modal-box">
+        <div class="modal-icon"><i class="fas fa-exclamation-triangle"></i></div>
+        <h3 class="modal-title">Delete OTC Sale?</h3>
+        <p class="modal-text">
             Are you sure you want to delete<br>
-            <strong id="deleteOtcRecord" style="color:var(--primary); background:var(--primary-bg); padding:3px 10px; border-radius:6px; font-family:var(--font-mono); display:inline-block; margin:4px 0;">-</strong><br>
-            <span style="color:var(--danger); font-weight:700; display:block; margin-top:8px; font-size:0.8rem;">
-                <i class="fas fa-exclamation-circle"></i> This action cannot be undone!
-            </span>
+            <strong id="deleteOtcRecord">-</strong><br>
+            <span class="modal-warning"><i class="fas fa-exclamation-circle"></i> This action cannot be undone!</span>
         </p>
         <form method="POST" id="deleteOtcForm">
             <input type="hidden" name="action" value="delete_otc_sale">
             <input type="hidden" name="sale_id" id="deleteOtcSaleId" value="">
             <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
-            <div style="display:flex; gap:12px; justify-content:center;">
-                <button type="button" onclick="closeDeleteOtcModal()" style="padding:11px 26px; border-radius:12px; font-weight:700; font-size:0.85rem; border:none; cursor:pointer; background:var(--border-color); color:var(--text-primary);">
+            <div class="modal-actions">
+                <button type="button" onclick="closeDeleteOtcModal()" class="modal-btn cancel">
                     <i class="fas fa-times"></i> Cancel
                 </button>
-                <button type="submit" style="padding:11px 26px; border-radius:12px; font-weight:700; font-size:0.85rem; border:none; cursor:pointer; background:linear-gradient(135deg, #DC2626, #B91C1C); color:white;">
+                <button type="submit" class="modal-btn danger">
                     <i class="fas fa-trash"></i> Yes, Delete
                 </button>
             </div>
@@ -3613,9 +3623,6 @@ body { font-family: var(--font-main) !important; }
 </div>
 
 <script>
-// ================================================================
-// ✅ TOGGLE PATIENT
-// ================================================================
 function togglePatient(patientId) {
     var body = document.getElementById('body-' + patientId);
     var chevron = document.getElementById('chevron-' + patientId);
@@ -3627,35 +3634,25 @@ function togglePatient(patientId) {
             body.querySelectorAll('.table-scroll').forEach(function(tbl) {
                 if (tbl.id) updateTableNav(tbl.id);
             });
-            // Update visit indicators
             body.querySelectorAll('[id^="visit-body-"]').forEach(function(vb) {
                 var uid = vb.id.replace('visit-body-', '');
                 updateVisitIndicator(uid);
             });
-            // ✅ Update category indicators
             initCategoryTables();
         }
     }, 450);
 }
 
-// ================================================================
-// ✅ SCROLL VISIT TABLE (kwa <> buttons kwenye visit header)
-// ================================================================
 function scrollVisitTable(uid, direction) {
     var body = document.getElementById('visit-body-' + uid);
     if (!body) return;
     
-    // Pata scrollable element
     var scrollTarget = body.querySelector('.table-scroll');
-    if (!scrollTarget) {
-        scrollTarget = body.querySelector('.bill-group-body');
-    }
-    if (!scrollTarget) {
-        scrollTarget = body;
-    }
+    if (!scrollTarget) scrollTarget = body.querySelector('.bill-group-body');
+    if (!scrollTarget) scrollTarget = body;
     
     var scrollAmount = 400;
-    var currentScroll = scrollTarget.scrollLeft || body.scrollLeft || 0;
+    var currentScroll = scrollTarget.scrollLeft || 0;
     var maxScroll = (scrollTarget.scrollWidth - scrollTarget.clientWidth) || 0;
     
     var newScroll = currentScroll + (direction * scrollAmount);
@@ -3669,44 +3666,31 @@ function scrollVisitTable(uid, direction) {
     setTimeout(function() { updateVisitIndicator(uid); }, 350);
 }
 
-// ================================================================
-// ✅ UPDATE VISIT INDICATOR % + BUTTON STATES
-// ================================================================
 function updateVisitIndicator(uid) {
     var body = document.getElementById('visit-body-' + uid);
     var indicator = document.getElementById('indicator-' + uid);
     if (!body || !indicator) return;
     
     var scrollTarget = body.querySelector('.table-scroll');
-    if (!scrollTarget) {
-        scrollTarget = body.querySelector('.bill-group-body');
-    }
-    if (!scrollTarget) {
-        scrollTarget = body;
-    }
+    if (!scrollTarget) scrollTarget = body.querySelector('.bill-group-body');
+    if (!scrollTarget) scrollTarget = body;
     
     var currentScroll = scrollTarget.scrollLeft || 0;
     var maxScroll = (scrollTarget.scrollWidth - scrollTarget.clientWidth) || 0;
     
     var percent = 0;
-    if (maxScroll > 0) {
-        percent = Math.round((currentScroll / maxScroll) * 100);
-    }
+    if (maxScroll > 0) percent = Math.round((currentScroll / maxScroll) * 100);
     indicator.textContent = percent + '%';
     
     var visitSection = body.closest('.visit-section');
     if (visitSection) {
         var leftBtn = visitSection.querySelector('.scroll-left');
         var rightBtn = visitSection.querySelector('.scroll-right');
-        
         if (leftBtn) leftBtn.disabled = (currentScroll <= 1);
         if (rightBtn) rightBtn.disabled = (currentScroll >= maxScroll - 1);
     }
 }
 
-// ================================================================
-// ✅ SCROLL CATEGORY TABLE (kwa <> buttons kwenye item-type-header)
-// ================================================================
 function scrollCategoryTable(catUid, direction) {
     var table = document.getElementById('table-' + catUid);
     if (!table) return;
@@ -3720,13 +3704,9 @@ function scrollCategoryTable(catUid, direction) {
     if (newScroll > maxScroll) newScroll = maxScroll;
     
     table.scrollTo({ left: newScroll, behavior: 'smooth' });
-    
     setTimeout(function() { updateCategoryIndicator(catUid); }, 350);
 }
 
-// ================================================================
-// ✅ UPDATE CATEGORY INDICATOR % + BUTTON STATES
-// ================================================================
 function updateCategoryIndicator(catUid) {
     var table = document.getElementById('table-' + catUid);
     var indicator = document.getElementById('indicator-' + catUid);
@@ -3738,9 +3718,7 @@ function updateCategoryIndicator(catUid) {
     var maxScroll = table.scrollWidth - table.clientWidth;
     
     var percent = 0;
-    if (maxScroll > 0) {
-        percent = Math.round((currentScroll / maxScroll) * 100);
-    }
+    if (maxScroll > 0) percent = Math.round((currentScroll / maxScroll) * 100);
     indicator.textContent = percent + '%';
     
     if (wrapper) {
@@ -3748,16 +3726,12 @@ function updateCategoryIndicator(catUid) {
         if (parentHeader) {
             var leftBtn = parentHeader.querySelector('.scroll-left');
             var rightBtn = parentHeader.querySelector('.scroll-right');
-            
             if (leftBtn) leftBtn.disabled = (currentScroll <= 1);
             if (rightBtn) rightBtn.disabled = (currentScroll >= maxScroll - 1);
         }
     }
 }
 
-// ================================================================
-// ✅ INIT CATEGORY TABLES (update indicators + attach listeners)
-// ================================================================
 function initCategoryTables() {
     document.querySelectorAll('.table-scroll[id^="table-"]').forEach(function(tbl) {
         if (tbl.closest('.item-type-section')) {
@@ -3765,25 +3739,6 @@ function initCategoryTables() {
             updateCategoryIndicator(catUid);
         }
     });
-}
-
-// ================================================================
-// ✅ SCROLL TABLE (generic)
-// ================================================================
-function scrollTable(tableId, direction) {
-    var table = document.getElementById(tableId);
-    if (!table) return;
-    
-    var scrollAmount = 300;
-    var currentScroll = table.scrollLeft;
-    var maxScroll = table.scrollWidth - table.clientWidth;
-    
-    var newScroll = currentScroll + (direction * scrollAmount);
-    if (newScroll < 0) newScroll = 0;
-    if (newScroll > maxScroll) newScroll = maxScroll;
-    
-    table.scrollTo({ left: newScroll, behavior: 'smooth' });
-    setTimeout(function() { updateTableNav(tableId); }, 350);
 }
 
 function updateTableNav(tableId) {
@@ -3801,9 +3756,6 @@ function updateTableNav(tableId) {
     if (indicator) indicator.textContent = percent + '%';
 }
 
-// ================================================================
-// ✅ INIT ON PAGE LOAD
-// ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     var firstBody = document.querySelector('.patient-body');
     var firstChevron = document.querySelector('.chevron');
@@ -3818,16 +3770,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 var uid = vb.id.replace('visit-body-', '');
                 updateVisitIndicator(uid);
             });
-            // ✅ Init category tables
             initCategoryTables();
         }, 300);
     }
     
-    // Attach scroll listeners kwa kila table-scroll
     document.querySelectorAll('.table-scroll').forEach(function(tbl) {
         if (!tbl.id) return;
-        
-        // ✅ Angalia kama ni category table au visit table
         var isCategoryTable = tbl.closest('.item-type-section') !== null;
         
         tbl.addEventListener('scroll', function() { 
@@ -3836,7 +3784,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 updateCategoryIndicator(catUid);
             } else {
                 updateTableNav(tbl.id);
-                // Update visit indicator kama ipo
                 var visitBody = tbl.closest('[id^="visit-body-"]');
                 if (visitBody) {
                     var uid = visitBody.id.replace('visit-body-', '');
@@ -3853,10 +3800,8 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // Init indicators
     document.querySelectorAll('[id^="indicator-"]').forEach(function(el) {
         var uid = el.id.replace('indicator-', '');
-        // Angalia kama ni category indicator au visit indicator
         if (document.getElementById('wrapper-' + uid)) {
             updateCategoryIndicator(uid);
         } else {
@@ -3865,9 +3810,6 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
-// ================================================================
-// ✅ OTC SCROLL FUNCTIONS
-// ================================================================
 function scrollOtcContainer(direction) {
     var container = document.getElementById('otcCardsContainer');
     if (!container) return;
@@ -3884,18 +3826,15 @@ function scrollOtcCard(btn, direction) {
     wrapper.scrollBy({ left: direction === 'left' ? -amount : amount, behavior: 'smooth' });
 }
 
-// ================================================================
-// ✅ DELETE OTC SALE MODAL
-// ================================================================
 function confirmDeleteOtcSale(id, saleNumber) {
     document.getElementById('deleteOtcSaleId').value = id;
     document.getElementById('deleteOtcRecord').textContent = saleNumber;
-    document.getElementById('deleteOtcModal').style.display = 'flex';
+    document.getElementById('deleteOtcModal').classList.add('active');
     document.body.style.overflow = 'hidden';
 }
 
 function closeDeleteOtcModal() {
-    document.getElementById('deleteOtcModal').style.display = 'none';
+    document.getElementById('deleteOtcModal').classList.remove('active');
     document.body.style.overflow = '';
 }
 
@@ -3907,9 +3846,6 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') closeDeleteOtcModal();
 });
 
-// ================================================================
-// ✅ PAGE SEARCH
-// ================================================================
 (function() {
     var input = document.getElementById('pageSearchInput');
     if (!input) return;
@@ -3942,9 +3878,6 @@ document.addEventListener('keydown', function(e) {
     });
 })();
 
-// ================================================================
-// ✅ FOOTER TIME
-// ================================================================
 setInterval(function() {
     var now = new Date();
     var t = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
@@ -3952,14 +3885,13 @@ setInterval(function() {
     if (ft) ft.textContent = 'Last updated: ' + t;
 }, 1000);
 
-console.log('%c🏥 Braick - Other Services V16', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+console.log('%c🏥 Braick - Other Services V17', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ All Bills: inaonyesha bills zenye patient_id TU', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c✅ Search bar imehamishwa CHINI ya summary cards', 'font-size:12px;color:#34D399;font-weight:bold;');
 console.log('%c✅ <> ARROW BUTTONS kwenye KILA visit table header', 'font-size:12px;color:#34D399;font-weight:bold;');
-console.log('%c✅ <> ARROW BUTTONS kwenye KILA ITEM CATEGORY table (All Bills tab)', 'font-size:12px;color:#34D399;font-weight:bold;');
-console.log('%c✅ Percentage indicator (0% - 100%)', 'font-size:12px;color:#34D399;');
-console.log('%c✅ Auto-disable buttons kama umefika mwisho', 'font-size:12px;color:#34D399;');
-console.log('%c✅ ALL ITEMS: View + Edit + Delete', 'font-size:12px;color:#34D399;');
-console.log('%c✅ Auto stock restore kwa medications', 'font-size:12px;color:#34D399;');
-console.log('%c✅ Auto recalculate bill baada ya delete', 'font-size:12px;color:#34D399;');
+console.log('%c✅ <> ARROW BUTTONS kwenye KILA ITEM CATEGORY table', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c✅ ALL ITEMS: View + Edit + Delete', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c✅ Auto stock restore + recalculate bill', 'font-size:12px;color:#34D399;font-weight:bold;');
 </script>
 
 </body>

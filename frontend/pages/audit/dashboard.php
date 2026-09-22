@@ -13,6 +13,7 @@
 // ✅ 8 CARDS SAME AS ADMIN AUDIT
 // ✅ BLUE THEME (#0B5ED7)
 // ✅ V15.3: DECIMALS ZIMEONDOLEWA - NAMBA KAMILI TU
+// ✅ V16: WELCOME + USER NAME kwenye header
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -48,9 +49,7 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 $user_email = $_SESSION['email'] ?? '';
 $user_username = $_SESSION['username'] ?? 'audit';
 
-// ================================================================
-// ✅ V14: LAZIMISHA branch ya mtumiaji aliye login TU
-// ================================================================
+// ✅ LAZIMISHA branch ya mtumiaji aliye login TU
 $selected_branch_id = (int)$user_branch_id;
 
 require_once __DIR__ . '/../../../backend/config/database.php';
@@ -87,7 +86,7 @@ $p_branch_cond = " AND p.branch_id = ?";
 $p_branch_params = [$selected_branch_id];
 
 // ================================================================
-// STATS - 8 CARDS + BREAKDOWN (SAME AS ADMIN AUDIT V15.2)
+// STATS - 8 CARDS + BREAKDOWN
 // ================================================================
 $stats = [
     'total_revenue' => 0,
@@ -139,9 +138,7 @@ $stats = [
 
 try {
     
-    // ============================================================
     // 1. PATIENT PAYMENTS REVENUE
-    // ============================================================
     $sql = "SELECT COALESCE(SUM(p.amount), 0) as total, 
                    COUNT(DISTINCT p.id) as count,
                    COUNT(DISTINCT p.bill_id) as bills_count
@@ -158,9 +155,7 @@ try {
     $stats['payments_count'] = (int)($row['count'] ?? 0);
     $stats['total_bills'] = (int)($row['bills_count'] ?? 0);
     
-    // ============================================================
-    // 2. MEDICATIONS (paid + partial) - RAW / GROSS (bila discount)
-    // ============================================================
+    // 2. MEDICATIONS - RAW / GROSS
     $sql = "SELECT COALESCE(SUM(bi.total_price), 0) as total, 
                    COUNT(DISTINCT bi.id) as count,
                    COALESCE(SUM(bi.quantity), 0) as qty
@@ -177,44 +172,32 @@ try {
     $stats['medication_count'] = (int)($row['count'] ?? 0);
     $stats['total_medicines_sold'] = (int)($row['qty'] ?? 0);
     
-    // ============================================================
     // 2b. PHARMACY DISCOUNT
-    // ============================================================
-    $sql = "SELECT COALESCE(SUM(b.pharmacy_discount), 0) as total,
-                   COUNT(DISTINCT b.id) as count
+    $sql = "SELECT COALESCE(SUM(b.pharmacy_discount), 0) as total
             FROM bills b
             WHERE b.status IN ('paid', 'partial')
             AND b.patient_id IS NOT NULL
             AND b.pharmacy_discount > 0
             $b_branch_cond";
     $stmt = $db->prepare($sql); $stmt->execute($b_branch_params);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    $stats['pharmacy_discount_total'] = (float)($row['total'] ?? 0);
+    $stats['pharmacy_discount_total'] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
     
-    // ============================================================
     // 2c. PHARMACY PREMIUM
-    // ============================================================
-    $sql = "SELECT COALESCE(SUM(b.pharmacy_premium), 0) as total,
-                   COUNT(DISTINCT b.id) as count
+    $sql = "SELECT COALESCE(SUM(b.pharmacy_premium), 0) as total
             FROM bills b
             WHERE b.status IN ('paid', 'partial')
             AND b.patient_id IS NOT NULL
             AND b.pharmacy_premium > 0
             $b_branch_cond";
     $stmt = $db->prepare($sql); $stmt->execute($b_branch_params);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    $stats['pharmacy_premium_total'] = (float)($row['total'] ?? 0);
+    $stats['pharmacy_premium_total'] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
     
-    // ============================================================
-    // ✅ V15.2: PRESCRIPTION REVENUE = GROSS
-    // ============================================================
+    // V15.2: PRESCRIPTION REVENUE = GROSS
     $stats['medication_revenue_gross'] = $stats['medication_revenue_raw'];
     $stats['prescription_revenue'] = $stats['medication_revenue_gross'];
     $stats['medication_revenue'] = $stats['medication_revenue_gross'];
     
-    // ============================================================
     // 3. PRESCRIPTION COUNT
-    // ============================================================
     $sql = "SELECT COUNT(DISTINCT bi.id) as count 
             FROM bill_items bi
             INNER JOIN bills b ON bi.bill_id = b.id
@@ -227,9 +210,7 @@ try {
     $stmt = $db->prepare($sql); $stmt->execute($bi_branch_params);
     $stats['prescription_count'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     
-    // ============================================================
     // 4. LAB TESTS
-    // ============================================================
     $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
                    COUNT(DISTINCT bi.id) as count 
             FROM bill_items bi
@@ -244,9 +225,7 @@ try {
     $stats['lab_revenue'] = (float)($row['total'] ?? 0);
     $stats['lab_count'] = (int)($row['count'] ?? 0);
     
-    // ============================================================
     // 5. CONSULTATION
-    // ============================================================
     $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total, 
                    COUNT(DISTINCT bi.id) as count 
             FROM bill_items bi
@@ -261,9 +240,7 @@ try {
     $stats['consultation_revenue'] = (float)($row['total'] ?? 0);
     $stats['consultation_count'] = (int)($row['count'] ?? 0);
     
-    // ============================================================
     // 6. PROCEDURES
-    // ============================================================
     $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total,
                    COUNT(DISTINCT bi.id) as count
             FROM bill_items bi
@@ -278,9 +255,7 @@ try {
     $stats['procedure_revenue'] = (float)($row['total'] ?? 0);
     $stats['procedure_count'] = (int)($row['count'] ?? 0);
     
-    // ============================================================
     // 7. REGISTRATION
-    // ============================================================
     $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total,
                    COUNT(DISTINCT bi.id) as count
             FROM bill_items bi
@@ -295,9 +270,7 @@ try {
     $stats['registration_revenue'] = (float)($row['total'] ?? 0);
     $stats['registration_count'] = (int)($row['count'] ?? 0);
     
-    // ============================================================
     // 8. EQUIPMENT
-    // ============================================================
     $sql = "SELECT COALESCE(SUM(bi.total_price - COALESCE(bi.discount_amount, 0)), 0) as total,
                    COUNT(DISTINCT bi.id) as count
             FROM bill_items bi
@@ -312,13 +285,10 @@ try {
     $stats['equipment_revenue'] = (float)($row['total'] ?? 0);
     $stats['equipment_count'] = (int)($row['count'] ?? 0);
     
-    // ============================================================
     // 9. TOTAL PREMIUM
-    // ============================================================
     $sql = "SELECT COALESCE(SUM(b.pharmacy_premium), 0) as pharmacy_total,
                    COALESCE(SUM(b.cashier_premium), 0) as cashier_total,
-                   COALESCE(SUM(b.pharmacy_premium + b.cashier_premium), 0) as total,
-                   COUNT(DISTINCT b.id) as count
+                   COALESCE(SUM(b.pharmacy_premium + b.cashier_premium), 0) as total
             FROM bills b
             WHERE b.status IN ('paid', 'partial')
             AND b.patient_id IS NOT NULL
@@ -330,13 +300,10 @@ try {
     $stats['cashier_premium_total'] = (float)($row['cashier_total'] ?? 0);
     $stats['premium_revenue'] = (float)($row['total'] ?? 0);
     
-    // ============================================================
     // 9b. TOTAL DISCOUNT
-    // ============================================================
     $sql = "SELECT COALESCE(SUM(b.pharmacy_discount), 0) as pharmacy_total,
                    COALESCE(SUM(b.cashier_discount), 0) as cashier_total,
-                   COALESCE(SUM(b.pharmacy_discount + b.cashier_discount), 0) as total,
-                   COUNT(DISTINCT b.id) as count
+                   COALESCE(SUM(b.pharmacy_discount + b.cashier_discount), 0) as total
             FROM bills b
             WHERE b.status IN ('paid', 'partial')
             AND b.patient_id IS NOT NULL
@@ -348,18 +315,11 @@ try {
     $stats['cashier_discount_total'] = (float)($row['cashier_total'] ?? 0);
     $stats['discount_total'] = (float)($row['total'] ?? 0);
     
-    // ============================================================
     // 10. OTHER REVENUE
-    // ============================================================
-    $stats['other_revenue'] = 
-        $stats['procedure_revenue'] + 
-        $stats['registration_revenue'] + 
-        $stats['equipment_revenue'];
+    $stats['other_revenue'] = $stats['procedure_revenue'] + $stats['registration_revenue'] + $stats['equipment_revenue'];
     $stats['other_count'] = $stats['procedure_count'] + $stats['registration_count'] + $stats['equipment_count'];
     
-    // ============================================================
     // 11. OTC REVENUE
-    // ============================================================
     $sql = "SELECT COALESCE(SUM(total_amount), 0) as total, COUNT(*) as count 
             FROM otc_sales 
             WHERE payment_status IN ('paid', 'partial') $o_branch_cond";
@@ -368,14 +328,10 @@ try {
     $stats['otc_revenue'] = (float)($row['total'] ?? 0);
     $stats['otc_count'] = (int)($row['count'] ?? 0);
     
-    // ============================================================
     // 12. TOTAL REVENUE
-    // ============================================================
     $stats['total_revenue'] = $stats['patient_payments_revenue'] + $stats['otc_revenue'];
     
-    // ============================================================
     // 13. EXPENSES
-    // ============================================================
     $sql = "SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count 
             FROM expenses 
             WHERE status = 'paid' $branch_cond";
@@ -384,14 +340,10 @@ try {
     $stats['total_expenses'] = (float)($row['total'] ?? 0);
     $stats['expenses_count'] = (int)($row['count'] ?? 0);
     
-    // ============================================================
     // 14. PROFIT
-    // ============================================================
     $stats['profit'] = $stats['total_revenue'] - $stats['total_expenses'];
     
-    // ============================================================
     // 15. TODAY'S STATS
-    // ============================================================
     try {
         $sql = "SELECT COALESCE(SUM(p.amount), 0) as total
                 FROM payments p
@@ -421,33 +373,28 @@ try {
     
     $stats['today_profit'] = $stats['today_revenue'] - $stats['today_expenses'];
     
-    // ============================================================
     // 16. OTHER STATS
-    // ============================================================
-    $p_branch = " AND branch_id = ?";
-    
-    $sql = "SELECT COUNT(*) as count FROM patients WHERE 1=1 $p_branch";
+    $sql = "SELECT COUNT(*) as count FROM patients WHERE 1=1 $branch_cond";
     $stmt = $db->prepare($sql); $stmt->execute($branch_params);
     $stats['total_patients'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     
-    $sql = "SELECT COUNT(*) as count FROM patients WHERE DATE(created_at) = CURDATE() $p_branch";
+    $sql = "SELECT COUNT(*) as count FROM patients WHERE DATE(created_at) = CURDATE() $branch_cond";
     $stmt = $db->prepare($sql); $stmt->execute($branch_params);
     $stats['today_patients'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     
-    $sql = "SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active' $p_branch";
+    $sql = "SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active' $branch_cond";
     $stmt = $db->prepare($sql); $stmt->execute($branch_params);
     $stats['total_doctors'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     
-    $sql = "SELECT COUNT(*) as count FROM users WHERE role = 'reception' AND status = 'active' $p_branch";
+    $sql = "SELECT COUNT(*) as count FROM users WHERE role = 'reception' AND status = 'active' $branch_cond";
     $stmt = $db->prepare($sql); $stmt->execute($branch_params);
     $stats['total_reception'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     
-    $al_branch = " AND branch_id = ?";
-    $sql = "SELECT COUNT(*) as count FROM activity_logs WHERE 1=1 $al_branch";
+    $sql = "SELECT COUNT(*) as count FROM activity_logs WHERE 1=1 $branch_cond";
     $stmt = $db->prepare($sql); $stmt->execute($branch_params);
     $stats['total_audit_logs'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     
-    $sql = "SELECT COUNT(*) as count FROM activity_logs WHERE DATE(created_at) = CURDATE() $al_branch";
+    $sql = "SELECT COUNT(*) as count FROM activity_logs WHERE DATE(created_at) = CURDATE() $branch_cond";
     $stmt = $db->prepare($sql); $stmt->execute($branch_params);
     $stats['today_audit_logs'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     
@@ -455,9 +402,7 @@ try {
     error_log("Stats error: " . $e->getMessage());
 }
 
-// ================================================================
-// V15.2: COMBINED CONSULTATION + PROCEDURES + EQUIPMENT + REGISTRATION
-// ================================================================
+// COMBINED
 $combined_consultation_revenue = 
     $stats['consultation_revenue'] + 
     $stats['procedure_revenue'] + 
@@ -470,9 +415,7 @@ $combined_consultation_count =
     $stats['equipment_count'] + 
     $stats['registration_count'];
 
-// ================================================================
-// MONTHLY SALES (12 months)
-// ================================================================
+// MONTHLY SALES
 $monthly_sales = [];
 $month_labels = [];
 $monthly_bills = [];
@@ -509,9 +452,7 @@ for ($i = 11; $i >= 0; $i--) {
     $monthly_sales[] = $bills_total + $otc_total;
 }
 
-// ================================================================
-// HOURLY SALES (Today)
-// ================================================================
+// HOURLY SALES
 $hourly_sales = [];
 for ($h = 0; $h < 24; $h++) {
     $hourly_sales[$h] = ['hour' => $h, 'total' => 0];
@@ -545,9 +486,7 @@ try {
     }
 } catch (Exception $e) {}
 
-// ================================================================
 // TOP MEDICINES
-// ================================================================
 $top_medicines = [];
 try {
     $sql = "SELECT bi.item_name as medication_name, 
@@ -567,19 +506,16 @@ try {
     $top_medicines = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-// ================================================================
 // DOCTOR PERFORMANCE
-// ================================================================
 $doctor_performance = [];
 try {
-    $d_branch = " AND u.branch_id = ?";
     $sql = "SELECT u.id, u.full_name as doctor_name, 
             COUNT(DISTINCT v.id) as total_visits,
             COUNT(DISTINCT p.id) as total_prescriptions
             FROM users u
             LEFT JOIN visits v ON v.doctor_id = u.id
             LEFT JOIN prescriptions p ON p.doctor_id = u.id
-            WHERE u.role = 'doctor' AND u.status = 'active' $d_branch
+            WHERE u.role = 'doctor' AND u.status = 'active' $branch_cond
             GROUP BY u.id, u.full_name 
             ORDER BY total_visits DESC 
             LIMIT 10";
@@ -587,27 +523,21 @@ try {
     $doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($doctors as $doc) {
-        $d_rev_branch = " AND b.branch_id = ?";
         $sql2 = "SELECT COALESCE(SUM(p.amount), 0) as total
                  FROM payments p
                  INNER JOIN bills b ON p.bill_id = b.id
                  INNER JOIN visits v ON b.visit_id = v.id
-                 WHERE v.doctor_id = ? $d_rev_branch";
-        $params2 = array_merge([$doc['id']], $branch_params);
+                 WHERE v.doctor_id = ? $b_branch_cond";
+        $params2 = array_merge([$doc['id']], $b_branch_params);
         $stmt2 = $db->prepare($sql2); $stmt2->execute($params2);
         $doc['total_revenue'] = (float)($stmt2->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
         $doctor_performance[] = $doc;
     }
 } catch (Exception $e) {}
 
-// ================================================================
 // RECENT TRANSACTIONS
-// ================================================================
 $recent_transactions = [];
 try {
-    $pay_branch = " AND p.branch_id = ?";
-    $otc_branch = " AND o.branch_id = ?";
-    
     $sql = "
         (SELECT 
             'payment' as trans_type,
@@ -631,7 +561,7 @@ try {
         WHERE b.patient_id IS NOT NULL 
         AND b.visit_id IS NOT NULL
         AND b.bill_number NOT LIKE 'BILL-OTC-%'
-        $pay_branch
+        $p_branch_cond
         ORDER BY p.received_at DESC 
         LIMIT 5)
         
@@ -655,7 +585,7 @@ try {
         FROM otc_sales o
         LEFT JOIN users u2 ON o.sold_by = u2.id
         WHERE o.payment_status IN ('paid', 'partial')
-        $otc_branch
+        $o_branch_cond
         ORDER BY o.updated_at DESC 
         LIMIT 5)
         
@@ -804,6 +734,39 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
     margin-top: 4px;
     position: relative;
     z-index: 1;
+}
+
+/* ✅ WELCOME BADGE - JINA LA MTUMIAJI */
+.welcome-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: linear-gradient(135deg, #FCD34D, #F59E0B);
+    color: #78350F;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 0.72rem;
+    font-weight: 800;
+    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 4px;
+    position: relative;
+    z-index: 1;
+}
+
+.welcome-badge i {
+    color: #78350F;
+    font-size: 0.8rem;
+}
+
+.welcome-badge .user-name {
+    background: rgba(255,255,255,0.4);
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-weight: 900;
+    text-transform: none;
+    letter-spacing: 0;
 }
 
 .page-header .role-badge {
@@ -1001,7 +964,6 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
     border: 1px solid rgba(124, 58, 237, 0.25);
 }
 
-/* CARD COLORS */
 .stat-card.revenue::before { background: linear-gradient(90deg, #0B5ED7, #3B82F6, #0B5ED7); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
 .stat-card.revenue:hover { border-color: #0B5ED7; }
 .stat-card.revenue .card-icon { background: linear-gradient(135deg, #0B5ED7, #3B82F6); }
@@ -1260,7 +1222,6 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
 .btn-action.view { background: rgba(11, 94, 215, 0.15); color: #0B5ED7; }
 .btn-action.view:hover { background: #0B5ED7; color: white; }
 
-/* DISCOUNT & PREMIUM CARD */
 .discount-premium-card {
     background: var(--bg-card);
     border-radius: 14px;
@@ -1387,6 +1348,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
 @media (max-width: 768px) {
     .page-header { padding: 16px 18px; }
     .page-header .page-title { font-size: 1.15rem; }
+    .welcome-badge { font-size: 0.65rem; padding: 5px 10px; }
     .stats-grid-8 { grid-template-columns: 1fr 1fr; gap: 10px; }
     .stat-card { padding: 12px; min-height: 115px; }
     .stat-card .card-value { font-size: 1.1rem; }
@@ -1407,9 +1369,16 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
     <!-- PAGE HEADER -->
     <div class="page-header">
         <div>
+            <!-- ✅ WELCOME BADGE - JINA LA MTUMIAJI -->
+            <div class="welcome-badge">
+                <i class="fas fa-hand-sparkles"></i>
+                Welcome,
+                <span class="user-name"><?= htmlspecialchars($user_full_name) ?></span>
+            </div>
+            
             <h1 class="page-title">
                 <i class="fas fa-shield-alt"></i>
-                Audit Dashboard V14
+                Audit Dashboard
                 <span class="role-badge"><i class="fas fa-user-shield"></i> AUDIT</span>
             </h1>
             <p class="page-subtitle">
@@ -1428,11 +1397,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
             </p>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="/dispensary_system/frontend/pages/audit/dashboard.php" 
-               class="btn-header" style="background: linear-gradient(135deg, #FCD34D, #F59E0B); color: #78350F; font-weight: 800;">
-                <i class="fas fa-arrow-left"></i> Back
-            </a>
-            <a href="revenue.php" class="btn-header">
+            <a href="/dispensary_system/frontend/pages/audit/revenue.php" class="btn-header">
                 <i class="fas fa-chart-line"></i> Reports
             </a>
             <button onclick="window.location.reload()" class="btn-header">
@@ -1488,7 +1453,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
             </div>
         </div>
 
-        <!-- CARD 3: PRESCRIPTION (V15.2 - GROSS, BILA ROUND OFF) -->
+        <!-- CARD 3: PRESCRIPTION (GROSS) -->
         <div class="stat-card prescription">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-prescription"></i></div>
@@ -1630,7 +1595,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
 
     </div>
 
-    <!-- DISCOUNT & PREMIUM - CARD MOJA -->
+    <!-- DISCOUNT & PREMIUM -->
     <div class="discount-premium-card">
         <div class="dp-header">
             <div class="dp-title">
@@ -1868,7 +1833,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                                     </td>
                                     <td style="text-align:center;">
                                         <?php if ($is_otc): ?>
-                                            <a href="view_otc.php?id=<?= $txn['id'] ?>" 
+                                            <a href="view_otc_sale.php?id=<?= $txn['id'] ?>" 
                                                class="btn-action view" title="View" target="_blank">
                                                 <i class="fas fa-eye"></i>
                                             </a>
@@ -2202,10 +2167,12 @@ if (breakdownCtx) {
     });
 }
 
-console.log('%c🔍 Audit Dashboard V14 - BRANCH LOCKED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Inaonyesha data za branch: <?= htmlspecialchars($user_branch_name) ?> (ID: <?= $selected_branch_id ?>)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ V15.2: Prescription = GROSS (Medication_RAW, bila discount, bila premium)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ V15.3: NAMBA KAMILI TU - hakuna decimals (.00, .02)', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c🔍 Audit Dashboard V16 - BRANCH LOCKED + WELCOME', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c👋 Welcome, <?= htmlspecialchars($user_full_name) ?>', 'font-size:14px; color:#F59E0B; font-weight:bold;');
+console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?> (ID: <?= $selected_branch_id ?>)', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c✅ Inaonyesha data za branch ya mtumiaji TU', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ V15.2: Prescription = GROSS', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ V15.3: NAMBA KAMILI TU', 'font-size:13px; color:#34D399; font-weight:bold;');
 console.log('%c💰 Total Revenue: <?= $currency ?> <?= number_format($stats['total_revenue'], 0, '.', ',') ?>', 'font-size:12px; color:#0B5ED7;');
 console.log('%c💊 Prescription (GROSS): <?= $currency ?> <?= number_format($stats['prescription_revenue'], 0, '.', ',') ?>', 'font-size:12px; color:#7C3AED; font-weight:bold;');
 console.log('%c📊 Patient Payments: <?= $currency ?> <?= number_format($stats['patient_payments_revenue'], 0, '.', ',') ?>', 'font-size:12px; color:#059669;');

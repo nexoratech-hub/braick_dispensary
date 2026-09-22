@@ -1,20 +1,14 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/revenue.php
-// AUDIT ROLE - REVENUE REPORT (BRANCH LOCKED V2 - ALIGNED WITH DASHBOARD)
-// ✅ Inaonyesha data za branch ya mtumiaji aliye login TU
-// ✅ ALIGNED WITH DASHBOARD V14
-// ✅ Patient Payments query inatumia patient_id + visit_id + NOT BILL-OTC-%
-// ✅ OTC query inatumia paid + partial
-// ✅ PRESCRIPTION CARD = GROSS PEKEE (bila discount, bila premium)
-// ✅ AUDIT role only - no Delete/Edit
-// ✅ 8 CARDS TU - Summary cards
-// ✅ Discount & Premium = CARD MOJA yenye width kubwa (grid 6 cols)
-// ✅ Patient Group Cards with BLUE BORDER
-// ✅ Visit Header 3-Row (info + DP cards + diagnosis)
-// ✅ OTC Sales as CARD per Sale
-// ✅ Expenses: scroll arrows kwenye header
-// ✅ Timezone: Africa/Dar_es_Salaam
+// AUDIT ROLE - REVENUE REPORT (V62 - FIX PENDING BILLS)
+// ================================================================
+// ✅ V62: FIX - Pending bills zinaonekana bila kuhitaji payments
+// ✅ V62: Pending filter inafanya kazi (bills zenye status pending)
+// ✅ V62: All filter inaonyesha pending + paid + partial
+// ✅ V61: Quick Filters (Today...Custom) JUU kabla ya Cards
+// ✅ V61: Patients Filter + Search CHINI ya Cards
+// ✅ V60: Live Search + Highlight ya njano
 // ================================================================
 
 date_default_timezone_set('Africa/Dar_es_Salaam');
@@ -28,7 +22,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     exit;
 }
 
-// AUDIT ROLE ONLY
 if ($_SESSION['role'] !== 'audit') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -51,7 +44,6 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ✅ LAZIMISHA branch ya mtumiaji aliye login TU
 $selected_branch_id = (int)$user_branch_id;
 
 require_once __DIR__ . '/../../../backend/config/database.php';
@@ -71,7 +63,19 @@ function roundTo50($value) {
     return round($value / 50) * 50;
 }
 
-// CURRENCY
+function highlightSearchTerm($text, $search) {
+    if (empty($search) || $text === null || $text === '') {
+        return htmlspecialchars($text ?? '');
+    }
+    $escaped = htmlspecialchars($text);
+    $searchEscaped = preg_quote($search, '/');
+    return preg_replace(
+        '/(' . $searchEscaped . ')/iu',
+        '<mark class="search-highlight">$1</mark>',
+        $escaped
+    );
+}
+
 $currency = 'TSh';
 try {
     $stmt = $db->query("SELECT setting_value FROM system_settings WHERE setting_key = 'currency'");
@@ -79,7 +83,6 @@ try {
     if ($row && !empty($row['setting_value'])) $currency = $row['setting_value'];
 } catch (Exception $e) {}
 
-// BRANCH NAME
 $branch_name_display = $user_branch_name;
 try {
     $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
@@ -88,64 +91,72 @@ try {
     if ($branch_data) $branch_name_display = $branch_data['name'];
 } catch (Exception $e) {}
 
-// FILTERS
 $quick_filter = $_GET['quick'] ?? 'all';
+$patient_filter = $_GET['patient_filter'] ?? 'all';
 $date_from = $_GET['date_from'] ?? date('Y-m-d');
 $date_to = $_GET['date_to'] ?? date('Y-m-d');
 $payment_method = $_GET['payment_method'] ?? 'all';
 $search = trim($_GET['search'] ?? '');
 
-// CALENDAR DAY FILTER
 $date_cond_payments = ""; $date_cond_otc = ""; $date_cond_exp = "";
-$date_params = []; $date_label = "";
+$date_cond_bills = "";
+$date_params = []; $date_params_bills = []; $date_label = "";
 
 switch ($quick_filter) {
     case 'today':
         $date_cond_payments = " AND DATE(p.{$payments_date_col}) = CURDATE()";
         $date_cond_otc = " AND DATE(o.{$otc_date_col}) = CURDATE()";
         $date_cond_exp = " AND DATE(e.{$expenses_date_col}) = CURDATE()";
+        $date_cond_bills = " AND DATE(b.created_at) = CURDATE()";
         $date_label = "Today • " . date('d M Y');
         break;
     case 'yesterday':
         $date_cond_payments = " AND DATE(p.{$payments_date_col}) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
         $date_cond_otc = " AND DATE(o.{$otc_date_col}) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
         $date_cond_exp = " AND DATE(e.{$expenses_date_col}) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
+        $date_cond_bills = " AND DATE(b.created_at) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
         $date_label = "Yesterday • " . date('d M Y', strtotime('-1 day'));
         break;
     case '1d':
         $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 24 HOUR)";
         $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 24 HOUR)";
         $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
+        $date_cond_bills = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)";
         $date_label = "Last 24 Hours";
         break;
     case '1w':
         $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
         $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
         $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)";
+        $date_cond_bills = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
         $date_label = "Last 7 Days";
         break;
     case '1m':
         $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)";
+        $date_cond_bills = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         $date_label = "Last 1 Month";
         break;
     case '3m':
         $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
         $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
         $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)";
+        $date_cond_bills = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
         $date_label = "Last 3 Months";
         break;
     case '6m':
         $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
         $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
         $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)";
+        $date_cond_bills = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
         $date_label = "Last 6 Months";
         break;
     case '1y':
         $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
         $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
         $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)";
+        $date_cond_bills = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
         $date_label = "Last 1 Year";
         break;
     case 'all':
@@ -155,7 +166,9 @@ switch ($quick_filter) {
         $date_cond_payments = " AND DATE(p.{$payments_date_col}) BETWEEN ? AND ?";
         $date_cond_otc = " AND DATE(o.{$otc_date_col}) BETWEEN ? AND ?";
         $date_cond_exp = " AND DATE(e.{$expenses_date_col}) BETWEEN ? AND ?";
+        $date_cond_bills = " AND DATE(b.created_at) BETWEEN ? AND ?";
         $date_params = [$date_from, $date_to];
+        $date_params_bills = [$date_from, $date_to];
         $date_label = date('d M Y', strtotime($date_from)) . ' → ' . date('d M Y', strtotime($date_to));
         break;
     default:
@@ -169,22 +182,18 @@ if ($payment_method !== 'all') {
     $pay_params = [$payment_method];
 }
 
-// ================================================================
-// ✅ BRANCH CONDITIONS
-// ================================================================
 $branch_cond_p = " AND p.branch_id = ?";
 $branch_cond_o = " AND o.branch_id = ?";
 $branch_cond_e = " AND e.branch_id = ?";
 $branch_cond_bi = " AND bi.branch_id = ?";
+$branch_cond_b = " AND b.branch_id = ?";
 $branch_params_p = [$selected_branch_id];
 $branch_params_o = [$selected_branch_id];
 $branch_params_e = [$selected_branch_id];
 $branch_params_bi = [$selected_branch_id];
+$branch_params_b = [$selected_branch_id];
 
-// ================================================================
-// ✅ PATIENT PAYMENTS - ALIGNED WITH DASHBOARD
-// (patient_id NOT NULL, visit_id NOT NULL, NOT BILL-OTC-%)
-// ================================================================
+// PATIENT PAYMENTS
 $patient_bills_revenue = 0; $patient_bills_count = 0;
 try {
     $sql = "SELECT COALESCE(SUM(p.amount), 0) as total, COUNT(*) as count 
@@ -202,9 +211,7 @@ try {
     $patient_bills_count = (int)($data['count'] ?? 0);
 } catch (Exception $e) {}
 
-// ================================================================
-// ✅ OTC REVENUE - ALIGNED WITH DASHBOARD (paid + partial)
-// ================================================================
+// OTC REVENUE
 $otc_revenue = 0; $otc_count = 0;
 try {
     $sql = "SELECT COALESCE(SUM(o.total_amount), 0) as total, COUNT(*) as count 
@@ -217,9 +224,60 @@ try {
     $otc_count = (int)($data['count'] ?? 0);
 } catch (Exception $e) {}
 
-// ================================================================
-// BREAKDOWN (GROSS - total_price bila discount)
-// ================================================================
+// PENDING & PARTIAL
+$pending_bills_amount = 0; $pending_bills_count = 0;
+try {
+    $sql = "SELECT COALESCE(SUM(b.total_amount - COALESCE(b.paid_amount, 0)), 0) as total, COUNT(*) as count 
+            FROM bills b
+            WHERE b.patient_id IS NOT NULL AND b.visit_id IS NOT NULL
+            AND b.bill_number NOT LIKE 'BILL-OTC-%' AND b.status = 'pending'
+            AND b.branch_id = ?";
+    $stmt = $db->prepare($sql);
+    $stmt->execute([$selected_branch_id]);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $pending_bills_amount = (float)($data['total'] ?? 0);
+    $pending_bills_count = (int)($data['count'] ?? 0);
+} catch (Exception $e) {}
+
+$partial_remaining = 0; $partial_bills_count = 0;
+try {
+    $sql = "SELECT COALESCE(SUM(b.total_amount - COALESCE(b.paid_amount, 0)), 0) as total, COUNT(*) as count 
+            FROM bills b
+            WHERE b.patient_id IS NOT NULL AND b.visit_id IS NOT NULL
+            AND b.bill_number NOT LIKE 'BILL-OTC-%' AND b.status = 'partial'
+            AND b.branch_id = ?";
+    $stmt = $db->prepare($sql);
+    $stmt->execute([$selected_branch_id]);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $partial_remaining = (float)($data['total'] ?? 0);
+    $partial_bills_count = (int)($data['count'] ?? 0);
+} catch (Exception $e) {}
+
+$pending_otc_amount = 0; $pending_otc_count = 0;
+try {
+    $sql = "SELECT COALESCE(SUM(o.total_amount), 0) as total, COUNT(*) as count 
+            FROM otc_sales o WHERE o.payment_status = 'pending' AND o.branch_id = ?";
+    $stmt = $db->prepare($sql);
+    $stmt->execute([$selected_branch_id]);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $pending_otc_amount = (float)($data['total'] ?? 0);
+    $pending_otc_count = (int)($data['count'] ?? 0);
+} catch (Exception $e) {}
+
+$partial_otc_amount = 0; $partial_otc_count = 0;
+try {
+    $sql = "SELECT COALESCE(SUM(o.total_amount), 0) as total, COUNT(*) as count 
+            FROM otc_sales o WHERE o.payment_status = 'partial' AND o.branch_id = ?";
+    $stmt = $db->prepare($sql);
+    $stmt->execute([$selected_branch_id]);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $partial_otc_amount = (float)($data['total'] ?? 0);
+    $partial_otc_count = (int)($data['count'] ?? 0);
+} catch (Exception $e) {}
+
+$total_pending = $pending_bills_amount + $partial_remaining + $pending_otc_amount + $partial_otc_amount;
+
+// BREAKDOWN
 $breakdown_types = ['consultation', 'lab_test', 'procedure', 'medication', 'registration', 'equipment'];
 $breakdown_data = [];
 foreach ($breakdown_types as $type) {
@@ -232,10 +290,8 @@ foreach ($breakdown_types as $type) {
                 AND b.bill_number NOT LIKE 'BILL-OTC-%' AND b.status IN ('paid', 'partial')
                 AND b.id IN (SELECT DISTINCT p.bill_id FROM payments p 
                     INNER JOIN bills b2 ON p.bill_id = b2.id
-                    WHERE p.bill_id IS NOT NULL
-                    AND b2.patient_id IS NOT NULL
-                    AND b2.visit_id IS NOT NULL
-                    AND b2.bill_number NOT LIKE 'BILL-OTC-%'
+                    WHERE p.bill_id IS NOT NULL AND b2.patient_id IS NOT NULL
+                    AND b2.visit_id IS NOT NULL AND b2.bill_number NOT LIKE 'BILL-OTC-%'
                     $branch_cond_p $date_cond_payments $pay_cond_payments)
                 $branch_cond_bi";
         $stmt = $db->prepare($sql);
@@ -245,9 +301,7 @@ foreach ($breakdown_types as $type) {
     } catch (Exception $e) {}
 }
 
-// ================================================================
 // DISCOUNTS + PREMIUMS
-// ================================================================
 $patient_discounts = 0; $patient_premiums = 0;
 $pharmacy_discounts = 0; $cashier_discounts = 0;
 $pharmacy_premiums = 0; $cashier_premiums = 0;
@@ -263,10 +317,8 @@ try {
               AND b.bill_number NOT LIKE 'BILL-OTC-%' AND b.status IN ('paid', 'partial')
               AND b.id IN (SELECT DISTINCT p.bill_id FROM payments p 
                   INNER JOIN bills b2 ON p.bill_id = b2.id
-                  WHERE p.bill_id IS NOT NULL
-                  AND b2.patient_id IS NOT NULL
-                  AND b2.visit_id IS NOT NULL
-                  AND b2.bill_number NOT LIKE 'BILL-OTC-%'
+                  WHERE p.bill_id IS NOT NULL AND b2.patient_id IS NOT NULL
+                  AND b2.visit_id IS NOT NULL AND b2.bill_number NOT LIKE 'BILL-OTC-%'
                   $branch_cond_p $date_cond_payments $pay_cond_payments)";
     $stmt = $db->prepare($sql);
     $stmt->execute(array_merge($branch_params_p, $date_params, $pay_params));
@@ -295,7 +347,7 @@ try {
 $total_discounts = $patient_discounts + $otc_discounts;
 $total_premiums = $patient_premiums + $otc_premiums;
 
-// CATEGORIES - GROSS
+// CATEGORIES
 $consultation_revenue = $breakdown_data['consultation']['revenue'];
 $consultation_count = $breakdown_data['consultation']['count'];
 $lab_revenue = $breakdown_data['lab_test']['revenue'];
@@ -309,7 +361,6 @@ $registration_count = $breakdown_data['registration']['count'];
 $equipment_revenue = $breakdown_data['equipment']['revenue'];
 $equipment_count = $breakdown_data['equipment']['count'];
 
-// PRESCRIPTION = GROSS PEKEE
 $prescription_gross = $medication_revenue_raw;
 $prescription_revenue = $prescription_gross;
 $prescription_count = $medication_count;
@@ -338,7 +389,6 @@ try {
 $net_profit = $total_revenue - $total_expenses;
 $profit_percentage = ($total_revenue > 0) ? round(($net_profit / $total_revenue) * 100, 1) : 0;
 
-// ROUND - FINAL
 $patient_bills_revenue_rounded = roundTo50($patient_bills_revenue);
 $otc_revenue_rounded = roundTo50($otc_revenue);
 $total_revenue = roundTo50($total_revenue);
@@ -365,6 +415,12 @@ $equipment_revenue = roundTo50($equipment_revenue);
 $clinical_services_revenue = roundTo50($clinical_services_revenue);
 
 $breakdown_total = roundTo50($breakdown_total_raw);
+
+$pending_bills_amount = roundTo50($pending_bills_amount);
+$partial_remaining = roundTo50($partial_remaining);
+$pending_otc_amount = roundTo50($pending_otc_amount);
+$partial_otc_amount = roundTo50($partial_otc_amount);
+$total_pending = roundTo50($total_pending);
 
 // OTC SALES LIST
 $otc_sales_list = [];
@@ -414,7 +470,14 @@ try {
 }
 
 // ================================================================
-// PATIENT-GROUPED BILLS - ALIGNED WITH DASHBOARD
+// ✅ V62: PATIENT-GROUPED BILLS - FIX PENDING BILLS
+// ================================================================
+// TATIZO LA V61: Query ilikuwa na `IN (SELECT ... FROM payments)` 
+// ambayo ilifuta pending bills (hazina payments).
+//
+// SULUHISHO: Kwa 'pending' filter, HATUTUMII payments condition.
+// Kwa 'all' filter, tunaonyesha pending pia.
+// Kwa 'paid'/'partial', tunatumia payments condition.
 // ================================================================
 $patient_groups = [];
 
@@ -422,8 +485,53 @@ try {
     $search_patient = "";
     $search_patient_params = [];
     if (!empty($search)) {
-        $search_patient = " AND (pat.full_name LIKE ? OR pat.patient_id LIKE ? OR b.bill_number LIKE ?)";
-        $search_patient_params = ["%$search%", "%$search%", "%$search%"];
+        $search_patient = " AND (
+            pat.full_name LIKE ? 
+            OR pat.patient_id LIKE ? 
+            OR pat.phone LIKE ? 
+            OR b.bill_number LIKE ?
+            OR v.visit_number LIKE ?
+        )";
+        $search_patient_params = [
+            "%$search%", "%$search%", "%$search%", "%$search%", "%$search%"
+        ];
+    }
+
+    // ✅ V62: Patient filter condition
+    $patient_filter_cond = "";
+    if ($patient_filter === 'partial') {
+        $patient_filter_cond = " AND b.status = 'partial'";
+    } elseif ($patient_filter === 'pending') {
+        $patient_filter_cond = " AND b.status = 'pending'";
+    } elseif ($patient_filter === 'paid') {
+        $patient_filter_cond = " AND b.status = 'paid'";
+    }
+    // 'all' - hakuna cond, inaonyesha zote
+
+    // ✅ V62: Payment requirement - TUNAPUNGUKA KWA PENDING/ALL
+    // Kwa paid/partial: inahitaji payment (ndio zilizolipwa)
+    // Kwa pending: HAITAJI payment (hazijalipwa bado)
+    // Kwa all: HAITAJI payment (tunataka pia pending zionekane)
+    $payment_require_cond = "";
+    $extra_params_payment = [];
+    
+    if ($patient_filter === 'paid' || $patient_filter === 'partial') {
+        // Kwa paid/partial — inahitaji payment kweli
+        $payment_require_cond = " AND b.id IN (SELECT DISTINCT p.bill_id FROM payments p 
+            INNER JOIN bills b2 ON p.bill_id = b2.id
+            WHERE p.bill_id IS NOT NULL 
+            AND b2.patient_id IS NOT NULL
+            AND b2.visit_id IS NOT NULL
+            AND b2.bill_number NOT LIKE 'BILL-OTC-%'
+            $branch_cond_p $date_cond_payments $pay_cond_payments)";
+        
+        // ✅ Tunahitaji params za payment kwa filter hii
+        $extra_params_payment = array_merge($branch_params_p, $date_params, $pay_params);
+    } else {
+        // Kwa 'pending' na 'all' — HAITAJI payment
+        // Pending bills hazina payments, hivyo lazima zionekane
+        $payment_require_cond = "";
+        $extra_params_payment = [];
     }
 
     $sql_bills = "SELECT b.id as bill_id, b.bill_number, b.patient_id as patient_db_id, b.visit_id,
@@ -443,20 +551,33 @@ try {
                 LEFT JOIN visits v ON b.visit_id = v.id
                 LEFT JOIN users u_doctor ON v.doctor_id = u_doctor.id
                 LEFT JOIN users u_reception ON v.receptionist_id = u_reception.id
-                WHERE b.patient_id IS NOT NULL AND b.visit_id IS NOT NULL
-                AND b.bill_number NOT LIKE 'BILL-OTC-%' AND b.status IN ('paid', 'partial')
-                AND b.id IN (SELECT DISTINCT p.bill_id FROM payments p 
-                    INNER JOIN bills b2 ON p.bill_id = b2.id
-                    WHERE p.bill_id IS NOT NULL
-                    AND b2.patient_id IS NOT NULL
-                    AND b2.visit_id IS NOT NULL
-                    AND b2.bill_number NOT LIKE 'BILL-OTC-%'
-                    $branch_cond_p $date_cond_payments $pay_cond_payments)
+                WHERE b.patient_id IS NOT NULL 
+                AND b.visit_id IS NOT NULL
+                AND b.bill_number NOT LIKE 'BILL-OTC-%' 
+                AND b.status IN ('paid', 'partial', 'pending')
+                $branch_cond_b
+                $date_cond_bills
+                $patient_filter_cond
                 $search_patient
-                ORDER BY pat.full_name ASC, v.visit_date DESC, b.created_at DESC LIMIT 200";
+                $payment_require_cond
+                ORDER BY pat.full_name ASC, v.visit_date DESC, b.created_at DESC 
+                LIMIT 200";
 
     $stmt = $db->prepare($sql_bills);
-    $stmt->execute(array_merge($branch_params_p, $date_params, $pay_params, $search_patient_params));
+    
+    // ✅ Params: 
+    // [branch, dates, search] + (payment params ikiwa paid/partial)
+    $final_params = array_merge(
+        $branch_params_b, 
+        $date_params_bills, 
+        $search_patient_params
+    );
+    
+    if (!empty($extra_params_payment)) {
+        $final_params = array_merge($final_params, $extra_params_payment);
+    }
+    
+    $stmt->execute($final_params);
     $bills_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($bills_data as $bill) {
@@ -474,13 +595,20 @@ try {
                 'visits' => [],
                 'total_paid' => 0,
                 'total_billed' => 0,
-                'total_balance' => 0
+                'total_balance' => 0,
+                'has_partial' => false,
+                'has_pending' => false,
+                'has_paid' => false
             ];
         }
 
         $patient_groups[$patient_key]['total_paid'] += (float)$bill['paid_amount'];
         $patient_groups[$patient_key]['total_billed'] += (float)$bill['total_amount'];
         $patient_groups[$patient_key]['total_balance'] += (float)$bill['balance'];
+        
+        if ($bill['bill_status'] === 'partial') $patient_groups[$patient_key]['has_partial'] = true;
+        if ($bill['bill_status'] === 'pending') $patient_groups[$patient_key]['has_pending'] = true;
+        if ($bill['bill_status'] === 'paid') $patient_groups[$patient_key]['has_paid'] = true;
 
         if (!isset($patient_groups[$patient_key]['visits'][$visit_key])) {
             $patient_groups[$patient_key]['visits'][$visit_key] = [
@@ -499,10 +627,16 @@ try {
                 'bills' => [],
                 'items' => [],
                 'visit_total' => 0,
+                'visit_paid' => 0,
+                'visit_balance' => 0,
                 'pharmacy_discount' => 0,
                 'cashier_discount' => 0,
                 'pharmacy_premium' => 0,
                 'cashier_premium' => 0,
+                'paid_items_count' => 0,
+                'paid_items_total' => 0,
+                'pending_items_count' => 0,
+                'pending_items_total' => 0,
                 'items_by_category' => [
                     'consultation' => [], 'lab_test' => [], 'medication' => [],
                     'procedure' => [], 'equipment' => [], 'registration' => [], 'other' => []
@@ -511,6 +645,8 @@ try {
         }
 
         $patient_groups[$patient_key]['visits'][$visit_key]['visit_total'] += (float)$bill['total_amount'];
+        $patient_groups[$patient_key]['visits'][$visit_key]['visit_paid'] += (float)$bill['paid_amount'];
+        $patient_groups[$patient_key]['visits'][$visit_key]['visit_balance'] += (float)$bill['balance'];
         $patient_groups[$patient_key]['visits'][$visit_key]['pharmacy_discount'] += (float)($bill['pharmacy_discount'] ?? 0);
         $patient_groups[$patient_key]['visits'][$visit_key]['cashier_discount'] += (float)($bill['cashier_discount'] ?? 0);
         $patient_groups[$patient_key]['visits'][$visit_key]['pharmacy_premium'] += (float)($bill['pharmacy_premium'] ?? 0);
@@ -559,6 +695,19 @@ try {
 
             $patient_groups[$patient_key]['visits'][$visit_key]['items_by_category'][$item_type][] = $item;
             $patient_groups[$patient_key]['visits'][$visit_key]['items'][] = $item;
+
+            $item_status = strtolower($item['item_status'] ?? 'pending');
+            $item_amount = (float)($item['total_price'] ?? 0);
+            $item_discount = (float)($item['discount_amount'] ?? 0);
+            $item_final = $item_amount - $item_discount;
+            
+            if ($item_status === 'paid') {
+                $patient_groups[$patient_key]['visits'][$visit_key]['paid_items_count']++;
+                $patient_groups[$patient_key]['visits'][$visit_key]['paid_items_total'] += $item_final;
+            } else {
+                $patient_groups[$patient_key]['visits'][$visit_key]['pending_items_count']++;
+                $patient_groups[$patient_key]['visits'][$visit_key]['pending_items_total'] += $item_final;
+            }
         }
     }
 
@@ -599,14 +748,10 @@ for ($i = 11; $i >= 0; $i--) {
     $p_e = [$month, $selected_branch_id];
 
     $sql = "SELECT COALESCE(SUM(p.amount), 0) as total 
-            FROM payments p 
-            INNER JOIN bills b ON p.bill_id = b.id 
-            WHERE p.bill_id IS NOT NULL 
-            AND b.patient_id IS NOT NULL 
-            AND b.visit_id IS NOT NULL 
-            AND b.bill_number NOT LIKE 'BILL-OTC-%' 
-            AND DATE_FORMAT(p.{$payments_date_col}, '%Y-%m') = ? 
-            AND p.branch_id = ?";
+            FROM payments p INNER JOIN bills b ON p.bill_id = b.id 
+            WHERE p.bill_id IS NOT NULL AND b.patient_id IS NOT NULL 
+            AND b.visit_id IS NOT NULL AND b.bill_number NOT LIKE 'BILL-OTC-%' 
+            AND DATE_FORMAT(p.{$payments_date_col}, '%Y-%m') = ? AND p.branch_id = ?";
     $stmt = $db->prepare($sql); $stmt->execute($p_p);
     $monthly_patient[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
@@ -628,14 +773,10 @@ for ($i = 29; $i >= 0; $i--) {
     $p_o = [$date, $selected_branch_id];
 
     $sql = "SELECT COALESCE(SUM(p.amount), 0) as total 
-            FROM payments p 
-            INNER JOIN bills b ON p.bill_id = b.id 
-            WHERE p.bill_id IS NOT NULL 
-            AND b.patient_id IS NOT NULL 
-            AND b.visit_id IS NOT NULL 
-            AND b.bill_number NOT LIKE 'BILL-OTC-%' 
-            AND DATE(p.{$payments_date_col}) = ? 
-            AND p.branch_id = ?";
+            FROM payments p INNER JOIN bills b ON p.bill_id = b.id 
+            WHERE p.bill_id IS NOT NULL AND b.patient_id IS NOT NULL 
+            AND b.visit_id IS NOT NULL AND b.bill_number NOT LIKE 'BILL-OTC-%' 
+            AND DATE(p.{$payments_date_col}) = ? AND p.branch_id = ?";
     $stmt = $db->prepare($sql); $stmt->execute($p_p);
     $daily_patient[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
@@ -655,7 +796,7 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Revenue Report • Braick Audit</title>
+<title>Revenue Report V62 • Braick Audit</title>
 <link rel="icon" href="<?= $logo_path ?>" type="image/png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -681,6 +822,7 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
     --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
     --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
     --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
+    --shadow-xl: 0 20px 50px rgba(0,0,0,0.15);
     --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px; --radius-xl: 20px; --radius-full: 9999px;
 }
 [data-theme="dark"] {
@@ -693,9 +835,36 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { scroll-behavior: smooth; }
-body { font-family: var(--font-primary); background: var(--bg-body); color: var(--text-primary); -webkit-font-smoothing: antialiased; line-height: 1.5; min-height: 100vh; }
+body { font-family: var(--font-primary); background: var(--bg-body); color: var(--text-primary); -webkit-font-smoothing: antialiased; line-height: 1.5; min-height: 100vh; animation: fadeIn 0.3s ease-in; }
+@keyframes fadeIn { from { opacity: 0.85; } to { opacity: 1; } }
 
 .money-number, .stat-value, .money-cell, .font-mono, .card-value { font-family: var(--font-mono) !important; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+
+mark.search-highlight {
+    background: linear-gradient(135deg, #FEF08A, #FDE047);
+    color: #78350F;
+    font-weight: 900;
+    padding: 1px 4px;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(250, 204, 21, 0.4);
+    animation: highlightPulse 0.6s ease-out;
+    border: 1px solid rgba(250, 204, 21, 0.6);
+}
+@keyframes highlightPulse {
+    0% { background: #FDE047; transform: scale(1.15); box-shadow: 0 0 12px rgba(250, 204, 21, 0.8); }
+    100% { background: linear-gradient(135deg, #FEF08A, #FDE047); transform: scale(1); }
+}
+.live-search-active {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 6px;
+    background: linear-gradient(135deg, #FDE047, #FACC15);
+    color: #78350F; font-size: 0.6rem; font-weight: 900;
+    text-transform: uppercase; animation: livePulse 1.5s infinite; margin-left: 8px;
+}
+@keyframes livePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+.search-input-wrapper.live-typing input { border-color: #FACC15; box-shadow: 0 0 0 4px rgba(250, 204, 21, 0.2); }
+.patient-group-card[style*="display: none"] { display: none !important; }
+.patient-group-card { transition: opacity 0.2s ease, transform 0.2s ease; }
 
 .page-header { background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #7C3AED 100%); border-radius: var(--radius-lg); padding: 24px 28px; margin-bottom: 20px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; box-shadow: 0 10px 40px rgba(11, 94, 215, 0.35); position: relative; overflow: hidden; }
 .page-header::before { content: ''; position: absolute; top: -50%; right: -10%; width: 400px; height: 400px; background: radial-gradient(circle, rgba(255,255,255,0.12) 0%, transparent 70%); border-radius: 50%; pointer-events: none; }
@@ -704,21 +873,146 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .page-header .page-subtitle { color: rgba(255,255,255,0.9); font-size: 0.8rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; position: relative; z-index: 1; }
 .branch-tag { background: rgba(255,255,255,0.15); color: white; padding: 4px 12px; border-radius: var(--radius-full); font-size: 0.68rem; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.15); }
 .branch-tag.filter-tag { background: linear-gradient(135deg, #10B981, #059669); border-color: rgba(255,255,255,0.25); font-weight: 800; }
-.branch-tag.user-tag { background: linear-gradient(135deg, #FCD34D, #F59E0B); color: #78350F; font-weight: 800; box-shadow: 0 2px 8px rgba(252, 211, 77, 0.3); }
+.branch-tag.user-tag { background: linear-gradient(135deg, #FCD34D, #F59E0B); color: #78350F; font-weight: 800; }
+.branch-tag.live-tag { background: linear-gradient(135deg, #FDE047, #FACC15); color: #78350F; font-weight: 900; }
 .btn-header { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.25); padding: 10px 16px; border-radius: var(--radius-sm); font-weight: 700; font-size: 0.75rem; transition: all 0.25s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; backdrop-filter: blur(10px); position: relative; z-index: 1; cursor: pointer; }
-.btn-header:hover { background: rgba(255,255,255,0.3); transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.2); }
+.btn-header:hover { background: rgba(255,255,255,0.3); transform: translateY(-2px); }
 
-.filter-card { background: var(--bg-card); border-radius: var(--radius-lg); padding: 18px 20px; border: 1px solid var(--border-color); margin-bottom: 20px; box-shadow: var(--shadow-sm); }
-.filter-section { margin-bottom: 14px; }
-.filter-section:last-child { margin-bottom: 0; }
-.filter-section-title { font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary); margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
-.quick-filters { display: flex; gap: 8px; flex-wrap: wrap; }
-.quick-btn { padding: 8px 14px; border-radius: var(--radius-sm); border: 1.5px solid var(--border-color); background: var(--bg-card); color: var(--text-secondary); font-weight: 700; font-size: 0.72rem; cursor: pointer; transition: all 0.25s; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; white-space: nowrap; }
-.quick-btn:hover { border-color: var(--primary); color: var(--primary); transform: translateY(-2px); }
-.quick-btn.active { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: white; border-color: transparent; box-shadow: 0 6px 16px rgba(11, 94, 215, 0.35); }
+.quick-filters-card {
+    background: var(--bg-card);
+    border-radius: var(--radius-lg);
+    padding: 18px 22px;
+    border: 2px solid var(--primary);
+    margin-bottom: 20px;
+    box-shadow: 0 6px 24px rgba(11, 94, 215, 0.15);
+    position: relative;
+    overflow: hidden;
+}
+.quick-filters-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #0B5ED7, #3B82F6, #7C3AED, #3B82F6, #0B5ED7);
+    background-size: 200% 100%;
+    animation: shimmer 3s infinite linear;
+}
+.quick-filters-card .qfc-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 2px dashed var(--border-color);
+}
+.quick-filters-card .qfc-title {
+    font-size: 0.95rem;
+    font-weight: 900;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.quick-filters-card .qfc-title .qfc-icon {
+    width: 38px; height: 38px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #0B5ED7, #3B82F6);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+}
+.quick-filters-card .qfc-count {
+    font-size: 0.7rem;
+    font-weight: 800;
+    background: var(--primary-bg);
+    color: var(--primary);
+    padding: 5px 12px;
+    border-radius: 20px;
+    border: 1.5px solid rgba(11, 94, 215, 0.25);
+}
+.filter-section-title {
+    font-size: 0.75rem;
+    font-weight: 900;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    margin-bottom: 8px;
+}
+.filter-section-title i { color: var(--primary); font-size: 0.85rem; }
+.quick-filters { 
+    display: flex; 
+    gap: 10px; 
+    flex-wrap: wrap; 
+    padding: 14px 16px;
+    background: linear-gradient(135deg, rgba(11, 94, 215, 0.04), rgba(124, 58, 237, 0.02));
+    border-radius: 14px;
+    border: 1.5px dashed var(--border-color);
+}
+.quick-btn { 
+    padding: 10px 18px; 
+    border-radius: 25px; 
+    border: 2px solid var(--border-color); 
+    background: var(--bg-card); 
+    color: var(--text-secondary); 
+    font-weight: 800; 
+    font-size: 0.72rem; 
+    cursor: pointer; 
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
+    display: inline-flex; 
+    align-items: center; 
+    gap: 7px; 
+    text-decoration: none; 
+    white-space: nowrap;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+}
+.quick-btn::before {
+    content: '';
+    position: absolute;
+    top: 0; left: -100%;
+    width: 100%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+    transition: left 0.5s ease;
+}
+.quick-btn:hover::before { left: 100%; }
+.quick-btn:hover { border-color: var(--primary); color: var(--primary); transform: translateY(-3px); box-shadow: 0 8px 20px rgba(11, 94, 215, 0.2); }
+.quick-btn.active { background: linear-gradient(135deg, var(--primary), var(--primary-dark), var(--purple)); color: white; border-color: transparent; box-shadow: 0 8px 24px rgba(11, 94, 215, 0.4), 0 0 0 3px rgba(11, 94, 215, 0.15); transform: translateY(-2px); }
+.quick-btn.active i { animation: pulseIcon 1.5s infinite; }
+@keyframes pulseIcon { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.15); } }
+
+.custom-date-row {
+    padding: 12px 16px;
+    background: var(--bg-body);
+    border-radius: 10px;
+    border: 2px solid var(--primary);
+    margin-top: 14px;
+    display: grid;
+    grid-template-columns: 1fr 1fr auto auto;
+    gap: 10px;
+    align-items: end;
+}
+
+.auto-filter-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 10px 18px; border-radius: 10px;
+    background: linear-gradient(135deg, #059669, #047857);
+    color: white; font-weight: 800; font-size: 0.78rem;
+    height: 44px; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+    white-space: nowrap;
+}
+.auto-filter-badge i { animation: pulseIcon 1.5s infinite; }
 
 .stats-grid-8 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
-
 .stat-card { background: var(--bg-card); border-radius: 14px; padding: 14px 16px; border: 2px solid var(--border-color); transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: var(--shadow-sm); position: relative; overflow: hidden; cursor: pointer; min-height: 130px; display: flex; flex-direction: column; justify-content: space-between; }
 .stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; transition: height 0.3s ease; }
 .stat-card:hover::before { height: 5px; }
@@ -740,43 +1034,36 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .stat-card.revenue .card-icon { background: linear-gradient(135deg, #0B5ED7, #3B82F6); }
 .stat-card.revenue .card-badge { background: var(--primary-bg); color: var(--primary); }
 .stat-card.revenue .card-value { color: var(--primary); }
-
 .stat-card.payments::before { background: linear-gradient(90deg, #059669, #34D399, #059669); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
 .stat-card.payments:hover { border-color: #059669; }
 .stat-card.payments .card-icon { background: linear-gradient(135deg, #059669, #34D399); }
 .stat-card.payments .card-badge { background: var(--success-bg); color: var(--success); }
 .stat-card.payments .card-value { color: var(--success); }
-
 .stat-card.prescription::before { background: linear-gradient(90deg, #7C3AED, #A78BFA, #7C3AED); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
 .stat-card.prescription:hover { border-color: #7C3AED; }
 .stat-card.prescription .card-icon { background: linear-gradient(135deg, #7C3AED, #A78BFA); }
 .stat-card.prescription .card-badge { background: var(--purple-bg); color: var(--purple); }
 .stat-card.prescription .card-value { color: var(--purple); }
-
 .stat-card.otc::before { background: linear-gradient(90deg, #0891B2, #06B6D4, #0891B2); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
 .stat-card.otc:hover { border-color: #0891B2; }
 .stat-card.otc .card-icon { background: linear-gradient(135deg, #0891B2, #06B6D4); }
 .stat-card.otc .card-badge { background: var(--cyan-bg); color: var(--cyan); }
 .stat-card.otc .card-value { color: var(--cyan); }
-
 .stat-card.lab::before { background: linear-gradient(90deg, #3B82F6, #93C5FD, #3B82F6); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
 .stat-card.lab:hover { border-color: #3B82F6; }
 .stat-card.lab .card-icon { background: linear-gradient(135deg, #3B82F6, #93C5FD); }
 .stat-card.lab .card-badge { background: var(--primary-soft); color: var(--primary); }
 .stat-card.lab .card-value { color: var(--primary); }
-
 .stat-card.consultation::before { background: linear-gradient(90deg, #059669, #34D399, #059669); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
 .stat-card.consultation:hover { border-color: #059669; }
 .stat-card.consultation .card-icon { background: linear-gradient(135deg, #059669, #34D399); }
 .stat-card.consultation .card-badge { background: var(--success-bg); color: var(--success); }
 .stat-card.consultation .card-value { color: var(--success); }
-
 .stat-card.expenses::before { background: linear-gradient(90deg, #DC2626, #F87171, #DC2626); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
 .stat-card.expenses:hover { border-color: #DC2626; }
 .stat-card.expenses .card-icon { background: linear-gradient(135deg, #DC2626, #F87171); }
 .stat-card.expenses .card-badge { background: var(--danger-bg); color: var(--danger); }
 .stat-card.expenses .card-value { color: var(--danger); }
-
 .stat-card.profit { background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-card) 70%, rgba(11, 94, 215, 0.05) 100%); }
 .stat-card.profit::before { background: linear-gradient(90deg, #0B5ED7, #10B981, #0B5ED7); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
 .stat-card.profit:hover { border-color: #0B5ED7; }
@@ -788,48 +1075,75 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .stat-card.profit.loss .card-icon { background: linear-gradient(135deg, #DC2626, #F87171); }
 .stat-card.profit.loss .card-badge { background: var(--danger-bg); color: var(--danger); }
 
-@keyframes shimmer {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-}
-
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 .pulse-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; margin-right: 3px; animation: pulseDot 1.5s infinite; }
+@keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-@keyframes pulseDot {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
-}
+.pending-partial-card { background: var(--bg-card); border-radius: 16px; padding: 20px 24px; border: 2px solid var(--warning); margin-bottom: 20px; box-shadow: 0 6px 24px rgba(217, 119, 6, 0.15); position: relative; overflow: hidden; transition: all 0.35s ease; }
+.pending-partial-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, #D97706, #F59E0B, #FBBF24, #F59E0B, #D97706); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
+.pending-partial-card:hover { box-shadow: 0 10px 32px rgba(217, 119, 6, 0.25); border-color: #F59E0B; transform: translateY(-2px); }
+.pending-partial-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px dashed var(--border-color); flex-wrap: wrap; gap: 10px; }
+.pending-partial-title { display: flex; align-items: center; gap: 10px; font-size: 1rem; font-weight: 900; color: var(--text-primary); }
+.pending-partial-title .title-icon { width: 40px; height: 40px; border-radius: 12px; background: linear-gradient(135deg, #D97706, #F59E0B); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 1.1rem; box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3); flex-shrink: 0; }
+.pending-partial-total { display: flex; align-items: center; gap: 8px; background: linear-gradient(135deg, #FEF3C7, #FDE68A); padding: 8px 16px; border-radius: 10px; border: 1.5px solid rgba(217, 119, 6, 0.3); }
+.pending-partial-total .total-label { font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: #92400E; }
+.pending-partial-total .total-value { font-family: var(--font-mono); font-size: 1.1rem; font-weight: 900; color: #92400E; }
+.pending-partial-total .total-currency { font-size: 0.7rem; font-weight: 700; color: #B45309; font-family: var(--font-primary); }
+
+.pending-partial-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.pending-partial-item { background: var(--bg-body); border-radius: 12px; padding: 14px 16px; border: 2px solid var(--border-color); display: flex; flex-direction: column; gap: 8px; transition: all 0.3s ease; position: relative; overflow: hidden; }
+.pending-partial-item::before { content: ''; position: absolute; top: 0; left: 0; bottom: 0; width: 4px; }
+.pending-partial-item:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
+.pending-partial-item .pp-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.pending-partial-item .pp-icon { width: 32px; height: 32px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.85rem; color: white; box-shadow: 0 3px 8px rgba(0,0,0,0.15); flex-shrink: 0; }
+.pending-partial-item .pp-count-badge { font-family: var(--font-mono); font-size: 0.6rem; font-weight: 800; padding: 3px 8px; border-radius: 6px; white-space: nowrap; }
+.pending-partial-item .pp-label { font-size: 0.62rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); }
+.pending-partial-item .pp-value { font-family: var(--font-mono); font-size: 1.05rem; font-weight: 900; letter-spacing: -0.02em; line-height: 1.1; display: flex; align-items: baseline; gap: 4px; }
+.pending-partial-item .pp-value .pp-currency { font-size: 0.65rem; font-weight: 700; color: var(--text-secondary); font-family: var(--font-primary); }
+.pending-partial-item .pp-sub { font-size: 0.55rem; font-weight: 600; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
+.pending-partial-item.bills-pending::before { background: linear-gradient(180deg, #DC2626, #F87171); }
+.pending-partial-item.bills-pending { border-color: rgba(220, 38, 38, 0.25); }
+.pending-partial-item.bills-pending .pp-icon { background: linear-gradient(135deg, #DC2626, #F87171); }
+.pending-partial-item.bills-pending .pp-count-badge { background: var(--danger-bg); color: var(--danger); }
+.pending-partial-item.bills-pending .pp-value { color: #DC2626; }
+.pending-partial-item.bills-partial::before { background: linear-gradient(180deg, #D97706, #FBBF24); }
+.pending-partial-item.bills-partial { border-color: rgba(217, 119, 6, 0.25); }
+.pending-partial-item.bills-partial .pp-icon { background: linear-gradient(135deg, #D97706, #FBBF24); }
+.pending-partial-item.bills-partial .pp-count-badge { background: var(--warning-bg); color: var(--warning); }
+.pending-partial-item.bills-partial .pp-value { color: #D97706; }
+.pending-partial-item.otc-pending::before { background: linear-gradient(180deg, #7C3AED, #A78BFA); }
+.pending-partial-item.otc-pending { border-color: rgba(124, 58, 237, 0.25); }
+.pending-partial-item.otc-pending .pp-icon { background: linear-gradient(135deg, #7C3AED, #A78BFA); }
+.pending-partial-item.otc-pending .pp-count-badge { background: var(--purple-bg); color: var(--purple); }
+.pending-partial-item.otc-pending .pp-value { color: #7C3AED; }
+.pending-partial-item.otc-partial::before { background: linear-gradient(180deg, #0891B2, #22D3EE); }
+.pending-partial-item.otc-partial { border-color: rgba(8, 145, 178, 0.25); }
+.pending-partial-item.otc-partial .pp-icon { background: linear-gradient(135deg, #0891B2, #22D3EE); }
+.pending-partial-item.otc-partial .pp-count-badge { background: var(--cyan-bg); color: var(--cyan); }
+.pending-partial-item.otc-partial .pp-value { color: #0891B2; }
 
 .discount-premium-card { background: var(--bg-card); border-radius: 14px; padding: 18px 20px; border: 2px solid var(--border-color); margin-bottom: 20px; box-shadow: var(--shadow-sm); transition: all 0.3s ease; }
 .discount-premium-card:hover { box-shadow: var(--shadow-md); border-color: #0B5ED7; }
 .discount-premium-card .dp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 2px dashed var(--border-color); flex-wrap: wrap; gap: 8px; }
 .discount-premium-card .dp-title { font-size: 0.95rem; font-weight: 800; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
-.discount-premium-card .dp-title i { color: var(--primary); font-size: 1rem; }
 .dp-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
 .dp-item { background: var(--bg-body); border-radius: 10px; padding: 12px 14px; border: 2px solid var(--border-color); transition: all 0.3s ease; position: relative; overflow: hidden; }
 .dp-item::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
 .dp-item:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
 .dp-item .dp-label { font-size: 0.55rem; color: var(--text-secondary); font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .dp-item .dp-value { font-size: 1rem; font-weight: 900; font-family: var(--font-mono); line-height: 1.1; }
-.dp-item .dp-sub { font-size: 0.55rem; color: var(--text-secondary); margin-top: 4px; font-weight: 600; }
 .dp-item.pharmacy-disc::before { background: linear-gradient(90deg, #D97706, #F59E0B); }
 .dp-item.pharmacy-disc .dp-value { color: #D97706; }
-.dp-item.pharmacy-disc .dp-label i { color: #D97706; }
 .dp-item.cashier-disc::before { background: linear-gradient(90deg, #7C3AED, #A78BFA); }
 .dp-item.cashier-disc .dp-value { color: #7C3AED; }
-.dp-item.cashier-disc .dp-label i { color: #7C3AED; }
 .dp-item.total-disc::before { background: linear-gradient(90deg, #DC2626, #F87171); }
 .dp-item.total-disc .dp-value { color: #DC2626; }
-.dp-item.total-disc .dp-label i { color: #DC2626; }
 .dp-item.pharmacy-prem::before { background: linear-gradient(90deg, #059669, #34D399); }
 .dp-item.pharmacy-prem .dp-value { color: #059669; }
-.dp-item.pharmacy-prem .dp-label i { color: #059669; }
 .dp-item.cashier-prem::before { background: linear-gradient(90deg, #0891B2, #06B6D4); }
 .dp-item.cashier-prem .dp-value { color: #0891B2; }
-.dp-item.cashier-prem .dp-label i { color: #0891B2; }
 .dp-item.total-prem::before { background: linear-gradient(90deg, #0B5ED7, #3B82F6); }
 .dp-item.total-prem .dp-value { color: #0B5ED7; }
-.dp-item.total-prem .dp-label i { color: #0B5ED7; }
 
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
 .chart-card { background: var(--bg-card); border-radius: var(--radius-lg); border: 1px solid var(--border-color); overflow: hidden; box-shadow: var(--shadow-sm); }
@@ -838,11 +1152,165 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .chart-card .chart-header .chart-title i { color: var(--primary); }
 .chart-card .chart-body { padding: 18px; height: 280px; position: relative; }
 
+.patient-filter-card {
+    background: var(--bg-card);
+    border-radius: var(--radius-lg);
+    padding: 20px 22px;
+    border: 2px solid var(--primary);
+    margin-bottom: 20px;
+    box-shadow: 0 6px 24px rgba(11, 94, 215, 0.15);
+    position: relative;
+    overflow: hidden;
+}
+.patient-filter-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #0B5ED7, #3B82F6, #7C3AED, #3B82F6, #0B5ED7);
+    background-size: 200% 100%;
+    animation: shimmer 3s infinite linear;
+}
+.patient-filter-card .pfc-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 2px dashed var(--border-color);
+}
+.patient-filter-card .pfc-title {
+    font-size: 0.95rem;
+    font-weight: 900;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.patient-filter-card .pfc-title .pfc-icon {
+    width: 38px; height: 38px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #0B5ED7, #3B82F6);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+}
+.patient-filter-card .pfc-count {
+    font-size: 0.7rem;
+    font-weight: 800;
+    background: var(--primary-bg);
+    color: var(--primary);
+    padding: 5px 12px;
+    border-radius: 20px;
+    border: 1.5px solid rgba(11, 94, 215, 0.25);
+}
+
+.patient-filter-section {
+    background: linear-gradient(135deg, #F8FAFC, #F1F5F9);
+    border-radius: var(--radius-md);
+    padding: 14px 18px;
+    margin-bottom: 14px;
+    border: 2px dashed var(--border-color);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+[data-theme="dark"] .patient-filter-section {
+    background: linear-gradient(135deg, #1E2A3D, #12294A);
+}
+.patient-filter-label {
+    font-size: 0.72rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.patient-filter-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    flex: 1;
+}
+.patient-filter-btn {
+    padding: 8px 18px;
+    border-radius: 20px;
+    font-size: 0.72rem;
+    font-weight: 800;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 2px solid var(--border-color);
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    transition: all 0.25s;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.patient-filter-btn:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.patient-filter-btn.active { color: white; border-color: transparent; box-shadow: 0 6px 16px rgba(0,0,0,0.15); }
+.patient-filter-btn.all.active { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+.patient-filter-btn.partial.active { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+.patient-filter-btn.pending.active { background: linear-gradient(135deg, #D97706, #B45309); }
+.patient-filter-btn.paid.active { background: linear-gradient(135deg, #059669, #047857); }
+.patient-filter-btn.partial:hover { border-color: #7C3AED; color: #7C3AED; }
+.patient-filter-btn.pending:hover { border-color: #D97706; color: #D97706; }
+.patient-filter-btn.paid:hover { border-color: #059669; color: #059669; }
+.patient-filter-btn.all:hover { border-color: #0B5ED7; color: #0B5ED7; }
+.patient-filter-btn.active:hover { color: white !important; }
+.patient-filter-btn .filter-count {
+    background: rgba(255,255,255,0.25);
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.6rem;
+    font-weight: 900;
+    font-family: var(--font-mono);
+}
+.patient-filter-btn:not(.active) .filter-count {
+    background: var(--bg-body);
+    color: var(--text-primary);
+}
+
+.search-input-wrapper { position: relative; width: 100%; }
+.search-input-wrapper input {
+    width: 100%;
+    padding: 12px 16px 12px 42px;
+    border-radius: 12px;
+    border: 2px solid var(--border-color);
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    font-weight: 600;
+    transition: all 0.25s;
+}
+.search-input-wrapper input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.15); }
+.search-input-wrapper .search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--primary); font-size: 0.95rem; pointer-events: none; }
+.search-input-wrapper .clear-search {
+    position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+    background: var(--danger-bg); color: var(--danger);
+    border: none; width: 24px; height: 24px; border-radius: 50%;
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.7rem; text-decoration: none;
+}
+
 .patient-group-card { background: var(--bg-card); border-radius: var(--radius-xl); border: 3px solid var(--primary); overflow: hidden; box-shadow: 0 8px 30px rgba(11, 94, 215, 0.15), 0 0 0 1px rgba(11, 94, 215, 0.1); margin-bottom: 36px; position: relative; transition: all 0.35s ease; }
 .patient-group-card::before { content: ''; position: absolute; inset: -8px; border-radius: calc(var(--radius-xl) + 8px); background: linear-gradient(135deg, rgba(11, 94, 215, 0.12), rgba(124, 58, 237, 0.08)); z-index: -1; pointer-events: none; }
 .patient-group-card:hover { border-color: var(--primary-light); box-shadow: 0 12px 40px rgba(11, 94, 215, 0.25), 0 0 0 1px rgba(11, 94, 215, 0.2); transform: translateY(-2px); }
+.patient-group-card.has-partial { border-color: #F59E0B; }
+.patient-group-card.has-partial::before { background: linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(217, 119, 6, 0.08)); }
+.patient-group-card.has-pending { border-color: #DC2626; }
+.patient-group-card.has-pending::before { background: linear-gradient(135deg, rgba(220, 38, 38, 0.15), rgba(185, 28, 28, 0.08)); }
 
-.patient-info-header { background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #7C3AED 100%); padding: 18px 24px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 16px; position: relative; overflow: hidden; }
+.patient-info-header { background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #7C3AED 100%); padding: 18px 24px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 16px; position: relative; overflow: hidden; cursor: pointer; }
 .patient-info-header::before { content: ''; position: absolute; top: -50%; right: -10%; width: 300px; height: 300px; background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%); border-radius: 50%; pointer-events: none; z-index: 0; }
 .patient-info-header > * { position: relative; z-index: 1; }
 .patient-number-badge { position: relative; background: rgba(255, 255, 255, 0.25); backdrop-filter: blur(10px); border: 1.5px solid rgba(255, 255, 255, 0.45); color: white; padding: 6px 14px; border-radius: 999px; font-size: 0.68rem; font-weight: 900; font-family: var(--font-mono); letter-spacing: 0.05em; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); align-self: flex-start; flex-shrink: 0; white-space: nowrap; }
@@ -860,6 +1328,17 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .summary-badge.billed .badge-value { color: #FBBF24; }
 .summary-badge.paid .badge-value { color: #6EE7B7; }
 .summary-badge.balance .badge-value { color: #FCA5A5; }
+
+.patient-toggle-btn { width: 38px; height: 38px; border-radius: 50%; background: rgba(255,255,255,0.25); backdrop-filter: blur(10px); border: 2px solid rgba(255,255,255,0.4); color: white; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 0.9rem; transition: all 0.3s ease; flex-shrink: 0; box-shadow: 0 4px 12px rgba(0,0,0,0.15); align-self: flex-start; }
+.patient-toggle-btn:hover { background: rgba(255,255,255,0.4); transform: scale(1.1); border-color: rgba(255,255,255,0.7); }
+.patient-toggle-btn.rotated { transform: rotate(180deg); }
+.patient-toggle-btn.rotated:hover { transform: rotate(180deg) scale(1.1); }
+
+.patient-body-container { max-height: 0; overflow: hidden; transition: max-height 0.5s ease-in-out, padding 0.3s ease; }
+.patient-body-container.open { max-height: 50000px; padding: 0; }
+
+.partial-badge { background: linear-gradient(135deg, #FCD34D, #F59E0B); color: #78350F; padding: 3px 10px; border-radius: 12px; font-size: 0.6rem; font-weight: 800; text-transform: uppercase; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 2px 8px rgba(245,158,11,0.5); border: 1px solid rgba(255,255,255,0.3); }
+.pending-badge { background: linear-gradient(135deg, #F87171, #DC2626); color: white; padding: 3px 10px; border-radius: 12px; font-size: 0.6rem; font-weight: 800; text-transform: uppercase; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 2px 8px rgba(220,38,38,0.5); border: 1px solid rgba(255,255,255,0.3); }
 
 .patient-footer { background: linear-gradient(135deg, rgba(11, 94, 215, 0.08), rgba(124, 58, 237, 0.05)); padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; border-top: 2px dashed var(--primary); }
 .patient-footer .footer-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -888,6 +1367,36 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .visit-staff-chip i { color: var(--primary); font-size: 0.72rem; }
 .visit-staff-chip .staff-label { color: var(--text-secondary); font-weight: 600; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.04em; }
 .visit-staff-chip .staff-name { color: var(--text-primary); font-weight: 800; }
+
+.visit-payment-summary { background: var(--bg-card); padding: 12px 20px; display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; border-bottom: 1px solid var(--border-color); }
+.vps-item { background: var(--bg-body); border-radius: var(--radius-md); padding: 10px 14px; border: 2px solid var(--border-color); display: flex; flex-direction: column; gap: 3px; position: relative; overflow: hidden; transition: all 0.25s ease; }
+.vps-item::before { content: ''; position: absolute; top: 0; left: 0; bottom: 0; width: 4px; }
+.vps-item:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.08); }
+.vps-item .vps-label { font-size: 0.55rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); display: flex; align-items: center; gap: 5px; }
+.vps-item .vps-value { font-family: var(--font-mono); font-size: 0.95rem; font-weight: 900; letter-spacing: -0.02em; display: flex; align-items: baseline; gap: 4px; }
+.vps-item .vps-value .vps-currency { font-size: 0.62rem; font-weight: 700; color: var(--text-secondary); font-family: var(--font-primary); }
+.vps-item .vps-sub { font-size: 0.55rem; font-weight: 600; color: var(--text-muted); }
+.vps-item.paid-items::before { background: linear-gradient(180deg, #059669, #34D399); }
+.vps-item.paid-items { border-color: rgba(5, 150, 105, 0.3); background: linear-gradient(135deg, #ECFDF5, #D1FAE5); }
+.vps-item.paid-items .vps-label i { color: #059669; }
+.vps-item.paid-items .vps-value { color: #059669; }
+.vps-item.pending-items::before { background: linear-gradient(180deg, #DC2626, #F87171); }
+.vps-item.pending-items { border-color: rgba(220, 38, 38, 0.3); background: linear-gradient(135deg, #FEF2F2, #FEE2E2); }
+.vps-item.pending-items .vps-label i { color: #DC2626; }
+.vps-item.pending-items .vps-value { color: #DC2626; }
+.vps-item.visit-paid::before { background: linear-gradient(180deg, #0891B2, #22D3EE); }
+.vps-item.visit-paid { border-color: rgba(8, 145, 178, 0.3); background: linear-gradient(135deg, #ECFEFF, #CFFAFE); }
+.vps-item.visit-paid .vps-label i { color: #0891B2; }
+.vps-item.visit-paid .vps-value { color: #0891B2; }
+.vps-item.visit-balance::before { background: linear-gradient(180deg, #D97706, #FBBF24); }
+.vps-item.visit-balance { border-color: rgba(217, 119, 6, 0.3); background: linear-gradient(135deg, #FFFBEB, #FEF3C7); }
+.vps-item.visit-balance .vps-label i { color: #D97706; }
+.vps-item.visit-balance .vps-value { color: #D97706; }
+
+[data-theme="dark"] .vps-item.paid-items { background: linear-gradient(135deg, #0F2E22, #1A3D2E); }
+[data-theme="dark"] .vps-item.pending-items { background: linear-gradient(135deg, #3A1414, #4A1A1A); }
+[data-theme="dark"] .vps-item.visit-paid { background: linear-gradient(135deg, #0A2E3A, #10404F); }
+[data-theme="dark"] .vps-item.visit-balance { background: linear-gradient(135deg, #3A2A0F, #4A3A12); }
 
 .visit-header-row2 { background: var(--bg-card); padding: 14px 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; align-items: stretch; border-bottom: 1px solid var(--border-color); }
 .visit-dp-card { background: var(--bg-body); border-radius: var(--radius-md); padding: 10px 14px; display: flex; flex-direction: column; gap: 3px; border: 1.5px solid var(--border-color); transition: all 0.25s; min-height: 70px; justify-content: center; }
@@ -941,7 +1450,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 
 .header-scroll-buttons { display: flex; gap: 6px; }
 .header-scroll-btn { width: 32px; height: 32px; border-radius: var(--radius-sm); border: 1.5px solid rgba(255,255,255,0.4); background: rgba(255,255,255,0.2); color: white; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 0.72rem; font-weight: 700; transition: all 0.25s; backdrop-filter: blur(10px); flex-shrink: 0; }
-.header-scroll-btn:hover { background: rgba(255,255,255,0.4); transform: translateY(-2px); border-color: rgba(255,255,255,0.6); }
+.header-scroll-btn:hover { background: rgba(255,255,255,0.4); transform: translateY(-2px); }
 
 .table-card.expenses-red { border-color: rgba(220, 38, 38, 0.3); }
 .table-card.expenses-red .table-header { background: linear-gradient(135deg, #DC2626, #B91C1C) !important; }
@@ -958,6 +1467,11 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .data-table tbody td { padding: 11px 14px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); vertical-align: middle; font-weight: 500; }
 .data-table tbody tr:hover td { background: var(--primary-bg); }
 .data-table tbody tr.total-row td { border-top: 3px solid var(--primary); font-weight: 800; font-size: 0.88rem; background: var(--primary-bg) !important; color: var(--primary); }
+
+.data-table tbody tr.item-paid td { background: linear-gradient(90deg, rgba(5, 150, 105, 0.04), transparent) !important; }
+.data-table tbody tr.item-paid:hover td { background: linear-gradient(90deg, rgba(5, 150, 105, 0.12), rgba(5, 150, 105, 0.05)) !important; }
+.data-table tbody tr.item-pending td { background: linear-gradient(90deg, rgba(217, 119, 6, 0.04), transparent) !important; }
+.data-table tbody tr.item-pending:hover td { background: linear-gradient(90deg, rgba(217, 119, 6, 0.12), rgba(217, 119, 6, 0.05)) !important; }
 
 .money-cell { font-family: var(--font-mono); font-weight: 800; font-size: 0.82rem; color: var(--success); text-align: right; white-space: nowrap; }
 .money-cell .currency-prefix { font-size: 0.65rem; color: var(--text-secondary); margin-right: 3px; font-weight: 600; }
@@ -1010,33 +1524,36 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .category-group-row.registration td .category-icon { background: linear-gradient(135deg, #64748B, #94A3B8); }
 .category-group-row.other td .category-icon { background: linear-gradient(135deg, #94A3B8, #CBD5E1); }
 .category-group-row td .category-total { float: right; font-family: var(--font-mono); font-size: 0.82rem; color: var(--success); background: var(--success-bg); padding: 3px 10px; border-radius: 6px; font-weight: 900; }
+.category-group-row td .category-breakdown { float: right; display: inline-flex; gap: 6px; align-items: center; margin-right: 12px; }
+.category-group-row td .category-breakdown .cb-paid { font-size: 0.62rem; font-weight: 800; color: #059669; background: #D1FAE5; padding: 2px 8px; border-radius: 6px; font-family: var(--font-mono); border: 1px solid rgba(5, 150, 105, 0.3); }
+.category-group-row td .category-breakdown .cb-pending { font-size: 0.62rem; font-weight: 800; color: #DC2626; background: #FEE2E2; padding: 2px 8px; border-radius: 6px; font-family: var(--font-mono); border: 1px solid rgba(220, 38, 38, 0.3); }
 
 .otc-sale-card { background: var(--bg-card); border: 2px solid var(--cyan); border-radius: var(--radius-lg); margin: 16px; overflow: hidden; box-shadow: 0 4px 16px rgba(8, 145, 178, 0.1); transition: all 0.3s ease; }
 .otc-sale-card:hover { box-shadow: 0 8px 28px rgba(8, 145, 178, 0.2); border-color: var(--cyan-light); }
 .otc-sale-header { background: linear-gradient(135deg, #0891B2, #0E7490); padding: 14px 20px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; color: white; }
 .otc-header-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 1; min-width: 300px; }
-.otc-sale-id-badge { background: rgba(255,255,255,0.2); backdrop-filter: blur(10px); border: 1.5px solid rgba(255,255,255,0.4); color: white; padding: 6px 14px; border-radius: var(--radius-sm); font-size: 0.78rem; font-weight: 900; font-family: var(--font-mono); display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+.otc-sale-id-badge { background: rgba(255,255,255,0.2); backdrop-filter: blur(10px); border: 1.5px solid rgba(255,255,255,0.4); color: white; padding: 6px 14px; border-radius: var(--radius-sm); font-size: 0.78rem; font-weight: 900; font-family: var(--font-mono); display: inline-flex; align-items: center; gap: 6px; }
 .otc-customer-info { display: flex; flex-direction: column; gap: 2px; }
 .otc-customer-name { font-size: 0.88rem; font-weight: 900; display: flex; align-items: center; gap: 6px; color: white; }
 .otc-customer-phone { font-size: 0.68rem; color: rgba(255,255,255,0.85); font-weight: 600; display: flex; align-items: center; gap: 4px; }
 .otc-header-middle { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.otc-stat-chip { display: flex; flex-direction: column; gap: 2px; padding: 8px 14px; border-radius: var(--radius-md); min-width: 110px; border: 1.5px solid rgba(255,255,255,0.3); background: rgba(255,255,255,0.15); backdrop-filter: blur(10px); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.otc-stat-chip { display: flex; flex-direction: column; gap: 2px; padding: 8px 14px; border-radius: var(--radius-md); min-width: 110px; border: 1.5px solid rgba(255,255,255,0.3); background: rgba(255,255,255,0.15); backdrop-filter: blur(10px); }
 .otc-stat-chip .stat-chip-label { font-size: 0.55rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: rgba(255,255,255,0.85); display: flex; align-items: center; gap: 4px; }
 .otc-stat-chip .stat-chip-value { font-size: 0.95rem; font-weight: 900; font-family: var(--font-mono); color: white; }
 .otc-stat-chip.discount { background: linear-gradient(135deg, rgba(217, 119, 6, 0.4), rgba(217, 119, 6, 0.2)); border-color: rgba(251, 191, 36, 0.6); }
 .otc-stat-chip.discount .stat-chip-value { color: #FEF3C7; }
 .otc-stat-chip.premium { background: linear-gradient(135deg, rgba(124, 58, 237, 0.4), rgba(124, 58, 237, 0.2)); border-color: rgba(167, 139, 250, 0.6); }
 .otc-stat-chip.premium .stat-chip-value { color: #EDE9FE; }
-.otc-stat-chip.grand-total { background: linear-gradient(135deg, rgba(5, 150, 105, 0.5), rgba(5, 150, 105, 0.3)); border-color: rgba(52, 211, 153, 0.7); box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3); }
+.otc-stat-chip.grand-total { background: linear-gradient(135deg, rgba(5, 150, 105, 0.5), rgba(5, 150, 105, 0.3)); border-color: rgba(52, 211, 153, 0.7); }
 .otc-stat-chip.grand-total .stat-chip-value { color: #D1FAE5; font-size: 1.05rem; }
 .otc-header-right { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.otc-action-btn { padding: 8px 14px; border-radius: var(--radius-sm); font-weight: 800; font-size: 0.68rem; border: 1.5px solid rgba(255,255,255,0.3); cursor: pointer; transition: all 0.25s; display: inline-flex; align-items: center; gap: 5px; text-decoration: none; text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap; backdrop-filter: blur(10px); box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+.otc-action-btn { padding: 8px 14px; border-radius: var(--radius-sm); font-weight: 800; font-size: 0.68rem; border: 1.5px solid rgba(255,255,255,0.3); cursor: pointer; transition: all 0.25s; display: inline-flex; align-items: center; gap: 5px; text-decoration: none; text-transform: uppercase; white-space: nowrap; backdrop-filter: blur(10px); }
 .otc-action-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.25); }
 .otc-action-btn.view { background: rgba(255,255,255,0.2); color: white; }
 .otc-action-btn.view:hover { background: rgba(255,255,255,0.35); }
 .otc-scroll-buttons { display: flex; gap: 5px; margin-left: 8px; }
-.otc-scroll-btn { width: 32px; height: 32px; border-radius: var(--radius-sm); border: 1.5px solid rgba(255,255,255,0.4); background: rgba(255,255,255,0.2); color: white; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 0.72rem; font-weight: 700; transition: all 0.25s; backdrop-filter: blur(10px); flex-shrink: 0; }
-.otc-scroll-btn:hover { background: rgba(255,255,255,0.4); transform: translateY(-2px); border-color: rgba(255,255,255,0.6); }
+.otc-scroll-btn { width: 32px; height: 32px; border-radius: var(--radius-sm); border: 1.5px solid rgba(255,255,255,0.4); background: rgba(255,255,255,0.2); color: white; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 0.72rem; font-weight: 700; transition: all 0.25s; flex-shrink: 0; }
+.otc-scroll-btn:hover { background: rgba(255,255,255,0.4); transform: translateY(-2px); }
 .otc-items-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
 .otc-items-table thead th { text-align: left; padding: 10px 14px; font-weight: 800; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.08em; color: white; background: linear-gradient(135deg, #0891B2, #0E7490); white-space: nowrap; }
 .otc-items-table tbody td { padding: 10px 14px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); vertical-align: middle; font-weight: 500; }
@@ -1061,8 +1578,10 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
     .chart-grid { grid-template-columns: 1fr; }
     .stats-grid-8 { grid-template-columns: repeat(2, 1fr); }
     .dp-grid { grid-template-columns: repeat(2, 1fr); }
+    .pending-partial-grid { grid-template-columns: repeat(2, 1fr); }
+    .visit-payment-summary { grid-template-columns: repeat(2, 1fr); }
     .patient-info-header { flex-direction: column; align-items: stretch; }
-    .patient-number-badge { align-self: flex-start; }
+    .custom-date-row { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 768px) {
     .page-header { padding: 18px 20px; }
@@ -1071,27 +1590,31 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
     .stat-card { padding: 12px; min-height: 115px; }
     .stat-card .card-value { font-size: 1.1rem; }
     .dp-grid { grid-template-columns: 1fr 1fr; }
+    .pending-partial-grid { grid-template-columns: 1fr 1fr; }
+    .visit-payment-summary { grid-template-columns: 1fr 1fr; padding: 10px 14px; }
     .discount-premium-card { padding: 14px; }
     .visit-header-row1 { padding: 12px 14px; flex-direction: column; align-items: stretch; }
     .visit-header-row2 { grid-template-columns: repeat(2, 1fr); padding: 12px 14px; }
     .visit-header-row3 { padding: 12px 14px; flex-direction: column; align-items: stretch; }
-    .visit-action-buttons { width: 100%; }
-    .visit-action-btn { flex: 1; justify-content: center; }
     .patient-footer { padding: 12px 16px; flex-direction: column; align-items: flex-start; }
     .otc-sale-header { flex-direction: column; align-items: stretch; }
     .otc-stat-chip { min-width: auto; flex: 1; }
+    .custom-date-row { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
     .stats-grid-8 { grid-template-columns: 1fr; }
     .dp-grid { grid-template-columns: 1fr; }
+    .pending-partial-grid { grid-template-columns: 1fr; }
+    .visit-payment-summary { grid-template-columns: 1fr; }
     .visit-header-row2 { grid-template-columns: 1fr; }
 }
 @media print {
-    .filter-card, .btn-header, .visit-action-buttons, .action-buttons, .header-scroll-buttons, .otc-scroll-buttons { display: none !important; }
+    .quick-filters-card, .patient-filter-card, .btn-header, .visit-action-buttons, .action-buttons, .header-scroll-buttons, .otc-scroll-buttons, .patient-toggle-btn { display: none !important; }
     .page-header { background: white !important; color: black !important; }
     .stat-card { break-inside: avoid; }
     .patient-group-card { break-inside: avoid; }
     .otc-sale-card { break-inside: avoid; }
+    .patient-body-container { max-height: none !important; }
 }
 </style>
 </head>
@@ -1104,12 +1627,13 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
         <div>
             <h1 class="page-title">
                 <i class="fas fa-chart-line"></i>
-                Revenue Report
+                Revenue Report V62
                 <span class="branch-tag" style="background:rgba(255,255,255,0.25);"><i class="fas fa-shield-alt"></i> AUDIT</span>
+                <span class="branch-tag live-tag"><i class="fas fa-check-circle"></i> PENDING FIXED</span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-user-circle"></i>
-                Karibu, <span class="branch-tag user-tag"><i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?></span>
+                Welcome, <span class="branch-tag user-tag"><i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?></span>
                 <span class="branch-tag">
                     <i class="fas fa-store-alt"></i>
                     <strong><?= htmlspecialchars($branch_name_display) ?></strong>
@@ -1127,59 +1651,61 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
         </div>
     </div>
 
-    <!-- FILTER CARD -->
-    <div class="filter-card">
-        <div class="filter-section">
-            <div class="filter-section-title"><i class="fas fa-bolt"></i> Quick Filters</div>
-            <div class="quick-filters">
-                <a href="?quick=today" class="quick-btn <?= $quick_filter === 'today' ? 'active' : '' ?>"><i class="fas fa-calendar-day"></i> Today</a>
-                <a href="?quick=yesterday" class="quick-btn <?= $quick_filter === 'yesterday' ? 'active' : '' ?>"><i class="fas fa-calendar-minus"></i> Yesterday</a>
-                <a href="?quick=1d" class="quick-btn <?= $quick_filter === '1d' ? 'active' : '' ?>"><i class="fas fa-clock"></i> 1D</a>
-                <a href="?quick=1w" class="quick-btn <?= $quick_filter === '1w' ? 'active' : '' ?>"><i class="fas fa-calendar-week"></i> 1W</a>
-                <a href="?quick=1m" class="quick-btn <?= $quick_filter === '1m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 1M</a>
-                <a href="?quick=3m" class="quick-btn <?= $quick_filter === '3m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 3M</a>
-                <a href="?quick=6m" class="quick-btn <?= $quick_filter === '6m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 6M</a>
-                <a href="?quick=1y" class="quick-btn <?= $quick_filter === '1y' ? 'active' : '' ?>"><i class="fas fa-calendar"></i> 1Y</a>
-                <a href="?quick=all" class="quick-btn <?= $quick_filter === 'all' ? 'active' : '' ?>"><i class="fas fa-infinity"></i> All</a>
-                <a href="?quick=custom&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="quick-btn <?= $quick_filter === 'custom' ? 'active' : '' ?>"><i class="fas fa-calendar-check"></i> Custom</a>
+    <!-- QUICK FILTERS CARD -->
+    <div class="quick-filters-card">
+        <div class="qfc-header">
+            <div class="qfc-title">
+                <span class="qfc-icon"><i class="fas fa-bolt"></i></span>
+                Quick Date Filters
+                <span class="live-search-active"><i class="fas fa-filter"></i> FILTER</span>
             </div>
+            <span class="qfc-count">
+                <i class="fas fa-calendar-alt"></i> <?= htmlspecialchars($date_label) ?>
+            </span>
         </div>
-        <form method="GET">
-            <input type="hidden" name="quick" value="<?= htmlspecialchars($quick_filter) ?>">
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;align-items:end;margin-top:12px;padding-top:14px;border-top:1.5px dashed var(--border-color);">
-                <?php if ($quick_filter === 'custom'): ?>
-                    <div><label style="font-size:0.65rem;font-weight:800;color:var(--text-secondary);display:block;margin-bottom:4px;">FROM</label><input type="date" name="date_from" value="<?= htmlspecialchars($date_from) ?>" style="width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-size:0.8rem;font-weight:600;"></div>
-                    <div><label style="font-size:0.65rem;font-weight:800;color:var(--text-secondary);display:block;margin-bottom:4px;">TO</label><input type="date" name="date_to" value="<?= htmlspecialchars($date_to) ?>" style="width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-size:0.8rem;font-weight:600;"></div>
-                <?php endif; ?>
-                <div>
-                    <label style="font-size:0.65rem;font-weight:800;color:var(--text-secondary);display:block;margin-bottom:4px;">PAYMENT METHOD</label>
-                    <select name="payment_method" style="width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-size:0.8rem;font-weight:600;">
-                        <option value="all" <?= $payment_method === 'all' ? 'selected' : '' ?>>All Methods</option>
-                        <option value="cash" <?= $payment_method === 'cash' ? 'selected' : '' ?>>Cash</option>
-                        <option value="m-pesa" <?= $payment_method === 'm-pesa' ? 'selected' : '' ?>>M-Pesa</option>
-                        <option value="airtel_money" <?= $payment_method === 'airtel_money' ? 'selected' : '' ?>>Airtel Money</option>
-                        <option value="tigo_pesa" <?= $payment_method === 'tigo_pesa' ? 'selected' : '' ?>>Tigo Pesa</option>
-                        <option value="halopesa" <?= $payment_method === 'halopesa' ? 'selected' : '' ?>>Halopesa</option>
-                        <option value="bank" <?= $payment_method === 'bank' ? 'selected' : '' ?>>Bank</option>
-                        <option value="card" <?= $payment_method === 'card' ? 'selected' : '' ?>>Card</option>
-                        <option value="insurance" <?= $payment_method === 'insurance' ? 'selected' : '' ?>>Insurance</option>
-                        <option value="other" <?= $payment_method === 'other' ? 'selected' : '' ?>>Other</option>
-                    </select>
-                </div>
-                <div>
-                    <label style="font-size:0.65rem;font-weight:800;color:var(--text-secondary);display:block;margin-bottom:4px;">SEARCH</label>
-                    <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Patient, bill, OTC..." style="width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-size:0.8rem;font-weight:600;">
-                </div>
-                <button type="submit" style="padding:9px 18px;border-radius:8px;background:linear-gradient(135deg,var(--primary),var(--primary-dark));color:white;border:none;font-weight:700;font-size:0.78rem;cursor:pointer;height:38px;"><i class="fas fa-filter"></i> Apply</button>
-                <a href="?" style="padding:9px 18px;border-radius:8px;background:transparent;color:var(--text-secondary);border:1.5px solid var(--border-color);font-weight:700;font-size:0.78rem;text-decoration:none;text-align:center;line-height:20px;"><i class="fas fa-redo"></i> Reset</a>
+
+        <div class="filter-section-title">
+            <i class="fas fa-clock"></i> Chagua Kipindi
+        </div>
+        <div class="quick-filters">
+            <a href="?quick=today&patient_filter=<?= $patient_filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= $payment_method !== 'all' ? '&payment_method=' . urlencode($payment_method) : '' ?>" class="quick-btn <?= $quick_filter === 'today' ? 'active' : '' ?>"><i class="fas fa-calendar-day"></i> Today</a>
+            <a href="?quick=yesterday&patient_filter=<?= $patient_filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= $payment_method !== 'all' ? '&payment_method=' . urlencode($payment_method) : '' ?>" class="quick-btn <?= $quick_filter === 'yesterday' ? 'active' : '' ?>"><i class="fas fa-calendar-minus"></i> Yesterday</a>
+            <a href="?quick=1d&patient_filter=<?= $patient_filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= $payment_method !== 'all' ? '&payment_method=' . urlencode($payment_method) : '' ?>" class="quick-btn <?= $quick_filter === '1d' ? 'active' : '' ?>"><i class="fas fa-clock"></i> 1D</a>
+            <a href="?quick=1w&patient_filter=<?= $patient_filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= $payment_method !== 'all' ? '&payment_method=' . urlencode($payment_method) : '' ?>" class="quick-btn <?= $quick_filter === '1w' ? 'active' : '' ?>"><i class="fas fa-calendar-week"></i> 1W</a>
+            <a href="?quick=1m&patient_filter=<?= $patient_filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= $payment_method !== 'all' ? '&payment_method=' . urlencode($payment_method) : '' ?>" class="quick-btn <?= $quick_filter === '1m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 1M</a>
+            <a href="?quick=3m&patient_filter=<?= $patient_filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= $payment_method !== 'all' ? '&payment_method=' . urlencode($payment_method) : '' ?>" class="quick-btn <?= $quick_filter === '3m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 3M</a>
+            <a href="?quick=6m&patient_filter=<?= $patient_filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= $payment_method !== 'all' ? '&payment_method=' . urlencode($payment_method) : '' ?>" class="quick-btn <?= $quick_filter === '6m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 6M</a>
+            <a href="?quick=1y&patient_filter=<?= $patient_filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= $payment_method !== 'all' ? '&payment_method=' . urlencode($payment_method) : '' ?>" class="quick-btn <?= $quick_filter === '1y' ? 'active' : '' ?>"><i class="fas fa-calendar"></i> 1Y</a>
+            <a href="?quick=all&patient_filter=<?= $patient_filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= $payment_method !== 'all' ? '&payment_method=' . urlencode($payment_method) : '' ?>" class="quick-btn <?= $quick_filter === 'all' ? 'active' : '' ?>"><i class="fas fa-infinity"></i> All</a>
+            <a href="?quick=custom&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>&patient_filter=<?= $patient_filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= $payment_method !== 'all' ? '&payment_method=' . urlencode($payment_method) : '' ?>" class="quick-btn <?= $quick_filter === 'custom' ? 'active' : '' ?>"><i class="fas fa-calendar-check"></i> Custom</a>
+        </div>
+
+        <?php if ($quick_filter === 'custom'): ?>
+        <form method="GET" id="customDateForm" class="custom-date-row">
+            <input type="hidden" name="quick" value="custom">
+            <input type="hidden" name="patient_filter" value="<?= htmlspecialchars($patient_filter) ?>">
+            <?php if (!empty($search)): ?><input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>"><?php endif; ?>
+            <?php if ($payment_method !== 'all'): ?><input type="hidden" name="payment_method" value="<?= htmlspecialchars($payment_method) ?>"><?php endif; ?>
+            <div>
+                <label style="font-size:0.65rem;font-weight:800;color:var(--text-secondary);display:block;margin-bottom:4px;text-transform:uppercase;">📅 From</label>
+                <input type="date" name="date_from" id="dateFromInput" value="<?= htmlspecialchars($date_from) ?>" style="width:100%;padding:9px 12px;border-radius:8px;border:2px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-size:0.82rem;font-weight:600;font-family:var(--font-mono);">
             </div>
+            <div>
+                <label style="font-size:0.65rem;font-weight:800;color:var(--text-secondary);display:block;margin-bottom:4px;text-transform:uppercase;">📅 To</label>
+                <input type="date" name="date_to" id="dateToInput" value="<?= htmlspecialchars($date_to) ?>" style="width:100%;padding:9px 12px;border-radius:8px;border:2px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-size:0.82rem;font-weight:600;font-family:var(--font-mono);">
+            </div>
+            <div class="auto-filter-badge">
+                <i class="fas fa-bolt"></i> Auto-Apply
+            </div>
+            <button type="button" class="quick-btn" onclick="resetCustomFilter();" style="height:44px;padding:0 20px;">
+                <i class="fas fa-redo"></i> Reset
+            </button>
         </form>
+        <?php endif; ?>
     </div>
 
     <!-- 8 CARDS -->
     <div class="stats-grid-8">
-
-        <!-- CARD 1: TOTAL REVENUE -->
         <div class="stat-card revenue">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-money-bill-wave"></i></div>
@@ -1187,18 +1713,10 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             </div>
             <div>
                 <div class="card-label"><i class="fas fa-coins"></i> Total Revenue</div>
-                <div class="card-value">
-                    <span class="currency"><?= $currency ?></span>
-                    <?= number_format($total_revenue, 0) ?>
-                </div>
+                <div class="card-value"><span class="currency"><?= $currency ?></span><?= number_format($total_revenue, 0) ?></div>
             </div>
-            <div class="card-footer">
-                <i class="fas fa-info-circle"></i>
-                Payments + OTC
-            </div>
+            <div class="card-footer"><i class="fas fa-info-circle"></i> Payments + OTC</div>
         </div>
-
-        <!-- CARD 2: PATIENT PAYMENTS -->
         <div class="stat-card payments">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-file-invoice"></i></div>
@@ -1206,24 +1724,15 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             </div>
             <div>
                 <div class="card-label"><i class="fas fa-hand-holding-usd"></i> Patient Payments</div>
-                <div class="card-value">
-                    <span class="currency"><?= $currency ?></span>
-                    <?= number_format($patient_bills_revenue_rounded, 0) ?>
-                </div>
+                <div class="card-value"><span class="currency"><?= $currency ?></span><?= number_format($patient_bills_revenue_rounded, 0) ?></div>
             </div>
             <div class="card-footer">
                 <i class="fas fa-receipt"></i>
                 Payments: <span class="highlight"><?= number_format($patient_bills_count) ?></span>
-                <?php if ($patient_discounts > 0): ?>
-                    <span class="discount-badge"><i class="fas fa-tag"></i> <?= number_format($patient_discounts, 0) ?></span>
-                <?php endif; ?>
-                <?php if ($patient_premiums > 0): ?>
-                    <span class="premium-badge"><i class="fas fa-star"></i> <?= number_format($patient_premiums, 0) ?></span>
-                <?php endif; ?>
+                <?php if ($patient_discounts > 0): ?><span class="discount-badge"><i class="fas fa-tag"></i> <?= number_format($patient_discounts, 0) ?></span><?php endif; ?>
+                <?php if ($patient_premiums > 0): ?><span class="premium-badge"><i class="fas fa-star"></i> <?= number_format($patient_premiums, 0) ?></span><?php endif; ?>
             </div>
         </div>
-
-        <!-- CARD 3: PRESCRIPTION (GROSS PEKEE) -->
         <div class="stat-card prescription">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-prescription"></i></div>
@@ -1231,19 +1740,10 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             </div>
             <div>
                 <div class="card-label"><i class="fas fa-prescription-bottle-medical"></i> Prescription (Gross)</div>
-                <div class="card-value">
-                    <span class="currency"><?= $currency ?></span>
-                    <?= number_format($prescription_gross, 0) ?>
-                </div>
+                <div class="card-value"><span class="currency"><?= $currency ?></span><?= number_format($prescription_gross, 0) ?></div>
             </div>
-            <div class="card-footer">
-                <i class="fas fa-list"></i>
-                Items: <span class="highlight"><?= number_format($prescription_count) ?></span>
-                <span style="color:var(--purple);font-weight:800;">Gross Only</span>
-            </div>
+            <div class="card-footer"><i class="fas fa-list"></i> Items: <span class="highlight"><?= number_format($prescription_count) ?></span></div>
         </div>
-
-        <!-- CARD 4: OTC SALES -->
         <div class="stat-card otc">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-cash-register"></i></div>
@@ -1251,24 +1751,15 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             </div>
             <div>
                 <div class="card-label"><i class="fas fa-shopping-cart"></i> OTC Sales</div>
-                <div class="card-value">
-                    <span class="currency"><?= $currency ?></span>
-                    <?= number_format($otc_revenue, 0) ?>
-                </div>
+                <div class="card-value"><span class="currency"><?= $currency ?></span><?= number_format($otc_revenue, 0) ?></div>
             </div>
             <div class="card-footer">
                 <i class="fas fa-receipt"></i>
                 Sales: <span class="highlight"><?= number_format($otc_count) ?></span>
-                <?php if ($otc_discounts > 0): ?>
-                    <span class="discount-badge"><i class="fas fa-tag"></i> <?= number_format($otc_discounts, 0) ?></span>
-                <?php endif; ?>
-                <?php if ($otc_premiums > 0): ?>
-                    <span class="premium-badge"><i class="fas fa-star"></i> <?= number_format($otc_premiums, 0) ?></span>
-                <?php endif; ?>
+                <?php if ($otc_discounts > 0): ?><span class="discount-badge"><i class="fas fa-tag"></i> <?= number_format($otc_discounts, 0) ?></span><?php endif; ?>
+                <?php if ($otc_premiums > 0): ?><span class="premium-badge"><i class="fas fa-star"></i> <?= number_format($otc_premiums, 0) ?></span><?php endif; ?>
             </div>
         </div>
-
-        <!-- CARD 5: CLINICAL SERVICES -->
         <div class="stat-card consultation">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-stethoscope"></i></div>
@@ -1276,10 +1767,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             </div>
             <div>
                 <div class="card-label"><i class="fas fa-notes-medical"></i> Clinical Services</div>
-                <div class="card-value">
-                    <span class="currency"><?= $currency ?></span>
-                    <?= number_format($clinical_services_revenue, 0) ?>
-                </div>
+                <div class="card-value"><span class="currency"><?= $currency ?></span><?= number_format($clinical_services_revenue, 0) ?></div>
             </div>
             <div class="card-footer">
                 <i class="fas fa-list"></i>
@@ -1288,8 +1776,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                 Equip: <span class="highlight"><?= number_format($equipment_count) ?></span>
             </div>
         </div>
-
-        <!-- CARD 6: LAB TESTS -->
         <div class="stat-card lab">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-flask"></i></div>
@@ -1297,18 +1783,10 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             </div>
             <div>
                 <div class="card-label"><i class="fas fa-microscope"></i> Lab Tests</div>
-                <div class="card-value">
-                    <span class="currency"><?= $currency ?></span>
-                    <?= number_format($lab_revenue, 0) ?>
-                </div>
+                <div class="card-value"><span class="currency"><?= $currency ?></span><?= number_format($lab_revenue, 0) ?></div>
             </div>
-            <div class="card-footer">
-                <i class="fas fa-check-circle"></i>
-                Tests: <span class="highlight"><?= number_format($lab_count) ?></span>
-            </div>
+            <div class="card-footer"><i class="fas fa-check-circle"></i> Tests: <span class="highlight"><?= number_format($lab_count) ?></span></div>
         </div>
-
-        <!-- CARD 7: EXPENSES -->
         <div class="stat-card expenses">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-receipt"></i></div>
@@ -1316,18 +1794,10 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             </div>
             <div>
                 <div class="card-label"><i class="fas fa-wallet"></i> Total Expenses</div>
-                <div class="card-value">
-                    <span class="currency"><?= $currency ?></span>
-                    <?= number_format($total_expenses, 0) ?>
-                </div>
+                <div class="card-value"><span class="currency"><?= $currency ?></span><?= number_format($total_expenses, 0) ?></div>
             </div>
-            <div class="card-footer">
-                <i class="fas fa-list"></i>
-                Records: <span class="highlight"><?= number_format($expenses_count) ?></span>
-            </div>
+            <div class="card-footer"><i class="fas fa-list"></i> Records: <span class="highlight"><?= number_format($expenses_count) ?></span></div>
         </div>
-
-        <!-- CARD 8: NET PROFIT -->
         <div class="stat-card profit <?= $net_profit < 0 ? 'loss' : '' ?>">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-<?= $net_profit >= 0 ? 'chart-line' : 'exclamation-triangle' ?>"></i></div>
@@ -1335,17 +1805,59 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             </div>
             <div>
                 <div class="card-label"><i class="fas fa-balance-scale"></i> <?= $net_profit >= 0 ? 'Net Profit' : 'Net Loss' ?></div>
-                <div class="card-value">
-                    <span class="currency"><?= $currency ?></span>
-                    <?= number_format(abs($net_profit), 0) ?>
-                </div>
+                <div class="card-value"><span class="currency"><?= $currency ?></span><?= number_format(abs($net_profit), 0) ?></div>
             </div>
-            <div class="card-footer">
-                <i class="fas fa-percentage"></i>
-                Margin: <span class="highlight"><?= $profit_percentage ?>%</span>
+            <div class="card-footer"><i class="fas fa-percentage"></i> Margin: <span class="highlight"><?= $profit_percentage ?>%</span></div>
+        </div>
+    </div>
+
+    <!-- PENDING & PARTIAL -->
+    <div class="pending-partial-card">
+        <div class="pending-partial-header">
+            <div class="pending-partial-title">
+                <span class="title-icon"><i class="fas fa-hourglass-half"></i></span>
+                Pending & Partial Overview
+            </div>
+            <div class="pending-partial-total">
+                <span class="total-label"><i class="fas fa-calculator"></i> Total</span>
+                <span class="total-currency"><?= $currency ?></span>
+                <span class="total-value"><?= number_format($total_pending, 0) ?></span>
             </div>
         </div>
-
+        <div class="pending-partial-grid">
+            <div class="pending-partial-item bills-pending">
+                <div class="pp-top">
+                    <span class="pp-icon"><i class="fas fa-file-invoice"></i></span>
+                    <span class="pp-count-badge"><i class="fas fa-hashtag"></i> <?= number_format($pending_bills_count) ?></span>
+                </div>
+                <div class="pp-label">Bills Pending</div>
+                <div class="pp-value"><span class="pp-currency"><?= $currency ?></span><?= number_format($pending_bills_amount, 0) ?></div>
+            </div>
+            <div class="pending-partial-item bills-partial">
+                <div class="pp-top">
+                    <span class="pp-icon"><i class="fas fa-hourglass-half"></i></span>
+                    <span class="pp-count-badge"><i class="fas fa-hashtag"></i> <?= number_format($partial_bills_count) ?></span>
+                </div>
+                <div class="pp-label">Partial Remaining</div>
+                <div class="pp-value"><span class="pp-currency"><?= $currency ?></span><?= number_format($partial_remaining, 0) ?></div>
+            </div>
+            <div class="pending-partial-item otc-pending">
+                <div class="pp-top">
+                    <span class="pp-icon"><i class="fas fa-cash-register"></i></span>
+                    <span class="pp-count-badge"><i class="fas fa-hashtag"></i> <?= number_format($pending_otc_count) ?></span>
+                </div>
+                <div class="pp-label">OTC Pending</div>
+                <div class="pp-value"><span class="pp-currency"><?= $currency ?></span><?= number_format($pending_otc_amount, 0) ?></div>
+            </div>
+            <div class="pending-partial-item otc-partial">
+                <div class="pp-top">
+                    <span class="pp-icon"><i class="fas fa-hourglass-start"></i></span>
+                    <span class="pp-count-badge"><i class="fas fa-hashtag"></i> <?= number_format($partial_otc_count) ?></span>
+                </div>
+                <div class="pp-label">OTC Partial</div>
+                <div class="pp-value"><span class="pp-currency"><?= $currency ?></span><?= number_format($partial_otc_amount, 0) ?></div>
+            </div>
+        </div>
     </div>
 
     <!-- DISCOUNT & PREMIUM -->
@@ -1354,9 +1866,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             <div class="dp-title">
                 <i class="fas fa-tags"></i>
                 Discount & Premium Breakdown
-                <span style="font-size:0.65rem;background:var(--primary-bg);color:var(--primary);padding:2px 8px;border-radius:6px;font-weight:700;">
-                    Total: <?= $currency ?> <?= number_format($total_discounts + $total_premiums, 0) ?>
-                </span>
             </div>
             <div style="font-size:0.65rem;color:var(--text-secondary);font-weight:600;">
                 <i class="fas fa-info-circle"></i> Pharmacy + Cashier
@@ -1366,32 +1875,26 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             <div class="dp-item pharmacy-disc">
                 <div class="dp-label"><i class="fas fa-prescription-bottle-medical"></i> Pharmacy Discount</div>
                 <div class="dp-value"><?= $currency ?> <?= number_format($pharmacy_discounts, 0) ?></div>
-                <div class="dp-sub">From medications</div>
             </div>
             <div class="dp-item cashier-disc">
                 <div class="dp-label"><i class="fas fa-cash-register"></i> Cashier Discount</div>
                 <div class="dp-value"><?= $currency ?> <?= number_format($cashier_discounts, 0) ?></div>
-                <div class="dp-sub">From cashier</div>
             </div>
             <div class="dp-item total-disc">
                 <div class="dp-label"><i class="fas fa-tag"></i> Total Discount</div>
                 <div class="dp-value"><?= $currency ?> <?= number_format($total_discounts, 0) ?></div>
-                <div class="dp-sub">Pharmacy + Cashier</div>
             </div>
             <div class="dp-item pharmacy-prem">
                 <div class="dp-label"><i class="fas fa-prescription-bottle-medical"></i> Pharmacy Premium</div>
                 <div class="dp-value"><?= $currency ?> <?= number_format($pharmacy_premiums, 0) ?></div>
-                <div class="dp-sub">From medications</div>
             </div>
             <div class="dp-item cashier-prem">
                 <div class="dp-label"><i class="fas fa-cash-register"></i> Cashier Premium</div>
                 <div class="dp-value"><?= $currency ?> <?= number_format($cashier_premiums, 0) ?></div>
-                <div class="dp-sub">From cashier</div>
             </div>
             <div class="dp-item total-prem">
                 <div class="dp-label"><i class="fas fa-star"></i> Total Premium</div>
                 <div class="dp-value"><?= $currency ?> <?= number_format($total_premiums, 0) ?></div>
-                <div class="dp-sub">Pharmacy + Cashier</div>
             </div>
         </div>
     </div>
@@ -1414,7 +1917,88 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
         </div>
     </div>
 
-    <!-- PATIENT-GROUPED SECTIONS -->
+    <!-- PATIENT FILTER CARD -->
+    <div class="patient-filter-card">
+        <div class="pfc-header">
+            <div class="pfc-title">
+                <span class="pfc-icon"><i class="fas fa-users"></i></span>
+                Patients Filter & Search
+                <span class="live-search-active" id="liveSearchBadge">
+                    <i class="fas fa-bolt"></i> LIVE
+                </span>
+            </div>
+            <span class="pfc-count" id="liveResultsCount">
+                <i class="fas fa-users"></i> <?= count($patient_groups) ?> Patient<?= count($patient_groups) != 1 ? 's' : '' ?> Found
+            </span>
+        </div>
+
+        <div class="patient-filter-section">
+            <div class="patient-filter-label">
+                <i class="fas fa-filter"></i> Patients Filter:
+            </div>
+            <div class="patient-filter-buttons">
+                <a href="?quick=<?= $quick_filter ?>&patient_filter=all<?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= $payment_method !== 'all' ? '&payment_method=' . urlencode($payment_method) : '' ?><?= $quick_filter === 'custom' ? '&date_from=' . $date_from . '&date_to=' . $date_to : '' ?>" 
+                   class="patient-filter-btn all <?= $patient_filter === 'all' ? 'active' : '' ?>">
+                    <i class="fas fa-list"></i> All
+                    <span class="filter-count"><?= count($patient_groups) ?></span>
+                </a>
+                <a href="?quick=<?= $quick_filter ?>&patient_filter=partial<?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= $payment_method !== 'all' ? '&payment_method=' . urlencode($payment_method) : '' ?><?= $quick_filter === 'custom' ? '&date_from=' . $date_from . '&date_to=' . $date_to : '' ?>" 
+                   class="patient-filter-btn partial <?= $patient_filter === 'partial' ? 'active' : '' ?>">
+                    <i class="fas fa-hourglass-half"></i> Partial
+                </a>
+                <a href="?quick=<?= $quick_filter ?>&patient_filter=pending<?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= $payment_method !== 'all' ? '&payment_method=' . urlencode($payment_method) : '' ?><?= $quick_filter === 'custom' ? '&date_from=' . $date_from . '&date_to=' . $date_to : '' ?>" 
+                   class="patient-filter-btn pending <?= $patient_filter === 'pending' ? 'active' : '' ?>">
+                    <i class="fas fa-clock"></i> Pending
+                </a>
+                <a href="?quick=<?= $quick_filter ?>&patient_filter=paid<?= !empty($search) ? '&search=' . urlencode($search) : '' ?><?= $payment_method !== 'all' ? '&payment_method=' . urlencode($payment_method) : '' ?><?= $quick_filter === 'custom' ? '&date_from=' . $date_from . '&date_to=' . $date_to : '' ?>" 
+                   class="patient-filter-btn paid <?= $patient_filter === 'paid' ? 'active' : '' ?>">
+                    <i class="fas fa-check-circle"></i> Paid
+                </a>
+            </div>
+        </div>
+
+        <form method="GET" id="searchFilterForm">
+            <input type="hidden" name="quick" value="<?= htmlspecialchars($quick_filter) ?>">
+            <input type="hidden" name="patient_filter" value="<?= htmlspecialchars($patient_filter) ?>">
+            <?php if ($quick_filter === 'custom'): ?>
+                <input type="hidden" name="date_from" value="<?= htmlspecialchars($date_from) ?>">
+                <input type="hidden" name="date_to" value="<?= htmlspecialchars($date_to) ?>">
+            <?php endif; ?>
+            
+            <div style="display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:end;flex-wrap:wrap;">
+                <div class="search-input-wrapper" id="liveSearchWrapper">
+                    <i class="fas fa-search search-icon"></i>
+                    <input type="text" name="search" id="liveSearchInput" value="<?= htmlspecialchars($search) ?>" 
+                           placeholder="🔍 Type to search live: Name, Phone, Patient ID, Bill No, Visit No..." 
+                           autocomplete="off">
+                    <a href="#" id="liveClearBtn" class="clear-search" title="Clear Search" style="<?= empty($search) ? 'display:none;' : '' ?>">
+                        <i class="fas fa-times"></i>
+                    </a>
+                </div>
+                
+                <div>
+                    <select name="payment_method" id="paymentMethodSelect" style="padding:10px 14px;border-radius:10px;border:2px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-size:0.82rem;font-weight:600;height:44px;">
+                        <option value="all" <?= $payment_method === 'all' ? 'selected' : '' ?>>💳 All Methods</option>
+                        <option value="cash" <?= $payment_method === 'cash' ? 'selected' : '' ?>>💵 Cash</option>
+                        <option value="m-pesa" <?= $payment_method === 'm-pesa' ? 'selected' : '' ?>>📱 M-Pesa</option>
+                        <option value="airtel_money" <?= $payment_method === 'airtel_money' ? 'selected' : '' ?>>📱 Airtel Money</option>
+                        <option value="tigo_pesa" <?= $payment_method === 'tigo_pesa' ? 'selected' : '' ?>>📱 Tigo Pesa</option>
+                        <option value="halopesa" <?= $payment_method === 'halopesa' ? 'selected' : '' ?>>📱 Halopesa</option>
+                        <option value="bank" <?= $payment_method === 'bank' ? 'selected' : '' ?>>🏦 Bank</option>
+                        <option value="card" <?= $payment_method === 'card' ? 'selected' : '' ?>>💳 Card</option>
+                        <option value="insurance" <?= $payment_method === 'insurance' ? 'selected' : '' ?>>🏥 Insurance</option>
+                        <option value="other" <?= $payment_method === 'other' ? 'selected' : '' ?>>📋 Other</option>
+                    </select>
+                </div>
+                
+                <div class="auto-filter-badge">
+                    <i class="fas fa-bolt"></i> Auto-Filter
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <!-- PATIENT LIST -->
     <?php if (count($patient_groups) > 0): ?>
         <?php foreach ($patient_groups as $patient_index => $patient): 
             $patient_initials = '';
@@ -1425,10 +2009,21 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                 $patient_initials = strtoupper(substr($patient['patient_name'] ?? 'NA', 0, 2));
             }
             $visit_count = count($patient['visits']);
-        ?>
-        <div class="patient-group-card">
             
-            <div class="patient-info-header">
+            $card_class = '';
+            $status_badge_html = '';
+            if ($patient['has_pending']) {
+                $card_class = 'has-pending';
+                $status_badge_html = '<span class="pending-badge"><i class="fas fa-clock"></i> PENDING</span>';
+            } elseif ($patient['has_partial']) {
+                $card_class = 'has-partial';
+                $status_badge_html = '<span class="partial-badge"><i class="fas fa-hourglass-half"></i> PARTIAL</span>';
+            }
+        ?>
+        <div class="patient-group-card <?= $card_class ?>" id="patientCard_<?= $patient_index ?>">
+            
+            <div class="patient-info-header" onclick="togglePatientCard(<?= $patient_index ?>)">
+                
                 <div class="patient-number-badge">
                     <i class="fas fa-user-tag"></i>
                     PATIENT #<?= $patient_index + 1 ?> / <?= count($patient_groups) ?>
@@ -1439,14 +2034,15 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                     <div class="patient-details">
                         <div class="patient-name">
                             <i class="fas fa-user-circle" style="color:#93C5FD;"></i>
-                            <?= htmlspecialchars($patient['patient_name'] ?? 'N/A') ?>
+                            <?= highlightSearchTerm($patient['patient_name'] ?? 'N/A', $search) ?>
+                            <?= $status_badge_html ?>
                         </div>
                         <div class="patient-meta">
                             <?php if (!empty($patient['patient_code'])): ?>
-                                <span><i class="fas fa-id-card"></i> <?= htmlspecialchars($patient['patient_code']) ?></span>
+                                <span><i class="fas fa-id-card"></i> <?= highlightSearchTerm($patient['patient_code'], $search) ?></span>
                             <?php endif; ?>
                             <?php if (!empty($patient['patient_phone'])): ?>
-                                <span><i class="fas fa-phone"></i> <?= htmlspecialchars($patient['patient_phone']) ?></span>
+                                <span><i class="fas fa-phone"></i> <?= highlightSearchTerm($patient['patient_phone'], $search) ?></span>
                             <?php endif; ?>
                             <?php if (!empty($patient['gender'])): ?>
                                 <span><i class="fas fa-venus-mars"></i> <?= htmlspecialchars(ucfirst($patient['gender'])) ?></span>
@@ -1472,8 +2068,16 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                         <span class="badge-value"><?= $currency ?> <?= number_format($patient['total_balance'], 0) ?></span>
                     </div>
                 </div>
+                
+                <button type="button" class="patient-toggle-btn" id="toggleBtn_<?= $patient_index ?>" 
+                        onclick="event.stopPropagation(); togglePatientCard(<?= $patient_index ?>);" 
+                        title="Fungua / Funga">
+                    <i class="fas fa-chevron-down"></i>
+                </button>
             </div>
 
+            <div class="patient-body-container" id="patientBody_<?= $patient_index ?>">
+                
             <?php foreach ($patient['visits'] as $visit_index => $visit): 
                 $visit_status = strtolower($visit['visit_status'] ?? 'pending');
                 $visit_total_rounded = roundTo50($visit['visit_total']);
@@ -1482,13 +2086,20 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                 $v_cash_disc = (float)($visit['cashier_discount'] ?? 0);
                 $v_pharm_prem = (float)($visit['pharmacy_premium'] ?? 0);
                 $v_cash_prem = (float)($visit['cashier_premium'] ?? 0);
+                
+                $v_paid_count = (int)($visit['paid_items_count'] ?? 0);
+                $v_paid_total = (float)($visit['paid_items_total'] ?? 0);
+                $v_pending_count = (int)($visit['pending_items_count'] ?? 0);
+                $v_pending_total = (float)($visit['pending_items_total'] ?? 0);
+                $v_visit_paid = (float)($visit['visit_paid'] ?? 0);
+                $v_visit_balance = (float)($visit['visit_balance'] ?? 0);
             ?>
             <div class="visit-section">
                 
                 <div class="visit-header-row1">
                     <div class="visit-info-left">
                         <span class="visit-number-badge">
-                            <i class="fas fa-notes-medical"></i> <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>
+                            <i class="fas fa-notes-medical"></i> <?= highlightSearchTerm($visit['visit_number'] ?? 'N/A', $search) ?>
                         </span>
                         <span class="visit-status-badge <?= $visit_status ?>">
                             <i class="fas fa-<?= $visit_status === 'completed' ? 'check-circle' : ($visit_status === 'cancelled' ? 'times-circle' : 'clock') ?>"></i>
@@ -1509,6 +2120,29 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                             <span class="staff-label">Reception:</span>
                             <span class="staff-name"><?= htmlspecialchars($visit['receptionist_name'] ?? 'N/A') ?></span>
                         </span>
+                    </div>
+                </div>
+
+                <div class="visit-payment-summary">
+                    <div class="vps-item paid-items">
+                        <div class="vps-label"><i class="fas fa-check-circle"></i> Items Paid</div>
+                        <div class="vps-value"><?= $v_paid_count ?> <span class="vps-currency">items</span></div>
+                        <div class="vps-sub"><i class="fas fa-money-bill-wave"></i> <?= $currency ?> <?= number_format(roundTo50($v_paid_total), 0) ?></div>
+                    </div>
+                    <div class="vps-item pending-items">
+                        <div class="vps-label"><i class="fas fa-clock"></i> Items Pending</div>
+                        <div class="vps-value"><?= $v_pending_count ?> <span class="vps-currency">items</span></div>
+                        <div class="vps-sub"><i class="fas fa-money-bill-wave"></i> <?= $currency ?> <?= number_format(roundTo50($v_pending_total), 0) ?></div>
+                    </div>
+                    <div class="vps-item visit-paid">
+                        <div class="vps-label"><i class="fas fa-hand-holding-usd"></i> Visit Paid</div>
+                        <div class="vps-value"><span class="vps-currency"><?= $currency ?></span><?= number_format(roundTo50($v_visit_paid), 0) ?></div>
+                        <div class="vps-sub"><i class="fas fa-info-circle"></i> <?= number_format($v_paid_count + $v_pending_count) ?> total items</div>
+                    </div>
+                    <div class="vps-item visit-balance">
+                        <div class="vps-label"><i class="fas fa-balance-scale"></i> Balance</div>
+                        <div class="vps-value"><span class="vps-currency"><?= $currency ?></span><?= number_format(roundTo50($v_visit_balance), 0) ?></div>
+                        <div class="vps-sub"><i class="fas fa-info-circle"></i> <?= $v_visit_balance <= 0 ? 'Fully Paid ✅' : 'Inabaki kulipwa' ?></div>
                     </div>
                 </div>
 
@@ -1562,7 +2196,16 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 
                 <div class="visit-items-container">
                     <div class="items-table-header">
-                        <span class="items-title"><i class="fas fa-list-ul"></i> Visit Items (<?= count($visit['items']) ?> items)</span>
+                        <span class="items-title">
+                            <i class="fas fa-list-ul"></i> 
+                            Bill Items (<?= count($visit['items']) ?>)
+                            <span style="color:var(--success);font-weight:800;font-size:0.68rem;background:var(--success-bg);padding:2px 8px;border-radius:6px;margin-left:6px;">
+                                ✅ <?= $v_paid_count ?> Paid
+                            </span>
+                            <span style="color:var(--danger);font-weight:800;font-size:0.68rem;background:var(--danger-bg);padding:2px 8px;border-radius:6px;margin-left:4px;">
+                                ⏳ <?= $v_pending_count ?> Pending
+                            </span>
+                        </span>
                         <div class="items-scroll-buttons">
                             <button type="button" class="scroll-btn" onclick="scrollItemsTable('itemsWrapper_<?= $patient_index ?>_<?= $visit_index ?>', 'left')"><i class="fas fa-chevron-left"></i></button>
                             <button type="button" class="scroll-btn" onclick="scrollItemsTable('itemsWrapper_<?= $patient_index ?>_<?= $visit_index ?>', 'right')"><i class="fas fa-chevron-right"></i></button>
@@ -1574,12 +2217,10 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                                 <tr>
                                     <th style="width:40px;">#</th>
                                     <th>Item Name</th>
-                                    <th>Code</th>
+                                    <th>Type</th>
                                     <th style="text-align:center;">Qty</th>
                                     <th style="text-align:right;">Unit Price</th>
-                                    <th style="text-align:right;">Total Price</th>
-                                    <th style="text-align:right;">Discount</th>
-                                    <th style="text-align:right;">Final Price</th>
+                                    <th style="text-align:right;">Total</th>
                                     <th style="text-align:center;">Status</th>
                                 </tr>
                             </thead>
@@ -1601,15 +2242,30 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                                     $cat_items = $visit['items_by_category'][$cat_key] ?? [];
                                     if (empty($cat_items)) continue;
                                     $has_any_items = true;
+                                    
+                                    $cat_paid_count = 0;
+                                    $cat_pending_count = 0;
                                     $cat_total = 0;
                                     foreach ($cat_items as $ci) {
-                                        $cat_total += (float)($ci['total_price'] ?? 0) - (float)($ci['discount_amount'] ?? 0);
+                                        $ci_status = strtolower($ci['item_status'] ?? 'pending');
+                                        $ci_amount = (float)($ci['total_price'] ?? 0) - (float)($ci['discount_amount'] ?? 0);
+                                        $cat_total += $ci_amount;
+                                        if ($ci_status === 'paid') $cat_paid_count++;
+                                        else $cat_pending_count++;
                                     }
                                 ?>
                                     <tr class="category-group-row <?= $cat_info['class'] ?>">
-                                        <td colspan="9">
+                                        <td colspan="7">
                                             <span class="category-icon"><i class="fas <?= $cat_info['icon'] ?>"></i></span>
                                             <?= htmlspecialchars($cat_info['label']) ?> (<?= count($cat_items) ?> items)
+                                            <span class="category-breakdown">
+                                                <?php if ($cat_paid_count > 0): ?>
+                                                    <span class="cb-paid">✅ <?= $cat_paid_count ?> Paid</span>
+                                                <?php endif; ?>
+                                                <?php if ($cat_pending_count > 0): ?>
+                                                    <span class="cb-pending">⏳ <?= $cat_pending_count ?> Pending</span>
+                                                <?php endif; ?>
+                                            </span>
                                             <span class="category-total"><?= $currency ?> <?= number_format(roundTo50($cat_total), 0) ?></span>
                                         </td>
                                     </tr>
@@ -1617,21 +2273,32 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                                         $item_status = strtolower($item['item_status'] ?? 'pending');
                                         $item_status_class = 'pending';
                                         $item_status_icon = 'fa-clock';
+                                        $row_class = 'item-pending';
                                         switch ($item_status) {
-                                            case 'paid': $item_status_class = 'paid'; $item_status_icon = 'fa-check-circle'; break;
-                                            case 'pending': $item_status_class = 'pending'; $item_status_icon = 'fa-clock'; break;
-                                            case 'cancelled': $item_status_class = 'cancelled'; $item_status_icon = 'fa-times-circle'; break;
+                                            case 'paid': 
+                                                $item_status_class = 'paid'; 
+                                                $item_status_icon = 'fa-check-circle'; 
+                                                $row_class = 'item-paid';
+                                                break;
+                                            case 'pending': 
+                                                $item_status_class = 'pending'; 
+                                                $item_status_icon = 'fa-clock'; 
+                                                $row_class = 'item-pending';
+                                                break;
+                                            case 'cancelled': 
+                                                $item_status_class = 'cancelled'; 
+                                                $item_status_icon = 'fa-times-circle'; 
+                                                $row_class = '';
+                                                break;
                                         }
                                     ?>
-                                        <tr>
+                                        <tr class="<?= $row_class ?>">
                                             <td style="text-align:center;font-weight:700;color:var(--text-secondary);"><?= $item_counter++ ?></td>
-                                            <td><div style="font-weight:700;font-size:0.78rem;"><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></div></td>
+                                            <td><div style="font-weight:700;font-size:0.78rem;"><?= highlightSearchTerm($item['item_name'] ?? 'N/A', $search) ?></div></td>
                                             <td>
-                                                <?php if (!empty($item['item_code'])): ?>
-                                                    <span style="font-size:0.65rem;color:var(--text-secondary);font-family:var(--font-mono);"><?= htmlspecialchars($item['item_code']) ?></span>
-                                                <?php else: ?>
-                                                    <span style="color:var(--text-secondary);font-size:0.68rem;">—</span>
-                                                <?php endif; ?>
+                                                <span style="font-size:0.6rem;background:var(--bg-body);padding:2px 8px;border-radius:5px;font-weight:700;text-transform:uppercase;">
+                                                    <?= htmlspecialchars($item['item_type'] ?? 'item') ?>
+                                                </span>
                                             </td>
                                             <td style="text-align:center;">
                                                 <span style="font-family:var(--font-mono);font-weight:800;font-size:0.78rem;background:var(--primary-bg);color:var(--primary);padding:3px 8px;border-radius:5px;">
@@ -1641,18 +2308,8 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                                             <td class="money-cell" style="font-size:0.75rem;">
                                                 <span class="currency-prefix"><?= $currency ?></span><?= number_format((float)($item['unit_price'] ?? 0), 0) ?>
                                             </td>
-                                            <td class="money-cell" style="font-size:0.75rem;">
-                                                <span class="currency-prefix"><?= $currency ?></span><?= number_format((float)($item['total_price'] ?? 0), 0) ?>
-                                            </td>
-                                            <td class="money-cell warning" style="font-size:0.75rem;">
-                                                <?php if ((float)($item['discount_amount'] ?? 0) > 0): ?>
-                                                    -<span class="currency-prefix"><?= $currency ?></span><?= number_format((float)($item['discount_amount'] ?? 0), 0) ?>
-                                                <?php else: ?>
-                                                    <span style="color:var(--text-secondary);">—</span>
-                                                <?php endif; ?>
-                                            </td>
                                             <td class="money-cell" style="font-size:0.78rem;font-weight:900;">
-                                                <span class="currency-prefix"><?= $currency ?></span><?= number_format((float)($item['total_price'] ?? 0) - (float)($item['discount_amount'] ?? 0), 0) ?>
+                                                <span class="currency-prefix"><?= $currency ?></span><?= number_format((float)($item['total_price'] ?? 0), 0) ?>
                                             </td>
                                             <td style="text-align:center;">
                                                 <span class="status-badge <?= $item_status_class ?>">
@@ -1665,7 +2322,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 
                                 <?php if (!$has_any_items): ?>
                                     <tr>
-                                        <td colspan="9">
+                                        <td colspan="7">
                                             <div class="empty-state" style="padding:30px 20px;">
                                                 <i class="fas fa-inbox" style="font-size:2rem;"></i>
                                                 <p style="font-size:0.8rem;">No items for this visit</p>
@@ -1676,22 +2333,48 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                             </tbody>
                             <tfoot>
                                 <tr class="total-row">
-                                    <td colspan="7" style="text-align:right;font-weight:900;font-size:0.82rem;color:var(--primary);">
+                                    <td colspan="5" style="text-align:right;font-weight:900;font-size:0.82rem;color:var(--primary);">
                                         <i class="fas fa-calculator"></i> VISIT TOTAL
                                     </td>
                                     <td style="text-align:right;font-weight:900;font-size:0.95rem;color:var(--primary);font-family:var(--font-mono);">
                                         <?= $currency ?> <?= number_format($visit_total_rounded, 0) ?>
                                     </td>
-                                    <td style="text-align:center;font-weight:800;color:var(--primary);font-size:0.72rem;">
-                                        <?= count($visit['items']) ?> items
+                                    <td style="text-align:center;font-weight:800;font-size:0.68rem;">
+                                        <span style="color:var(--success);">✅ <?= $v_paid_count ?></span> / <span style="color:var(--danger);">⏳ <?= $v_pending_count ?></span>
                                     </td>
                                 </tr>
+                                <tr style="background:linear-gradient(135deg, rgba(5,150,105,0.1), rgba(5,150,105,0.05));">
+                                    <td colspan="5" style="text-align:right;font-weight:800;font-size:0.75rem;color:var(--success);">
+                                        <i class="fas fa-check-circle"></i> PAID TOTAL
+                                    </td>
+                                    <td style="text-align:right;font-weight:900;font-size:0.85rem;color:var(--success);font-family:var(--font-mono);">
+                                        <?= $currency ?> <?= number_format(roundTo50($v_visit_paid), 0) ?>
+                                    </td>
+                                    <td style="text-align:center;">
+                                        <span class="status-badge paid" style="font-size:0.55rem;"><i class="fas fa-check"></i> PAID</span>
+                                    </td>
+                                </tr>
+                                <?php if ($v_visit_balance > 0): ?>
+                                <tr style="background:linear-gradient(135deg, rgba(220,38,38,0.1), rgba(220,38,38,0.05));">
+                                    <td colspan="5" style="text-align:right;font-weight:800;font-size:0.75rem;color:var(--danger);">
+                                        <i class="fas fa-exclamation-circle"></i> PENDING BALANCE
+                                    </td>
+                                    <td style="text-align:right;font-weight:900;font-size:0.85rem;color:var(--danger);font-family:var(--font-mono);">
+                                        <?= $currency ?> <?= number_format(roundTo50($v_visit_balance), 0) ?>
+                                    </td>
+                                    <td style="text-align:center;">
+                                        <span class="status-badge pending" style="font-size:0.55rem;"><i class="fas fa-clock"></i> DUE</span>
+                                    </td>
+                                </tr>
+                                <?php endif; ?>
                             </tfoot>
                         </table>
                     </div>
                 </div>
             </div>
             <?php endforeach; ?>
+
+            </div>
 
             <div class="patient-footer">
                 <div class="footer-left">
@@ -1700,8 +2383,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                         END OF <?= htmlspecialchars(strtoupper($patient['patient_name'] ?? 'N/A')) ?>
                     </span>
                     <span class="footer-visit-count">
-                        <i class="fas fa-notes-medical"></i>
-                        <?= $visit_count ?> Visit<?= $visit_count != 1 ? 's' : '' ?>
+                        <i class="fas fa-notes-medical"></i> <?= $visit_count ?> Visit<?= $visit_count != 1 ? 's' : '' ?>
                     </span>
                 </div>
                 <div class="footer-right">
@@ -1720,8 +2402,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                     </span>
                     <?php else: ?>
                     <span class="footer-stat success">
-                        <i class="fas fa-check-double"></i>
-                        Fully Paid
+                        <i class="fas fa-check-double"></i> Fully Paid
                     </span>
                     <?php endif; ?>
                 </div>
@@ -1737,7 +2418,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             </div>
             <div class="empty-state">
                 <i class="fas fa-file-invoice"></i>
-                <p>No patient bills found for <?= htmlspecialchars($date_label) ?></p>
+                <p>No patient bills found <?= $patient_filter !== 'all' ? 'for filter: ' . strtoupper($patient_filter) : 'for ' . htmlspecialchars($date_label) ?><?= !empty($search) ? ' (Search: "' . htmlspecialchars($search) . '")' : '' ?></p>
             </div>
         </div>
     <?php endif; ?>
@@ -1773,16 +2454,16 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                     <div class="otc-sale-header">
                         <div class="otc-header-left">
                             <span class="otc-sale-id-badge">
-                                <i class="fas fa-receipt"></i> <?= htmlspecialchars($otc['sale_number'] ?? 'N/A') ?>
+                                <i class="fas fa-receipt"></i> <?= highlightSearchTerm($otc['sale_number'] ?? 'N/A', $search) ?>
                             </span>
                             <div class="otc-customer-info">
                                 <div class="otc-customer-name">
                                     <i class="fas fa-user-circle"></i>
-                                    <?= htmlspecialchars($otc['customer_name'] ?? 'Walk-in Customer') ?>
+                                    <?= highlightSearchTerm($otc['customer_name'] ?? 'Walk-in Customer', $search) ?>
                                 </div>
                                 <?php if (!empty($otc['customer_phone'])): ?>
                                     <div class="otc-customer-phone">
-                                        <i class="fas fa-phone"></i> <?= htmlspecialchars($otc['customer_phone']) ?>
+                                        <i class="fas fa-phone"></i> <?= highlightSearchTerm($otc['customer_phone'], $search) ?>
                                     </div>
                                 <?php endif; ?>
                             </div>
@@ -1799,7 +2480,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                                     <?php endif; ?>
                                 </span>
                             </div>
-                            
                             <div class="otc-stat-chip premium">
                                 <span class="stat-chip-label"><i class="fas fa-star"></i> Premium</span>
                                 <span class="stat-chip-value">
@@ -1810,7 +2490,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                                     <?php endif; ?>
                                 </span>
                             </div>
-                            
                             <div class="otc-stat-chip grand-total">
                                 <span class="stat-chip-label"><i class="fas fa-calculator"></i> Grand Total</span>
                                 <span class="stat-chip-value"><?= $currency ?> <?= number_format((float)$otc['total_amount'], 0) ?></span>
@@ -1850,7 +2529,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                                             <td>
                                                 <div class="otc-item-name-cell">
                                                     <span class="item-icon"><i class="fas fa-capsules"></i></span>
-                                                    <?= htmlspecialchars($item['item_name'] ?? 'N/A') ?>
+                                                    <?= highlightSearchTerm($item['item_name'] ?? 'N/A', $search) ?>
                                                 </div>
                                             </td>
                                             <td style="text-align:center;">
@@ -1891,18 +2570,9 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                     
                     <div class="otc-sale-footer">
                         <div class="otc-footer-info">
-                            <span class="otc-footer-stat">
-                                <i class="fas fa-list-ul" style="color:var(--cyan);"></i>
-                                Items: <strong><?= $item_count ?></strong>
-                            </span>
-                            <span class="otc-footer-stat">
-                                <i class="fas fa-store-alt" style="color:var(--primary);"></i>
-                                Branch: <strong><?= htmlspecialchars($otc['branch_name'] ?? 'N/A') ?></strong>
-                            </span>
-                            <span class="otc-footer-stat">
-                                <i class="fas fa-credit-card" style="color:var(--primary);"></i>
-                                Subtotal: <strong><?= $currency ?> <?= number_format((float)($otc['subtotal'] ?? 0), 0) ?></strong>
-                            </span>
+                            <span class="otc-footer-stat"><i class="fas fa-list-ul" style="color:var(--cyan);"></i> Items: <strong><?= $item_count ?></strong></span>
+                            <span class="otc-footer-stat"><i class="fas fa-store-alt" style="color:var(--primary);"></i> Branch: <strong><?= htmlspecialchars($otc['branch_name'] ?? 'N/A') ?></strong></span>
+                            <span class="otc-footer-stat"><i class="fas fa-credit-card" style="color:var(--primary);"></i> Subtotal: <strong><?= $currency ?> <?= number_format((float)($otc['subtotal'] ?? 0), 0) ?></strong></span>
                         </div>
                         <div class="otc-footer-info">
                             <?php if ($otc_status === 'paid'): ?>
@@ -1967,7 +2637,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                         <td style="text-align:right;color:var(--text-secondary);"><?= number_format($medication_count) ?></td>
                     </tr>
                     <tr>
-                        <td><span class="dot-indicator" style="background:#059669;"></span> <strong>Clinical Services</strong> (Cons + Proc + Equip)</td>
+                        <td><span class="dot-indicator" style="background:#059669;"></span> <strong>Clinical Services</strong></td>
                         <td class="money-cell" style="color:#059669;font-weight:900;"><span class="currency-prefix"><?= $currency ?></span><?= number_format($clinical_services_revenue, 0) ?></td>
                         <td style="text-align:right;color:var(--text-secondary);">—</td>
                         <td style="text-align:right;color:var(--text-secondary);"><?= number_format($clinical_services_count) ?></td>
@@ -2010,7 +2680,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                     </tr>
                     <?php if ($total_discounts > 0): ?>
                     <tr style="background:var(--warning-bg);">
-                        <td style="padding-left:20px;"><i class="fas fa-tag" style="color:var(--warning);"></i> <strong style="color:var(--warning);">Total Discounts</strong> (Pharm: <?= number_format($pharmacy_discounts, 0) ?> + Cashier: <?= number_format($cashier_discounts, 0) ?>)</td>
+                        <td style="padding-left:20px;"><i class="fas fa-tag" style="color:var(--warning);"></i> <strong style="color:var(--warning);">Total Discounts</strong></td>
                         <td class="money-cell warning">-<?= number_format($total_discounts, 0) ?></td>
                         <td style="text-align:right;color:var(--warning);">—</td>
                         <td style="text-align:right;color:var(--warning);">—</td>
@@ -2018,14 +2688,14 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                     <?php endif; ?>
                     <?php if ($total_premiums > 0): ?>
                     <tr style="background:var(--purple-bg);">
-                        <td style="padding-left:20px;"><i class="fas fa-star" style="color:var(--purple);"></i> <strong style="color:var(--purple);">Total Premiums</strong> (Pharm: <?= number_format($pharmacy_premiums, 0) ?> + Cashier: <?= number_format($cashier_premiums, 0) ?>)</td>
+                        <td style="padding-left:20px;"><i class="fas fa-star" style="color:var(--purple);"></i> <strong style="color:var(--purple);">Total Premiums</strong></td>
                         <td class="money-cell purple">+<?= number_format($total_premiums, 0) ?></td>
                         <td style="text-align:right;color:var(--purple);">—</td>
                         <td style="text-align:right;color:var(--purple);">—</td>
                     </tr>
                     <?php endif; ?>
                     <tr class="total-row">
-                        <td style="font-weight:800;font-size:0.88rem;"><i class="fas fa-calculator"></i> TOTAL REVENUE (Payments + OTC)</td>
+                        <td style="font-weight:800;font-size:0.88rem;"><i class="fas fa-calculator"></i> TOTAL REVENUE</td>
                         <td style="text-align:right;font-weight:800;font-size:0.9rem;font-family:var(--font-mono);"><?= $currency ?> <?= number_format($total_revenue, 0) ?></td>
                         <td style="text-align:right;font-weight:800;font-size:0.88rem;">100%</td>
                         <td style="text-align:right;font-weight:800;font-size:0.88rem;"><?= number_format($total_transactions) ?></td>
@@ -2075,7 +2745,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                     ?>
                         <tr>
                             <td style="text-align:center;font-weight:700;color:var(--text-secondary);"><?= $exp_num++ ?></td>
-                            <td><span class="expense-ref-badge"><?= htmlspecialchars($exp['expense_number'] ?? 'N/A') ?></span></td>
+                            <td><span class="expense-ref-badge"><?= highlightSearchTerm($exp['expense_number'] ?? 'N/A', $search) ?></span></td>
                             <td><span class="expense-category-badge"><i class="fas fa-tag"></i> <?= htmlspecialchars($exp['category'] ?? 'N/A') ?></span></td>
                             <td style="max-width:250px;"><div style="font-size:0.75rem;font-weight:500;"><?= htmlspecialchars($exp['description'] ?? 'N/A') ?></div></td>
                             <td><span class="payment-badge"><i class="fas fa-credit-card"></i> <?= htmlspecialchars(ucfirst(str_replace('_', ' ', $exp['payment_method'] ?? 'Cash'))) ?></span></td>
@@ -2147,6 +2817,216 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 </main>
 
 <script>
+// ================================================================
+// ✅ LIVE SEARCH WITH HIGHLIGHT
+// ================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    
+    const searchInput = document.getElementById('liveSearchInput');
+    const searchWrapper = document.getElementById('liveSearchWrapper');
+    const resultsCount = document.getElementById('liveResultsCount');
+    const clearBtn = document.getElementById('liveClearBtn');
+    const paymentSelect = document.getElementById('paymentMethodSelect');
+    const dateFrom = document.getElementById('dateFromInput');
+    const dateTo = document.getElementById('dateToInput');
+    
+    if (!searchInput) return;
+    
+    const patientCards = document.querySelectorAll('.patient-group-card');
+    const otcCards = document.querySelectorAll('.otc-sale-card');
+    const patientCardsOriginal = new Map();
+    const otcCardsOriginal = new Map();
+    
+    patientCards.forEach((card, i) => {
+        patientCardsOriginal.set(i, card.innerHTML);
+    });
+    otcCards.forEach((card, i) => {
+        otcCardsOriginal.set(i, card.innerHTML);
+    });
+    
+    function highlightInElement(element, query) {
+        if (!query) return;
+        const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`(${escaped})`, 'gi');
+        
+        const textSelectors = [
+            '.patient-name', '.patient-meta span', '.received-by-name',
+            '.otc-customer-name', '.otc-customer-phone', '.otc-sale-id-badge',
+            '.visit-number-badge', '.expense-ref-badge', '.otc-item-name-cell',
+            '.badge-value', '.patient-number-badge'
+        ];
+        
+        textSelectors.forEach(selector => {
+            element.querySelectorAll(selector).forEach(el => {
+                if (el.querySelector('mark.search-highlight')) return;
+                
+                const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+                const textNodes = [];
+                let node;
+                while (node = walker.nextNode()) {
+                    if (node.nodeValue.trim()) textNodes.push(node);
+                }
+                
+                textNodes.forEach(textNode => {
+                    const text = textNode.nodeValue;
+                    if (regex.test(text)) {
+                        const span = document.createElement('span');
+                        span.innerHTML = text.replace(regex, '<mark class="search-highlight">$1</mark>');
+                        textNode.parentNode.replaceChild(span, textNode);
+                    }
+                });
+            });
+        });
+    }
+    
+    function applyLiveFilter(query) {
+        const q = query.trim().toLowerCase();
+        let visiblePatients = 0;
+        let visibleOtc = 0;
+        
+        patientCards.forEach((card, i) => {
+            const original = patientCardsOriginal.get(i);
+            
+            if (!q) {
+                card.style.display = '';
+                card.innerHTML = original;
+                visiblePatients++;
+                return;
+            }
+            
+            card.innerHTML = original;
+            
+            const patientName = (card.querySelector('.patient-name')?.textContent || '').toLowerCase();
+            const patientCode = (card.querySelector('.patient-meta span:nth-child(1)')?.textContent || '').toLowerCase();
+            const patientPhone = (card.querySelector('.patient-meta span:nth-child(2)')?.textContent || '').toLowerCase();
+            const visitNumbers = Array.from(card.querySelectorAll('.visit-number-badge'))
+                .map(el => el.textContent.toLowerCase()).join(' ');
+            const itemNames = Array.from(card.querySelectorAll('.data-table tbody td div'))
+                .map(el => el.textContent.toLowerCase()).join(' ');
+            
+            const searchableText = `${patientName} ${patientCode} ${patientPhone} ${visitNumbers} ${itemNames}`;
+            
+            if (searchableText.includes(q)) {
+                card.style.display = '';
+                visiblePatients++;
+                highlightInElement(card, query);
+            } else {
+                card.style.display = 'none';
+            }
+        });
+        
+        otcCards.forEach((card, i) => {
+            const original = otcCardsOriginal.get(i);
+            
+            if (!q) {
+                card.style.display = '';
+                card.innerHTML = original;
+                visibleOtc++;
+                return;
+            }
+            
+            card.innerHTML = original;
+            
+            const saleNumber = (card.querySelector('.otc-sale-id-badge')?.textContent || '').toLowerCase();
+            const customerName = (card.querySelector('.otc-customer-name')?.textContent || '').toLowerCase();
+            const customerPhone = (card.querySelector('.otc-customer-phone')?.textContent || '').toLowerCase();
+            const itemNames = Array.from(card.querySelectorAll('.otc-item-name-cell'))
+                .map(el => el.textContent.toLowerCase()).join(' ');
+            
+            const searchableText = `${saleNumber} ${customerName} ${customerPhone} ${itemNames}`;
+            
+            if (searchableText.includes(q)) {
+                card.style.display = '';
+                visibleOtc++;
+                highlightInElement(card, query);
+            } else {
+                card.style.display = 'none';
+            }
+        });
+        
+        if (resultsCount) {
+            resultsCount.innerHTML = `<i class="fas fa-users"></i> ${visiblePatients} Patient${visiblePatients !== 1 ? 's' : ''} • <i class="fas fa-cash-register"></i> ${visibleOtc} OTC`;
+        }
+    }
+    
+    let liveTimeout;
+    searchInput.addEventListener('input', function() {
+        const query = this.value;
+        
+        if (clearBtn) {
+            clearBtn.style.display = query.length > 0 ? 'inline-flex' : 'none';
+        }
+        
+        if (searchWrapper) {
+            searchWrapper.classList.add('live-typing');
+        }
+        
+        clearTimeout(liveTimeout);
+        liveTimeout = setTimeout(() => {
+            applyLiveFilter(query);
+        }, 30);
+    });
+    
+    searchInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            this.closest('form').submit();
+        }
+    });
+    
+    if (clearBtn) {
+        clearBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            searchInput.value = '';
+            clearBtn.style.display = 'none';
+            applyLiveFilter('');
+            searchInput.focus();
+        });
+    }
+    
+    if (paymentSelect) {
+        paymentSelect.addEventListener('change', function() {
+            this.closest('form').submit();
+        });
+    }
+    
+    if (dateFrom && dateTo) {
+        [dateFrom, dateTo].forEach(input => {
+            input.addEventListener('change', function() {
+                this.closest('form').submit();
+            });
+        });
+    }
+    
+    if (searchInput.value.trim()) {
+        applyLiveFilter(searchInput.value);
+    }
+    
+    var firstBody = document.getElementById('patientBody_0');
+    var firstBtn = document.getElementById('toggleBtn_0');
+    if (firstBody && firstBtn) {
+        setTimeout(function() {
+            firstBody.classList.add('open');
+            firstBtn.classList.add('rotated');
+        }, 200);
+    }
+});
+
+function togglePatientCard(index) {
+    var body = document.getElementById('patientBody_' + index);
+    var btn = document.getElementById('toggleBtn_' + index);
+    
+    if (!body || !btn) return;
+    
+    if (body.classList.contains('open')) {
+        body.classList.remove('open');
+        btn.classList.remove('rotated');
+    } else {
+        body.classList.add('open');
+        btn.classList.add('rotated');
+    }
+}
+
 function scrollItemsTable(wrapperId, direction) {
     var wrapper = document.getElementById(wrapperId);
     if (!wrapper) return;
@@ -2177,6 +3057,22 @@ function scrollOtcCard(btn, direction) {
     wrapper.scrollBy({ left: direction === 'left' ? -amount : amount, behavior: 'smooth' });
 }
 
+function resetCustomFilter() {
+    var today = new Date();
+    var dateFrom = document.getElementById('dateFromInput');
+    var dateTo = document.getElementById('dateToInput');
+    if (dateFrom) dateFrom.value = formatDateForInput(today);
+    if (dateTo) dateTo.value = formatDateForInput(today);
+}
+
+function formatDateForInput(date) {
+    var year = date.getFullYear();
+    var month = String(date.getMonth() + 1).padStart(2, '0');
+    var day = String(date.getDate()).padStart(2, '0');
+    return year + '-' + month + '-' + day;
+}
+
+// CHARTS
 document.addEventListener('DOMContentLoaded', function() {
     var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
     var textColor = isDark ? '#94A3B8' : '#64748B';
@@ -2234,14 +3130,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-console.log('%c📊 Revenue Report - BRANCH LOCKED V2 (ALIGNED WITH DASHBOARD)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#F59E0B; font-weight:bold;');
-console.log('%c✅ Branch: <?= htmlspecialchars($branch_name_display) ?> (ID: <?= $selected_branch_id ?>)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Patient Payments: patient_id + visit_id + NOT BILL-OTC-%', 'font-size:12px; color:#10B981; font-weight:bold;');
-console.log('%c✅ OTC: paid + partial', 'font-size:12px; color:#10B981; font-weight:bold;');
+console.log('%c📊 Revenue Report V62 - AUDIT (PENDING BILLS FIXED)', 'font-size:18px; font-weight:bold; color:#059669;');
+console.log('%c✅ V62: Pending bills zinaonekana bila kuhitaji payments', 'font-size:13px; color:#059669; font-weight:bold;');
+console.log('%c✅ V62: All filter inaonyesha pending + paid + partial', 'font-size:13px; color:#7C3AED; font-weight:bold;');
+console.log('%c✅ V61: Quick Filters JUU + Patients Filter CHINI', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
 console.log('%c💰 Total Revenue: <?= $currency ?> <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
-console.log('%c📊 Patient Payments: <?= $currency ?> <?= number_format($patient_bills_revenue_rounded, 0) ?>', 'font-size:13px; color:#059669; font-weight:bold;');
-console.log('%c🛒 OTC Revenue: <?= $currency ?> <?= number_format($otc_revenue, 0) ?>', 'font-size:13px; color:#0891B2; font-weight:bold;');
 </script>
 
 </body>

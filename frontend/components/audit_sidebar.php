@@ -1,14 +1,14 @@
 <?php
 // ================================================================
 // FILE: frontend/components/audit_sidebar.php
-// AUDIT - SIDEBAR (V10 - OTHER SERVICES = "All" BADGE)
-// ✅ Branch ya aliye login TU
-// ✅ Uses AUDIT links (/pages/audit/...) — NOT admin links
-// ✅ Revenue = Payments (received_at) + OTC (created_at) — TODAY ONLY
-// ✅ Other Services badge = "All" (static, haibadiliki)
-// ✅ Partial payments zinaonekana
+// AUDIT - SIDEBAR (V12 - BRANCH LOCKED + STOCK MOVEMENT ADDED)
+// ✅ Revenue = Payments (patient bills) + OTC (paid+partial) — LEO TU
+// ✅ Branch ya aliye login TU - kila query ina branch_id
+// ✅ Hakuna double counting
+// ✅ Other Services badge = "All" (static)
+// ✅ NEW: Stock Movement badge (medications sold, equipment used, stock in/out)
+// ✅ Auto-refresh badge nyingine pekee (Revenue static kutoka PHP)
 // ✅ Inareset 00:00 kila siku
-// ✅ Auto-refresh kila dakika 1
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -43,7 +43,7 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 $user_is_online = $_SESSION['is_online'] ?? 1;
 
-// ✅ AUDIT anaona branch yake TU
+// ✅ AUDIT anaona branch yake TU - LAZIMA
 $selected_branch_id = (int)$user_branch_id;
 
 // ================================================================
@@ -55,6 +55,7 @@ if (!isset($_SESSION['audit_sidebar_last_date']) || $_SESSION['audit_sidebar_las
     unset($_SESSION['audit_cached_revenue_today']);
     unset($_SESSION['audit_cached_bills_today']);
     unset($_SESSION['audit_cached_otc_today']);
+    unset($_SESSION['audit_cached_stock_today']);
 }
 
 // ================================================================
@@ -82,6 +83,9 @@ $branch_params_p = [(int)$user_branch_id];
 $branch_cond_o = " AND o.branch_id = ?";
 $branch_params_o = [(int)$user_branch_id];
 
+$branch_cond_sm = " AND sm.branch_id = ?";
+$branch_params_sm = [(int)$user_branch_id];
+
 // ================================================================
 // GET BADGE DATA
 // ================================================================
@@ -101,18 +105,30 @@ $today_audit_logs = 0;
 $total_branches = 0;
 $total_lab_tests = 0;
 
+// ✅ STOCK MOVEMENT COUNTS (LEO TU)
+$stock_movements_today = 0;
+$medications_sold_today = 0;
+$equipment_used_today = 0;
+$stock_added_today = 0;
+$stock_removed_today = 0;
+
 if ($db !== null) {
     
     // ============================================================
-    // REVENUE: PAYMENTS (LEO TU) — payments.received_at
+    // ✅ REVENUE: PAYMENTS (LEO TU) - ALIGNED WITH DASHBOARD
+    // ✅ patient_id NOT NULL + visit_id NOT NULL + NOT BILL-OTC-%
+    // ✅ LAZIMA branch ya mtumiaji
     // ============================================================
     try {
         $sql = "SELECT COALESCE(SUM(p.amount), 0) as total, COUNT(*) as count 
                 FROM payments p
                 INNER JOIN bills b ON p.bill_id = b.id
                 WHERE p.bill_id IS NOT NULL
-                AND DATE(p.received_at) = CURDATE()
-                AND b.branch_id = ?";
+                AND b.patient_id IS NOT NULL
+                AND b.visit_id IS NOT NULL
+                AND b.bill_number NOT LIKE 'BILL-OTC-%'
+                AND b.branch_id = ?
+                AND DATE(p.received_at) = CURDATE()";
         $stmt = $db->prepare($sql);
         $stmt->execute([(int)$user_branch_id]);
         $data = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -125,12 +141,14 @@ if ($db !== null) {
     }
     
     // ============================================================
-    // OTC REVENUE (LEO TU) — otc_sales.created_at
+    // ✅ OTC REVENUE (LEO TU) - ALIGNED WITH DASHBOARD
+    // ✅ paid + partial (SIYO paid pekee)
+    // ✅ LAZIMA branch ya mtumiaji
     // ============================================================
     try {
         $sql = "SELECT COALESCE(SUM(o.total_amount), 0) as total, COUNT(*) as count 
                 FROM otc_sales o
-                WHERE o.payment_status = 'paid' 
+                WHERE o.payment_status IN ('paid', 'partial')
                 AND DATE(o.created_at) = CURDATE()
                 $branch_cond_o";
         $stmt = $db->prepare($sql);
@@ -147,7 +165,7 @@ if ($db !== null) {
     $total_revenue_today = $bills_today + $otc_today;
     
     // ============================================================
-    // PATIENTS
+    // PATIENTS - branch ya mtumiaji
     // ============================================================
     try {
         $sql = "SELECT COUNT(*) as count FROM patients WHERE 1=1" . $branch_cond;
@@ -162,7 +180,7 @@ if ($db !== null) {
     } catch (Exception $e) {}
     
     // ============================================================
-    // EMPLOYEES
+    // EMPLOYEES - branch ya mtumiaji
     // ============================================================
     try {
         $sql = "SELECT COUNT(*) as count FROM users WHERE role NOT IN ('admin', 'audit') AND status = 'active'" . $branch_cond;
@@ -177,7 +195,7 @@ if ($db !== null) {
     } catch (Exception $e) {}
     
     // ============================================================
-    // INVENTORY
+    // INVENTORY - branch ya mtumiaji
     // ============================================================
     try {
         $sql = "SELECT COUNT(*) as count FROM medications_inventory WHERE status = 'active'" . $branch_cond;
@@ -192,7 +210,104 @@ if ($db !== null) {
     } catch (Exception $e) {}
     
     // ============================================================
-    // LAB TESTS
+    // ✅ STOCK MOVEMENTS (LEO TU) - branch ya mtumiaji
+    // Inahesabu: medications sold, equipment used, stock added, stock removed
+    // ============================================================
+    try {
+        $check_sm = $db->query("SHOW TABLES LIKE 'stock_movements'");
+        $has_stock_movements = ($check_sm && $check_sm->rowCount() > 0);
+        
+        if ($has_stock_movements) {
+            // Total movements zote leo
+            $sql = "SELECT COUNT(*) as count 
+                    FROM stock_movements sm
+                    WHERE DATE(sm.created_at) = CURDATE()
+                    $branch_cond_sm";
+            $stmt = $db->prepare($sql);
+            $stmt->execute($branch_params_sm);
+            $stock_movements_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // Medications sold
+            try {
+                $sql = "SELECT COUNT(*) as count 
+                        FROM stock_movements sm
+                        WHERE DATE(sm.created_at) = CURDATE()
+                        AND sm.movement_type IN ('sale', 'dispensed', 'sold', 'otc_sale')
+                        $branch_cond_sm";
+                $stmt = $db->prepare($sql);
+                $stmt->execute($branch_params_sm);
+                $medications_sold_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            } catch (Exception $e) {}
+            
+            // Equipment used for test
+            try {
+                $sql = "SELECT COUNT(*) as count 
+                        FROM stock_movements sm
+                        WHERE DATE(sm.created_at) = CURDATE()
+                        AND sm.movement_type IN ('equipment_use', 'test_use', 'equipment', 'lab_use')
+                        $branch_cond_sm";
+                $stmt = $db->prepare($sql);
+                $stmt->execute($branch_params_sm);
+                $equipment_used_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            } catch (Exception $e) {}
+            
+            // Stock added
+            try {
+                $sql = "SELECT COUNT(*) as count 
+                        FROM stock_movements sm
+                        WHERE DATE(sm.created_at) = CURDATE()
+                        AND sm.movement_type IN ('in', 'added', 'purchase', 'restock', 'received')
+                        $branch_cond_sm";
+                $stmt = $db->prepare($sql);
+                $stmt->execute($branch_params_sm);
+                $stock_added_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            } catch (Exception $e) {}
+            
+            // Stock removed
+            try {
+                $sql = "SELECT COUNT(*) as count 
+                        FROM stock_movements sm
+                        WHERE DATE(sm.created_at) = CURDATE()
+                        AND sm.movement_type IN ('out', 'removed', 'damaged', 'expired', 'adjustment', 'transfer')
+                        $branch_cond_sm";
+                $stmt = $db->prepare($sql);
+                $stmt->execute($branch_params_sm);
+                $stock_removed_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            } catch (Exception $e) {}
+        } else {
+            // Fallback: bill_items + otc_sale_items kwa branch ya mtumiaji
+            try {
+                $sql = "SELECT COUNT(*) as count 
+                        FROM bill_items bi
+                        INNER JOIN bills b ON bi.bill_id = b.id
+                        WHERE DATE(b.created_at) = CURDATE()
+                        AND bi.item_type IN ('medication', 'medicine', 'drug')
+                        AND b.branch_id = ?";
+                $stmt = $db->prepare($sql);
+                $stmt->execute([(int)$user_branch_id]);
+                $medications_sold_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            } catch (Exception $e) {}
+            
+            try {
+                $sql = "SELECT COUNT(*) as count 
+                        FROM otc_sale_items osi
+                        INNER JOIN otc_sales o ON osi.otc_sale_id = o.id
+                        WHERE DATE(o.created_at) = CURDATE()
+                        AND o.payment_status IN ('paid', 'partial')
+                        AND o.branch_id = ?";
+                $stmt = $db->prepare($sql);
+                $stmt->execute([(int)$user_branch_id]);
+                $medications_sold_today += (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            } catch (Exception $e) {}
+            
+            $stock_movements_today = $medications_sold_today + $equipment_used_today + $stock_added_today + $stock_removed_today;
+        }
+    } catch (Exception $e) {
+        error_log("Stock movements error: " . $e->getMessage());
+    }
+    
+    // ============================================================
+    // LAB TESTS - branch ya mtumiaji
     // ============================================================
     try {
         $sql = "SELECT COUNT(*) as count FROM lab_tests WHERE status != 'cancelled'" . $branch_cond;
@@ -207,7 +322,7 @@ if ($db !== null) {
     }
     
     // ============================================================
-    // AUDIT LOGS
+    // AUDIT LOGS - branch ya mtumiaji
     // ============================================================
     try {
         $sql = "SELECT COUNT(*) as count FROM activity_logs WHERE 1=1" . $branch_cond;
@@ -222,7 +337,7 @@ if ($db !== null) {
     } catch (Exception $e) {}
     
     // ============================================================
-    // BRANCHES (kwa display tu - total branches count)
+    // BRANCHES (kwa display tu)
     // ============================================================
     try {
         $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
@@ -246,10 +361,11 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 ?>
 
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
 <style>
 /* ================================================================
-   AUDIT SIDEBAR STYLES (V10)
+   AUDIT SIDEBAR STYLES (V12)
    ================================================================ */
 
 .sidebar {
@@ -481,7 +597,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     font-weight: 700;
 }
 
-/* ✅ OTHER SERVICES BADGE = "All" (STATIC) */
 .sidebar-link .badge.badge-services {
     background: linear-gradient(135deg, #0891B2, #0E7490) !important;
     box-shadow: 0 2px 8px rgba(8, 145, 178, 0.6);
@@ -491,6 +606,15 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-family: 'Inter', sans-serif !important;
+}
+
+/* ✅ NEW: STOCK MOVEMENT BADGE */
+.sidebar-link .badge.badge-stock {
+    background: linear-gradient(135deg, #F97316, #EA580C) !important;
+    box-shadow: 0 2px 8px rgba(249, 115, 22, 0.6);
+    font-size: 0.58rem;
+    padding: 2px 8px;
+    font-weight: 700;
 }
 
 .sidebar-link:hover .badge {
@@ -781,6 +905,12 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                 <i class="fas fa-eye"></i> VIEW ONLY
             </span>
         </div>
+        <!-- ✅ BRANCH TAG -->
+        <div style="margin-top:6px;padding:0 2px;">
+            <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(255,255,255,0.12);color:white;padding:3px 10px;border-radius:6px;font-size:0.6rem;font-weight:600;border:1px solid rgba(255,255,255,0.15);">
+                <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
+            </span>
+        </div>
     </div>
     
     <!-- NAVIGATION -->
@@ -796,7 +926,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         
         <div class="nav-label"><span class="label-icon">📊</span> Reports</div>
         
-        <!-- REVENUE BADGE: LEO TU -->
+        <!-- ✅ REVENUE BADGE - INAONYESHA MARA MOJA kutoka PHP (branch ya mtumiaji) -->
         <a href="/dispensary_system/frontend/pages/audit/revenue.php?quick=today" 
            class="sidebar-link <?= isActive('revenue.php') || isAuditPage(['revenue_details.php']) ? 'active' : '' ?>">
             <i class="fas fa-chart-line"></i>
@@ -815,6 +945,17 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <?php endif; ?>
         </a>
         
+        <!-- ✅ NEW: STOCK MOVEMENT -->
+        <a href="/dispensary_system/frontend/pages/audit/stock_movement.php" 
+           class="sidebar-link <?= isActive('stock_movement.php') || isAuditPage(['stock_movement_details.php', 'stock_in.php', 'stock_out.php', 'medication_movement.php', 'equipment_usage.php']) ? 'active' : '' ?>">
+            <i class="fas fa-exchange-alt"></i>
+            <span class="link-text">Stock Movement</span>
+            <span class="badge badge-stock" id="badgeStockMovement"><?= number_format($stock_movements_today) ?></span>
+            <?php if ($medications_sold_today > 0): ?>
+                <span class="badge badge-new" id="badgeStockToday">+<?= $medications_sold_today ?></span>
+            <?php endif; ?>
+        </a>
+        
         <!-- LAB TESTS -->
         <a href="/dispensary_system/frontend/pages/audit/lab_tests.php" 
            class="sidebar-link <?= isActive('lab_tests.php') || isAuditPage(['lab_test_details.php', 'view_lab_test.php', 'edit_lab_test.php']) ? 'active' : '' ?>">
@@ -823,7 +964,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <span class="badge badge-lab" id="badgeLabTests"><?= number_format($total_lab_tests) ?></span>
         </a>
         
-        <!-- ✅ OTHER SERVICES - BADGE "All" (STATIC) -->
+        <!-- OTHER SERVICES -->
         <a href="/dispensary_system/frontend/pages/audit/other_services.php" 
            class="sidebar-link <?= isActive('other_services.php') || isAuditPage(['other_service_details.php', 'view_service.php', 'edit_service.php', 'consultations.php', 'procedures.php', 'equipment_services.php']) ? 'active' : '' ?>">
             <i class="fas fa-concierge-bell"></i>
@@ -1072,12 +1213,13 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 
 // ================================================================
 // ✅ AUTO REFRESH SIDEBAR BADGE KILA DAKIKA 1
-// (Other Services badge = "All" - STATIC, haibadiliki)
-// Branch ya mtumiaji TU - haitokani na URL
+// ✅ Revenue badge HAIRefresh - inatumia PHP value (SAHIHI)
+// ✅ Badge nyingine zina-refresh kutoka API
+// ✅ Branch ya mtumiaji TU
+// ✅ NEW: Stock Movement badge ina-refresh
 // ================================================================
 (function() {
     var lastDate = new Date().toDateString();
-    // ✅ Branch ya mtumiaji moja kwa moja kutoka PHP session
     var userBranchId = <?= (int)$user_branch_id ?>;
     
     function refreshBadges() {
@@ -1088,7 +1230,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             return;
         }
         
-        // ✅ Tuma branch_id ya mtumiaji tu
         var url = '/dispensary_system/frontend/api/get_sidebar_badges.php?branch=' + userBranchId + '&role=audit&_t=' + Date.now();
         
         fetch(url, { 
@@ -1101,14 +1242,17 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.success) {
-                    var revBadge = document.getElementById('badgeRevenue');
-                    if (revBadge && data.total_revenue_today !== undefined) {
-                        revBadge.textContent = 'TSh ' + Number(data.total_revenue_today).toLocaleString();
-                    }
+                    // ❌ REVENUE BADGE - IMEONDOLWA (inatumia PHP value)
                     
                     var invBadge = document.getElementById('badgeInventory');
                     if (invBadge && data.total_inventory_items !== undefined) {
                         invBadge.textContent = data.total_inventory_items;
+                    }
+                    
+                    // ✅ STOCK MOVEMENT BADGE UPDATE
+                    var stockBadge = document.getElementById('badgeStockMovement');
+                    if (stockBadge && data.stock_movements_today !== undefined) {
+                        stockBadge.textContent = Number(data.stock_movements_today).toLocaleString();
                     }
                     
                     var labBadge = document.getElementById('badgeLabTests');
@@ -1116,8 +1260,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                         labBadge.textContent = Number(data.total_lab_tests).toLocaleString();
                     }
                     
-                    // ✅ OTHER SERVICES BADGE = "All" - STATIC
-                    // (HAIBADILIKI - imeachwa kama "All" daima)
+                    // OTHER SERVICES BADGE = "All" - STATIC
                     
                     var patBadge = document.getElementById('badgePatients');
                     if (patBadge && data.total_patients !== undefined) {
@@ -1142,17 +1285,24 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     setTimeout(refreshBadges, 5000);
     
     console.log('%c🔄 Audit sidebar badge auto-refresh active', 'color:#10B981;font-size:12px;');
-    console.log('%c📌 Other Services badge ni STATIC "All" - haibadiliki', 'color:#0891B2;font-size:11px;');
+    console.log('%c📌 Revenue badge = static (PHP) — hairefresh kutoka API', 'color:#F59E0B;font-size:11px;');
+    console.log('%c📌 Other Services badge = "All" (STATIC)', 'color:#0891B2;font-size:11px;');
+    console.log('%c📦 Stock Movement badge inaonyesha movements za leo', 'color:#F97316;font-size:11px;');
 })();
 
-console.log('%c🔍 Audit Sidebar V10 - OTHER SERVICES = "All"', 'font-size:16px; font-weight:bold; color:#0B4EA8;');
-console.log('%c✅ Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#10B981; font-weight:bold;');
-console.log('%c✅ Links: /pages/audit/... (SIO /pages/admin/audit/...)', 'font-size:13px; color:#10B981; font-weight:bold;');
-console.log('%c✅ Revenue = Payments (received_at) + OTC (created_at) — LEO TU', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c🔍 Audit Sidebar V12 - BRANCH LOCKED + STOCK MOVEMENT', 'font-size:16px; font-weight:bold; color:#0B4EA8;');
+console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?> (ID: <?= $selected_branch_id ?>)', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c✅ Revenue badge = static (PHP) — MARA MOJA', 'font-size:13px; color:#F59E0B; font-weight:bold;');
+console.log('%c✅ Payments query: patient_id + visit_id + NOT BILL-OTC-% + branch_id', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c✅ OTC query: paid + partial + branch_id', 'font-size:13px; color:#10B981; font-weight:bold;');
 console.log('%c✅ Other Services Badge = "All" (STATIC)', 'font-size:13px; color:#0891B2; font-weight:bold;');
-console.log('%c✅ Partial payments zinaonekana', 'font-size:13px; color:#F59E0B; font-weight:bold;');
-console.log('%c✅ Inareset 00:00 kila siku', 'font-size:13px; color:#7C3AED; font-weight:bold;');
-console.log('%c💰 Payments Today: TSh <?= number_format($bills_today, 0) ?> (<?= $payments_today_count ?> payments)', 'font-size:13px; color:#0B5ED7;');
-console.log('%c💊 OTC Today: TSh <?= number_format($otc_today, 0) ?> (<?= $otc_today_count ?> sales)', 'font-size:13px; color:#0891B2;');
+console.log('%c✅ Stock Movement = Meds Sold + Equipment Used + Stock In/Out', 'font-size:13px; color:#F97316; font-weight:bold;');
+console.log('%c💰 Payments Today (Branch): TSh <?= number_format($bills_today, 0) ?> (<?= $payments_today_count ?> payments)', 'font-size:13px; color:#0B5ED7;');
+console.log('%c💊 OTC Today (Branch): TSh <?= number_format($otc_today, 0) ?> (<?= $otc_today_count ?> sales)', 'font-size:13px; color:#0891B2;');
 console.log('%c📊 TOTAL TODAY: TSh <?= number_format($total_revenue_today, 0) ?>', 'font-size:14px; color:#10B981; font-weight:bold;');
+console.log('%c📦 Stock Movements Today: <?= number_format($stock_movements_today) ?>', 'font-size:13px; color:#F97316; font-weight:bold;');
+console.log('%c   💊 Medications Sold: <?= number_format($medications_sold_today) ?>', 'font-size:12px; color:#EA580C;');
+console.log('%c   🔬 Equipment Used: <?= number_format($equipment_used_today) ?>', 'font-size:12px; color:#EA580C;');
+console.log('%c   📥 Stock Added: <?= number_format($stock_added_today) ?>', 'font-size:12px; color:#EA580C;');
+console.log('%c   📤 Stock Removed: <?= number_format($stock_removed_today) ?>', 'font-size:12px; color:#EA580C;');
 </script>

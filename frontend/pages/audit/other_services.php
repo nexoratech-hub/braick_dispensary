@@ -1,13 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/other_services.php
-// AUDIT - OTHER SERVICES (V8 - BRANCH LOCKED CLEAN)
-// ✅ AUDIT ANAONA BRANCH YAKE TU (HAWEZI KUBADILISHA)
-// ✅ ONDOA VIEW ONLY notice na badges
+// AUDIT - OTHER SERVICES (V9 - FIXED ALL BILLS + SEARCH POSITION)
+// ================================================================
+// ✅ V9: All Bills inaonyesha bills zenye patient_id TU
+// ✅ V9: Search bar imehamishwa CHINI ya summary cards
+// ✅ V8: AUDIT ANAONA BRANCH YAKE TU
 // ✅ Tabs: Procedures | Consultations | All Bills | OTC Bills
-// ✅ 6 Summary Cards (3+3 rows) kwa All Bills
-// ✅ Patient Cards with blue border + END OF footer
-// ✅ OTC Card per Sale (design sawa na revenue.php)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) session_start();
@@ -17,7 +16,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     exit;
 }
 
-// AUDIT ROLE ONLY
 if ($_SESSION['role'] !== 'audit') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -101,7 +99,6 @@ if (!in_array($active_tab, ['procedures', 'consultations', 'all_bills', 'otc_bil
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
 
-// ✅ AUDIT ANAONA BRANCH YAKE TU - HAWEZI KUBADILISHA
 $selected_branch_id = $user_branch_id;
 $selected_branch_name = $user_branch_name;
 
@@ -121,7 +118,6 @@ switch ($quick_filter) {
     default: $quick_date_from = ''; $quick_date_to = ''; break;
 }
 
-// Chukua jina la branch ya aliye login
 $branches_list = [];
 try {
     $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
@@ -432,7 +428,7 @@ if ($active_tab === 'consultations') {
 }
 
 // ================================================================
-// TAB 3: ALL BILLS
+// TAB 3: ALL BILLS - ✅ V9 FIXED: ONLY BILLS WITH patient_id
 // ================================================================
 $bills_data = [];
 $bills_array = [];
@@ -442,8 +438,14 @@ $bills_stats = ['total_bills'=>0, 'paid'=>0, 'pending'=>0, 'partial'=>0,
                 'total_billed_amt'=>0, 'paid_percentage'=>0];
 
 if ($active_tab === 'all_bills') {
-    $where = " WHERE b.branch_id = ?";
+    // ✅ V9: LAZIMISHA patient_id IS NOT NULL + visit_id IS NOT NULL
+    // ✅ V9: ZUIA BILL-OTC-% 
+    $where = " WHERE b.branch_id = ? 
+               AND b.patient_id IS NOT NULL 
+               AND b.visit_id IS NOT NULL
+               AND b.bill_number NOT LIKE 'BILL-OTC-%'";
     $params = [(int)$selected_branch_id];
+    
     if (!empty($search)) {
         $where .= " AND (b.bill_number LIKE ? OR pat.full_name LIKE ? OR pat.patient_id LIKE ?)";
         $sp = "%$search%";
@@ -460,7 +462,7 @@ if ($active_tab === 'all_bills') {
                br.name as branch_name, v.visit_number, v.visit_date, v.diagnosis,
                doc.full_name as doctor_name, rec.full_name as receptionist_name
         FROM bills b
-        LEFT JOIN patients pat ON b.patient_id = pat.id
+        INNER JOIN patients pat ON b.patient_id = pat.id
         LEFT JOIN branches br ON b.branch_id = br.id
         LEFT JOIN visits v ON b.visit_id = v.id
         LEFT JOIN users doc ON v.doctor_id = doc.id
@@ -567,37 +569,37 @@ if ($active_tab === 'all_bills') {
     }
     unset($p);
     
-    $stmt = $db->prepare("SELECT COUNT(*) as c, COALESCE(SUM(total_amount),0) as s FROM bills b LEFT JOIN patients pat ON b.patient_id = pat.id " . $where);
+    $stmt = $db->prepare("SELECT COUNT(*) as c, COALESCE(SUM(total_amount),0) as s FROM bills b INNER JOIN patients pat ON b.patient_id = pat.id " . $where);
     $stmt->execute($params);
     $r = $stmt->fetch(PDO::FETCH_ASSOC);
     $bills_stats['total_bills'] = $r['c'] ?? 0;
     $bills_stats['total_billed_amt'] = $r['s'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COUNT(*) as c, COALESCE(SUM(paid_amount),0) as s FROM bills b LEFT JOIN patients pat ON b.patient_id = pat.id " . $where . " AND b.status = 'paid'");
+    $stmt = $db->prepare("SELECT COUNT(*) as c, COALESCE(SUM(paid_amount),0) as s FROM bills b INNER JOIN patients pat ON b.patient_id = pat.id " . $where . " AND b.status = 'paid'");
     $stmt->execute($params);
     $r = $stmt->fetch(PDO::FETCH_ASSOC);
     $bills_stats['paid'] = $r['c'] ?? 0;
     $bills_stats['total_paid_amt'] = $r['s'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COUNT(*) as c, COALESCE(SUM(total_amount),0) as s FROM bills b LEFT JOIN patients pat ON b.patient_id = pat.id " . $where . " AND b.status = 'pending'");
+    $stmt = $db->prepare("SELECT COUNT(*) as c, COALESCE(SUM(total_amount),0) as s FROM bills b INNER JOIN patients pat ON b.patient_id = pat.id " . $where . " AND b.status = 'pending'");
     $stmt->execute($params);
     $r = $stmt->fetch(PDO::FETCH_ASSOC);
     $bills_stats['pending'] = $r['c'] ?? 0;
     $bills_stats['total_pending_amt'] = $r['s'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COUNT(*) as c FROM bills b LEFT JOIN patients pat ON b.patient_id = pat.id " . $where . " AND b.status = 'partial'");
+    $stmt = $db->prepare("SELECT COUNT(*) as c FROM bills b INNER JOIN patients pat ON b.patient_id = pat.id " . $where . " AND b.status = 'partial'");
     $stmt->execute($params);
     $bills_stats['partial'] = $stmt->fetch(PDO::FETCH_ASSOC)['c'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COALESCE(SUM(premium_amount),0) as s FROM bills b LEFT JOIN patients pat ON b.patient_id = pat.id " . $where);
+    $stmt = $db->prepare("SELECT COALESCE(SUM(premium_amount),0) as s FROM bills b INNER JOIN patients pat ON b.patient_id = pat.id " . $where);
     $stmt->execute($params);
     $bills_stats['total_premium'] = $stmt->fetch(PDO::FETCH_ASSOC)['s'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COALESCE(SUM(total_discount),0) as s FROM bills b LEFT JOIN patients pat ON b.patient_id = pat.id " . $where);
+    $stmt = $db->prepare("SELECT COALESCE(SUM(total_discount),0) as s FROM bills b INNER JOIN patients pat ON b.patient_id = pat.id " . $where);
     $stmt->execute($params);
     $bills_stats['total_discount'] = $stmt->fetch(PDO::FETCH_ASSOC)['s'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COALESCE(SUM(paid_amount),0) as s FROM bills b LEFT JOIN patients pat ON b.patient_id = pat.id " . $where);
+    $stmt = $db->prepare("SELECT COALESCE(SUM(paid_amount),0) as s FROM bills b INNER JOIN patients pat ON b.patient_id = pat.id " . $where);
     $stmt->execute($params);
     $total_paid_all = $stmt->fetch(PDO::FETCH_ASSOC)['s'] ?? 0;
     
@@ -607,7 +609,7 @@ if ($active_tab === 'all_bills') {
 }
 
 // ================================================================
-// TAB 4: OTC BILLS - Card per Sale
+// TAB 4: OTC BILLS
 // ================================================================
 $otc_sales_list = [];
 $otc_stats = ['total'=>0, 'paid'=>0, 'pending'=>0, 'partial'=>0, 'amount'=>0, 'items_total'=>0];
@@ -729,7 +731,6 @@ body { font-family: var(--font-main) !important; }
     font-variant-numeric: tabular-nums;
 }
 
-/* PAGE HEADER */
 .page-header-custom {
     background: linear-gradient(135deg, #0B5ED7, #0A4CA8, #083C8A);
     border-radius: 16px; padding: 20px 28px; margin-bottom: 20px;
@@ -784,7 +785,6 @@ body { font-family: var(--font-main) !important; }
     transform: translateY(-2px); color: white;
 }
 
-/* TABS */
 .tabs-container {
     display: flex; gap: 6px; background: var(--bg-card);
     border-radius: 12px; padding: 6px; margin-bottom: 18px;
@@ -812,12 +812,11 @@ body { font-family: var(--font-main) !important; }
     background: var(--primary-bg); color: var(--primary);
 }
 
-/* 6 SUMMARY CARDS - 3+3 */
 .stats-grid-6 {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 16px;
-    margin-bottom: 24px;
+    margin-bottom: 18px;
 }
 
 .stat-card-custom {
@@ -919,10 +918,13 @@ body { font-family: var(--font-main) !important; }
     box-shadow: 0 0 10px rgba(110, 231, 183, 0.5);
 }
 
-/* SEARCH */
+/* ✅ V9: SEARCH - CHINI YA CARDS */
+.search-section-wrapper {
+    margin-bottom: 16px;
+}
 .med-search-panel {
     background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-    border-radius: 12px; padding: 12px 16px; margin-bottom: 14px;
+    border-radius: 12px; padding: 14px 18px; margin-bottom: 12px;
     box-shadow: 0 3px 12px rgba(11, 94, 215, 0.2);
     display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
 }
@@ -935,7 +937,7 @@ body { font-family: var(--font-main) !important; }
     background: rgba(255,255,255,0.18);
     border: 2px solid rgba(255,255,255,0.3);
     border-radius: 8px; padding: 0 12px;
-    height: 38px; flex: 1; min-width: 200px;
+    height: 40px; flex: 1; min-width: 200px;
 }
 .med-search-panel .search-box input {
     flex: 1; background: transparent; border: none;
@@ -944,7 +946,7 @@ body { font-family: var(--font-main) !important; }
 }
 .med-search-panel .search-box input::placeholder { color: rgba(255,255,255,0.65); }
 
-/* QUICK FILTERS */
+/* QUICK FILTERS - CHINI YA SEARCH */
 .quick-filters {
     display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
     background: var(--bg-card); border-radius: 12px;
@@ -969,7 +971,6 @@ body { font-family: var(--font-main) !important; }
     border-color: var(--primary); color: white;
 }
 
-/* PATIENT CARDS with BLUE BORDER */
 .patient-card {
     background: var(--bg-card);
     border-radius: 16px;
@@ -1088,24 +1089,7 @@ body { font-family: var(--font-main) !important; }
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
 }
 .patient-actions-info strong { font-weight: 800; color: var(--primary); }
-.btn-patient-view {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 9px 20px; border-radius: 8px;
-    font-weight: 800; font-size: 0.75rem;
-    background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-    color: white; text-decoration: none;
-    border: none; cursor: pointer;
-    box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    transition: all 0.25s;
-}
-.btn-patient-view:hover { 
-    transform: translateY(-2px); color: white; 
-    box-shadow: 0 6px 20px rgba(11, 94, 215, 0.4);
-}
 
-/* PATIENT FOOTER - END OF [NAME] */
 .patient-footer {
     background: linear-gradient(135deg, rgba(11, 94, 215, 0.08), rgba(124, 58, 237, 0.05));
     padding: 18px 24px;
@@ -1181,7 +1165,6 @@ body { font-family: var(--font-main) !important; }
 }
 .patient-footer .footer-stat.danger strong { color: var(--danger); }
 
-/* VISIT SECTIONS */
 .visit-section {
     border: 2px solid var(--border-color);
     border-radius: 12px; margin-bottom: 18px;
@@ -1370,7 +1353,6 @@ body { font-family: var(--font-main) !important; }
 .amount-cell.purple { color: var(--purple); }
 .amount-cell.orange { color: var(--warning); }
 
-/* ✅ BUTTON - Unified size */
 .action-buttons-group {
     display: inline-flex;
     gap: 6px;
@@ -1495,16 +1477,13 @@ body { font-family: var(--font-main) !important; }
 }
 .footer .footer-brand { color: var(--primary); font-weight: 600; }
 
-/* ================================================================
-   OTC SALE CARD
-   ================================================================ */
+/* OTC CARD */
 .otc-cards-container {
     overflow-x: auto;
     scroll-behavior: smooth;
     padding: 8px 0;
     min-width: 100%;
 }
-
 .otc-sale-card {
     background: var(--bg-card);
     border: 2px solid var(--cyan);
@@ -1518,7 +1497,6 @@ body { font-family: var(--font-main) !important; }
     box-shadow: 0 8px 28px rgba(8, 145, 178, 0.2);
     border-color: #22D3EE;
 }
-
 .otc-sale-header {
     background: linear-gradient(135deg, #0891B2, #0E7490);
     padding: 14px 20px;
@@ -1623,7 +1601,6 @@ body { font-family: var(--font-main) !important; }
     box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
 }
 .otc-stat-chip.grand-total .stat-chip-value { color: #D1FAE5; font-size: 1.05rem; }
-
 .otc-header-right {
     display: flex;
     gap: 8px;
@@ -1651,7 +1628,6 @@ body { font-family: var(--font-main) !important; }
 .otc-action-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.25); }
 .otc-action-btn.view { background: rgba(255,255,255,0.2); color: white; }
 .otc-action-btn.view:hover { background: rgba(255,255,255,0.35); }
-
 .otc-scroll-buttons {
     display: flex;
     gap: 5px;
@@ -1675,7 +1651,6 @@ body { font-family: var(--font-main) !important; }
     flex-shrink: 0;
 }
 .otc-scroll-btn:hover { background: rgba(255,255,255,0.4); transform: translateY(-2px); border-color: rgba(255,255,255,0.6); }
-
 .otc-items-table {
     width: 100%;
     border-collapse: collapse;
@@ -1701,7 +1676,6 @@ body { font-family: var(--font-main) !important; }
 }
 .otc-items-table tbody tr:hover td { background: var(--cyan-bg); }
 .otc-items-table tbody tr:last-child td { border-bottom: none; }
-
 .otc-item-name-cell {
     display: flex;
     align-items: center;
@@ -1735,7 +1709,6 @@ body { font-family: var(--font-main) !important; }
     font-size: 0.78rem;
     border: 1.5px solid rgba(8, 145, 178, 0.3);
 }
-
 .otc-sale-footer {
     background: linear-gradient(135deg, rgba(8, 145, 178, 0.08), rgba(8, 145, 178, 0.03));
     padding: 10px 20px;
@@ -1893,55 +1866,12 @@ body { font-family: var(--font-main) !important; }
         </a>
     </div>
 
-    <!-- QUICK FILTERS -->
-    <div class="quick-filters">
-        <span style="font-size:0.68rem;font-weight:700;color:var(--text-secondary);">
-            <i class="fas fa-bolt"></i> Quick:
-        </span>
-        <a href="<?= buildFilterUrl(['quick' => 'all', 'date_from' => null, 'date_to' => null]) ?>" 
-           class="quick-filter-btn <?= $quick_filter === 'all' ? 'active' : '' ?>">
-            <i class="fas fa-infinity"></i> All
-        </a>
-        <a href="<?= buildFilterUrl(['quick' => 'today', 'date_from' => null, 'date_to' => null]) ?>" 
-           class="quick-filter-btn <?= $quick_filter === 'today' ? 'active' : '' ?>">
-            <i class="fas fa-calendar-day"></i> Today
-        </a>
-        <a href="<?= buildFilterUrl(['quick' => '1w', 'date_from' => null, 'date_to' => null]) ?>" 
-           class="quick-filter-btn <?= $quick_filter === '1w' ? 'active' : '' ?>">
-            <i class="fas fa-calendar-week"></i> 1 Week
-        </a>
-        <a href="<?= buildFilterUrl(['quick' => '1m', 'date_from' => null, 'date_to' => null]) ?>" 
-           class="quick-filter-btn <?= $quick_filter === '1m' ? 'active' : '' ?>">
-            <i class="fas fa-calendar-alt"></i> 1 Month
-        </a>
-        <a href="<?= buildFilterUrl(['quick' => '3m', 'date_from' => null, 'date_to' => null]) ?>" 
-           class="quick-filter-btn <?= $quick_filter === '3m' ? 'active' : '' ?>">
-            <i class="fas fa-calendar-alt"></i> 3 Months
-        </a>
-        <a href="<?= buildFilterUrl(['quick' => '1y', 'date_from' => null, 'date_to' => null]) ?>" 
-           class="quick-filter-btn <?= $quick_filter === '1y' ? 'active' : '' ?>">
-            <i class="fas fa-calendar"></i> 1 Year
-        </a>
-    </div>
-
-    <!-- SEARCH -->
-    <div class="med-search-panel">
-        <div class="search-label">
-            <i class="fas fa-search"></i>
-            <span>Search</span>
-        </div>
-        <div class="search-box">
-            <i class="fas fa-search" style="color:white;margin-right:8px;"></i>
-            <input type="text" id="pageSearchInput" 
-                   placeholder="Search patient, bill, item..." autocomplete="off">
-        </div>
-    </div>
-
     <!-- ============================================================
          TAB 1: PROCEDURES & EQUIPMENTS
          ============================================================ -->
     <?php if ($active_tab === 'procedures'): ?>
         
+        <!-- SUMMARY CARDS -->
         <div class="stats-grid-6">
             <div class="stat-card-custom card-blue-1">
                 <div class="stat-top">
@@ -1991,6 +1921,52 @@ body { font-family: var(--font-main) !important; }
                 <p class="stat-number"><?= $procedures_stats['procedure_count'] ?></p>
                 <p class="stat-amount"><i class="fas fa-hand-holding-medical"></i> Procedure Items</p>
             </div>
+        </div>
+
+        <!-- ✅ V9: SEARCH CHINI YA CARDS -->
+        <div class="search-section-wrapper">
+            <div class="med-search-panel">
+                <div class="search-label">
+                    <i class="fas fa-search"></i>
+                    <span>Search</span>
+                </div>
+                <div class="search-box">
+                    <i class="fas fa-search" style="color:white;margin-right:8px;"></i>
+                    <input type="text" id="pageSearchInput" 
+                           placeholder="Search patient, bill, item..." autocomplete="off">
+                </div>
+            </div>
+        </div>
+
+        <!-- QUICK FILTERS -->
+        <div class="quick-filters">
+            <span style="font-size:0.68rem;font-weight:700;color:var(--text-secondary);">
+                <i class="fas fa-bolt"></i> Quick:
+            </span>
+            <a href="<?= buildFilterUrl(['quick' => 'all', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === 'all' ? 'active' : '' ?>">
+                <i class="fas fa-infinity"></i> All
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => 'today', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === 'today' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-day"></i> Today
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '1w', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1w' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-week"></i> 1 Week
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '1m', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1m' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 1 Month
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '3m', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '3m' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 3 Months
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '1y', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1y' ? 'active' : '' ?>">
+                <i class="fas fa-calendar"></i> 1 Year
+            </a>
         </div>
         
         <?php if (!empty($procedures_array)): ?>
@@ -2162,7 +2138,6 @@ body { font-family: var(--font-main) !important; }
                         <?php endforeach; ?>
                     </div>
                     
-                    <!-- PATIENT FOOTER -->
                     <div class="patient-footer <?= $has_partial ? 'has-partial' : '' ?>">
                         <div class="footer-left">
                             <span class="footer-end-label">
@@ -2247,6 +2222,52 @@ body { font-family: var(--font-main) !important; }
                 <p class="stat-number"><?= $consultations_stats['total'] > 0 ? round(($consultations_stats['paid'] / $consultations_stats['total']) * 100, 1) : 0 ?>%</p>
                 <p class="stat-amount"><i class="fas fa-chart-pie"></i> Completion Rate</p>
             </div>
+        </div>
+
+        <!-- ✅ V9: SEARCH CHINI YA CARDS -->
+        <div class="search-section-wrapper">
+            <div class="med-search-panel">
+                <div class="search-label">
+                    <i class="fas fa-search"></i>
+                    <span>Search</span>
+                </div>
+                <div class="search-box">
+                    <i class="fas fa-search" style="color:white;margin-right:8px;"></i>
+                    <input type="text" id="pageSearchInput" 
+                           placeholder="Search patient, visit, doctor..." autocomplete="off">
+                </div>
+            </div>
+        </div>
+
+        <!-- QUICK FILTERS -->
+        <div class="quick-filters">
+            <span style="font-size:0.68rem;font-weight:700;color:var(--text-secondary);">
+                <i class="fas fa-bolt"></i> Quick:
+            </span>
+            <a href="<?= buildFilterUrl(['quick' => 'all', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === 'all' ? 'active' : '' ?>">
+                <i class="fas fa-infinity"></i> All
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => 'today', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === 'today' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-day"></i> Today
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '1w', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1w' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-week"></i> 1 Week
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '1m', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1m' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 1 Month
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '3m', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '3m' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 3 Months
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '1y', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1y' ? 'active' : '' ?>">
+                <i class="fas fa-calendar"></i> 1 Year
+            </a>
         </div>
         
         <?php if (!empty($consultations_array)): ?>
@@ -2388,7 +2409,6 @@ body { font-family: var(--font-main) !important; }
                         <?php endforeach; ?>
                     </div>
                     
-                    <!-- PATIENT FOOTER -->
                     <div class="patient-footer <?= $has_partial ? 'has-partial' : '' ?>">
                         <div class="footer-left">
                             <span class="footer-end-label">
@@ -2419,7 +2439,7 @@ body { font-family: var(--font-main) !important; }
     <?php endif; ?>
 
     <!-- ============================================================
-         TAB 3: ALL BILLS - 6 SUMMARY CARDS + PATIENT CARDS
+         TAB 3: ALL BILLS
          ============================================================ -->
     <?php if ($active_tab === 'all_bills'): ?>
         
@@ -2484,6 +2504,52 @@ body { font-family: var(--font-main) !important; }
                     <?= formatTsh($bills_stats['total_paid_amt']) ?> of <?= formatTsh($bills_stats['total_billed_amt']) ?>
                 </p>
             </div>
+        </div>
+
+        <!-- ✅ V9: SEARCH CHINI YA CARDS -->
+        <div class="search-section-wrapper">
+            <div class="med-search-panel">
+                <div class="search-label">
+                    <i class="fas fa-search"></i>
+                    <span>Search</span>
+                </div>
+                <div class="search-box">
+                    <i class="fas fa-search" style="color:white;margin-right:8px;"></i>
+                    <input type="text" id="pageSearchInput" 
+                           placeholder="Search patient, bill number, item..." autocomplete="off">
+                </div>
+            </div>
+        </div>
+
+        <!-- QUICK FILTERS -->
+        <div class="quick-filters">
+            <span style="font-size:0.68rem;font-weight:700;color:var(--text-secondary);">
+                <i class="fas fa-bolt"></i> Quick:
+            </span>
+            <a href="<?= buildFilterUrl(['quick' => 'all', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === 'all' ? 'active' : '' ?>">
+                <i class="fas fa-infinity"></i> All
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => 'today', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === 'today' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-day"></i> Today
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '1w', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1w' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-week"></i> 1 Week
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '1m', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1m' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 1 Month
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '3m', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '3m' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 3 Months
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '1y', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1y' ? 'active' : '' ?>">
+                <i class="fas fa-calendar"></i> 1 Year
+            </a>
         </div>
         
         <?php if (!empty($bills_array)): ?>
@@ -2681,7 +2747,7 @@ body { font-family: var(--font-main) !important; }
                                                                     </thead>
                                                                     <tbody>
                                                                         <?php foreach ($items as $it): ?>
-                                                                            <tr>
+                                                                            <tr data-search="<?= htmlspecialchars(strtolower($it['item_name'])) ?>">
                                                                                 <td style="font-weight:700;color:var(--primary);">
                                                                                     <?= htmlspecialchars($it['item_name']) ?>
                                                                                 </td>
@@ -2720,7 +2786,6 @@ body { font-family: var(--font-main) !important; }
                         <?php endforeach; ?>
                     </div>
                     
-                    <!-- PATIENT FOOTER - END OF [NAME] -->
                     <div class="patient-footer <?= $has_partial ? 'has-partial' : '' ?>">
                         <div class="footer-left">
                             <span class="footer-end-label">
@@ -2761,12 +2826,13 @@ body { font-family: var(--font-main) !important; }
             <div class="empty-state">
                 <i class="fas fa-file-invoice"></i>
                 <p>No bills found</p>
+                <p class="sub">Bills without patient ID are excluded from this view</p>
             </div>
         <?php endif; ?>
     <?php endif; ?>
 
     <!-- ============================================================
-         TAB 4: OTC BILLS - Card per Sale
+         TAB 4: OTC BILLS
          ============================================================ -->
     <?php if ($active_tab === 'otc_bills'): ?>
         
@@ -2819,6 +2885,52 @@ body { font-family: var(--font-main) !important; }
                 <p class="stat-number"><?= $otc_stats['total'] > 0 ? round(($otc_stats['paid'] / $otc_stats['total']) * 100, 1) : 0 ?>%</p>
                 <p class="stat-amount"><i class="fas fa-chart-pie"></i> Completion Rate</p>
             </div>
+        </div>
+
+        <!-- ✅ V9: SEARCH CHINI YA CARDS -->
+        <div class="search-section-wrapper">
+            <div class="med-search-panel">
+                <div class="search-label">
+                    <i class="fas fa-search"></i>
+                    <span>Search</span>
+                </div>
+                <div class="search-box">
+                    <i class="fas fa-search" style="color:white;margin-right:8px;"></i>
+                    <input type="text" id="pageSearchInput" 
+                           placeholder="Search customer, sale number..." autocomplete="off">
+                </div>
+            </div>
+        </div>
+
+        <!-- QUICK FILTERS -->
+        <div class="quick-filters">
+            <span style="font-size:0.68rem;font-weight:700;color:var(--text-secondary);">
+                <i class="fas fa-bolt"></i> Quick:
+            </span>
+            <a href="<?= buildFilterUrl(['quick' => 'all', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === 'all' ? 'active' : '' ?>">
+                <i class="fas fa-infinity"></i> All
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => 'today', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === 'today' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-day"></i> Today
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '1w', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1w' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-week"></i> 1 Week
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '1m', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1m' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 1 Month
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '3m', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '3m' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 3 Months
+            </a>
+            <a href="<?= buildFilterUrl(['quick' => '1y', 'date_from' => null, 'date_to' => null]) ?>" 
+               class="quick-filter-btn <?= $quick_filter === '1y' ? 'active' : '' ?>">
+                <i class="fas fa-calendar"></i> 1 Year
+            </a>
         </div>
         
         <!-- OTC CARDS CONTAINER -->
@@ -3156,9 +3268,9 @@ setInterval(function() {
     if (ft) ft.textContent = 'Last updated: ' + t;
 }, 1000);
 
-console.log('%c🔍 Audit - Other Services V8 (BRANCH LOCKED CLEAN)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ AUDIT ANAONA BRANCH YAKE TU', 'font-size:12px;color:#34D399;font-weight:bold;');
-console.log('%c✅ VIEW ONLY notice na badges zimeondolewa', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c🔍 Audit - Other Services V9 (FIXED ALL BILLS + SEARCH POSITION)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ All Bills: inaonyesha bills zenye patient_id TU', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c✅ Search bar imehamishwa CHINI ya summary cards', 'font-size:12px;color:#34D399;font-weight:bold;');
 console.log('%c👥 Branch: <?= htmlspecialchars($selected_branch_name) ?>', 'font-size:12px;color:#0B5ED7;font-weight:bold;');
 </script>
 

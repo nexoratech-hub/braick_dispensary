@@ -2,12 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/admin/visits.php
 // SUPER ADMIN - VISITS MANAGEMENT
-// ✅ Kama patients.php: Status toggle buttons + filter bar
-// ✅ Assigned → View + Reassign + Change
-// ✅ Lab/Prescribe/Waiting → View + Complete + Cancel
-// ✅ Complete → View only
-// ✅ Pending/New → View + Assign Doctor
-// ✅ Cancelled → View only
+// ✅ Delete button kwa KILA visit (hata Complete)
+// ✅ Delete inafuta visit + data zote zinazohusiana
+// ✅ Confirm modal ya Delete
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -81,7 +78,7 @@ $message = '';
 $message_type = '';
 
 // ================================================================
-// AJAX HANDLERS (Reassign / Complete / Cancel / Assign)
+// AJAX HANDLERS (Reassign / Complete / Cancel / Delete)
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
@@ -168,6 +165,119 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $response['success'] = true;
             $response['message'] = 'Visit cancelled.';
             
+        } elseif ($action === 'delete_visit') {
+            // ================================================================
+            // ✅ DELETE VISIT - Inafuta visit + data zote zinazohusiana
+            // ================================================================
+            $db->beginTransaction();
+            
+            $stmt = $db->prepare("SELECT id, visit_number, patient_id FROM visits WHERE id = ? LIMIT 1");
+            $stmt->execute([$visit_id]);
+            $visit = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$visit) throw new Exception('Visit not found');
+            
+            $visit_number = $visit['visit_number'];
+            $patient_id_visit = (int)$visit['patient_id'];
+            
+            // ✅ Log activity KABLA ya kufuta
+            try {
+                $stmt = $db->prepare("INSERT INTO activity_logs (user_id, action, details, created_at) VALUES (?, 'visit_deleted', ?, NOW())");
+                $stmt->execute([$user_id, "Visit #{$visit_number} deleted PERMANENTLY (ID: {$visit_id})"]);
+            } catch (Exception $e) {}
+            
+            // ✅ Futa payments za bills za visit hii
+            try {
+                $stmt = $db->prepare("
+                    DELETE p FROM payments p
+                    INNER JOIN bills b ON p.bill_id = b.id
+                    WHERE b.visit_id = ?
+                ");
+                $stmt->execute([$visit_id]);
+            } catch (Exception $e) {}
+            
+            // ✅ Futa bill_items za bills za visit hii
+            try {
+                $stmt = $db->prepare("
+                    DELETE bi FROM bill_items bi
+                    INNER JOIN bills b ON bi.bill_id = b.id
+                    WHERE b.visit_id = ?
+                ");
+                $stmt->execute([$visit_id]);
+            } catch (Exception $e) {}
+            
+            // ✅ Futa bills za visit hii
+            try {
+                $stmt = $db->prepare("DELETE FROM bills WHERE visit_id = ?");
+                $stmt->execute([$visit_id]);
+            } catch (Exception $e) {}
+            
+            // ✅ Futa prescription_items za prescriptions za visit hii
+            try {
+                $stmt = $db->prepare("
+                    DELETE pi FROM prescription_items pi
+                    INNER JOIN prescriptions pr ON pi.prescription_id = pr.id
+                    WHERE pr.visit_id = ?
+                ");
+                $stmt->execute([$visit_id]);
+            } catch (Exception $e) {}
+            
+            // ✅ Futa prescriptions za visit hii
+            try {
+                $stmt = $db->prepare("DELETE FROM prescriptions WHERE visit_id = ?");
+                $stmt->execute([$visit_id]);
+            } catch (Exception $e) {}
+            
+            // ✅ Futa lab_tests za visit hii
+            try {
+                $stmt = $db->prepare("DELETE FROM lab_tests WHERE visit_id = ?");
+                $stmt->execute([$visit_id]);
+            } catch (Exception $e) {}
+            
+            // ✅ Futa vital_signs za visit hii
+            try {
+                $stmt = $db->prepare("DELETE FROM vital_signs WHERE visit_id = ?");
+                $stmt->execute([$visit_id]);
+            } catch (Exception $e) {}
+            
+            // ✅ Futa procedures za visit hii
+            try {
+                $stmt = $db->prepare("DELETE FROM procedures WHERE visit_id = ?");
+                $stmt->execute([$visit_id]);
+            } catch (Exception $e) {}
+            
+            // ✅ Futa medical_records za visit hii (kama zipo)
+            try {
+                $stmt = $db->prepare("DELETE FROM medical_records WHERE visit_id = ?");
+                $stmt->execute([$visit_id]);
+            } catch (Exception $e) {}
+            
+            // ✅ Futa queue/notifications za visit (kama zipo)
+            try {
+                $stmt = $db->prepare("DELETE FROM notifications WHERE visit_id = ?");
+                $stmt->execute([$visit_id]);
+            } catch (Exception $e) {}
+            
+            // ✅ Futa visit yenyewe
+            $stmt = $db->prepare("DELETE FROM visits WHERE id = ?");
+            $stmt->execute([$visit_id]);
+            
+            // ✅ Kama patient hana visits nyingine, ondoa assigned_doctor_id
+            try {
+                $stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE patient_id = ?");
+                $stmt->execute([$patient_id_visit]);
+                $remaining = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+                
+                if ($remaining === 0) {
+                    $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = NULL WHERE id = ?");
+                    $stmt->execute([$patient_id_visit]);
+                }
+            } catch (Exception $e) {}
+            
+            $db->commit();
+            $response['success'] = true;
+            $response['message'] = "Visit #{$visit_number} deleted permanently.";
+            
         } else {
             throw new Exception('Invalid action');
         }
@@ -229,19 +339,10 @@ try {
     $stmt->execute($params);
     $visits_raw = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // ============================================================
-    // CATEGORIZE VISITS BY STATUS
-    // ============================================================
     $visits = [];
     $status_counts = [
-        'all' => 0,
-        'assigned' => 0,
-        'lab_test' => 0,
-        'prescribe' => 0,
-        'waiting' => 0,
-        'complete' => 0,
-        'pending' => 0,
-        'cancelled' => 0
+        'all' => 0, 'assigned' => 0, 'lab_test' => 0, 'prescribe' => 0,
+        'waiting' => 0, 'complete' => 0, 'pending' => 0, 'cancelled' => 0
     ];
     
     foreach ($visits_raw as $v) {
@@ -267,9 +368,6 @@ try {
     
     $total_visits = count($visits);
     
-    // ============================================================
-    // STATS
-    // ============================================================
     $today = date('Y-m-d');
     $week_start = date('Y-m-d', strtotime('monday this week'));
     $month_start = date('Y-m-01');
@@ -320,9 +418,6 @@ $profile_pic_url = !empty($profile_pic)
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
@@ -372,7 +467,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     --purple-bg: #2D1B5F;
 }
 
-/* PAGE HEADER */
 .page-header-custom {
     background: var(--primary-gradient);
     border-radius: var(--radius-lg);
@@ -471,7 +565,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     color: white;
 }
 
-/* STATS CARDS */
 .stats-grid-mini {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -513,7 +606,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     margin-top: 4px;
 }
 
-/* STATUS TOGGLE BUTTONS */
 .status-toggle-group {
     display: flex;
     gap: 8px;
@@ -594,7 +686,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     font-weight: 700;
 }
 
-/* TABLE CARD */
 .table-card {
     background: var(--bg-card);
     border-radius: var(--radius-lg);
@@ -625,7 +716,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
 .table-card .card-title i { color: var(--primary); }
 
-/* FILTER BAR */
 .filter-bar {
     display: flex;
     align-items: center;
@@ -750,7 +840,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* SCROLL BUTTONS */
 .scroll-controls {
     display: flex;
     align-items: center;
@@ -785,7 +874,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     transform: none !important;
 }
 
-/* TABLE */
 .table-scroll-wrapper {
     overflow-x: auto;
     overflow-y: auto;
@@ -801,7 +889,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
 .visit-table {
     width: 100%;
-    min-width: 1900px;
+    min-width: 2000px;
     border-collapse: collapse;
     font-size: 0.85rem;
 }
@@ -852,7 +940,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     background: #1A3A2A;
 }
 
-/* PATIENT NAME - BLACK */
 .patient-name-link {
     color: var(--text-black) !important;
     font-weight: 700 !important;
@@ -884,7 +971,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     text-decoration: underline !important;
 }
 
-/* BADGES */
 .branch-badge-display {
     display: inline-block;
     font-size: 0.7rem;
@@ -906,7 +992,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 .status-badge.with_doctor { background: var(--success-bg); color: var(--success); }
 .status-badge.without_doctor { background: var(--warning-bg); color: var(--warning); }
 
-/* CATEGORY STATUS BADGES */
 .category-badge {
     display: inline-flex;
     align-items: center;
@@ -918,47 +1003,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     white-space: nowrap;
 }
 
-.category-badge.assigned {
-    background: #D1FAE5;
-    color: #059669;
-    border: 1px solid #059669;
-}
-
-.category-badge.lab_test {
-    background: #EDE9FE;
-    color: #7C3AED;
-    border: 1px solid #7C3AED;
-}
-
-.category-badge.prescribe {
-    background: #D1FAE5;
-    color: #047857;
-    border: 1px solid #047857;
-}
-
-.category-badge.waiting {
-    background: #FEF3C7;
-    color: #D97706;
-    border: 1px solid #D97706;
-}
-
-.category-badge.complete {
-    background: #E0F2FE;
-    color: #0891B2;
-    border: 1px solid #0891B2;
-}
-
-.category-badge.pending {
-    background: #FEF3C7;
-    color: #D97706;
-    border: 1px solid #D97706;
-}
-
-.category-badge.cancelled {
-    background: #FEE2E2;
-    color: #DC2626;
-    border: 1px solid #DC2626;
-}
+.category-badge.assigned { background: #D1FAE5; color: #059669; border: 1px solid #059669; }
+.category-badge.lab_test { background: #EDE9FE; color: #7C3AED; border: 1px solid #7C3AED; }
+.category-badge.prescribe { background: #D1FAE5; color: #047857; border: 1px solid #047857; }
+.category-badge.waiting { background: #FEF3C7; color: #D97706; border: 1px solid #D97706; }
+.category-badge.complete { background: #E0F2FE; color: #0891B2; border: 1px solid #0891B2; }
+.category-badge.pending { background: #FEF3C7; color: #D97706; border: 1px solid #D97706; }
+.category-badge.cancelled { background: #FEE2E2; color: #DC2626; border: 1px solid #DC2626; }
 
 [data-theme="dark"] .category-badge.assigned { background: #064E3B; color: #6EE7B7; }
 [data-theme="dark"] .category-badge.lab_test { background: #2D1B5F; color: #C4B5FD; }
@@ -987,7 +1038,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     color: var(--primary);
 }
 
-/* BUTTONS */
 .btn {
     display: inline-flex;
     align-items: center;
@@ -1021,14 +1071,27 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 .btn-cyan { background: var(--cyan); color: white; }
 .btn-cyan:hover { background: #0E7490; transform: translateY(-1px); color: white; }
 
+/* ✅ DELETE BUTTON STYLE */
+.btn-delete {
+    background: linear-gradient(135deg, #991B1B, #7F1D1D);
+    color: white;
+    font-weight: 700;
+    box-shadow: 0 2px 8px rgba(153, 27, 27, 0.3);
+}
+.btn-delete:hover {
+    background: linear-gradient(135deg, #DC2626, #991B1B);
+    transform: translateY(-1px);
+    color: white;
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.5);
+}
+
 .action-buttons-group {
     display: flex;
     gap: 4px;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     align-items: center;
 }
 
-/* MESSAGE */
 .message-box {
     padding: 14px 20px;
     border-radius: var(--radius);
@@ -1043,7 +1106,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 .message-box.error { background: var(--danger-bg); color: var(--danger-dark); border-left: 5px solid var(--danger); }
 .message-box i { font-size: 1.2rem; margin-top: 2px; }
 
-/* FOOTER */
 .footer {
     padding: 14px 0;
     border-top: 1px solid var(--border-color);
@@ -1058,7 +1120,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     font-weight: 600;
 }
 
-/* TOAST */
 .toast-custom {
     position: fixed;
     bottom: 24px;
@@ -1083,7 +1144,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 .toast-custom.info { background: var(--primary); }
 .toast-custom.warning { background: var(--warning); }
 
-/* CONFIRM MODAL */
 .confirm-modal-overlay {
     display: none;
     position: fixed;
@@ -1107,7 +1167,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     box-shadow: 0 20px 60px rgba(0,0,0,0.3);
 }
 
-/* ANIMATION */
 @keyframes fadeInUp {
     from { opacity: 0; transform: translateY(20px); }
     to { opacity: 1; transform: translateY(0); }
@@ -1118,7 +1177,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     opacity: 0;
 }
 
-/* RESPONSIVE */
 @media (max-width: 768px) {
     .stats-grid-mini { grid-template-columns: repeat(2, 1fr); }
     .filter-bar { flex-direction: column; align-items: stretch; }
@@ -1221,50 +1279,42 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </span>
             
             <button type="button" class="status-toggle-btn active" data-status="all" onclick="filterByStatus('all')">
-                <i class="fas fa-list"></i>
-                All
+                <i class="fas fa-list"></i> All
                 <span class="toggle-count" id="countAll"><?= $status_counts['all'] ?></span>
             </button>
             
             <button type="button" class="status-toggle-btn" data-status="assigned" onclick="filterByStatus('assigned')">
-                <i class="fas fa-user-check"></i>
-                Assigned
+                <i class="fas fa-user-check"></i> Assigned
                 <span class="toggle-count" id="countAssigned"><?= $status_counts['assigned'] ?></span>
             </button>
             
             <button type="button" class="status-toggle-btn" data-status="lab_test" onclick="filterByStatus('lab_test')">
-                <i class="fas fa-flask"></i>
-                Lab Test
+                <i class="fas fa-flask"></i> Lab Test
                 <span class="toggle-count" id="countLabTest"><?= $status_counts['lab_test'] ?></span>
             </button>
             
             <button type="button" class="status-toggle-btn" data-status="prescribe" onclick="filterByStatus('prescribe')">
-                <i class="fas fa-prescription"></i>
-                Prescribe
+                <i class="fas fa-prescription"></i> Prescribe
                 <span class="toggle-count" id="countPrescribe"><?= $status_counts['prescribe'] ?></span>
             </button>
             
             <button type="button" class="status-toggle-btn" data-status="waiting" onclick="filterByStatus('waiting')">
-                <i class="fas fa-clock"></i>
-                Waiting
+                <i class="fas fa-clock"></i> Waiting
                 <span class="toggle-count" id="countWaiting"><?= $status_counts['waiting'] ?></span>
             </button>
             
             <button type="button" class="status-toggle-btn" data-status="complete" onclick="filterByStatus('complete')">
-                <i class="fas fa-check-circle"></i>
-                Complete
+                <i class="fas fa-check-circle"></i> Complete
                 <span class="toggle-count" id="countComplete"><?= $status_counts['complete'] ?></span>
             </button>
             
             <button type="button" class="status-toggle-btn" data-status="pending" onclick="filterByStatus('pending')">
-                <i class="fas fa-hourglass-half"></i>
-                Pending
+                <i class="fas fa-hourglass-half"></i> Pending
                 <span class="toggle-count" id="countPending"><?= $status_counts['pending'] ?></span>
             </button>
             
             <button type="button" class="status-toggle-btn" data-status="cancelled" onclick="filterByStatus('cancelled')">
-                <i class="fas fa-times-circle"></i>
-                Cancelled
+                <i class="fas fa-times-circle"></i> Cancelled
                 <span class="toggle-count" id="countCancelled"><?= $status_counts['cancelled'] ?></span>
             </button>
         </div>
@@ -1297,7 +1347,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 </span>
             </div>
             
-            <!-- SCROLL BUTTONS -->
             <div class="filter-bar-right">
                 <div class="scroll-controls">
                     <button type="button" class="scroll-btn-header" id="scrollLeftBtn" onclick="scrollTable('left')" title="Scroll Left">
@@ -1327,7 +1376,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             <th><i class="fas fa-store-alt"></i> Branch</th>
                             <th><i class="fas fa-calendar"></i> Date</th>
                             <th><i class="fas fa-info-circle"></i> Status</th>
-                            <th style="min-width:340px;"><i class="fas fa-cog"></i> Actions</th>
+                            <th style="min-width:420px;"><i class="fas fa-cog"></i> Actions</th>
                         </tr>
                     </thead>
                     <tbody id="visitTableBody">
@@ -1350,7 +1399,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 $doctor_display = '<span class="status-badge without_doctor">⚠️ No Doctor</span>';
                             }
                             
-                            // Category badge
                             $category_label = '';
                             $category_icon = '';
                             switch ($category) {
@@ -1366,6 +1414,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             $visit_id = (int)$visit['id'];
                             $patient_id = (int)$visit['patient_id'];
                             $visit_number_js = htmlspecialchars(addslashes($visit['visit_number']));
+                            $patient_name_js = htmlspecialchars(addslashes($visit['patient_name'] ?? 'Unknown'));
                         ?>
                             <tr class="visit-row" 
                                 data-visit="<?= strtolower(htmlspecialchars($visit['visit_number'] ?? '')) ?>"
@@ -1424,7 +1473,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                         </a>
                                         
                                         <?php if ($category === 'assigned'): ?>
-                                            <!-- ASSIGNED: Reassign + Change -->
                                             <button type="button" 
                                                     class="btn btn-danger" 
                                                     onclick="reassignDoctor(<?= $visit_id ?>, <?= $patient_id ?>, '<?= $visit_number_js ?>')" 
@@ -1439,7 +1487,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                             </button>
                                             
                                         <?php elseif (in_array($category, ['lab_test', 'prescribe', 'waiting'])): ?>
-                                            <!-- LAB/PRESCRIBE/WAITING: Complete + Cancel -->
                                             <button type="button" 
                                                     class="btn btn-success" 
                                                     onclick="completeVisit(<?= $visit_id ?>, '<?= $visit_number_js ?>')"
@@ -1454,19 +1501,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                             </button>
                                             
                                         <?php elseif ($category === 'complete'): ?>
-                                            <!-- COMPLETE: View only -->
                                             <span style="font-size:0.7rem;color:var(--success);font-weight:600;display:inline-flex;align-items:center;gap:3px;padding:7px 10px;background:var(--success-bg);border-radius:7px;">
                                                 <i class="fas fa-check-circle"></i> Completed
                                             </span>
                                             
                                         <?php elseif ($category === 'cancelled'): ?>
-                                            <!-- CANCELLED: View only -->
                                             <span style="font-size:0.7rem;color:var(--danger);font-weight:600;display:inline-flex;align-items:center;gap:3px;padding:7px 10px;background:var(--danger-bg);border-radius:7px;">
                                                 <i class="fas fa-times-circle"></i> Cancelled
                                             </span>
                                             
                                         <?php else: ?>
-                                            <!-- PENDING: Assign Doctor -->
                                             <button type="button" 
                                                     class="btn btn-purple" 
                                                     onclick="changeDoctor(<?= $patient_id ?>)"
@@ -1474,6 +1518,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                                 <i class="fas fa-user-md"></i> Assign
                                             </button>
                                         <?php endif; ?>
+                                        
+                                        <!-- ✅ DELETE BUTTON - KILA VISIT -->
+                                        <button type="button" 
+                                                class="btn btn-delete" 
+                                                onclick="deleteVisit(<?= $visit_id ?>, '<?= $visit_number_js ?>', '<?= $patient_name_js ?>')"
+                                                title="Delete Visit PERMANENTLY">
+                                            <i class="fas fa-trash-alt"></i> Delete
+                                        </button>
                                     </div>
                                 </td>
                             </tr>
@@ -1482,7 +1534,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 </table>
             </div>
             
-            <!-- NO RESULTS -->
             <div id="noResultsMessage" style="display:none;text-align:center;padding:40px 20px;">
                 <i class="fas fa-search" style="font-size:2rem;color:var(--border-color);display:block;margin-bottom:12px;"></i>
                 <p style="color:var(--text-secondary);font-size:0.9rem;">No visits match your filter</p>
@@ -1538,6 +1589,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </h3>
             <p style="font-size:0.85rem;color:var(--text-secondary);" id="confirmMessage">
                 Are you sure?
+            </p>
+        </div>
+        
+        <div id="confirmWarning" style="display:none;background:var(--danger-bg);border:2px solid var(--danger);border-radius:12px;padding:12px 16px;margin-bottom:12px;">
+            <p style="font-size:0.75rem;color:var(--danger);margin:0;font-weight:700;display:flex;align-items:center;gap:6px;">
+                <i class="fas fa-exclamation-triangle"></i>
+                <span>This action CANNOT be undone!</span>
             </p>
         </div>
         
@@ -1750,6 +1808,7 @@ function completeVisit(visitId, visitNumber) {
     document.getElementById('confirmTitle').textContent = '✅ Complete Visit?';
     document.getElementById('confirmMessage').textContent = 'This will mark the visit as COMPLETED.';
     document.getElementById('confirmVisitInfo').textContent = '📋 Visit #' + visitNumber;
+    document.getElementById('confirmWarning').style.display = 'none';
     
     var btn = document.getElementById('confirmActionBtn');
     btn.style.background = 'var(--success)';
@@ -1774,6 +1833,7 @@ function cancelVisit(visitId, patientId, visitNumber) {
     document.getElementById('confirmTitle').textContent = '❌ Cancel Visit?';
     document.getElementById('confirmMessage').textContent = 'This will CANCEL the visit.';
     document.getElementById('confirmVisitInfo').textContent = '📋 Visit #' + visitNumber;
+    document.getElementById('confirmWarning').style.display = 'none';
     
     var btn = document.getElementById('confirmActionBtn');
     btn.style.background = 'var(--danger)';
@@ -1788,18 +1848,56 @@ function cancelVisit(visitId, patientId, visitNumber) {
     document.body.style.overflow = 'hidden';
 }
 
+// ============================================================
+// ✅ DELETE VISIT - CONFIRM MODAL
+// ============================================================
+function deleteVisit(visitId, visitNumber, patientName) {
+    document.getElementById('confirmIcon').innerHTML = '<i class="fas fa-trash-alt"></i>';
+    document.getElementById('confirmIcon').style.background = 'var(--danger-bg)';
+    document.getElementById('confirmIcon').style.color = 'var(--danger)';
+    document.getElementById('confirmTitle').textContent = '🗑️ Delete Visit?';
+    document.getElementById('confirmMessage').innerHTML = 
+        'This will <strong>PERMANENTLY DELETE</strong> the visit and all related data:<br>' +
+        '<span style="font-size:0.75rem;color:var(--text-secondary);display:block;margin-top:6px;">' +
+        '• Bills & Payments<br>• Lab Tests<br>• Prescriptions<br>• Vital Signs<br>• Procedures' +
+        '</span>';
+    document.getElementById('confirmVisitInfo').innerHTML = 
+        '📋 Visit #' + visitNumber + '<br>' +
+        '<span style="font-size:0.75rem;font-weight:500;">Patient: ' + patientName + '</span>';
+    document.getElementById('confirmWarning').style.display = 'block';
+    
+    var btn = document.getElementById('confirmActionBtn');
+    btn.style.background = 'var(--danger)';
+    btn.innerHTML = '<i class="fas fa-trash-alt"></i> YES, DELETE';
+    
+    btn.onclick = function() {
+        closeConfirmModal();
+        executeVisitAction('delete_visit', visitId, 0);
+    };
+    
+    document.getElementById('confirmModal').classList.add('show');
+    document.body.style.overflow = 'hidden';
+}
+
 function executeVisitAction(action, visitId, patientId) {
     var formData = new FormData();
     formData.append('action', action);
     formData.append('visit_id', visitId);
     formData.append('patient_id', patientId);
     
+    // Show loading toast
+    showToast('⏳ Processing...', 'Please wait', 'info');
+    
     fetch(window.location.href, { method: 'POST', body: formData })
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.success) {
-                var msg = action === 'complete_visit' ? 'Visit completed!' : 'Visit cancelled!';
-                showToast('✅ Success', msg, 'success');
+                var msg = '';
+                if (action === 'complete_visit') msg = 'Visit completed!';
+                else if (action === 'cancel_visit') msg = 'Visit cancelled!';
+                else if (action === 'delete_visit') msg = 'Visit deleted!';
+                
+                showToast('✅ Success', msg || data.message, 'success');
                 setTimeout(function() { location.reload(); }, 1500);
             } else {
                 showToast('❌ Error', data.message || 'Failed', 'error');
@@ -1875,12 +1973,10 @@ function showToast(title, message, type) {
     }, 3500);
 }
 
-console.log('%c👑 Braick - Admin Visits (Kama patients.php)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ 8 Status Filters: All, Assigned, Lab Test, Prescribe, Waiting, Complete, Pending, Cancelled', 'font-size:12px;color:#34D399;');
-console.log('%c✅ Assigned: Reassign + Change buttons', 'font-size:12px;color:#D97706;');
-console.log('%c✅ Lab/Prescribe/Waiting: Complete + Cancel buttons', 'font-size:12px;color:#059669;');
-console.log('%c✅ Complete/Cancelled: View only', 'font-size:12px;color:#0891B2;');
-console.log('%c✅ Pending: Assign Doctor button', 'font-size:12px;color:#7C3AED;');
+console.log('%c👑 Braick - Admin Visits + DELETE', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ Delete button kwa KILA visit', 'font-size:12px;color:#DC2626;font-weight:bold;');
+console.log('%c✅ Delete inafuta visit + data zote (bills, labs, prescriptions, vitals, procedures)', 'font-size:12px;color:#059669;');
+console.log('%c✅ Confirm modal ya Delete na tahadhari', 'font-size:12px;color:#D97706;');
 </script>
 
 </body>
