@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/view_otc.php
-// AUDIT ROLE - VIEW OTC SALE DETAILS
+// AUDIT ROLE - VIEW OTC SALE DETAILS (V2 - BRANCH LOCKED)
+// ✅ AUDIT ANAONA OTC SALE ZA BRANCH YAKE TU
 // ✅ View OTC sale details
 // ✅ Blue theme #0B5ED7
 // ✅ Print & PDF export
@@ -37,14 +38,17 @@ if ($_SESSION['role'] !== 'audit') {
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Audit User';
 $user_role = $_SESSION['role'] ?? 'audit';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $sale_id = (int)($_GET['id'] ?? 0);
-$selected_branch_id = $_GET['branch'] ?? 'all';
+
+// ✅ AUDIT ANAONA BRANCH YAKE TU
+$selected_branch_id = $user_branch_id;
 
 if ($sale_id <= 0) {
-    header('Location: revenue.php?branch=' . $selected_branch_id);
+    header('Location: other_services.php?tab=otc_bills');
     exit;
 }
 
@@ -68,7 +72,7 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// GET OTC SALE DETAILS
+// GET OTC SALE DETAILS - ✅ BRANCH YA ALIYE LOGIN TU
 // ================================================================
 $sale = null;
 try {
@@ -84,17 +88,18 @@ try {
     FROM otc_sales o
     LEFT JOIN users u ON o.sold_by = u.id
     LEFT JOIN branches br ON o.branch_id = br.id
-    WHERE o.id = ?";
+    WHERE o.id = ? AND o.branch_id = ?";
     
     $stmt = $db->prepare($sql);
-    $stmt->execute([$sale_id]);
+    $stmt->execute([$sale_id, $user_branch_id]);
     $sale = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     error_log("OTC fetch error: " . $e->getMessage());
 }
 
 if (!$sale) {
-    header('Location: revenue.php?branch=' . $selected_branch_id);
+    $_SESSION['error_message'] = "OTC sale not found or you don't have permission to view this sale (different branch).";
+    header('Location: other_services.php?tab=otc_bills');
     exit;
 }
 
@@ -931,12 +936,15 @@ html, body {
             <h1 class="page-title">
                 <i class="fas fa-shopping-cart"></i>
                 OTC Sale Details
+                <span class="branch-tag" style="background:linear-gradient(135deg,#3B82F6,#2563EB);font-weight:800;">
+                    <i class="fas fa-shield-alt"></i> AUDIT
+                </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-hashtag"></i>
                 <strong><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></strong>
                 <span class="branch-tag">
-                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($sale['branch_name'] ?? 'N/A') ?>
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($sale['branch_name'] ?? $user_branch_name) ?>
                 </span>
                 <span class="branch-tag">
                     <i class="fas fa-calendar"></i> <?= date('d M Y, H:i', strtotime($sale['created_at'])) ?>
@@ -947,7 +955,7 @@ html, body {
             <button onclick="window.print()" class="btn-header">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="btn-header">
+            <a href="other_services.php?tab=otc_bills" class="btn-header">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
@@ -1189,15 +1197,17 @@ html, body {
             </div>
             <div class="info-text">
                 <div class="info-title">OTC Sale Actions</div>
-                <div class="info-sub">View, print, or manage this sale</div>
+                <div class="info-sub">
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($sale['branch_name'] ?? $user_branch_name) ?>
+                </div>
             </div>
         </div>
         <div class="action-buttons">
             <button onclick="window.print()" class="btn btn-secondary">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="btn btn-primary">
-                <i class="fas fa-arrow-left"></i> Back to Revenue
+            <a href="other_services.php?tab=otc_bills" class="btn btn-primary">
+                <i class="fas fa-arrow-left"></i> Back to OTC Bills
             </a>
         </div>
     </div>
@@ -1205,7 +1215,9 @@ html, body {
 </main>
 
 <script>
-console.log('%c🛒 View OTC Sale - Audit', 'font-size:18px; font-weight:bold; color:#0891B2;');
+console.log('%c🛒 View OTC Sale - Audit (BRANCH LOCKED)', 'font-size:18px; font-weight:bold; color:#0891B2;');
+console.log('%c✅ AUDIT ANAONA BRANCH YAKE TU', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c👥 Branch: <?= htmlspecialchars($sale['branch_name'] ?? $user_branch_name) ?>', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
 console.log('%c✅ Sale #<?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?>', 'font-size:13px; color:#34D399;');
 console.log('%c💰 Total: <?= $currency ?> <?= number_format($total_amount, 0) ?>', 'font-size:13px; color:#0891B2; font-weight:bold;');
 console.log('%c📦 Items: <?= count($sale_items) ?>', 'font-size:13px; color:#0891B2;');

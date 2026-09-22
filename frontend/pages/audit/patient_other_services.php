@@ -4,6 +4,7 @@
 // AUDIT - PATIENT OTHER SERVICES (V1 - VIEW ONLY)
 // ✅ Types: consultations | procedures | equipment
 // ✅ Group by Patient → Visit
+// ✅ Branch ya aliye login TU
 // ✅ NO Edit / Delete / Add buttons
 // ✅ BLUE THEME + Table nav < >
 // ================================================================
@@ -35,12 +36,15 @@ if ($_SESSION['role'] !== 'audit') {
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Audit User';
 $user_role = $_SESSION['role'] ?? 'audit';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $patient_id = (int)($_GET['patient_id'] ?? 0);
 $type = $_GET['type'] ?? 'consultations';
-$selected_branch_id = $_GET['branch'] ?? 'all';
+
+// ✅ AUDIT anaona branch yake TU
+$selected_branch_id = (int)$user_branch_id;
 
 // Validate type
 if (!in_array($type, ['consultations', 'procedures', 'equipment'])) {
@@ -48,7 +52,7 @@ if (!in_array($type, ['consultations', 'procedures', 'equipment'])) {
 }
 
 if ($patient_id <= 0) {
-    header('Location: other_services.php?branch=' . urlencode($selected_branch_id));
+    header('Location: other_services.php');
     exit;
 }
 
@@ -94,7 +98,7 @@ function formatTsh($amount) {
 }
 
 // ================================================================
-// GET PATIENT
+// ✅ GET PATIENT - LAZIMA branch ya mtumiaji
 // ================================================================
 $patient = null;
 try {
@@ -102,19 +106,22 @@ try {
         SELECT p.*, b.name as branch_name
         FROM patients p
         LEFT JOIN branches b ON p.branch_id = b.id
-        WHERE p.id = ?
+        WHERE p.id = ? AND p.branch_id = ?
     ");
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $user_branch_id]);
     $patient = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
 if (!$patient) {
-    header('Location: other_services.php?branch=' . urlencode($selected_branch_id));
+    // ✅ Patient hayupo kwenye branch yake - redirect
+    header('Location: other_services.php');
     exit;
 }
 
+$patient_branch_id = (int)$patient['branch_id'];
+
 // ================================================================
-// FETCH DATA BASED ON TYPE
+// FETCH DATA BASED ON TYPE - ✅ branch ya mtumiaji tu
 // ================================================================
 $visits_data = [];
 $all_items = [];
@@ -130,11 +137,11 @@ if ($type === 'consultations') {
         LEFT JOIN users doc ON v.doctor_id = doc.id
         LEFT JOIN users rec ON v.receptionist_id = rec.id
         LEFT JOIN branches b ON v.branch_id = b.id
-        WHERE v.patient_id = ?
+        WHERE v.patient_id = ? AND v.branch_id = ?
         ORDER BY v.visit_date DESC, v.created_at DESC
     ";
     $stmt = $db->prepare($sql);
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $patient_branch_id]);
     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($rows as $row) {
@@ -153,7 +160,7 @@ if ($type === 'consultations') {
             'status' => $row['status'] ?? 'N/A',
             'payment_status' => $row['payment_status'] ?? 'N/A',
             'visit_total' => $row['visit_total'] ?? 0,
-            'items' => [$row] // Single row = single consultation
+            'items' => [$row]
         ];
         $all_items[] = $row;
     }
@@ -172,7 +179,7 @@ if ($type === 'consultations') {
         LEFT JOIN users doc ON p.doctor_id = doc.id
         LEFT JOIN branches b ON p.branch_id = b.id
         LEFT JOIN visits v ON p.visit_id = v.id
-        WHERE p.patient_id = ?
+        WHERE p.patient_id = ? AND p.branch_id = ?
     ";
     
     if ($type === 'equipment') {
@@ -184,7 +191,7 @@ if ($type === 'consultations') {
     $sql .= " ORDER BY v.visit_date DESC, p.created_at DESC";
     
     $stmt = $db->prepare($sql);
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $patient_branch_id]);
     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($rows as $row) {
@@ -667,7 +674,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             <button onclick="window.print()" class="btn-header">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="other_services.php?branch=<?= $selected_branch_id ?>&tab=<?= $type === 'consultations' ? 'consultations' : 'procedures' ?>" class="btn-header">
+            <a href="other_services.php?tab=<?= $type === 'consultations' ? 'consultations' : 'procedures' ?>" class="btn-header">
                 <i class="fas fa-arrow-left"></i> Back to List
             </a>
         </div>
@@ -709,15 +716,15 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 
     <!-- TYPE TABS -->
     <div class="type-tabs">
-        <a href="?patient_id=<?= $patient_id ?>&type=consultations&branch=<?= $selected_branch_id ?>" 
+        <a href="?patient_id=<?= $patient_id ?>&type=consultations" 
            class="type-tab <?= $type === 'consultations' ? 'active' : '' ?>">
             <i class="fas fa-stethoscope"></i> Consultations
         </a>
-        <a href="?patient_id=<?= $patient_id ?>&type=procedures&branch=<?= $selected_branch_id ?>" 
+        <a href="?patient_id=<?= $patient_id ?>&type=procedures" 
            class="type-tab <?= $type === 'procedures' ? 'active' : '' ?>">
             <i class="fas fa-syringe"></i> Procedures
         </a>
-        <a href="?patient_id=<?= $patient_id ?>&type=equipment&branch=<?= $selected_branch_id ?>" 
+        <a href="?patient_id=<?= $patient_id ?>&type=equipment" 
            class="type-tab <?= $type === 'equipment' ? 'active' : '' ?>">
             <i class="fas fa-microscope"></i> Equipments
         </a>
@@ -856,7 +863,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                         </span>
                                     </td>
                                     <td style="text-align:center;">
-                                        <a href="view_consultation.php?id=<?= $vid ?>&branch=<?= $selected_branch_id ?>" 
+                                        <a href="view_consultation.php?id=<?= $vid ?>" 
                                            class="btn-act view" title="View Consultation">
                                             <i class="fas fa-eye"></i>
                                         </a>
@@ -893,7 +900,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                     </td>
                                     <td style="font-size:0.7rem;"><?= date('d M Y', strtotime($item['created_at'])) ?></td>
                                     <td style="text-align:center;">
-                                        <a href="view_procedure.php?id=<?= $item['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                        <a href="view_procedure.php?id=<?= $item['id'] ?>" 
                                            class="btn-act view" title="View">
                                             <i class="fas fa-eye"></i>
                                         </a>
@@ -970,6 +977,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 console.log('%c🔍 Audit - Patient Other Services (VIEW ONLY)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
 console.log('%c✅ Type: <?= $type ?>', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px;color:#10B981;font-weight:bold;');
 console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:12px;color:#34D399;');
 console.log('%c📊 Total: <?= $total_items ?> items / <?= $total_visits ?> visits', 'font-size:12px;color:#34D399;');
 console.log('%c❌ NO Edit/Delete buttons', 'font-size:12px;color:#DC2626;font-weight:bold;');

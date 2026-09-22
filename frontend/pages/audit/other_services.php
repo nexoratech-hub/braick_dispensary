@@ -1,13 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/other_services.php
-// AUDIT - OTHER SERVICES (V6 - VIEW ONLY + ADMIN AUDIT DESIGN)
-// ✅ VIEW ONLY - No Edit/Delete buttons anywhere
+// AUDIT - OTHER SERVICES (V8 - BRANCH LOCKED CLEAN)
+// ✅ AUDIT ANAONA BRANCH YAKE TU (HAWEZI KUBADILISHA)
+// ✅ ONDOA VIEW ONLY notice na badges
 // ✅ Tabs: Procedures | Consultations | All Bills | OTC Bills
 // ✅ 6 Summary Cards (3+3 rows) kwa All Bills
 // ✅ Patient Cards with blue border + END OF footer
 // ✅ OTC Card per Sale (design sawa na revenue.php)
-// ✅ Design ifanane na admin/audit/other_services.php
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) session_start();
@@ -100,7 +100,11 @@ if (!in_array($active_tab, ['procedures', 'consultations', 'all_bills', 'otc_bil
 
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
-$selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
+
+// ✅ AUDIT ANAONA BRANCH YAKE TU - HAWEZI KUBADILISHA
+$selected_branch_id = $user_branch_id;
+$selected_branch_name = $user_branch_name;
+
 $quick_filter = isset($_GET['quick']) ? $_GET['quick'] : 'all';
 $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
@@ -117,17 +121,15 @@ switch ($quick_filter) {
     default: $quick_date_from = ''; $quick_date_to = ''; break;
 }
 
+// Chukua jina la branch ya aliye login
 $branches_list = [];
 try {
     $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
     $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-$selected_branch_name = 'All Branches';
-if ($selected_branch_id !== 'all') {
-    foreach ($branches_list as $b) {
-        if ($b['id'] == $selected_branch_id) { $selected_branch_name = $b['name']; break; }
-    }
+foreach ($branches_list as $b) {
+    if ($b['id'] == $user_branch_id) { $selected_branch_name = $b['name']; break; }
 }
 
 $profile_pic_url = !empty($profile_pic)
@@ -142,17 +144,13 @@ $procedures_array = [];
 $procedures_stats = ['total'=>0, 'pending'=>0, 'completed'=>0, 'amount'=>0, 'equipment_count'=>0, 'procedure_count'=>0];
 
 if ($active_tab === 'procedures') {
-    $where = " WHERE bi.item_type IN ('procedure', 'equipment') AND bi.status != 'cancelled'";
-    $params = [];
+    $where = " WHERE bi.item_type IN ('procedure', 'equipment') AND bi.status != 'cancelled' AND bi.branch_id = ?";
+    $params = [(int)$selected_branch_id];
     
     if (!empty($search)) {
         $where .= " AND (bi.item_name LIKE ? OR pat.full_name LIKE ? OR pat.patient_id LIKE ?)";
         $sp = "%$search%";
         $params[] = $sp; $params[] = $sp; $params[] = $sp;
-    }
-    if ($selected_branch_id !== 'all') { 
-        $where .= " AND bi.branch_id = ?"; 
-        $params[] = (int)$selected_branch_id; 
     }
     if (!empty($quick_date_from)) { 
         $where .= " AND DATE(bi.created_at) >= ?"; 
@@ -292,17 +290,13 @@ $consultations_array = [];
 $consultations_stats = ['total'=>0, 'pending'=>0, 'paid'=>0, 'partial'=>0, 'amount'=>0];
 
 if ($active_tab === 'consultations') {
-    $where = " WHERE bi.item_type = 'consultation' AND bi.status != 'cancelled'";
-    $params = [];
+    $where = " WHERE bi.item_type = 'consultation' AND bi.status != 'cancelled' AND bi.branch_id = ?";
+    $params = [(int)$selected_branch_id];
     
     if (!empty($search)) {
         $where .= " AND (v.visit_number LIKE ? OR pat.full_name LIKE ? OR pat.patient_id LIKE ?)";
         $sp = "%$search%";
         $params[] = $sp; $params[] = $sp; $params[] = $sp;
-    }
-    if ($selected_branch_id !== 'all') { 
-        $where .= " AND bi.branch_id = ?"; 
-        $params[] = (int)$selected_branch_id; 
     }
     if (!empty($quick_date_from)) { 
         $where .= " AND DATE(v.visit_date) >= ?"; 
@@ -448,15 +442,14 @@ $bills_stats = ['total_bills'=>0, 'paid'=>0, 'pending'=>0, 'partial'=>0,
                 'total_billed_amt'=>0, 'paid_percentage'=>0];
 
 if ($active_tab === 'all_bills') {
-    $where = " WHERE 1=1";
-    $params = [];
+    $where = " WHERE b.branch_id = ?";
+    $params = [(int)$selected_branch_id];
     if (!empty($search)) {
         $where .= " AND (b.bill_number LIKE ? OR pat.full_name LIKE ? OR pat.patient_id LIKE ?)";
         $sp = "%$search%";
         $params[] = $sp; $params[] = $sp; $params[] = $sp;
     }
     if (!empty($status_filter)) { $where .= " AND b.status = ?"; $params[] = $status_filter; }
-    if ($selected_branch_id !== 'all') { $where .= " AND b.branch_id = ?"; $params[] = (int)$selected_branch_id; }
     if (!empty($quick_date_from)) { $where .= " AND DATE(b.created_at) >= ?"; $params[] = $quick_date_from; }
     if (!empty($quick_date_to)) { $where .= " AND DATE(b.created_at) <= ?"; $params[] = $quick_date_to; }
     
@@ -614,21 +607,20 @@ if ($active_tab === 'all_bills') {
 }
 
 // ================================================================
-// TAB 4: OTC BILLS - Card per Sale (design sawa na revenue.php)
+// TAB 4: OTC BILLS - Card per Sale
 // ================================================================
 $otc_sales_list = [];
 $otc_stats = ['total'=>0, 'paid'=>0, 'pending'=>0, 'partial'=>0, 'amount'=>0, 'items_total'=>0];
 
 if ($active_tab === 'otc_bills') {
-    $where = " WHERE 1=1";
-    $params = [];
+    $where = " WHERE s.branch_id = ?";
+    $params = [(int)$selected_branch_id];
     if (!empty($search)) {
         $where .= " AND (s.sale_number LIKE ? OR s.customer_name LIKE ? OR s.customer_phone LIKE ? OR u.full_name LIKE ?)";
         $sp = "%$search%";
         $params[] = $sp; $params[] = $sp; $params[] = $sp; $params[] = $sp;
     }
     if (!empty($status_filter)) { $where .= " AND s.payment_status = ?"; $params[] = $status_filter; }
-    if ($selected_branch_id !== 'all') { $where .= " AND s.branch_id = ?"; $params[] = (int)$selected_branch_id; }
     if (!empty($quick_date_from)) { $where .= " AND DATE(s.created_at) >= ?"; $params[] = $quick_date_from; }
     if (!empty($quick_date_to)) { $where .= " AND DATE(s.created_at) <= ?"; $params[] = $quick_date_to; }
     
@@ -772,10 +764,6 @@ body { font-family: var(--font-main) !important; }
     background: linear-gradient(135deg, #0EA5E9, #0284C7);
     font-weight: 800;
 }
-.page-header-custom .role-badge-display.view-only-tag {
-    background: linear-gradient(135deg, #F59E0B, #D97706);
-    font-weight: 800;
-}
 .page-header-custom .branch-tag {
     background: rgba(255,255,255,0.15); color: white;
     padding: 2px 10px; border-radius: 20px;
@@ -794,26 +782,6 @@ body { font-family: var(--font-main) !important; }
 .page-header-custom .btn-outline-light:hover {
     background: rgba(255,255,255,0.25);
     transform: translateY(-2px); color: white;
-}
-
-/* VIEW ONLY NOTICE */
-.view-only-notice {
-    background: linear-gradient(135deg, var(--warning-bg), #FEF9E7);
-    border-left: 4px solid var(--warning);
-    border-radius: 10px; padding: 12px 18px; margin-bottom: 16px;
-    display: flex; align-items: center; gap: 12px;
-    font-size: 0.78rem; font-weight: 700; color: var(--warning);
-    box-shadow: var(--shadow);
-}
-[data-theme="dark"] .view-only-notice { background: linear-gradient(135deg, #3A2A1A, #2D2015); color: #FBBF24; }
-.view-only-notice i { font-size: 1.15rem; flex-shrink: 0; }
-.view-only-notice .notice-text { flex: 1; line-height: 1.5; }
-.view-only-notice .notice-badge {
-    background: var(--warning); color: white;
-    padding: 4px 12px; border-radius: 8px;
-    font-size: 0.62rem; font-weight: 800;
-    text-transform: uppercase; letter-spacing: 0.05em;
-    white-space: nowrap;
 }
 
 /* TABS */
@@ -1402,7 +1370,7 @@ body { font-family: var(--font-main) !important; }
 .amount-cell.purple { color: var(--purple); }
 .amount-cell.orange { color: var(--warning); }
 
-/* ✅ VIEW ONLY BUTTON - Unified size */
+/* ✅ BUTTON - Unified size */
 .action-buttons-group {
     display: inline-flex;
     gap: 6px;
@@ -1528,7 +1496,7 @@ body { font-family: var(--font-main) !important; }
 .footer .footer-brand { color: var(--primary); font-weight: 600; }
 
 /* ================================================================
-   OTC SALE CARD - Design sawa na revenue.php
+   OTC SALE CARD
    ================================================================ */
 .otc-cards-container {
     overflow-x: auto;
@@ -1861,7 +1829,7 @@ body { font-family: var(--font-main) !important; }
 }
 
 @media print {
-    .action-buttons-group, .view-only-notice, .med-search-panel, .quick-filters { display: none !important; }
+    .action-buttons-group, .med-search-panel, .quick-filters { display: none !important; }
     .page-header-custom { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 </style>
@@ -1877,12 +1845,7 @@ body { font-family: var(--font-main) !important; }
                 <span class="role-badge-display audit-tag">
                     <i class="fas fa-user-shield"></i> AUDIT
                 </span>
-                <span class="role-badge-display view-only-tag">
-                    <i class="fas fa-eye"></i> VIEW ONLY
-                </span>
-                <?php if ($selected_branch_id !== 'all'): ?>
-                    <span class="branch-tag"><i class="fas fa-store-alt"></i> <?= htmlspecialchars($selected_branch_name) ?></span>
-                <?php endif; ?>
+                <span class="branch-tag"><i class="fas fa-store-alt"></i> <?= htmlspecialchars($selected_branch_name) ?></span>
             </h1>
             <p class="page-subtitle">
                 <span class="branch-tag"><i class="fas fa-th-large"></i> Procedures • Consultations • Bills • OTC</span>
@@ -1892,22 +1855,10 @@ body { font-family: var(--font-main) !important; }
             <button onclick="window.print()" class="btn-outline-light">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="dashboard.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
+            <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
         </div>
-    </div>
-
-    <!-- VIEW ONLY NOTICE -->
-    <div class="view-only-notice">
-        <i class="fas fa-info-circle"></i>
-        <span class="notice-text">
-            You are viewing this report in <strong>VIEW ONLY</strong> mode. 
-            You cannot edit or delete records. For any changes, please contact your Administrator.
-        </span>
-        <span class="notice-badge">
-            <i class="fas fa-lock"></i> VIEW ONLY
-        </span>
     </div>
 
     <!-- TABS -->
@@ -1987,7 +1938,7 @@ body { font-family: var(--font-main) !important; }
     </div>
 
     <!-- ============================================================
-         TAB 1: PROCEDURES & EQUIPMENTS (VIEW ONLY)
+         TAB 1: PROCEDURES & EQUIPMENTS
          ============================================================ -->
     <?php if ($active_tab === 'procedures'): ?>
         
@@ -2194,7 +2145,7 @@ body { font-family: var(--font-main) !important; }
                                                             <td style="font-size:0.7rem;"><?= date('d M Y', strtotime($item['item_created_at'])) ?></td>
                                                             <td style="text-align:center;">
                                                                 <div class="action-buttons-group">
-                                                                    <a href="view_procedure.php?id=<?= $reference_id ?>&bill_item_id=<?= $bill_item_id ?>&type=<?= $item['item_type'] ?>&branch=<?= $selected_branch_id ?>" 
+                                                                    <a href="view_procedure.php?id=<?= $reference_id ?>&bill_item_id=<?= $bill_item_id ?>&type=<?= $item['item_type'] ?>" 
                                                                        class="btn-action-sm view" title="View Details">
                                                                         <i class="fas fa-eye"></i> View
                                                                     </a>
@@ -2243,7 +2194,7 @@ body { font-family: var(--font-main) !important; }
     <?php endif; ?>
 
     <!-- ============================================================
-         TAB 2: CONSULTATIONS (VIEW ONLY)
+         TAB 2: CONSULTATIONS
          ============================================================ -->
     <?php if ($active_tab === 'consultations'): ?>
         
@@ -2422,7 +2373,7 @@ body { font-family: var(--font-main) !important; }
                                                         <td class="amount-cell"><?= formatTsh($visit['consultation_fee']) ?></td>
                                                         <td style="text-align:center;">
                                                             <div class="action-buttons-group">
-                                                                <a href="view_consultation.php?id=<?= $visit['visit_id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-action-sm view" title="View Consultation">
+                                                                <a href="view_consultation.php?id=<?= $visit['visit_id'] ?>" class="btn-action-sm view" title="View Consultation">
                                                                     <i class="fas fa-eye"></i> View
                                                                 </a>
                                                             </div>
@@ -2468,7 +2419,7 @@ body { font-family: var(--font-main) !important; }
     <?php endif; ?>
 
     <!-- ============================================================
-         TAB 3: ALL BILLS - 6 SUMMARY CARDS + PATIENT CARDS (VIEW ONLY)
+         TAB 3: ALL BILLS - 6 SUMMARY CARDS + PATIENT CARDS
          ============================================================ -->
     <?php if ($active_tab === 'all_bills'): ?>
         
@@ -2682,7 +2633,7 @@ body { font-family: var(--font-main) !important; }
                                                         </span>
                                                     <?php endif; ?>
                                                     <div class="action-buttons-group">
-                                                        <a href="view_bill.php?id=<?= $bill['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-action-sm view">
+                                                        <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn-action-sm view">
                                                             <i class="fas fa-eye"></i> View Bill
                                                         </a>
                                                     </div>
@@ -2743,11 +2694,11 @@ body { font-family: var(--font-main) !important; }
                                                                                 <td style="text-align:center;">
                                                                                     <div class="action-buttons-group">
                                                                                         <?php if (in_array($item_type, ['procedure', 'equipment'])): ?>
-                                                                                            <a href="view_procedure.php?id=<?= $it['reference_id'] ?? 0 ?>&bill_item_id=<?= $it['id'] ?>&type=<?= $item_type ?>&branch=<?= $selected_branch_id ?>" class="btn-action-sm view">
+                                                                                            <a href="view_procedure.php?id=<?= $it['reference_id'] ?? 0 ?>&bill_item_id=<?= $it['id'] ?>&type=<?= $item_type ?>" class="btn-action-sm view">
                                                                                                 <i class="fas fa-eye"></i> View
                                                                                             </a>
                                                                                         <?php else: ?>
-                                                                                            <a href="view_bill_item.php?id=<?= $it['id'] ?>&type=<?= $item_type ?>&branch=<?= $selected_branch_id ?>" class="btn-action-sm view">
+                                                                                            <a href="view_bill_item.php?id=<?= $it['id'] ?>&type=<?= $item_type ?>" class="btn-action-sm view">
                                                                                                 <i class="fas fa-eye"></i> View
                                                                                             </a>
                                                                                         <?php endif; ?>
@@ -2815,7 +2766,7 @@ body { font-family: var(--font-main) !important; }
     <?php endif; ?>
 
     <!-- ============================================================
-         TAB 4: OTC BILLS - Card per Sale (VIEW ONLY)
+         TAB 4: OTC BILLS - Card per Sale
          ============================================================ -->
     <?php if ($active_tab === 'otc_bills'): ?>
         
@@ -2951,7 +2902,7 @@ body { font-family: var(--font-main) !important; }
                             </div>
                             
                             <div class="otc-header-right">
-                                <a href="view_otc.php?id=<?= (int)$otc['sale_id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                <a href="view_otc.php?id=<?= (int)$otc['sale_id'] ?>" 
                                    class="otc-action-btn view" title="View OTC Sale" target="_blank">
                                     <i class="fas fa-eye"></i> View
                                 </a>
@@ -3062,10 +3013,6 @@ body { font-family: var(--font-main) !important; }
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span style="margin:0 8px;">|</span>
             Other Services (Procedures • Consultations • Bills • OTC)
-            <span style="margin:0 8px;">|</span>
-            <span style="color:var(--warning);font-weight:700;font-size:0.65rem;">
-                <i class="fas fa-lock"></i> VIEW ONLY
-            </span>
             <span style="margin:0 8px;">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
         </p>
@@ -3209,12 +3156,10 @@ setInterval(function() {
     if (ft) ft.textContent = 'Last updated: ' + t;
 }, 1000);
 
-console.log('%c🔍 Audit - Other Services V6 (VIEW ONLY)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ VIEW ONLY - No Edit/Delete buttons anywhere', 'font-size:12px;color:#34D399;font-weight:bold;');
-console.log('%c✅ 6 Summary Cards (3+3) kwa All Bills', 'font-size:12px;color:#34D399;font-weight:bold;');
-console.log('%c✅ Patient Cards with blue border + END OF footer', 'font-size:12px;color:#34D399;font-weight:bold;');
-console.log('%c✅ OTC: Card per Sale (design sawa na revenue.php)', 'font-size:12px;color:#34D399;font-weight:bold;');
-console.log('%c✅ Design ifanane na admin/audit/other_services.php', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c🔍 Audit - Other Services V8 (BRANCH LOCKED CLEAN)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ AUDIT ANAONA BRANCH YAKE TU', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c✅ VIEW ONLY notice na badges zimeondolewa', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c👥 Branch: <?= htmlspecialchars($selected_branch_name) ?>', 'font-size:12px;color:#0B5ED7;font-weight:bold;');
 </script>
 
 </body>

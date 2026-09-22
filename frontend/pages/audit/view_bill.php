@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/audit/view_bill.php
 // AUDIT ROLE - VIEW BILL DETAILS
+// ✅ Branch ya aliye login TU
 // ✅ AUDIT role only - VIEW ONLY
 // ✅ Recalculates total from subtotal - discount + premium
 // ✅ Blue theme #0B5ED7
@@ -37,14 +38,17 @@ if ($_SESSION['role'] !== 'audit') {
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Audit User';
 $user_role = $_SESSION['role'] ?? 'audit';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $bill_id = (int)($_GET['id'] ?? 0);
-$selected_branch_id = $_GET['branch'] ?? 'all';
+
+// ✅ AUDIT anaona branch yake TU
+$selected_branch_id = (int)$user_branch_id;
 
 if ($bill_id <= 0) {
-    header('Location: revenue.php?branch=' . $selected_branch_id);
+    header('Location: revenue.php');
     exit;
 }
 
@@ -68,7 +72,7 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// GET BILL DETAILS
+// ✅ GET BILL DETAILS - LAZIMA branch ya mtumiaji
 // ================================================================
 $bill = null;
 try {
@@ -97,19 +101,22 @@ try {
     LEFT JOIN visits v ON b.visit_id = v.id
     LEFT JOIN users u ON b.created_by = u.id
     LEFT JOIN branches br ON b.branch_id = br.id
-    WHERE b.id = ?";
+    WHERE b.id = ? AND b.branch_id = ?";
     
     $stmt = $db->prepare($sql);
-    $stmt->execute([$bill_id]);
+    $stmt->execute([$bill_id, $user_branch_id]);
     $bill = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     error_log("Bill fetch error: " . $e->getMessage());
 }
 
 if (!$bill) {
-    header('Location: revenue.php?branch=' . $selected_branch_id);
+    // ✅ Bill hayupo kwenye branch yake - redirect
+    header('Location: revenue.php');
     exit;
 }
+
+$bill_branch_id = (int)$bill['branch_id'];
 
 // ================================================================
 // GET BILL ITEMS
@@ -1158,7 +1165,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             <button onclick="window.print()" class="btn-header">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="btn-header">
+            <a href="revenue.php" class="btn-header">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
@@ -1563,7 +1570,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             <button onclick="window.print()" class="btn btn-secondary">
                 <i class="fas fa-print"></i> Print Bill
             </button>
-            <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="btn btn-primary">
+            <a href="revenue.php" class="btn btn-primary">
                 <i class="fas fa-arrow-left"></i> Back to Revenue
             </a>
         </div>
@@ -1574,6 +1581,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 <script>
 console.log('%c📄 View Bill - Audit (VIEW ONLY)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
 console.log('%c✅ AUDIT ROLE', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#10B981; font-weight:bold;');
 console.log('%c✅ VIEW ONLY - No Edit/Delete', 'font-size:13px; color:#FCD34D; font-weight:bold;');
 console.log('%c✅ Bill #<?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#34D399;');
 console.log('%c💰 Subtotal: <?= $currency ?> <?= number_format($subtotal, 0) ?>', 'font-size:13px; color:#0B5ED7;');

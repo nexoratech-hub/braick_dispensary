@@ -1,11 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/view_expense.php
-// AUDIT - VIEW EXPENSE DETAILS (V2 - READ ONLY, RED THEME)
+// AUDIT - VIEW EXPENSE DETAILS (V3 - BRANCH LOCKED CLEAN)
+// ✅ Branch ya aliye login TU
+// ✅ ONDOA AUDIT MODE READ-ONLY notice na badges
 // ✅ View expense details with recorded by info
 // ✅ RED THEME (matching expenses section)
 // ✅ Print
-// ✅ READ-ONLY: Bila Edit/Delete buttons
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -20,14 +21,17 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'audit') {
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Audit User';
 $user_role = $_SESSION['role'] ?? 'audit';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $expense_id = (int)($_GET['id'] ?? 0);
-$selected_branch_id = $_GET['branch'] ?? 'all';
+
+// ✅ AUDIT anaona branch yake TU
+$selected_branch_id = (int)$user_branch_id;
 
 if ($expense_id <= 0) {
-    header('Location: dashboard.php?branch=' . $selected_branch_id);
+    header('Location: dashboard.php');
     exit;
 }
 
@@ -48,7 +52,7 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// GET EXPENSE DETAILS
+// ✅ GET EXPENSE DETAILS - LAZIMA branch ya mtumiaji
 // ================================================================
 $expense = null;
 try {
@@ -67,17 +71,18 @@ try {
     FROM expenses e
     LEFT JOIN users u ON e.created_by = u.id
     LEFT JOIN branches br ON e.branch_id = br.id
-    WHERE e.id = ?";
+    WHERE e.id = ? AND e.branch_id = ?";
     
     $stmt = $db->prepare($sql);
-    $stmt->execute([$expense_id]);
+    $stmt->execute([$expense_id, $user_branch_id]);
     $expense = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     error_log("Expense fetch error: " . $e->getMessage());
 }
 
 if (!$expense) {
-    header('Location: dashboard.php?branch=' . $selected_branch_id);
+    // ✅ Expense hayupo kwenye branch yake - redirect
+    header('Location: dashboard.php');
     exit;
 }
 
@@ -247,9 +252,7 @@ html, body {
     letter-spacing: -0.02em;
 }
 
-/* ================================================================
-   ✅ PAGE HEADER - RED THEME
-   ================================================================ */
+/* PAGE HEADER - RED THEME */
 .page-header {
     background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
     border-radius: 16px;
@@ -290,7 +293,7 @@ html, body {
 
 .page-header .page-title i { font-size: 1.5rem; color: #FCA5A5; }
 
-.audit-mode-badge {
+.audit-badge {
     background: linear-gradient(135deg, #7C3AED, #6D28D9);
     color: white;
     padding: 4px 14px;
@@ -354,59 +357,7 @@ html, body {
     transform: translateY(-2px);
 }
 
-/* ================================================================
-   ✅ AUDIT READ-ONLY NOTICE
-   ================================================================ */
-.audit-notice {
-    background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
-    border: 2px solid #C4B5FD;
-    border-radius: 14px;
-    padding: 14px 20px;
-    margin-bottom: 18px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-[data-theme="dark"] .audit-notice {
-    background: linear-gradient(135deg, #2D1B4E, #3D2B5E);
-    border-color: #7C3AED;
-}
-
-.audit-notice i {
-    font-size: 1.5rem;
-    color: #7C3AED;
-    flex-shrink: 0;
-}
-
-[data-theme="dark"] .audit-notice i {
-    color: #A78BFA;
-}
-
-.audit-notice .notice-text strong {
-    color: #5B21B6;
-    font-size: 0.85rem;
-    display: block;
-    margin-bottom: 2px;
-}
-
-[data-theme="dark"] .audit-notice .notice-text strong {
-    color: #C4B5FD;
-}
-
-.audit-notice .notice-text span {
-    color: #6D28D9;
-    font-size: 0.72rem;
-    font-weight: 600;
-}
-
-[data-theme="dark"] .audit-notice .notice-text span {
-    color: #A78BFA;
-}
-
-/* ================================================================
-   ✅ STATUS BANNER - RED THEME
-   ================================================================ */
+/* STATUS BANNER - RED THEME */
 .status-banner {
     border-radius: 14px;
     padding: 18px 24px;
@@ -968,7 +919,7 @@ html, body {
 
 /* PRINT */
 @media print {
-    .btn-header, .audit-notice { display: none !important; }
+    .btn-header { display: none !important; }
     .page-header { 
         background: #DC2626 !important;
         -webkit-print-color-adjust: exact;
@@ -985,16 +936,14 @@ html, body {
 
 <main class="main-content">
 
-    <!-- ============================================================ -->
     <!-- PAGE HEADER - RED THEME + AUDIT BADGE -->
-    <!-- ============================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-receipt"></i>
                 Expense Details
-                <span class="audit-mode-badge">
-                    <i class="fas fa-lock"></i> READ-ONLY
+                <span class="audit-badge">
+                    <i class="fas fa-shield-alt"></i> AUDIT
                 </span>
             </h1>
             <p class="page-subtitle">
@@ -1012,26 +961,13 @@ html, body {
             <button onclick="window.print()" class="btn-header">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="dashboard.php?branch=<?= $selected_branch_id ?>" class="btn-header" style="background:linear-gradient(135deg,#7C3AED,#6D28D9);border-color:rgba(255,255,255,0.3);">
+            <a href="dashboard.php" class="btn-header" style="background:linear-gradient(135deg,#7C3AED,#6D28D9);border-color:rgba(255,255,255,0.3);">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
     </div>
 
-    <!-- ============================================================ -->
-    <!-- AUDIT READ-ONLY NOTICE -->
-    <!-- ============================================================ -->
-    <div class="audit-notice">
-        <i class="fas fa-shield-alt"></i>
-        <div class="notice-text">
-            <strong>AUDIT MODE — READ-ONLY ACCESS</strong>
-            <span>You can view all expense records but cannot edit or delete any data.</span>
-        </div>
-    </div>
-
-    <!-- ============================================================ -->
     <!-- STATUS BANNER - RED THEME -->
-    <!-- ============================================================ -->
     <div class="status-banner <?= htmlspecialchars($expense['status'] ?? 'paid') ?>">
         <div class="status-left">
             <div class="status-icon">
@@ -1063,9 +999,7 @@ html, body {
         </div>
     </div>
 
-    <!-- ============================================================ -->
     <!-- MAIN GRID -->
-    <!-- ============================================================ -->
     <div class="view-grid">
         
         <!-- EXPENSE INFO -->
@@ -1230,9 +1164,7 @@ html, body {
         
     </div>
 
-    <!-- ============================================================ -->
     <!-- DESCRIPTION + RECEIPT + NOTES -->
-    <!-- ============================================================ -->
     <div class="info-card red-theme" style="margin-bottom:18px;">
         <div class="card-header">
             <span class="title">
@@ -1292,12 +1224,10 @@ html, body {
         </div>
     </div>
 
-    <!-- ============================================================ -->
-    <!-- AUDIT FOOTER -->
-    <!-- ============================================================ -->
+    <!-- FOOTER -->
     <div class="audit-footer">
-        <i class="fas fa-shield-alt"></i>
-        <strong>Audit Mode</strong> — Read-only. Data displayed for review only.
+        <i class="fas fa-store-alt" style="color:#DC2626;"></i>
+        <strong><?= htmlspecialchars($expense['branch_name'] ?? $user_branch_name) ?></strong>
         <span style="margin:0 8px;">|</span>
         <span id="footerTime"><?= date('H:i:s') ?></span>
     </div>
@@ -1312,12 +1242,14 @@ setInterval(function() {
     if (el) el.textContent = timeStr;
 }, 1000);
 
-console.log('%c🧾 View Expense - AUDIT (RED THEME, READ-ONLY)', 'font-size:18px; font-weight:bold; color:#DC2626;');
+console.log('%c🧾 View Expense - AUDIT (BRANCH LOCKED CLEAN)', 'font-size:18px; font-weight:bold; color:#DC2626;');
+console.log('%c✅ AUDIT ANAONA BRANCH YAKE TU', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c✅ READ-ONLY notice na badges zimeondolewa', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c👥 Branch: <?= htmlspecialchars($expense['branch_name'] ?? $user_branch_name) ?>', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
 console.log('%c✅ Expense #<?= htmlspecialchars($expense['expense_number'] ?? 'N/A') ?>', 'font-size:13px; color:#DC2626;');
 console.log('%c💰 Amount: <?= $currency ?> <?= number_format($amount, 0) ?>', 'font-size:13px; color:#DC2626; font-weight:bold;');
 console.log('%c📁 Category: <?= htmlspecialchars($expense['category'] ?? 'N/A') ?>', 'font-size:13px; color:#D97706;');
 console.log('%c👤 Recorded By: <?= htmlspecialchars($recorder_name) ?>', 'font-size:13px; color:#059669;');
-console.log('%c🔒 AUDIT MODE: Read-only. No edit/delete buttons.', 'font-size:12px; color:#7C3AED; font-weight:bold;');
 </script>
 
 </body>

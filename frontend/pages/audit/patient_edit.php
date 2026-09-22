@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/audit/patient_edit.php
 // AUDIT - EDIT PATIENT (with Vital Signs) - V2
+// ✅ Branch ya aliye login TU
 // ✅ Inatumia audit_header.php + audit_sidebar.php
 // ✅ AUDIT ROLE TU
 // ✅ Ina vital signs zote 7 (Temperature, BP, Pulse, Weight, Height, BMI, SpO2)
@@ -43,10 +44,12 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 $user_is_online = $_SESSION['is_online'] ?? 1;
 
 $patient_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
+
+// ✅ AUDIT anaona branch yake TU
+$selected_branch_id = (int)$user_branch_id;
 
 if ($patient_id <= 0) {
-    header('Location: patients.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
+    header('Location: patients.php?error=invalid_id');
     exit;
 }
 
@@ -62,36 +65,26 @@ $message = '';
 $message_type = '';
 
 // ================================================================
-// GET PATIENT
+// ✅ GET PATIENT - LAZIMA branch ya mtumiaji
 // ================================================================
 $patient = null;
 try {
-    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-        $stmt = $db->prepare("
-            SELECT p.*, u.full_name as assigned_doctor_name, b.name as branch_name
-            FROM patients p
-            LEFT JOIN users u ON p.assigned_doctor_id = u.id
-            LEFT JOIN branches b ON p.branch_id = b.id
-            WHERE p.id = ? AND p.branch_id = ?
-        ");
-        $stmt->execute([$patient_id, (int)$selected_branch_id]);
-    } else {
-        $stmt = $db->prepare("
-            SELECT p.*, u.full_name as assigned_doctor_name, b.name as branch_name
-            FROM patients p
-            LEFT JOIN users u ON p.assigned_doctor_id = u.id
-            LEFT JOIN branches b ON p.branch_id = b.id
-            WHERE p.id = ?
-        ");
-        $stmt->execute([$patient_id]);
-    }
+    $stmt = $db->prepare("
+        SELECT p.*, u.full_name as assigned_doctor_name, b.name as branch_name
+        FROM patients p
+        LEFT JOIN users u ON p.assigned_doctor_id = u.id
+        LEFT JOIN branches b ON p.branch_id = b.id
+        WHERE p.id = ? AND p.branch_id = ?
+    ");
+    $stmt->execute([$patient_id, $user_branch_id]);
     $patient = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $patient = null;
 }
 
 if (!$patient) {
-    header('Location: patients.php?branch=' . urlencode($selected_branch_id) . '&error=notfound');
+    // ✅ Patient hayupo kwenye branch yake - redirect
+    header('Location: patients.php?error=notfound');
     exit;
 }
 
@@ -158,6 +151,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_patient'])) {
         if (empty($full_name_new)) throw new Exception("Patient name is required");
         if (empty($gender)) throw new Exception("Gender is required");
         
+        // ✅ Update - LAZIMA branch ya mtumiaji
         $stmt = $db->prepare("
             UPDATE patients SET 
                 full_name = ?, gender = ?, date_of_birth = ?, marital_status = ?,
@@ -179,8 +173,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_patient'])) {
             $complaint = trim($_POST['complaint'] ?? '');
             $notes = trim($_POST['notes'] ?? '');
             
-            $stmt = $db->prepare("UPDATE visits SET symptoms = ?, complaint = ?, notes = ?, updated_at = NOW() WHERE id = ?");
-            $stmt->execute([$symptoms, $complaint, $notes, $last_visit['id']]);
+            $stmt = $db->prepare("UPDATE visits SET symptoms = ?, complaint = ?, notes = ?, updated_at = NOW() WHERE id = ? AND branch_id = ?");
+            $stmt->execute([$symptoms, $complaint, $notes, $last_visit['id'], $patient_branch_id]);
         }
         
         // Vital signs
@@ -200,17 +194,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_patient'])) {
         }
         
         if ($vital_signs && isset($vital_signs['id'])) {
+            // ✅ Update - LAZIMA branch ya mtumiaji
             $stmt = $db->prepare("
                 UPDATE vital_signs SET 
                     temperature = ?, blood_pressure_systolic = ?, blood_pressure_diastolic = ?,
                     pulse_rate = ?, weight = ?, height = ?, bmi = ?, 
                     oxygen_saturation = ?, notes = ?, updated_at = NOW()
-                WHERE id = ?
+                WHERE id = ? AND branch_id = ?
             ");
             $stmt->execute([
                 $temperature, $bp_systolic, $bp_diastolic, $pulse_rate,
                 $weight, $height, $bmi, $oxygen_saturation, $vital_notes ?: null,
-                $vital_signs['id']
+                $vital_signs['id'], $patient_branch_id
             ]);
         } elseif ($last_visit && ($temperature || $bp_systolic || $pulse_rate || $weight || $height || $oxygen_saturation)) {
             $stmt = $db->prepare("
@@ -238,8 +233,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_patient'])) {
         $message_type = 'success';
         
         // Re-fetch
-        $stmt = $db->prepare("SELECT p.*, u.full_name as assigned_doctor_name, b.name as branch_name FROM patients p LEFT JOIN users u ON p.assigned_doctor_id = u.id LEFT JOIN branches b ON p.branch_id = b.id WHERE p.id = ?");
-        $stmt->execute([$patient_id]);
+        $stmt = $db->prepare("SELECT p.*, u.full_name as assigned_doctor_name, b.name as branch_name FROM patients p LEFT JOIN users u ON p.assigned_doctor_id = u.id LEFT JOIN branches b ON p.branch_id = b.id WHERE p.id = ? AND p.branch_id = ?");
+        $stmt->execute([$patient_id, $user_branch_id]);
         $patient = $stmt->fetch(PDO::FETCH_ASSOC);
         
         $stmt = $db->prepare("SELECT * FROM vital_signs WHERE patient_id = ? AND branch_id = ? ORDER BY id DESC LIMIT 1");
@@ -748,10 +743,10 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
             </p>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="view_patient.php?id=<?= $patient_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn-outline-light">
+            <a href="view_patient.php?id=<?= $patient_id ?>" class="btn-outline-light">
                 <i class="fas fa-eye"></i> View
             </a>
-            <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn-outline-light">
+            <a href="patients.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
@@ -1126,10 +1121,10 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
                 <button type="submit" class="btn btn-primary" id="saveBtn">
                     <i class="fas fa-save"></i> Save Changes
                 </button>
-                <a href="view_patient.php?id=<?= $patient_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-purple">
+                <a href="view_patient.php?id=<?= $patient_id ?>" class="btn btn-purple">
                     <i class="fas fa-eye"></i> View Patient
                 </a>
-                <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline" style="margin-left:auto;">
+                <a href="patients.php" class="btn btn-outline" style="margin-left:auto;">
                     <i class="fas fa-times"></i> Cancel
                 </a>
             </div>
@@ -1305,9 +1300,10 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('spo2Input')?.addEventListener('input', calculateSpO2Category);
     
     console.log('%c🔍 Audit - Edit Patient', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Branch ya mtumiaji TU', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#10B981; font-weight:bold;');
     console.log('%c✅ Uses audit_header + audit_sidebar', 'font-size:13px; color:#059669; font-weight:bold;');
     console.log('%c✅ 7 Vital Signs (with SpO2)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Branch: <?= htmlspecialchars($patient["branch_name"] ?? "N/A") ?>', 'font-size:13px; color:#60A5FA;');
     console.log('%c✅ AUDIT ROLE', 'font-size:13px; color:#0EA5E9; font-weight:bold;');
 });
 </script>

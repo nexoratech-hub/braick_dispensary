@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: C:\xampp\htdocs\dispensary_system\frontend\pages\audit\patient_pdf.php
-// AUDIT - PATIENT PDF (V2 FULL - FULL PATHS + LOGO DETECTION)
+// AUDIT - PATIENT PDF (V3 - BRANCH LOCKED)
+// ✅ AUDIT ANAONA PATIENT WA BRANCH YAKE TU
 // ✅ Full absolute paths (hakuna ../../../)
 // ✅ Logo detection + Base64 + SVG fallback
 // ✅ Kila Visit na Card yake (Blue Margin)
@@ -24,13 +25,16 @@ $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Audit User';
 $user_role = $_SESSION['role'] ?? 'audit';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
 $is_admin = ($user_role === 'admin');
 $is_audit = ($user_role === 'audit');
 
 $patient_id = (int)($_GET['id'] ?? 0);
-$selected_branch_id = $_GET['branch'] ?? 'all';
+
+// ✅ AUDIT ANAONA BRANCH YAKE TU
+$selected_branch_id = $is_audit ? $user_branch_id : ($_GET['branch'] ?? 'all');
 
 if ($patient_id <= 0) {
     die("Invalid patient ID");
@@ -59,32 +63,20 @@ $logo_base64 = '';
 $logo_found_path = '';
 $logo_found = false;
 
-// Full paths za kuangalia
 $possible_logo_paths = [
-    // 1. Main Braick logo (uploads/profiles)
     $system_root . '/frontend/assets/uploads/profiles/braick_logo.png',
     $system_root . '/frontend/assets/uploads/profiles/Braick_logo.png',
     $system_root . '/frontend/assets/uploads/profiles/BRAICK_LOGO.png',
-    
-    // 2. Generic logo names
     $system_root . '/frontend/assets/uploads/profiles/logo.png',
     $system_root . '/frontend/assets/uploads/profiles/Logo.png',
-    
-    // 3. assets/images folder
     $system_root . '/frontend/assets/images/braick_logo.png',
     $system_root . '/frontend/assets/images/logo.png',
-    
-    // 4. Root assets folder
     $system_root . '/assets/uploads/profiles/braick_logo.png',
     $system_root . '/assets/images/logo.png',
     $system_root . '/assets/logo.png',
-    
-    // 5. Fallback - page folder
     $system_root . '/frontend/pages/audit/braick_logo.png',
     $system_root . '/frontend/pages/audit/logo.png',
     $system_root . '/frontend/pages/admin/audit/braick_logo.png',
-    
-    // 6. System root
     $system_root . '/braick_logo.png',
     $system_root . '/logo.png',
 ];
@@ -109,7 +101,6 @@ foreach ($possible_logo_paths as $path) {
     }
 }
 
-// Fallback SVG (Braick "B" logo)
 if (!$logo_found || empty($logo_base64)) {
     $svg_logo = '<svg xmlns="http://www.w3.org/2000/svg" width="90" height="90" viewBox="0 0 90 90">' .
         '<defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">' .
@@ -155,54 +146,99 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// GET PATIENT
+// GET PATIENT - ✅ AUDIT ANAONA PATIENT WA BRANCH YAKE TU
 // ================================================================
 $patient = null;
 try {
-    $stmt = $db->prepare("
-        SELECT p.*, 
-               b.name AS branch_name,
-               b.location AS branch_location,
-               b.phone AS branch_phone,
-               b.email AS branch_email,
-               u.full_name AS registered_by_name,
-               d.full_name AS assigned_doctor_name
-        FROM patients p
-        LEFT JOIN branches b ON p.branch_id = b.id
-        LEFT JOIN users u ON p.created_by = u.id
-        LEFT JOIN users d ON p.assigned_doctor_id = d.id
-        WHERE p.id = ?
-    ");
-    $stmt->execute([$patient_id]);
+    if ($is_audit) {
+        // Audit: Lazimisha patient wa branch yake
+        $stmt = $db->prepare("
+            SELECT p.*, 
+                   b.name AS branch_name,
+                   b.location AS branch_location,
+                   b.phone AS branch_phone,
+                   b.email AS branch_email,
+                   u.full_name AS registered_by_name,
+                   d.full_name AS assigned_doctor_name
+            FROM patients p
+            LEFT JOIN branches b ON p.branch_id = b.id
+            LEFT JOIN users u ON p.created_by = u.id
+            LEFT JOIN users d ON p.assigned_doctor_id = d.id
+            WHERE p.id = ? AND p.branch_id = ?
+        ");
+        $stmt->execute([$patient_id, $user_branch_id]);
+    } else {
+        // Admin: Anaweza kuona branch yoyote
+        $stmt = $db->prepare("
+            SELECT p.*, 
+                   b.name AS branch_name,
+                   b.location AS branch_location,
+                   b.phone AS branch_phone,
+                   b.email AS branch_email,
+                   u.full_name AS registered_by_name,
+                   d.full_name AS assigned_doctor_name
+            FROM patients p
+            LEFT JOIN branches b ON p.branch_id = b.id
+            LEFT JOIN users u ON p.created_by = u.id
+            LEFT JOIN users d ON p.assigned_doctor_id = d.id
+            WHERE p.id = ?
+        ");
+        $stmt->execute([$patient_id]);
+    }
     $patient = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     die("Error loading patient: " . $e->getMessage());
 }
 
 if (!$patient) {
-    die("Patient not found");
+    if ($is_audit) {
+        die("Patient not found or you don't have permission to view this patient (different branch)");
+    } else {
+        die("Patient not found");
+    }
 }
 
+// ✅ Chukua branch_id ya patient kwa ajili ya filtering ya data zote
+$patient_branch_id = $patient['branch_id'] ?? 0;
+
 // ================================================================
-// GET VISITS
+// GET VISITS - ✅ BRANCH YA PATIENT TU
 // ================================================================
 $visits = [];
 try {
-    $stmt = $db->prepare("
-        SELECT v.*, 
-               u.full_name AS doctor_name,
-               u.specialty AS doctor_specialty,
-               r.full_name AS receptionist_name,
-               d.disease_name,
-               d.disease_code
-        FROM visits v
-        LEFT JOIN users u ON v.doctor_id = u.id
-        LEFT JOIN users r ON v.receptionist_id = r.id
-        LEFT JOIN diseases d ON v.disease_id = d.id
-        WHERE v.patient_id = ?
-        ORDER BY v.visit_date DESC
-    ");
-    $stmt->execute([$patient_id]);
+    if ($is_audit) {
+        $stmt = $db->prepare("
+            SELECT v.*, 
+                   u.full_name AS doctor_name,
+                   u.specialty AS doctor_specialty,
+                   r.full_name AS receptionist_name,
+                   d.disease_name,
+                   d.disease_code
+            FROM visits v
+            LEFT JOIN users u ON v.doctor_id = u.id
+            LEFT JOIN users r ON v.receptionist_id = r.id
+            LEFT JOIN diseases d ON v.disease_id = d.id
+            WHERE v.patient_id = ? AND v.branch_id = ?
+            ORDER BY v.visit_date DESC
+        ");
+        $stmt->execute([$patient_id, $user_branch_id]);
+    } else {
+        $stmt = $db->prepare("
+            SELECT v.*, 
+                   u.full_name AS doctor_name,
+                   u.specialty AS doctor_specialty,
+                   r.full_name AS receptionist_name,
+                   d.disease_name,
+                   d.disease_code
+            FROM visits v
+            LEFT JOIN users u ON v.doctor_id = u.id
+            LEFT JOIN users r ON v.receptionist_id = r.id
+            LEFT JOIN diseases d ON v.disease_id = d.id
+            WHERE v.patient_id = ?
+            ORDER BY v.visit_date DESC
+        ");
+        $stmt->execute([$patient_id]);
+    }
     $visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
@@ -228,18 +264,29 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// BILLS BY VISIT
+// BILLS BY VISIT - ✅ BRANCH YA PATIENT TU
 // ================================================================
 $bills_by_visit = [];
 try {
-    $stmt = $db->prepare("
-        SELECT b.*, u.full_name AS created_by_name
-        FROM bills b
-        LEFT JOIN users u ON b.created_by = u.id
-        WHERE b.patient_id = ?
-        ORDER BY b.created_at DESC
-    ");
-    $stmt->execute([$patient_id]);
+    if ($is_audit) {
+        $stmt = $db->prepare("
+            SELECT b.*, u.full_name AS created_by_name
+            FROM bills b
+            LEFT JOIN users u ON b.created_by = u.id
+            WHERE b.patient_id = ? AND b.branch_id = ?
+            ORDER BY b.created_at DESC
+        ");
+        $stmt->execute([$patient_id, $user_branch_id]);
+    } else {
+        $stmt = $db->prepare("
+            SELECT b.*, u.full_name AS created_by_name
+            FROM bills b
+            LEFT JOIN users u ON b.created_by = u.id
+            WHERE b.patient_id = ?
+            ORDER BY b.created_at DESC
+        ");
+        $stmt->execute([$patient_id]);
+    }
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $b) {
         $vid = $b['visit_id'] ?? 0;
         if (!isset($bills_by_visit[$vid])) $bills_by_visit[$vid] = [];
@@ -248,19 +295,30 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// BILL ITEMS BY BILL + BY VISIT+TYPE
+// BILL ITEMS BY BILL + BY VISIT+TYPE - ✅ BRANCH YA PATIENT TU
 // ================================================================
 $bill_items_by_bill = [];
 $items_by_visit_type = [];
 try {
-    $stmt = $db->prepare("
-        SELECT bi.*, b.visit_id
-        FROM bill_items bi
-        INNER JOIN bills b ON bi.bill_id = b.id
-        WHERE b.patient_id = ?
-        ORDER BY bi.created_at DESC
-    ");
-    $stmt->execute([$patient_id]);
+    if ($is_audit) {
+        $stmt = $db->prepare("
+            SELECT bi.*, b.visit_id
+            FROM bill_items bi
+            INNER JOIN bills b ON bi.bill_id = b.id
+            WHERE b.patient_id = ? AND b.branch_id = ?
+            ORDER BY bi.created_at DESC
+        ");
+        $stmt->execute([$patient_id, $user_branch_id]);
+    } else {
+        $stmt = $db->prepare("
+            SELECT bi.*, b.visit_id
+            FROM bill_items bi
+            INNER JOIN bills b ON bi.bill_id = b.id
+            WHERE b.patient_id = ?
+            ORDER BY bi.created_at DESC
+        ");
+        $stmt->execute([$patient_id]);
+    }
     $all_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($all_items as $item) {
@@ -302,16 +360,29 @@ try {
 // ================================================================
 $prescriptions_by_visit = [];
 try {
-    $stmt = $db->prepare("
-        SELECT pr.*, u.full_name AS doctor_name,
-               ph.full_name AS pharmacist_name
-        FROM prescriptions pr
-        LEFT JOIN users u ON pr.doctor_id = u.id
-        LEFT JOIN users ph ON pr.pharmacy_id = ph.id
-        WHERE pr.patient_id = ?
-        ORDER BY pr.created_at DESC
-    ");
-    $stmt->execute([$patient_id]);
+    if ($is_audit) {
+        $stmt = $db->prepare("
+            SELECT pr.*, u.full_name AS doctor_name,
+                   ph.full_name AS pharmacist_name
+            FROM prescriptions pr
+            LEFT JOIN users u ON pr.doctor_id = u.id
+            LEFT JOIN users ph ON pr.pharmacy_id = ph.id
+            WHERE pr.patient_id = ? AND pr.branch_id = ?
+            ORDER BY pr.created_at DESC
+        ");
+        $stmt->execute([$patient_id, $user_branch_id]);
+    } else {
+        $stmt = $db->prepare("
+            SELECT pr.*, u.full_name AS doctor_name,
+                   ph.full_name AS pharmacist_name
+            FROM prescriptions pr
+            LEFT JOIN users u ON pr.doctor_id = u.id
+            LEFT JOIN users ph ON pr.pharmacy_id = ph.id
+            WHERE pr.patient_id = ?
+            ORDER BY pr.created_at DESC
+        ");
+        $stmt->execute([$patient_id]);
+    }
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $pr) {
         $vid = $pr['visit_id'] ?? 0;
         if (!isset($prescriptions_by_visit[$vid])) $prescriptions_by_visit[$vid] = [];
@@ -337,18 +408,29 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// LAB TESTS BY VISIT
+// LAB TESTS BY VISIT - ✅ BRANCH YA PATIENT TU
 // ================================================================
 $lab_tests_by_visit = [];
 try {
-    $stmt = $db->prepare("
-        SELECT lt.*, u.full_name AS technician_name
-        FROM lab_tests lt
-        LEFT JOIN users u ON lt.lab_technician_id = u.id
-        WHERE lt.patient_id = ?
-        ORDER BY lt.created_at DESC
-    ");
-    $stmt->execute([$patient_id]);
+    if ($is_audit) {
+        $stmt = $db->prepare("
+            SELECT lt.*, u.full_name AS technician_name
+            FROM lab_tests lt
+            LEFT JOIN users u ON lt.lab_technician_id = u.id
+            WHERE lt.patient_id = ? AND lt.branch_id = ?
+            ORDER BY lt.created_at DESC
+        ");
+        $stmt->execute([$patient_id, $user_branch_id]);
+    } else {
+        $stmt = $db->prepare("
+            SELECT lt.*, u.full_name AS technician_name
+            FROM lab_tests lt
+            LEFT JOIN users u ON lt.lab_technician_id = u.id
+            WHERE lt.patient_id = ?
+            ORDER BY lt.created_at DESC
+        ");
+        $stmt->execute([$patient_id]);
+    }
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $lt) {
         $vid = $lt['visit_id'] ?? 0;
         if (!isset($lab_tests_by_visit[$vid])) $lab_tests_by_visit[$vid] = [];
@@ -357,7 +439,7 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// STATS
+// STATS - ✅ BRANCH YA PATIENT TU
 // ================================================================
 $stats = [
     'visits' => count($visits),
@@ -367,15 +449,27 @@ $stats = [
 ];
 
 try {
-    $stmt = $db->prepare("
-        SELECT 
-            COALESCE(SUM(total_amount), 0) as total_spent,
-            COALESCE(SUM(paid_amount), 0) as total_paid,
-            COALESCE(SUM(balance), 0) as total_balance
-        FROM bills
-        WHERE patient_id = ?
-    ");
-    $stmt->execute([$patient_id]);
+    if ($is_audit) {
+        $stmt = $db->prepare("
+            SELECT 
+                COALESCE(SUM(total_amount), 0) as total_spent,
+                COALESCE(SUM(paid_amount), 0) as total_paid,
+                COALESCE(SUM(balance), 0) as total_balance
+            FROM bills
+            WHERE patient_id = ? AND branch_id = ?
+        ");
+        $stmt->execute([$patient_id, $user_branch_id]);
+    } else {
+        $stmt = $db->prepare("
+            SELECT 
+                COALESCE(SUM(total_amount), 0) as total_spent,
+                COALESCE(SUM(paid_amount), 0) as total_paid,
+                COALESCE(SUM(balance), 0) as total_balance
+            FROM bills
+            WHERE patient_id = ?
+        ");
+        $stmt->execute([$patient_id]);
+    }
     $bill_stats = $stmt->fetch(PDO::FETCH_ASSOC);
     $stats['total_spent'] = (float)($bill_stats['total_spent'] ?? 0);
     $stats['total_paid'] = (float)($bill_stats['total_paid'] ?? 0);
@@ -484,9 +578,6 @@ body {
     letter-spacing: -0.02em;
 }
 
-/* ================================================================
-   PAGE CONTAINER
-   ================================================================ */
 .pdf-page {
     background: white;
     max-width: 210mm;
@@ -496,9 +587,6 @@ body {
     border-radius: 8px;
 }
 
-/* ================================================================
-   HEADER
-   ================================================================ */
 .report-header {
     display: flex;
     justify-content: space-between;
@@ -516,7 +604,6 @@ body {
     flex: 1;
 }
 
-/* ✅ LOGO STYLES */
 .header-logo {
     width: 90px;
     height: 90px;
@@ -529,9 +616,7 @@ body {
     display: block;
 }
 
-.header-info {
-    flex: 1;
-}
+.header-info { flex: 1; }
 
 .header-title {
     font-size: 24px;
@@ -595,13 +680,8 @@ body {
     line-height: 1.6;
 }
 
-.report-meta strong {
-    color: var(--text-primary);
-}
+.report-meta strong { color: var(--text-primary); }
 
-/* ================================================================
-   PATIENT INFO BOX
-   ================================================================ */
 .patient-box {
     background: #F8FAFC;
     border: 1px solid var(--border-color);
@@ -651,9 +731,6 @@ body {
     color: var(--text-primary);
 }
 
-/* ================================================================
-   STATS CARDS
-   ================================================================ */
 .stats-row {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -704,9 +781,6 @@ body {
 .stat-box.paid .stat-value { color: var(--info); }
 .stat-box.balance .stat-value { color: var(--danger); }
 
-/* ================================================================
-   VISIT SECTION - BLUE MARGIN
-   ================================================================ */
 .visits-container {
     display: flex;
     flex-direction: column;
@@ -790,18 +864,14 @@ body {
     border: 1.5px solid rgba(255,255,255,0.3);
 }
 
-.visit-body {
-    padding: 0;
-}
+.visit-body { padding: 0; }
 
 .visit-section {
     border-bottom: 2px dashed var(--border-color);
     padding: 14px 18px;
 }
 
-.visit-section:last-child {
-    border-bottom: none;
-}
+.visit-section:last-child { border-bottom: none; }
 
 .visit-section-title {
     font-size: 12px;
@@ -817,9 +887,7 @@ body {
     border-bottom: 2px solid var(--blue-primary);
 }
 
-.visit-section-title i {
-    font-size: 14px;
-}
+.visit-section-title i { font-size: 14px; }
 
 .visit-section-title .section-count {
     margin-left: auto;
@@ -882,7 +950,6 @@ body {
 .info-item.highlight-purple .info-label i { color: var(--purple); }
 .info-item.highlight-purple .info-value { color: var(--purple); font-weight: 900; }
 
-/* Vitals Grid */
 .vitals-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(115px, 1fr));
@@ -951,7 +1018,6 @@ body {
     margin-left: 2px;
 }
 
-/* Diagnosis Boxes */
 .diagnosis-box {
     background: rgba(124, 58, 237, 0.08);
     border: 2px solid var(--purple);
@@ -1048,7 +1114,6 @@ body {
     line-height: 1.6;
 }
 
-/* Table */
 .pdf-table {
     width: 100%;
     border-collapse: collapse;
@@ -1117,7 +1182,6 @@ body {
     margin-right: 2px;
 }
 
-/* Bill Box */
 .bill-box {
     border: 2px solid var(--border-color);
     border-radius: 8px;
@@ -1126,9 +1190,7 @@ body {
     background: #F8FAFC;
 }
 
-.bill-box:last-child {
-    margin-bottom: 0;
-}
+.bill-box:last-child { margin-bottom: 0; }
 
 .bill-header {
     display: flex;
@@ -1234,9 +1296,6 @@ body {
 .status-badge.info { background: var(--info-bg); color: var(--info); border: 1px solid var(--info); }
 .status-badge.secondary { background: #E2E8F0; color: var(--text-secondary); border: 1px solid var(--border-color); }
 
-/* ================================================================
-   OFFICIAL STAMP SECTION
-   ================================================================ */
 .stamp-section {
     margin-top: 40px;
     padding-top: 25px;
@@ -1251,9 +1310,7 @@ body {
     align-items: end;
 }
 
-.stamp-certification {
-    padding: 15px 0;
-}
+.stamp-certification { padding: 15px 0; }
 
 .stamp-certification-title {
     font-size: 13px;
@@ -1275,9 +1332,7 @@ body {
     margin-bottom: 10px;
 }
 
-.stamp-certification-text strong {
-    color: var(--text-primary);
-}
+.stamp-certification-text strong { color: var(--text-primary); }
 
 .stamp-info-row {
     display: flex;
@@ -1429,9 +1484,6 @@ body {
     letter-spacing: 0.06em;
 }
 
-/* ================================================================
-   FOOTER
-   ================================================================ */
 .report-footer {
     margin-top: 25px;
     padding-top: 15px;
@@ -1477,7 +1529,6 @@ body {
     font-weight: 700;
 }
 
-/* Print Controls */
 .print-controls {
     position: fixed;
     bottom: 20px;
@@ -1523,9 +1574,6 @@ body {
     transform: translateY(-2px);
 }
 
-/* ================================================================
-   PRINT STYLES
-   ================================================================ */
 @media print {
     body {
         background: white;
@@ -1618,9 +1666,7 @@ body {
 
 <div class="pdf-page">
     
-    <!-- ================================================================
-         HEADER - NA LOGO
-         ================================================================ -->
+    <!-- HEADER -->
     <div class="report-header">
         <div class="header-left">
             <img src="<?= $logo_base64 ?>" 
@@ -1666,9 +1712,7 @@ body {
         </div>
     </div>
     
-    <!-- ================================================================
-         PATIENT INFORMATION
-         ================================================================ -->
+    <!-- PATIENT INFORMATION -->
     <div class="patient-box">
         <div class="patient-box-title">
             <i class="fas fa-user-injured"></i>
@@ -1732,9 +1776,7 @@ body {
         </div>
     </div>
     
-    <!-- ================================================================
-         STATS
-         ================================================================ -->
+    <!-- STATS -->
     <div class="stats-row">
         <div class="stat-box visits">
             <div class="stat-label">Total Visits</div>
@@ -1757,9 +1799,7 @@ body {
         </div>
     </div>
     
-    <!-- ================================================================
-         VISITS
-         ================================================================ -->
+    <!-- VISITS -->
     <?php if (count($visits) > 0): ?>
         <div class="visits-container">
             <?php foreach ($visits as $visit_index => $visit): 
@@ -1773,7 +1813,6 @@ body {
             ?>
                 <div class="visit-card">
                     
-                    <!-- VISIT HEADER -->
                     <div class="visit-header">
                         <div class="visit-header-left">
                             <span class="visit-badge">
@@ -1802,10 +1841,9 @@ body {
                         </span>
                     </div>
                     
-                    <!-- VISIT BODY -->
                     <div class="visit-body">
                         
-                        <!-- SECTION 1: VISIT INFORMATION -->
+                        <!-- VISIT INFORMATION -->
                         <div class="visit-section">
                             <div class="visit-section-title">
                                 <i class="fas fa-clipboard-list"></i>
@@ -1849,7 +1887,7 @@ body {
                             </div>
                         </div>
                         
-                        <!-- SECTION 2: VITAL SIGNS -->
+                        <!-- VITAL SIGNS -->
                         <?php if ($visit_vital !== null): 
                             $has_vital = false;
                             $fields = ['temperature', 'blood_pressure_systolic', 'pulse_rate', 
@@ -1957,7 +1995,7 @@ body {
                             <?php endif; ?>
                         <?php endif; ?>
                         
-                        <!-- SECTION 3: DIAGNOSIS & TREATMENT -->
+                        <!-- DIAGNOSIS & TREATMENT -->
                         <?php if (!empty($visit['symptoms']) || !empty($visit['diagnosis']) || !empty($visit['disease_name']) || !empty($visit['treatment'])): ?>
                         <div class="visit-section">
                             <div class="visit-section-title">
@@ -2002,7 +2040,7 @@ body {
                         </div>
                         <?php endif; ?>
                         
-                        <!-- SECTION 4: LAB TESTS -->
+                        <!-- LAB TESTS -->
                         <?php if (count($visit_labs) > 0): ?>
                         <div class="visit-section">
                             <div class="visit-section-title">
@@ -2048,7 +2086,7 @@ body {
                         </div>
                         <?php endif; ?>
                         
-                        <!-- SECTION 5: MEDICATIONS -->
+                        <!-- MEDICATIONS -->
                         <?php if (count($visit_prescriptions) > 0): ?>
                         <div class="visit-section">
                             <div class="visit-section-title">
@@ -2100,7 +2138,7 @@ body {
                         </div>
                         <?php endif; ?>
                         
-                        <!-- SECTION 6: PROCEDURES -->
+                        <!-- PROCEDURES -->
                         <?php if (count($visit_procedures) > 0): ?>
                         <div class="visit-section">
                             <div class="visit-section-title">
@@ -2157,7 +2195,7 @@ body {
                         </div>
                         <?php endif; ?>
                         
-                        <!-- SECTION 7: MEDICAL EQUIPMENT -->
+                        <!-- MEDICAL EQUIPMENT -->
                         <?php if (count($visit_equipment) > 0): ?>
                         <div class="visit-section">
                             <div class="visit-section-title">
@@ -2214,7 +2252,7 @@ body {
                         </div>
                         <?php endif; ?>
                         
-                        <!-- SECTION 8: BILLS & PAYMENTS -->
+                        <!-- BILLS & PAYMENTS -->
                         <?php if (count($visit_bills) > 0): ?>
                         <div class="visit-section">
                             <div class="visit-section-title">
@@ -2365,13 +2403,10 @@ body {
         </div>
     <?php endif; ?>
     
-    <!-- ================================================================
-         OFFICIAL STAMP / MUHULI SECTION
-         ================================================================ -->
+    <!-- OFFICIAL STAMP -->
     <div class="stamp-section">
         <div class="stamp-container">
             
-            <!-- LEFT: Certification -->
             <div class="stamp-certification">
                 <div class="stamp-certification-title">
                     <i class="fas fa-certificate"></i>
@@ -2401,7 +2436,6 @@ body {
                 </div>
             </div>
             
-            <!-- RIGHT: Stamp / Muhuli Area -->
             <div class="stamp-area">
                 <div class="stamp-box">
                     <div class="stamp-corner tl"></div>
@@ -2433,9 +2467,7 @@ body {
         </div>
     </div>
     
-    <!-- ================================================================
-         FOOTER
-         ================================================================ -->
+    <!-- FOOTER -->
     <div class="report-footer">
         <div class="footer-brand"><?= htmlspecialchars($site_name) ?></div>
         <div class="footer-slogan">
@@ -2474,16 +2506,11 @@ body {
 </div>
 
 <script>
-console.log('%c📄 Audit Patient PDF - FULL PATHS + LOGO', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c📄 Audit Patient PDF - BRANCH LOCKED', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
 console.log('%c✅ Role: <?= $user_role ?>', 'font-size:12px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Document Root: <?= htmlspecialchars($document_root) ?>', 'font-size:12px; color:#7C3AED;');
-console.log('%c✅ System Root: <?= htmlspecialchars($system_root) ?>', 'font-size:12px; color:#7C3AED;');
+console.log('%c✅ AUDIT ANAONA PATIENT WA BRANCH YAKE TU', 'font-size:12px; color:#34D399; font-weight:bold;');
+console.log('%c👥 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#0B5ED7; font-weight:bold;');
 console.log('%c✅ Logo Found: <?= $logo_found ? 'YES' : 'NO (using SVG fallback)' ?>', 'font-size:12px; color:<?= $logo_found ? '#34D399' : '#FBBF24' ?>; font-weight:bold;');
-<?php if ($logo_found): ?>
-console.log('%c✅ Logo Path: <?= htmlspecialchars($logo_found_path) ?>', 'font-size:11px; color:#34D399;');
-<?php endif; ?>
-console.log('%c✅ Kila Visit na Card yake (Blue Margin)', 'font-size:12px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Official Stamp / Muhuli section chini', 'font-size:12px; color:#34D399; font-weight:bold;');
 </script>
 
 </body>

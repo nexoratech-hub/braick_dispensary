@@ -7,6 +7,7 @@
 // ✅ HAKUNA Edit/Delete buttons
 // ✅ Group by Visit
 // ✅ Table nav < >
+// ✅ BRANCH ISOLATION: only logged-in user's branch data is shown
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -23,24 +24,51 @@ $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Audit User';
 $user_role = $_SESSION['role'] ?? 'audit';
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$profile_pic = $_SESSION['profile_pic'] ?? '';
-$is_audit = true;
 
-$patient_id = (int)($_GET['patient_id'] ?? 0);
-$selected_branch_id = $_GET['branch'] ?? 'all';
+// ================================================================
+// ✅ BRANCH ISOLATION
+// Force branch to the logged-in user's branch.
+// Audit user CANNOT see other branches' data.
+// ================================================================
+$user_branch_id = (int)($_SESSION['branch_id'] ?? 0);
 
-if ($patient_id <= 0) {
-    header('Location: other_services.php?tab=procedures&branch=' . urlencode($selected_branch_id));
-    exit;
-}
-
+// If branch_id is not set in session, try to resolve it from DB
 require_once __DIR__ . '/../../../backend/config/database.php';
-
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     die("Database connection error: " . $e->getMessage());
 }
+
+if ($user_branch_id <= 0) {
+    try {
+        $stmt = $db->prepare("SELECT branch_id FROM users WHERE id = ? LIMIT 1");
+        $stmt->execute([$user_id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row && !empty($row['branch_id'])) {
+            $user_branch_id = (int)$row['branch_id'];
+        }
+    } catch (Exception $e) {}
+}
+
+// If still no branch, block access (cannot determine scope)
+if ($user_branch_id <= 0) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
+}
+
+// ✅ ALWAYS use the logged-in user's branch — ignore URL "branch" param
+$selected_branch_id = $user_branch_id;
+
+$patient_id = (int)($_GET['patient_id'] ?? 0);
+
+if ($patient_id <= 0) {
+    header('Location: other_services.php?tab=procedures');
+    exit;
+}
+
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_audit = true;
 
 // ================================================================
 // CURRENCY
@@ -90,7 +118,7 @@ function getInitials($name) {
 }
 
 // ================================================================
-// GET PATIENT
+// GET PATIENT — ✅ restricted to logged-in user's branch
 // ================================================================
 $patient = null;
 try {
@@ -99,18 +127,21 @@ try {
         FROM patients p
         LEFT JOIN branches b ON p.branch_id = b.id
         WHERE p.id = ?
+          AND p.branch_id = ?
     ");
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $user_branch_id]);
     $patient = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
 if (!$patient) {
-    header('Location: other_services.php?tab=procedures&branch=' . urlencode($selected_branch_id));
+    // Patient doesn't exist in this branch → deny access
+    header('Location: other_services.php?tab=procedures');
     exit;
 }
 
 // ================================================================
 // FETCH DATA - Procedures + Equipments kutoka bill_items
+// ✅ Always filtered by logged-in user's branch
 // ================================================================
 $visits_data = [];
 $all_items = [];
@@ -146,31 +177,24 @@ try {
         LEFT JOIN branches br ON bi.branch_id = br.id
         LEFT JOIN procedures_catalog pc ON (bi.item_type = 'procedure' AND bi.reference_id = pc.id)
         WHERE bi.patient_id = ?
+          AND bi.branch_id = ?
           AND bi.item_type IN ('procedure', 'equipment')
           AND bi.status != 'cancelled'
+        ORDER BY v.visit_date DESC, bi.item_type ASC, bi.id ASC
     ";
-    
-    $params = [$patient_id];
-    
-    if ($selected_branch_id !== 'all') {
-        $sql .= " AND bi.branch_id = ?";
-        $params[] = (int)$selected_branch_id;
-    }
-    
-    $sql .= " ORDER BY v.visit_date DESC, bi.item_type ASC, bi.id ASC";
-    
+
     $stmt = $db->prepare($sql);
-    $stmt->execute($params);
+    $stmt->execute([$patient_id, $user_branch_id]);
     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
+
     foreach ($rows as $row) {
         $vid = $row['visit_id'] ?? 0;
-        
+
         // Fetch payments kwa bill
         $received_by_name = null;
         $received_by_role = null;
         $payments_count = 0;
-        
+
         if (($row['bill_paid'] ?? 0) > 0 && !empty($row['bill_id'])) {
             $stmt_pay = $db->prepare("
                 SELECT u.full_name as received_by_name, u.role as received_by_role
@@ -182,21 +206,21 @@ try {
             ");
             $stmt_pay->execute([$row['bill_id']]);
             $pay = $stmt_pay->fetch(PDO::FETCH_ASSOC);
-            
+
             if ($pay) {
                 $received_by_name = $pay['received_by_name'];
                 $received_by_role = $pay['received_by_role'];
             }
-            
+
             $stmt_count = $db->prepare("SELECT COUNT(*) as c FROM payments WHERE bill_id = ?");
             $stmt_count->execute([$row['bill_id']]);
             $payments_count = $stmt_count->fetch(PDO::FETCH_ASSOC)['c'] ?? 0;
         }
-        
+
         $row['received_by_name'] = $received_by_name;
         $row['received_by_role'] = $received_by_role;
         $row['payments_count'] = $payments_count;
-        
+
         if (!isset($visits_data[$vid])) {
             $visits_data[$vid] = [
                 'visit_id' => $vid,
@@ -221,16 +245,16 @@ try {
                 'equipment_count' => 0
             ];
         }
-        
+
         $visits_data[$vid]['items'][] = $row;
         $visits_data[$vid]['total_amount'] += $row['procedure_total'] ?? 0;
-        
+
         if ($row['item_type'] === 'equipment') {
             $visits_data[$vid]['equipment_count']++;
         } else {
             $visits_data[$vid]['procedure_count']++;
         }
-        
+
         $all_items[] = $row;
     }
 } catch (Exception $e) {
@@ -257,10 +281,10 @@ foreach ($all_items as $item) {
     } else {
         $total_procedures++;
     }
-    
+
     $price = (float)($item['procedure_price'] ?? 0);
     $status = $item['item_status'] ?? 'pending';
-    
+
     $total_amount += $price;
     if (in_array($status, ['paid', 'completed'])) {
         $total_paid += $price;
@@ -292,11 +316,11 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>All Procedures & Equipments - <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></title>
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
-    
+
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    
+
     <style>
 :root {
     --font-primary: 'Inter', -apple-system, sans-serif;
@@ -500,13 +524,16 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                 <span class="branch-tag">
                     <i class="fas fa-clipboard-list"></i> <?= $total_visits ?> Visit(s)
                 </span>
+                <span class="branch-tag" style="background:linear-gradient(135deg,#059669,#34D399);">
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($patient['branch_name'] ?? $user_branch_name) ?>
+                </span>
             </p>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
             <button onclick="window.print()" class="btn-header">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="other_services.php?tab=procedures&branch=<?= $selected_branch_id ?>" class="btn-header">
+            <a href="other_services.php?tab=procedures" class="btn-header">
                 <i class="fas fa-arrow-left"></i> Back to List
             </a>
         </div>
@@ -762,7 +789,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                     <td style="text-align:center;">
                                         <div class="action-group">
                                             <!-- ✅ VIEW ONLY - No Edit/Delete -->
-                                            <a href="view_procedure.php?id=<?= $reference_id ?>&bill_item_id=<?= $bill_item_id ?>&type=<?= $item['item_type'] ?>&branch=<?= $selected_branch_id ?>" 
+                                            <a href="view_procedure.php?id=<?= $reference_id ?>&bill_item_id=<?= $bill_item_id ?>&type=<?= $item['item_type'] ?>" 
                                                class="btn-act view" title="View Details">
                                                 <i class="fas fa-eye"></i>
                                             </a>
@@ -779,7 +806,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
         <div class="empty-state">
             <i class="fas fa-syringe"></i>
             <p>No procedures or equipments found</p>
-            <p class="sub">This patient has no procedures or equipments recorded yet</p>
+            <p class="sub">This patient has no procedures or equipments recorded in your branch</p>
         </div>
     <?php endif; ?>
 
@@ -835,7 +862,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 console.log('%c🔍 Audit - All Procedures & Equipments (VIEW ONLY)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ Uses audit_header + audit_sidebar', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c✅ Branch isolated to: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px;color:#34D399;font-weight:bold;');
 console.log('%c✅ NO Edit/Delete buttons', 'font-size:12px;color:#F59E0B;font-weight:bold;');
 console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:12px;color:#34D399;');
 console.log('%c📊 Total: <?= $total_procedures ?> Procedures + <?= $total_equipments ?> Equipments', 'font-size:12px;color:#34D399;font-weight:bold;');

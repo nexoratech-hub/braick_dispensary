@@ -1,11 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/view_prescription.php
-// AUDIT - VIEW ALL PRESCRIPTIONS FOR A VISIT (VIEW ONLY) - V6
+// AUDIT - VIEW ALL PRESCRIPTIONS FOR A VISIT
+// ✅ Branch ya aliye login TU
+// ✅ Back button inafanya kazi kila wakati (goBack function)
 // ✅ Single table design (kama OTC)
 // ✅ All prescriptions in ONE table
 // ✅ Blue theme (#0B5ED7)
-// ✅ ✅ SCROLL BUTTONS < > kwenye table header
+// ✅ SCROLL BUTTONS < > kwenye table header
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -35,12 +37,18 @@ if ($_SESSION['role'] !== 'audit') {
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Audit User';
 $user_role = $_SESSION['role'] ?? 'audit';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $prescription_id = (int)($_GET['id'] ?? 0);
 $visit_id = (int)($_GET['visit_id'] ?? 0);
 $patient_id = (int)($_GET['patient_id'] ?? 0);
-$selected_branch_id = $_GET['branch'] ?? 'all';
+
+// ================================================================
+// ✅ LAZIMISHA branch ya mtumiaji aliye login TU
+// ================================================================
+$selected_branch_id = (int)$user_branch_id;
 
 if ($prescription_id <= 0 && $visit_id <= 0) {
     die("
@@ -60,7 +68,7 @@ if ($prescription_id <= 0 && $visit_id <= 0) {
             <div class='box'>
                 <h2>⚠️ Invalid Request</h2>
                 <p style='color: #64748B;'>Prescription ID au Visit ID inahitajika.</p>
-                <a href='inventory.php?branch=" . htmlspecialchars($selected_branch_id) . "' class='btn'>← Back to Inventory</a>
+                <a href='other_services.php?tab=prescriptions' class='btn'>← Back to Prescriptions</a>
             </div>
         </body>
         </html>
@@ -85,7 +93,7 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// STEP 1: GET ALL PRESCRIPTIONS
+// ✅ STEP 1: GET ALL PRESCRIPTIONS - LAZIMISHA BRANCH
 // ================================================================
 $prescriptions = [];
 
@@ -95,10 +103,10 @@ try {
             SELECT id, prescription_number, visit_id, patient_id, doctor_id, 
                    pharmacy_id, status, branch_id, created_at, updated_at, dispensed_at
             FROM prescriptions 
-            WHERE visit_id = ? 
+            WHERE visit_id = ? AND branch_id = ?
             ORDER BY id ASC
         ");
-        $stmt->execute([$visit_id]);
+        $stmt->execute([$visit_id, $selected_branch_id]);
         $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
     
@@ -107,9 +115,9 @@ try {
             SELECT id, prescription_number, visit_id, patient_id, doctor_id, 
                    pharmacy_id, status, branch_id, created_at, updated_at, dispensed_at
             FROM prescriptions 
-            WHERE id = ?
+            WHERE id = ? AND branch_id = ?
         ");
-        $stmt->execute([$prescription_id]);
+        $stmt->execute([$prescription_id, $selected_branch_id]);
         $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
     
@@ -136,7 +144,7 @@ if (empty($prescriptions)) {
                 <h2>⚠️ Prescriptions Not Found</h2>
                 <p style='color: #64748B;'>Prescription ID: <code>" . htmlspecialchars((string)$prescription_id) . "</code></p>
                 <p style='color: #64748B;'>Visit ID: <code>" . htmlspecialchars((string)$visit_id) . "</code></p>
-                <a href='inventory.php?branch=" . htmlspecialchars($selected_branch_id) . "' class='btn'>← Back to Inventory</a>
+                <a href='other_services.php?tab=prescriptions' class='btn'>← Back to Prescriptions</a>
             </div>
         </body>
         </html>
@@ -269,9 +277,11 @@ if (!empty($prescription_ids)) {
                 INNER JOIN bill_items bi ON bi.bill_id = b.id
                 WHERE bi.reference_type = 'prescription'
                 AND bi.reference_id IN ($placeholders)
+                AND b.branch_id = ?
                 LIMIT 1";
         $stmt = $db->prepare($sql);
-        $stmt->execute($prescription_ids);
+        $params = array_merge($prescription_ids, [$selected_branch_id]);
+        $stmt->execute($params);
         $related_bill = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
     } catch (Exception $e) {
         error_log("Related bill error: " . $e->getMessage());
@@ -379,9 +389,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     letter-spacing: -0.02em;
 }
 
-/* ================================================================
-   PAGE HEADER
-   ================================================================ */
 .page-header {
     background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
     border-radius: 16px;
@@ -442,6 +449,12 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     backdrop-filter: blur(4px);
     border: 1px solid rgba(255,255,255,0.15);
 }
+.branch-tag.user-tag {
+    background: linear-gradient(135deg, #FCD34D, #F59E0B);
+    color: #78350F;
+    font-weight: 800;
+    box-shadow: 0 2px 8px rgba(252, 211, 77, 0.3);
+}
 .btn-header {
     background: rgba(255,255,255,0.18);
     color: white;
@@ -465,9 +478,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     transform: translateY(-2px);
 }
 
-/* ================================================================
-   STATUS BANNER
-   ================================================================ */
 .status-banner {
     border-radius: 14px;
     padding: 16px 22px;
@@ -555,9 +565,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     letter-spacing: 0.08em;
 }
 
-/* ================================================================
-   VIEW GRID
-   ================================================================ */
 .view-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -675,9 +682,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 }
 .patient-meta-item i { color: var(--primary); font-size: 0.62rem; }
 
-/* ================================================================
-   ITEMS TABLE CARD
-   ================================================================ */
 .items-table-card {
     background: var(--bg-card);
     border-radius: 14px;
@@ -714,9 +718,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     backdrop-filter: blur(4px);
 }
 
-/* ================================================================
-   ✅ TOOLBAR WITH SCROLL BUTTONS
-   ================================================================ */
 .table-toolbar {
     display: flex;
     justify-content: space-between;
@@ -742,7 +743,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     gap: 6px;
 }
 
-/* ✅ SCROLL BUTTONS < > */
 .scroll-btn {
     width: 36px;
     height: 36px;
@@ -776,7 +776,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     font-size: 0.85rem;
 }
 
-/* ✅ SCROLL HINT */
 .scroll-hint {
     font-size: 0.65rem;
     color: var(--text-secondary);
@@ -791,9 +790,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     font-size: 0.7rem;
 }
 
-/* ================================================================
-   ✅ TABLE WRAPPER (scrollable)
-   ================================================================ */
 .table-scroll-wrapper {
     overflow-x: auto;
     scroll-behavior: smooth;
@@ -844,7 +840,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 [data-theme="dark"] .items-table tbody tr:hover td { background: #1E3A5F; }
 .items-table tbody tr:last-child td { border-bottom: none; }
 
-/* RX BADGE in table */
 .rx-badge {
     font-family: var(--font-mono);
     font-size: 0.65rem;
@@ -915,9 +910,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     color: var(--text-primary);
 }
 
-/* ================================================================
-   TOTALS CARD
-   ================================================================ */
 .totals-card {
     background: var(--bg-card);
     border-radius: 14px;
@@ -982,9 +974,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     font-weight: 900;
 }
 
-/* ================================================================
-   ACTION BAR
-   ================================================================ */
 .action-bar {
     background: var(--bg-card);
     border-radius: 14px;
@@ -1038,6 +1027,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     gap: 7px;
     text-decoration: none;
     white-space: nowrap;
+    font-family: var(--font-primary);
 }
 .btn:hover { transform: translateY(-2px); }
 .btn-primary {
@@ -1045,40 +1035,13 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     color: white;
     box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
 }
-.btn-primary:hover { box-shadow: 0 6px 20px rgba(11, 94, 215, 0.5); }
+.btn-primary:hover { box-shadow: 0 6px 20px rgba(11, 94, 215, 0.5); color: white; }
 .btn-secondary {
     background: var(--bg-card);
     color: var(--text-primary);
     border: 2px solid var(--border-color);
 }
 .btn-secondary:hover { border-color: var(--primary); color: var(--primary); }
-
-/* ================================================================
-   VIEW ONLY NOTICE
-   ================================================================ */
-.view-only-notice {
-    background: linear-gradient(135deg, var(--warning-bg), #FEF9E7);
-    border-left: 4px solid var(--warning);
-    border-radius: 10px;
-    padding: 12px 18px;
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-size: 0.78rem;
-    font-weight: 700;
-    color: var(--warning);
-}
-[data-theme="dark"] .view-only-notice { background: linear-gradient(135deg, #3A2A1A, #2D2015); color: #FBBF24; }
-.view-only-notice i { font-size: 1.15rem; flex-shrink: 0; }
-.view-only-notice .notice-text { flex: 1; line-height: 1.5; }
-.view-only-notice .notice-badge {
-    background: var(--warning); color: white;
-    padding: 4px 12px; border-radius: 8px;
-    font-size: 0.62rem; font-weight: 800;
-    text-transform: uppercase; letter-spacing: 0.05em;
-    white-space: nowrap;
-}
 
 .empty-mini {
     text-align: center;
@@ -1128,18 +1091,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 
 <main class="main-content">
 
-    <!-- VIEW ONLY NOTICE -->
-    <div class="view-only-notice">
-        <i class="fas fa-info-circle"></i>
-        <span class="notice-text">
-            You are viewing these prescriptions in <strong>VIEW ONLY</strong> mode. 
-            For changes, contact your Administrator.
-        </span>
-        <span class="notice-badge">
-            <i class="fas fa-lock"></i> VIEW ONLY
-        </span>
-    </div>
-
     <!-- PAGE HEADER -->
     <div class="page-header">
         <div>
@@ -1148,6 +1099,8 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                 Prescription Details
             </h1>
             <p class="page-subtitle">
+                <i class="fas fa-user-circle"></i>
+                Karibu, <span class="branch-tag user-tag"><i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?></span>
                 <?php if (!empty($visit['visit_number'])): ?>
                     <span class="branch-tag">
                         <i class="fas fa-clipboard-check"></i> <?= htmlspecialchars($visit['visit_number']) ?>
@@ -1178,14 +1131,15 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                 <i class="fas fa-print"></i> Print
             </button>
             <?php if ($related_bill): ?>
-                <a href="/dispensary_system/frontend/pages/audit/view_bill.php?id=<?= $related_bill['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                <a href="/dispensary_system/frontend/pages/audit/view_bill.php?id=<?= $related_bill['id'] ?>" 
                    class="btn-header" target="_blank">
                     <i class="fas fa-file-invoice"></i> View Bill
                 </a>
             <?php endif; ?>
-            <a href="javascript:history.back()" class="btn-header">
+            <!-- ✅ BACK BUTTON - INAFANYA KAZI KILA WAKATI -->
+            <button type="button" onclick="goBack()" class="btn-header" style="cursor:pointer;">
                 <i class="fas fa-arrow-left"></i> Back
-            </a>
+            </button>
         </div>
     </div>
 
@@ -1326,7 +1280,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
         
     </div>
 
-    <!-- ✅ SINGLE TABLE WITH SCROLL BUTTONS -->
+    <!-- SINGLE TABLE WITH SCROLL BUTTONS -->
     <div class="items-table-card">
         <div class="card-header">
             <span class="title">
@@ -1336,7 +1290,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             <span class="count"><?= $grand_total_items ?> items</span>
         </div>
         
-        <!-- ✅ TOOLBAR WITH SCROLL BUTTONS -->
+        <!-- TOOLBAR WITH SCROLL BUTTONS -->
         <div class="table-toolbar">
             <div class="table-toolbar-left">
                 <span class="scroll-hint">
@@ -1345,7 +1299,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                 </span>
             </div>
             <div class="table-toolbar-right">
-                <!-- ✅ SCROLL LEFT -->
                 <button type="button" 
                         class="scroll-btn" 
                         onclick="scrollItemsTable('left')" 
@@ -1353,7 +1306,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                     <i class="fas fa-chevron-left"></i>
                 </button>
                 
-                <!-- ✅ SCROLL RIGHT -->
                 <button type="button" 
                         class="scroll-btn" 
                         onclick="scrollItemsTable('right')" 
@@ -1494,14 +1446,15 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                 <i class="fas fa-print"></i> Print All
             </button>
             <?php if ($related_bill): ?>
-                <a href="/dispensary_system/frontend/pages/audit/view_bill.php?id=<?= $related_bill['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                <a href="/dispensary_system/frontend/pages/audit/view_bill.php?id=<?= $related_bill['id'] ?>" 
                    class="btn btn-primary" target="_blank">
                     <i class="fas fa-file-invoice"></i> View Bill
                 </a>
             <?php endif; ?>
-            <a href="javascript:history.back()" class="btn btn-primary">
+            <!-- ✅ BACK BUTTON - INAFANYA KAZI KILA WAKATI -->
+            <button type="button" onclick="goBack()" class="btn btn-primary">
                 <i class="fas fa-arrow-left"></i> Back
-            </a>
+            </button>
         </div>
     </div>
 
@@ -1509,13 +1462,39 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 
 <script>
 // ================================================================
-// ✅ SCROLL ITEMS TABLE (LEFT / RIGHT)
+// ✅ SMART BACK FUNCTION - Inafanya kazi kila wakati
+// ================================================================
+function goBack() {
+    var fallbackUrl = '/dispensary_system/frontend/pages/audit/other_services.php?tab=prescriptions';
+    
+    // Jaribu history.back() kwanza
+    if (window.history.length > 1 && document.referrer && document.referrer !== '') {
+        try {
+            window.history.back();
+            // Kama bado tuko hapa baada ya 500ms, tumia fallback
+            setTimeout(function() {
+                // Kama URL haijabadilika (bado tupo kwenye page hii)
+                if (document.visibilityState === 'visible' && window.location.href.indexOf('view_prescription.php') !== -1) {
+                    window.location.href = fallbackUrl;
+                }
+            }, 500);
+        } catch (e) {
+            window.location.href = fallbackUrl;
+        }
+    } else {
+        // Direct visit - tumia fallback URL
+        window.location.href = fallbackUrl;
+    }
+}
+
+// ================================================================
+// SCROLL TABLE FUNCTION
 // ================================================================
 function scrollItemsTable(direction) {
     var wrapper = document.getElementById('itemsTableWrapper');
     if (!wrapper) return;
     
-    var scrollAmount = 350; // pixels
+    var scrollAmount = 350;
     var currentScroll = wrapper.scrollLeft;
     var targetScroll = direction === 'left' 
         ? currentScroll - scrollAmount 
@@ -1526,7 +1505,6 @@ function scrollItemsTable(direction) {
         behavior: 'smooth'
     });
     
-    // Visual feedback
     var btns = document.querySelectorAll('.scroll-btn');
     btns.forEach(function(btn) {
         btn.style.transform = 'scale(0.92)';
@@ -1534,9 +1512,6 @@ function scrollItemsTable(direction) {
     });
 }
 
-// ================================================================
-// ✅ KEYBOARD SHORTCUTS (Alt + ← / →)
-// ================================================================
 document.addEventListener('keydown', function(e) {
     if (e.altKey && e.key === 'ArrowLeft') {
         e.preventDefault();
@@ -1548,9 +1523,6 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-// ================================================================
-// ✅ SHOW SCROLL HINT BASED ON OVERFLOW
-// ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     var wrapper = document.getElementById('itemsTableWrapper');
     if (wrapper) {
@@ -1562,12 +1534,15 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-console.log('%c💊 View Prescriptions - Audit V6 (WITH SCROLL BUTTONS)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c💊 View Prescriptions - BRANCH LOCKED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#F59E0B; font-weight:bold;');
+console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?> (ID: <?= $selected_branch_id ?>)', 'font-size:13px; color:#10B981; font-weight:bold;');
 console.log('%c✅ Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
 console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
 console.log('%c💊 Total Prescriptions: <?= $total_prescriptions ?>', 'font-size:13px; color:#0B5ED7;');
 console.log('%c💊 Total Items: <?= $grand_total_items ?> | Total Qty: <?= $grand_total_qty ?>', 'font-size:13px; color:#0B5ED7;');
-console.log('%c✅ Scroll: < > buttons kwenye header au Alt+←/→', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Back button inafanya kazi (goBack function)', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Scroll: < > buttons au Alt+←/→', 'font-size:13px; color:#34D399; font-weight:bold;');
 </script>
 
 </body>

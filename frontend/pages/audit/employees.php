@@ -1,7 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/employees.php
-// AUDIT - EMPLOYEES PERFORMANCE REPORT (V6 - NO REVENUE)
+// AUDIT - EMPLOYEES PERFORMANCE REPORT (V8 - BRANCH LOCKED CLEAN)
+// ✅ AUDIT ANAONA BRANCH YAKE TU (HAWEZI KUBADILISHA)
+// ✅ ONDOA "Branch ONLY" tag kwenye header
 // ✅ ONDOA "Revenue Generated" cards
 // ✅ ONDOA "Revenue" column kwenye table
 // ✅ ONDOA "Total Revenue" kwenye Role Summary
@@ -41,7 +43,8 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-$selected_branch_id = $_GET['branch'] ?? 'all';
+// ✅ AUDIT ANAONA BRANCH YAKE TU - HAWEZI KUBADILISHA
+$selected_branch_id = $user_branch_id;
 
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -65,28 +68,23 @@ function formatMoney($amount) {
     return number_format((float)$amount, 0, '.', ',');
 }
 
-// BRANCH FILTER
-$filter_by_branch = false;
-$filter_branch_id = 0;
-if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    $filter_by_branch = true;
-    $filter_branch_id = (int)$selected_branch_id;
-}
+// ✅ BRANCH FILTER - LAZIMISHA BRANCH YA ALIYE LOGIN
+$filter_by_branch = true;
+$filter_branch_id = (int)$user_branch_id;
 
-$branch_cond_u = $filter_by_branch ? " AND u.branch_id = ?" : "";
-$branch_params = $filter_by_branch ? [$filter_branch_id] : [];
+$branch_cond_u = " AND u.branch_id = ?";
+$branch_params = [$filter_branch_id];
 
+// Chukua jina la branch ya aliye login
 $branches = [];
 try {
     $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-$display_branch_name = 'All Branches';
-if ($filter_by_branch) {
-    foreach ($branches as $b) {
-        if ($b['id'] == $filter_branch_id) { $display_branch_name = $b['name']; break; }
-    }
+$display_branch_name = $user_branch_name;
+foreach ($branches as $b) {
+    if ($b['id'] == $filter_branch_id) { $display_branch_name = $b['name']; break; }
 }
 
 // DATE FILTERS
@@ -126,7 +124,7 @@ function buildDateCond($quick, $column, &$params, $date_from, $date_to) {
     }
 }
 
-// EMPLOYEES LIST
+// EMPLOYEES LIST - WA BRANCH YA ALIYE LOGIN TU
 $employees = [];
 try {
     $sql = "SELECT u.id, u.username, u.full_name, u.email, u.phone, u.role,
@@ -195,10 +193,9 @@ foreach ($employees as $emp) {
             try {
                 $d_params = [$emp_id];
                 $dc = buildDateCond($quick_filter, 'v.visit_date', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
+                $d_params[] = $filter_branch_id;
                 $sql = "SELECT COUNT(*) as cnt, COUNT(DISTINCT v.patient_id) as patients
-                        FROM visits v WHERE v.doctor_id = ? $dc";
-                if ($filter_by_branch) $sql .= " AND v.branch_id = ?";
+                        FROM visits v WHERE v.doctor_id = ? $dc AND v.branch_id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute($d_params);
                 $r = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -209,9 +206,8 @@ foreach ($employees as $emp) {
             try {
                 $d_params = [$emp_id];
                 $dc = buildDateCond($quick_filter, 'p.created_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
-                $sql = "SELECT COUNT(*) as cnt FROM prescriptions p WHERE p.doctor_id = ? $dc";
-                if ($filter_by_branch) $sql .= " AND p.branch_id = ?";
+                $d_params[] = $filter_branch_id;
+                $sql = "SELECT COUNT(*) as cnt FROM prescriptions p WHERE p.doctor_id = ? $dc AND p.branch_id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute($d_params);
                 $doctor_prescriptions = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
@@ -220,9 +216,8 @@ foreach ($employees as $emp) {
             try {
                 $d_params = [$emp_id];
                 $dc = buildDateCond($quick_filter, 'b.created_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
-                $sql = "SELECT COUNT(*) as cnt FROM bills b WHERE b.created_by = ? $dc";
-                if ($filter_by_branch) $sql .= " AND b.branch_id = ?";
+                $d_params[] = $filter_branch_id;
+                $sql = "SELECT COUNT(*) as cnt FROM bills b WHERE b.created_by = ? $dc AND b.branch_id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute($d_params);
                 $doctor_bills = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
@@ -247,9 +242,8 @@ foreach ($employees as $emp) {
             try {
                 $d_params = [$emp_id];
                 $dc = buildDateCond($quick_filter, 'p.created_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
-                $sql = "SELECT COUNT(*) as cnt FROM patients p WHERE p.created_by = ? $dc";
-                if ($filter_by_branch) $sql .= " AND p.branch_id = ?";
+                $d_params[] = $filter_branch_id;
+                $sql = "SELECT COUNT(*) as cnt FROM patients p WHERE p.created_by = ? $dc AND p.branch_id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute($d_params);
                 $rec_patients = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
@@ -258,9 +252,8 @@ foreach ($employees as $emp) {
             try {
                 $d_params = [$emp_id];
                 $dc = buildDateCond($quick_filter, 'v.created_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
-                $sql = "SELECT COUNT(*) as cnt FROM visits v WHERE v.created_by = ? $dc";
-                if ($filter_by_branch) $sql .= " AND v.branch_id = ?";
+                $d_params[] = $filter_branch_id;
+                $sql = "SELECT COUNT(*) as cnt FROM visits v WHERE v.created_by = ? $dc AND v.branch_id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute($d_params);
                 $rec_visits = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
@@ -284,10 +277,9 @@ foreach ($employees as $emp) {
             try {
                 $d_params = [$emp_id];
                 $dc = buildDateCond($quick_filter, 'p.received_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
+                $d_params[] = $filter_branch_id;
                 $sql = "SELECT COUNT(*) as cnt FROM payments p
-                        WHERE p.received_by = ? AND p.bill_id IS NOT NULL AND p.amount > 0 $dc";
-                if ($filter_by_branch) $sql .= " AND p.branch_id = ?";
+                        WHERE p.received_by = ? AND p.bill_id IS NOT NULL AND p.amount > 0 $dc AND p.branch_id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute($d_params);
                 $cashier_payments = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
@@ -296,10 +288,9 @@ foreach ($employees as $emp) {
             try {
                 $d_params = [$emp_id];
                 $dc = buildDateCond($quick_filter, 'o.created_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
+                $d_params[] = $filter_branch_id;
                 $sql = "SELECT COUNT(*) as cnt FROM otc_sales o 
-                        WHERE o.sold_by = ? AND o.payment_status = 'paid' $dc";
-                if ($filter_by_branch) $sql .= " AND o.branch_id = ?";
+                        WHERE o.sold_by = ? AND o.payment_status = 'paid' $dc AND o.branch_id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute($d_params);
                 $cashier_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
@@ -322,10 +313,9 @@ foreach ($employees as $emp) {
             try {
                 $d_params = [$emp_id];
                 $dc = buildDateCond($quick_filter, 'p.dispensed_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
+                $d_params[] = $filter_branch_id;
                 $sql = "SELECT COUNT(*) as cnt FROM prescriptions p 
-                        WHERE p.dispensed_by = ? AND p.status IN ('dispensed', 'confirmed') $dc";
-                if ($filter_by_branch) $sql .= " AND p.branch_id = ?";
+                        WHERE p.dispensed_by = ? AND p.status IN ('dispensed', 'confirmed') $dc AND p.branch_id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute($d_params);
                 $pharm_prescriptions = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
@@ -334,10 +324,9 @@ foreach ($employees as $emp) {
             try {
                 $d_params = [$emp_id];
                 $dc = buildDateCond($quick_filter, 'o.created_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
+                $d_params[] = $filter_branch_id;
                 $sql = "SELECT COUNT(*) as cnt FROM otc_sales o 
-                        WHERE o.sold_by = ? AND o.payment_status = 'paid' $dc";
-                if ($filter_by_branch) $sql .= " AND o.branch_id = ?";
+                        WHERE o.sold_by = ? AND o.payment_status = 'paid' $dc AND o.branch_id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute($d_params);
                 $pharm_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
@@ -360,10 +349,9 @@ foreach ($employees as $emp) {
             try {
                 $d_params = [$emp_id];
                 $dc = buildDateCond($quick_filter, 'lt.completed_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
+                $d_params[] = $filter_branch_id;
                 $sql = "SELECT COUNT(*) as cnt FROM lab_tests lt
-                        WHERE lt.lab_technician_id = ? AND lt.status = 'completed' $dc";
-                if ($filter_by_branch) $sql .= " AND lt.branch_id = ?";
+                        WHERE lt.lab_technician_id = ? AND lt.status = 'completed' $dc AND lt.branch_id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute($d_params);
                 $lab_completed = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
@@ -372,10 +360,9 @@ foreach ($employees as $emp) {
             try {
                 $d_params = [$emp_id];
                 $dc = buildDateCond($quick_filter, 'lt.created_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
+                $d_params[] = $filter_branch_id;
                 $sql = "SELECT COUNT(*) as cnt FROM lab_tests lt 
-                        WHERE lt.lab_technician_id = ? AND lt.status IN ('pending', 'in_progress') $dc";
-                if ($filter_by_branch) $sql .= " AND lt.branch_id = ?";
+                        WHERE lt.lab_technician_id = ? AND lt.status IN ('pending', 'in_progress') $dc AND lt.branch_id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute($d_params);
                 $lab_in_progress = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
@@ -423,9 +410,8 @@ foreach ($employees as $emp) {
             try {
                 $d_params = [$emp_id];
                 $dc = buildDateCond($quick_filter, 'b.created_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
-                $sql = "SELECT COUNT(*) as cnt FROM bills b WHERE b.created_by = ? $dc";
-                if ($filter_by_branch) $sql .= " AND b.branch_id = ?";
+                $d_params[] = $filter_branch_id;
+                $sql = "SELECT COUNT(*) as cnt FROM bills b WHERE b.created_by = ? $dc AND b.branch_id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute($d_params);
                 $admin_bills_created = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
@@ -434,9 +420,8 @@ foreach ($employees as $emp) {
             try {
                 $d_params = [$emp_id];
                 $dc = buildDateCond($quick_filter, 'o.created_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
-                $sql = "SELECT COUNT(*) as cnt FROM otc_sales o WHERE o.sold_by = ? AND o.payment_status = 'paid' $dc";
-                if ($filter_by_branch) $sql .= " AND o.branch_id = ?";
+                $d_params[] = $filter_branch_id;
+                $sql = "SELECT COUNT(*) as cnt FROM otc_sales o WHERE o.sold_by = ? AND o.payment_status = 'paid' $dc AND o.branch_id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute($d_params);
                 $admin_otc_created = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
@@ -445,10 +430,9 @@ foreach ($employees as $emp) {
             try {
                 $d_params = [$emp_id];
                 $dc = buildDateCond($quick_filter, 'p.received_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
+                $d_params[] = $filter_branch_id;
                 $sql = "SELECT COUNT(*) as cnt FROM payments p 
-                        WHERE p.received_by = ? AND p.bill_id IS NOT NULL AND p.amount > 0 $dc";
-                if ($filter_by_branch) $sql .= " AND p.branch_id = ?";
+                        WHERE p.received_by = ? AND p.bill_id IS NOT NULL AND p.amount > 0 $dc AND p.branch_id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute($d_params);
                 $admin_payments = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
@@ -1189,41 +1173,41 @@ mark.search-highlight {
             <button onclick="window.print()" class="btn-header">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="dashboard.php?branch=<?= $selected_branch_id ?>" class="btn-header">
+            <a href="dashboard.php" class="btn-header">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
         </div>
     </div>
 
-    <!-- FILTER CARD -->
+    <!-- FILTER CARD - HAKUNA BRANCH SELECTOR -->
     <div class="filter-card">
         <div class="filter-section">
             <div class="filter-section-title">
                 <i class="fas fa-bolt"></i> Quick Filters
             </div>
             <div class="quick-filters">
-                <a href="?branch=<?= $selected_branch_id ?>&quick=today" class="quick-btn <?= $quick_filter === 'today' ? 'active' : '' ?>">
+                <a href="?quick=today" class="quick-btn <?= $quick_filter === 'today' ? 'active' : '' ?>">
                     <i class="fas fa-calendar-day"></i> Today
                 </a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=1w" class="quick-btn <?= $quick_filter === '1w' ? 'active' : '' ?>">
+                <a href="?quick=1w" class="quick-btn <?= $quick_filter === '1w' ? 'active' : '' ?>">
                     <i class="fas fa-calendar-week"></i> 1W
                 </a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=1m" class="quick-btn <?= $quick_filter === '1m' ? 'active' : '' ?>">
+                <a href="?quick=1m" class="quick-btn <?= $quick_filter === '1m' ? 'active' : '' ?>">
                     <i class="fas fa-calendar-alt"></i> 1M
                 </a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=3m" class="quick-btn <?= $quick_filter === '3m' ? 'active' : '' ?>">
+                <a href="?quick=3m" class="quick-btn <?= $quick_filter === '3m' ? 'active' : '' ?>">
                     <i class="fas fa-calendar-alt"></i> 3M
                 </a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=6m" class="quick-btn <?= $quick_filter === '6m' ? 'active' : '' ?>">
+                <a href="?quick=6m" class="quick-btn <?= $quick_filter === '6m' ? 'active' : '' ?>">
                     <i class="fas fa-calendar-alt"></i> 6M
                 </a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=1y" class="quick-btn <?= $quick_filter === '1y' ? 'active' : '' ?>">
+                <a href="?quick=1y" class="quick-btn <?= $quick_filter === '1y' ? 'active' : '' ?>">
                     <i class="fas fa-calendar"></i> 1Y
                 </a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=all" class="quick-btn <?= $quick_filter === 'all' ? 'active' : '' ?>">
+                <a href="?quick=all" class="quick-btn <?= $quick_filter === 'all' ? 'active' : '' ?>">
                     <i class="fas fa-infinity"></i> All
                 </a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=custom&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" 
+                <a href="?quick=custom&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" 
                    class="quick-btn <?= $quick_filter === 'custom' ? 'active' : '' ?>">
                     <i class="fas fa-calendar-check"></i> Custom
                 </a>
@@ -1231,7 +1215,6 @@ mark.search-highlight {
         </div>
 
         <form method="GET" id="filterForm">
-            <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
             <input type="hidden" name="quick" value="<?= htmlspecialchars($quick_filter) ?>">
             <?php if ($quick_filter === 'custom'): ?>
             <div class="filter-form">
@@ -1246,7 +1229,7 @@ mark.search-highlight {
                 <button type="submit" class="filter-btn-primary">
                     <i class="fas fa-filter"></i> Apply
                 </button>
-                <a href="?branch=<?= $selected_branch_id ?>" class="filter-btn-secondary">
+                <a href="?" class="filter-btn-secondary">
                     <i class="fas fa-redo"></i> Reset
                 </a>
             </div>
@@ -1794,7 +1777,7 @@ function openPDFWindow() {
 '<div class="pdf-subtitle"><strong>Braick Dispensary</strong>' +
 '<span class="tag">📍 ' + data.branchName + '</span>' +
 '<span class="tag">📅 ' + data.filterLabel + '</span>' +
-'<span class="tag">🔒 AUDIT</span></div></div>' +
+'<span class="tag">🛡️ AUDIT</span></div></div>' +
 '<div style="text-align:right;"><div class="pdf-generated">Generated On</div>' +
 '<div class="pdf-date">' + dateStr + ' • ' + timeStr + '</div></div>' +
 '</div>' +
@@ -1850,11 +1833,11 @@ function openPDFWindow() {
     w.document.close();
 }
 
-console.log('%c🔍 Audit Employee Performance V6 - NO REVENUE', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ ONDOA Revenue cards (zote)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ ONDOA Revenue column kwenye table', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ ONDOA Total Revenue + Avg Revenue kwenye Role Summary', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Baki: Total Employees + Total Activities', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c🔍 Audit Employee Performance V8 - BRANCH LOCKED CLEAN', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ AUDIT ANAONA BRANCH YAKE TU', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ HAWEZI KUBADILISHA BRANCH', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ HAKUNA "Branch ONLY" tag kwenye header', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c👥 Branch: <?= htmlspecialchars($display_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
 console.log('%c👥 Total Employees: <?= $total_employees ?>', 'font-size:13px; color:#0B5ED7;');
 console.log('%c📊 Total Activities: <?= $total_transactions ?>', 'font-size:13px; color:#7C3AED;');
 </script>

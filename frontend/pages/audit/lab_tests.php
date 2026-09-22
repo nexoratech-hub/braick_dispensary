@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/audit/lab_tests.php
 // AUDIT - LAB TESTS GROUPED BY PATIENT → VISIT (V5 - VIEW ONLY)
-// ✅ Same as admin/audit/lab_tests.php
+// ✅ Branch ya aliye login TU
 // ✅ NO Edit button (view only)
 // ✅ NO Delete button (view only)
 // ✅ Only View button
@@ -53,10 +53,13 @@ try {
 // ================================================================
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
-$selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
 $quick_filter = isset($_GET['quick']) ? $_GET['quick'] : 'all';
 $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
+
+// ✅ AUDIT anaona branch yake TU
+$selected_branch_id = (int)$user_branch_id;
+$selected_branch_name = $user_branch_name;
 
 $quick_date_from = '';
 $quick_date_to = date('Y-m-d');
@@ -93,26 +96,10 @@ switch ($quick_filter) {
 }
 
 // ================================================================
-// BRANCHES LIST
+// BUILD WHERE CLAUSE - ✅ LAZIMA branch ya mtumiaji
 // ================================================================
-$branches_list = [];
-try {
-    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-    $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
-
-$selected_branch_name = 'All Branches';
-if ($selected_branch_id !== 'all') {
-    foreach ($branches_list as $b) {
-        if ($b['id'] == $selected_branch_id) { $selected_branch_name = $b['name']; break; }
-    }
-}
-
-// ================================================================
-// BUILD WHERE CLAUSE
-// ================================================================
-$where_clause = " WHERE 1=1";
-$params = [];
+$where_clause = " WHERE lt.branch_id = ?";
+$params = [(int)$user_branch_id];
 
 if (!empty($search)) {
     $where_clause .= " AND (
@@ -131,11 +118,6 @@ if (!empty($search)) {
 if (!empty($status_filter)) {
     $where_clause .= " AND lt.status = ?";
     $params[] = $status_filter;
-}
-
-if ($selected_branch_id !== 'all') {
-    $where_clause .= " AND lt.branch_id = ?";
-    $params[] = (int)$selected_branch_id;
 }
 
 if (!empty($quick_date_from)) {
@@ -255,14 +237,11 @@ foreach ($patients_array as &$p) {
 unset($p);
 
 // ================================================================
-// STATS
+// STATS - ✅ branch ya mtumiaji tu
 // ================================================================
-$stats_where = " WHERE 1=1";
-$stats_params = [];
-if ($selected_branch_id !== 'all') {
-    $stats_where .= " AND lt.branch_id = ?";
-    $stats_params[] = (int)$selected_branch_id;
-}
+$stats_where = " WHERE lt.branch_id = ?";
+$stats_params = [(int)$user_branch_id];
+
 if (!empty($quick_date_from)) {
     $stats_where .= " AND DATE(lt.test_date) >= ?";
     $stats_params[] = $quick_date_from;
@@ -319,6 +298,8 @@ function calculateAge($dob) {
 
 function buildFilterUrl($params_to_update = []) {
     $current = $_GET;
+    // ✅ Ondoa 'branch' kama ipo
+    unset($current['branch']);
     foreach ($params_to_update as $key => $value) {
         if ($value === null || $value === '') unset($current[$key]);
         else $current[$key] = $value;
@@ -1288,11 +1269,9 @@ body { font-family: var(--font-main) !important; }
                 <i class="fas fa-flask"></i>
                 Lab Tests
                 <span class="role-badge-display">AUDIT • VIEW ONLY</span>
-                <?php if ($selected_branch_id !== 'all'): ?>
-                    <span class="branch-tag">
-                        <i class="fas fa-store-alt"></i> <?= htmlspecialchars($selected_branch_name) ?>
-                    </span>
-                <?php endif; ?>
+                <span class="branch-tag">
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($selected_branch_name) ?>
+                </span>
             </h1>
             <p class="page-subtitle">
                 <span class="branch-tag"><i class="fas fa-users"></i> <?= $total_patients_count ?> Patients</span>
@@ -1303,7 +1282,7 @@ body { font-family: var(--font-main) !important; }
             </p>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="dashboard.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
+            <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
             <button onclick="window.location.reload()" class="btn-outline-light">
@@ -1314,7 +1293,7 @@ body { font-family: var(--font-main) !important; }
 
     <!-- STATS - BLUE THEME -->
     <div class="stats-grid-5">
-        <a href="lab_tests.php?branch=<?= $selected_branch_id ?>" class="stat-card-custom card-blue-1">
+        <a href="lab_tests.php" class="stat-card-custom card-blue-1">
             <div class="stat-icon"><i class="fas fa-flask"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Total Tests</p>
@@ -1322,7 +1301,7 @@ body { font-family: var(--font-main) !important; }
                 <p class="stat-amount">TSh <?= number_format($total_amount_all, 0) ?></p>
             </div>
         </a>
-        <a href="lab_tests.php?branch=<?= $selected_branch_id ?>&status=pending" class="stat-card-custom card-blue-2">
+        <a href="lab_tests.php?status=pending" class="stat-card-custom card-blue-2">
             <div class="stat-icon"><i class="fas fa-clock"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Pending</p>
@@ -1330,7 +1309,7 @@ body { font-family: var(--font-main) !important; }
                 <p class="stat-amount">TSh <?= number_format($pending_amount, 0) ?></p>
             </div>
         </a>
-        <a href="lab_tests.php?branch=<?= $selected_branch_id ?>&status=in_progress" class="stat-card-custom card-blue-3">
+        <a href="lab_tests.php?status=in_progress" class="stat-card-custom card-blue-3">
             <div class="stat-icon"><i class="fas fa-spinner"></i></div>
             <div class="stat-content">
                 <p class="stat-label">In Progress</p>
@@ -1338,7 +1317,7 @@ body { font-family: var(--font-main) !important; }
                 <p class="stat-amount">In Progress</p>
             </div>
         </a>
-        <a href="lab_tests.php?branch=<?= $selected_branch_id ?>&status=completed" class="stat-card-custom card-blue-4">
+        <a href="lab_tests.php?status=completed" class="stat-card-custom card-blue-4">
             <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Completed</p>
@@ -1346,7 +1325,7 @@ body { font-family: var(--font-main) !important; }
                 <p class="stat-amount">TSh <?= number_format($completed_amount, 0) ?></p>
             </div>
         </a>
-        <a href="lab_tests.php?branch=<?= $selected_branch_id ?>&status=cancelled" class="stat-card-custom card-blue-5">
+        <a href="lab_tests.php?status=cancelled" class="stat-card-custom card-blue-5">
             <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Cancelled</p>
@@ -1390,7 +1369,7 @@ body { font-family: var(--font-main) !important; }
         </a>
         
         <?php if ($quick_filter !== 'all' || $status_filter || $search): ?>
-            <a href="lab_tests.php?branch=<?= $selected_branch_id ?>" 
+            <a href="lab_tests.php" 
                class="quick-filter-btn" 
                style="border-color:var(--danger);color:var(--danger);margin-left:auto;">
                 <i class="fas fa-times"></i> Clear All
@@ -1402,7 +1381,6 @@ body { font-family: var(--font-main) !important; }
     <div class="custom-date-row <?= $quick_filter === 'custom' ? 'show' : '' ?>" id="customDateRow">
         <form method="GET" style="display:contents;">
             <input type="hidden" name="quick" value="custom">
-            <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
             <input type="hidden" name="status" value="<?= htmlspecialchars($status_filter) ?>">
             <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
             
@@ -1515,7 +1493,7 @@ body { font-family: var(--font-main) !important; }
                                 Total: <strong>TSh <?= number_format($patient['total_amount'] ?? 0, 0) ?></strong>
                             </div>
                             <div class="patient-actions-buttons">
-                                <a href="patient_lab_tests.php?patient_id=<?= $patient_id ?>&branch=<?= $selected_branch_id ?>" 
+                                <a href="patient_lab_tests.php?patient_id=<?= $patient_id ?>" 
                                    class="btn-patient-view" title="View All Lab Tests">
                                     <i class="fas fa-eye"></i> VIEW ALL
                                 </a>
@@ -1683,7 +1661,7 @@ body { font-family: var(--font-main) !important; }
                                                                 <td>
                                                                     <!-- ✅ VIEW ONLY (NO EDIT/DELETE) -->
                                                                     <div class="action-buttons-group">
-                                                                        <a href="view_lab_test.php?id=<?= $test['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                                                        <a href="view_lab_test.php?id=<?= $test['id'] ?>" 
                                                                            class="btn-action-sm view" 
                                                                            title="View Lab Test">
                                                                             <i class="fas fa-eye"></i> View
@@ -1983,12 +1961,12 @@ setInterval(function() {
 }, 1000);
 
 console.log('%c🔍 Audit - Lab Tests (VIEW ONLY)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ Same as admin/audit/lab_tests.php', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c✅ Branch ya mtumiaji TU', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px;color:#10B981;font-weight:bold;');
 console.log('%c✅ NO Edit button (audit view only)', 'font-size:12px;color:#DC2626;font-weight:bold;');
 console.log('%c✅ NO Delete button (audit view only)', 'font-size:12px;color:#DC2626;font-weight:bold;');
 console.log('%c✅ Only View button', 'font-size:12px;color:#34D399;');
 console.log('%c✅ Table nav < > kwa kila visit', 'font-size:12px;color:#0891B2;');
-console.log('%c✅ Blue theme', 'font-size:12px;color:#0B5ED7;font-weight:bold;');
 </script>
 
 </body>

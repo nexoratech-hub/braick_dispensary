@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/view_bill_item.php
-// AUDIT - VIEW BILL ITEM DETAILS (VIEW ONLY - SAWA NA ADMIN)
+// AUDIT - VIEW BILL ITEM DETAILS (V2 - BRANCH LOCKED)
+// ✅ AUDIT ANAONA BILL ITEM ZA BRANCH YAKE TU
 // ✅ Allow both admin and audit roles
 // ✅ Full bill item information
 // ✅ Related bill, patient, visit info
@@ -41,10 +42,12 @@ $base_path = $is_admin
 
 $item_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $item_type_param = $_GET['type'] ?? '';
-$selected_branch_id = $_GET['branch'] ?? 'all';
+
+// ✅ AUDIT ANAONA BRANCH YAKE TU
+$selected_branch_id = $is_audit ? $user_branch_id : ($_GET['branch'] ?? 'all');
 
 if ($item_id <= 0) {
-    header('Location: ' . $base_path . '/revenue.php?branch=' . $selected_branch_id);
+    header('Location: ' . $base_path . '/revenue.php');
     exit;
 }
 
@@ -112,9 +115,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     } catch (Exception $e) {}
                     
                     if ($visit_id_del > 0) {
-                        header('Location: ' . $base_path . '/view_visit.php?id=' . $visit_id_del . '&branch=' . $selected_branch_id . '&deleted=1');
+                        header('Location: ' . $base_path . '/view_visit.php?id=' . $visit_id_del . '&deleted=1');
                     } else {
-                        header('Location: ' . $base_path . '/revenue.php?branch=' . $selected_branch_id . '&deleted=1');
+                        header('Location: ' . $base_path . '/revenue.php?deleted=1');
                     }
                     exit;
                 }
@@ -175,7 +178,7 @@ if (!$logo_found) {
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// FETCH BILL ITEM DETAILS
+// FETCH BILL ITEM DETAILS - ✅ AUDIT ANAONA BRANCH YAKE TU
 // ================================================================
 $item = null;
 try {
@@ -192,6 +195,7 @@ try {
                 b.total_discount as bill_discount,
                 b.premium_amount as bill_premium,
                 b.created_at as bill_created_at,
+                b.branch_id as bill_branch_id,
                 pat.patient_id as patient_code,
                 pat.full_name as patient_name,
                 pat.phone as patient_phone,
@@ -222,15 +226,27 @@ try {
             LEFT JOIN users u ON b.created_by = u.id
             LEFT JOIN branches br ON b.branch_id = br.id
             WHERE bi.id = ?";
-    $stmt = $db->prepare($sql);
-    $stmt->execute([$item_id]);
+    
+    // ✅ Audit: Lazimisha bill ya branch yake
+    if ($is_audit) {
+        $sql .= " AND b.branch_id = ?";
+        $stmt = $db->prepare($sql);
+        $stmt->execute([$item_id, $user_branch_id]);
+    } else {
+        $stmt = $db->prepare($sql);
+        $stmt->execute([$item_id]);
+    }
     $item = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     die("Error fetching bill item: " . $e->getMessage());
 }
 
 if (!$item) {
-    die("Bill item not found.");
+    if ($is_audit) {
+        die("Bill item not found or you don't have permission to view this item (different branch)");
+    } else {
+        die("Bill item not found.");
+    }
 }
 
 // ✅ Include headers
@@ -334,9 +350,6 @@ body {
 .alert.success { background: var(--success-bg); color: var(--success); border-left-color: var(--success); }
 .alert.error { background: var(--danger-bg); color: var(--danger); border-left-color: var(--danger); }
 
-/* ================================================================ */
-/* PAGE HEADER */
-/* ================================================================ */
 .page-header { 
     background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #7C3AED 100%); 
     border-radius: var(--radius-lg); 
@@ -428,9 +441,6 @@ body {
 .btn-header.success { background: rgba(16,185,129,0.3); border-color: rgba(255,255,255,0.3); }
 .btn-header.success:hover { background: rgba(16,185,129,0.6); }
 
-/* ================================================================ */
-/* CARDS */
-/* ================================================================ */
 .card { 
     background: var(--bg-card); 
     border-radius: var(--radius-lg); 
@@ -476,9 +486,6 @@ body {
 }
 .card-body { padding: 18px 20px; }
 
-/* ================================================================ */
-/* ITEM HERO */
-/* ================================================================ */
 .item-hero {
     background: linear-gradient(135deg, #0B5ED7, #7C3AED);
     padding: 24px 28px;
@@ -584,9 +591,6 @@ body {
     letter-spacing: -0.03em;
 }
 
-/* ================================================================ */
-/* INFO GRID */
-/* ================================================================ */
 .info-grid { 
     display: grid; 
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); 
@@ -624,9 +628,6 @@ body {
 .info-value.treatment { color: var(--success); font-weight: 700; }
 .info-value.muted { color: var(--text-muted); font-weight: 500; font-style: italic; }
 
-/* ================================================================ */
-/* PRICE BREAKDOWN */
-/* ================================================================ */
 .price-breakdown {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -665,9 +666,6 @@ body {
 .price-value.final { color: var(--primary); }
 .price-value.tax { color: var(--purple); }
 
-/* ================================================================ */
-/* STATUS BADGE */
-/* ================================================================ */
 .status-badge { 
     display: inline-flex; 
     align-items: center; 
@@ -685,9 +683,6 @@ body {
 .status-badge.cancelled { background: var(--danger-bg); color: var(--danger); border: 1.5px solid var(--danger); }
 .status-badge.refunded { background: var(--pink-bg); color: var(--pink); border: 1.5px solid var(--pink); }
 
-/* ================================================================ */
-/* ITEM TYPE BADGE */
-/* ================================================================ */
 .item-type-badge {
     display: inline-flex;
     align-items: center;
@@ -708,9 +703,6 @@ body {
 .item-type-badge.tool { background: var(--indigo-bg); color: var(--indigo); border: 1.5px solid var(--indigo); }
 .item-type-badge.other { background: var(--pink-bg); color: var(--pink); border: 1.5px solid var(--pink); }
 
-/* ================================================================ */
-/* PATIENT MINI CARD */
-/* ================================================================ */
 .patient-mini {
     display: flex;
     align-items: center;
@@ -750,9 +742,6 @@ body {
     flex-wrap: wrap;
 }
 
-/* ================================================================ */
-/* RESPONSIVE */
-/* ================================================================ */
 @media (max-width: 1024px) {
     .info-grid { grid-template-columns: repeat(2, 1fr); }
 }
@@ -838,12 +827,13 @@ body {
                     <i class="fas <?= $status_icon ?>"></i> <?= strtoupper($item_status) ?>
                 </span>
                 <span class="header-badge purple"><i class="fas fa-money-bill-wave"></i> <?= $currency ?> <?= number_format($item_final, 0) ?></span>
+                <span class="header-badge"><i class="fas fa-store-alt"></i> <?= htmlspecialchars($item['branch_name'] ?? 'N/A') ?></span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <?php if ($is_admin): ?>
                 <!-- ✅ Admin Only - Edit/Delete buttons -->
-                <a href="<?= $base_path ?>/edit_bill_item.php?id=<?= $item_id ?>&branch=<?= $selected_branch_id ?>" class="btn-header warning">
+                <a href="<?= $base_path ?>/edit_bill_item.php?id=<?= $item_id ?>" class="btn-header warning">
                     <i class="fas fa-edit"></i> Edit Item
                 </a>
                 <button onclick="confirmDeleteItem(<?= $item_id ?>, '<?= htmlspecialchars(addslashes($item['item_name'] ?? 'N/A')) ?>')" class="btn-header danger">
@@ -855,11 +845,11 @@ body {
                 <i class="fas fa-print"></i> Print
             </button>
             <?php if (!empty($item['visit_id'])): ?>
-            <a href="<?= $base_path ?>/view_visit.php?id=<?= $item['visit_id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-header">
+            <a href="<?= $base_path ?>/view_visit.php?id=<?= $item['visit_id'] ?>" class="btn-header">
                 <i class="fas fa-arrow-left"></i> Back to Visit
             </a>
             <?php else: ?>
-            <a href="<?= $base_path ?>/revenue.php?branch=<?= $selected_branch_id ?>" class="btn-header">
+            <a href="<?= $base_path ?>/revenue.php" class="btn-header">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
             <?php endif; ?>
@@ -1022,7 +1012,7 @@ body {
         <div class="card-header green">
             <span class="title"><i class="fas fa-file-invoice"></i> Bill Information</span>
             <?php if (!empty($item['bill_id'])): ?>
-            <a href="<?= $base_path ?>/view_bill.php?id=<?= $item['bill_id'] ?>&branch=<?= $selected_branch_id ?>" style="color:white;font-size:0.7rem;font-weight:700;text-decoration:none;background:rgba(255,255,255,0.2);padding:5px 12px;border-radius:var(--radius-full);backdrop-filter:blur(10px);display:inline-flex;align-items:center;gap:5px;">
+            <a href="<?= $base_path ?>/view_bill.php?id=<?= $item['bill_id'] ?>" style="color:white;font-size:0.7rem;font-weight:700;text-decoration:none;background:rgba(255,255,255,0.2);padding:5px 12px;border-radius:var(--radius-full);backdrop-filter:blur(10px);display:inline-flex;align-items:center;gap:5px;">
                 <i class="fas fa-external-link-alt"></i> View Bill
             </a>
             <?php endif; ?>
@@ -1142,7 +1132,7 @@ body {
     <div class="card">
         <div class="card-header indigo">
             <span class="title"><i class="fas fa-stethoscope"></i> Visit Information</span>
-            <a href="<?= $base_path ?>/view_visit.php?id=<?= $item['visit_id'] ?>&branch=<?= $selected_branch_id ?>" style="color:white;font-size:0.7rem;font-weight:700;text-decoration:none;background:rgba(255,255,255,0.2);padding:5px 12px;border-radius:var(--radius-full);backdrop-filter:blur(10px);display:inline-flex;align-items:center;gap:5px;">
+            <a href="<?= $base_path ?>/view_visit.php?id=<?= $item['visit_id'] ?>" style="color:white;font-size:0.7rem;font-weight:700;text-decoration:none;background:rgba(255,255,255,0.2);padding:5px 12px;border-radius:var(--radius-full);backdrop-filter:blur(10px);display:inline-flex;align-items:center;gap:5px;">
                 <i class="fas fa-external-link-alt"></i> View Visit
             </a>
         </div>
@@ -1242,11 +1232,12 @@ document.addEventListener('keydown', function(e) { if (e.key === 'Escape') close
 <script>
 console.log('%c📦 Bill Item Details - #<?= $item_id ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
 console.log('%c👤 Role: <?= strtoupper($user_role) ?>', 'font-size:12px; color:#<?= $is_admin ? 'FCD34D' : '3B82F6' ?>; font-weight:bold;');
+console.log('%c👥 Branch: <?= htmlspecialchars($item['branch_name'] ?? $user_branch_name) ?>', 'font-size:12px; color:#0B5ED7; font-weight:bold;');
 console.log('%c📝 Item: <?= htmlspecialchars($item['item_name'] ?? 'N/A') ?>', 'font-size:12px; color:#059669; font-weight:bold;');
 console.log('%c💰 Final Price: <?= $currency ?> <?= number_format($item_final, 0) ?>', 'font-size:12px; color:#7C3AED; font-weight:bold;');
 console.log('%c📊 Type: <?= strtoupper($item_type) ?> | Status: <?= strtoupper($item_status) ?>', 'font-size:12px; color:#0891B2; font-weight:bold;');
 <?php if ($is_audit): ?>
-console.log('%c🔒 VIEW ONLY MODE - Hakuna Edit/Delete buttons', 'font-size:12px; color:#F59E0B; font-weight:bold;');
+console.log('%c🔒 AUDIT ANAONA BRANCH YAKE TU', 'font-size:12px; color:#F59E0B; font-weight:bold;');
 <?php endif; ?>
 </script>
 

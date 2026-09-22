@@ -1,11 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/patient_lab_tests.php
-// AUDIT - ALL LAB TESTS FOR A PATIENT (V4 - VIEW ONLY + ARROWS)
+// AUDIT - ALL LAB TESTS FOR A PATIENT
+// ✅ Inaonyesha data za branch ya mtumiaji aliye login TU
+// ✅ Jina la mtumiaji aliye login linaonekana kwenye header
 // ✅ Arrow <> buttons kwenye kila visit table header
 // ✅ Lab Technician column per test (lab_technician_id)
 // ✅ Interpretation column
-// ✅ NO Edit/Add/Delete buttons (audit view-only)
 // ✅ Print + Back + View button only
 // ✅ BLUE THEME
 // ================================================================
@@ -37,14 +38,19 @@ if ($_SESSION['role'] !== 'audit') {
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Audit User';
 $user_role = $_SESSION['role'] ?? 'audit';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $patient_id = (int)($_GET['patient_id'] ?? 0);
-$selected_branch_id = $_GET['branch'] ?? 'all';
+
+// ================================================================
+// ✅ LAZIMISHA branch ya mtumiaji aliye login TU
+// ================================================================
+$selected_branch_id = (int)$user_branch_id;
 
 if ($patient_id <= 0) {
-    header('Location: lab_tests.php?branch=' . $selected_branch_id);
+    header('Location: lab_tests.php');
     exit;
 }
 
@@ -65,7 +71,7 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// GET PATIENT INFO
+// GET PATIENT INFO - LAZIMISHA BRANCH YA MTUMIAJI
 // ================================================================
 $patient = null;
 try {
@@ -73,14 +79,14 @@ try {
         SELECT p.*, b.name as branch_name
         FROM patients p
         LEFT JOIN branches b ON p.branch_id = b.id
-        WHERE p.id = ?
+        WHERE p.id = ? AND p.branch_id = ?
     ");
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $selected_branch_id]);
     $patient = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
 if (!$patient) {
-    header('Location: lab_tests.php?branch=' . $selected_branch_id);
+    header('Location: lab_tests.php');
     exit;
 }
 
@@ -131,11 +137,11 @@ try {
         LEFT JOIN users tech ON lt.lab_technician_id = tech.id
         LEFT JOIN visits v ON lt.visit_id = v.id
         LEFT JOIN branches b ON lt.branch_id = b.id
-        WHERE lt.patient_id = ?
+        WHERE lt.patient_id = ? AND lt.branch_id = ?
         ORDER BY v.visit_date DESC, lt.created_at DESC
     ";
     $stmt = $db->prepare($sql);
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $selected_branch_id]);
     $all_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($all_tests as $test) {
@@ -325,10 +331,11 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     font-weight: 500; display: inline-flex; align-items: center; gap: 4px;
     backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1);
 }
-.branch-tag.view-only {
-    background: linear-gradient(135deg, #F59E0B, #D97706);
-    border-color: rgba(255,255,255,0.2);
-    font-weight: 700;
+.branch-tag.user-tag {
+    background: linear-gradient(135deg, #FCD34D, #F59E0B);
+    color: #78350F;
+    font-weight: 800;
+    box-shadow: 0 2px 8px rgba(252, 211, 77, 0.3);
 }
 .btn-header {
     background: rgba(255,255,255,0.15); color: white;
@@ -458,7 +465,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     font-family: var(--font-mono); font-weight: 900; font-size: 0.8rem;
 }
 
-/* ✅ SCROLL BUTTONS - Kwenye visit header */
+/* SCROLL BUTTONS - Kwenye visit header */
 .scroll-buttons-group {
     display: inline-flex;
     gap: 6px;
@@ -531,7 +538,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .data-table tbody tr:hover td { background: var(--primary-bg); }
 .data-table tbody tr:last-child td { border-bottom: none; }
 
-/* ✅ LAB TECHNICIAN CELL */
+/* LAB TECHNICIAN CELL */
 .tech-info {
     display: flex;
     align-items: center;
@@ -596,7 +603,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .status-badge.purple { background: var(--purple-bg); color: var(--purple); }
 .status-badge.teal { background: var(--teal-bg); color: var(--teal); }
 
-/* ACTION BUTTON — VIEW ONLY */
+/* ACTION BUTTON */
 .action-group { display: flex; gap: 4px; align-items: center; justify-content: center; }
 .btn-act {
     width: 30px; height: 30px; border-radius: 7px;
@@ -628,51 +635,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .empty-state p { font-size: 1rem; font-weight: 700; color: var(--text-primary); }
 .empty-state .sub { font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; font-weight: 400; }
 
-/* VIEW ONLY BANNER */
-.view-only-banner {
-    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-    border: 2px solid #F59E0B;
-    border-radius: 12px;
-    padding: 14px 20px;
-    margin-bottom: 18px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.2);
-}
-[data-theme="dark"] .view-only-banner {
-    background: linear-gradient(135deg, #3A2A1A, #2A1E0E);
-    border-color: #B45309;
-}
-.view-only-banner .vo-icon {
-    width: 44px; height: 44px; border-radius: 12px;
-    background: linear-gradient(135deg, #F59E0B, #D97706);
-    color: white; display: flex; align-items: center; justify-content: center;
-    font-size: 1.2rem; flex-shrink: 0;
-    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
-}
-.view-only-banner .vo-content {
-    flex: 1;
-    min-width: 200px;
-}
-.view-only-banner .vo-title {
-    font-size: 0.9rem;
-    font-weight: 800;
-    color: #78350F;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 2px;
-}
-[data-theme="dark"] .view-only-banner .vo-title { color: #FCD34D; }
-.view-only-banner .vo-sub {
-    font-size: 0.72rem;
-    color: #92400E;
-    font-weight: 600;
-}
-[data-theme="dark"] .view-only-banner .vo-sub { color: #FDE68A; }
-
 /* RESPONSIVE */
 @media (max-width: 1024px) {
     .stats-grid-4 { grid-template-columns: repeat(2, 1fr); }
@@ -698,7 +660,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 @media print {
     .btn-header, .btn-act, .scroll-buttons-group { display: none !important; }
     .page-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .view-only-banner { display: none !important; }
 }
     </style>
 </head>
@@ -712,21 +673,21 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             <h1 class="page-title">
                 <i class="fas fa-flask"></i>
                 Patient Lab Tests
-                <span class="branch-tag view-only">
-                    <i class="fas fa-eye"></i> VIEW ONLY
-                </span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-user-injured"></i>
-                <strong><?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></strong>
+                <i class="fas fa-user-circle"></i>
+                Karibu, <span class="branch-tag user-tag"><i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?></span>
+                <span class="branch-tag">
+                    <i class="fas fa-user-injured"></i> <strong><?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></strong>
+                </span>
                 <span class="branch-tag">
                     <i class="fas fa-id-card"></i> <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>
                 </span>
                 <span class="branch-tag">
-                    <i class="fas fa-clipboard-list"></i> <?= $total_visits ?> Visit(s)
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
-                <span class="branch-tag" style="background:rgba(52,211,153,0.25);">
-                    <i class="fas fa-book"></i> <?= count($lab_catalog) ?> Tests in <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?>
+                <span class="branch-tag">
+                    <i class="fas fa-clipboard-list"></i> <?= $total_visits ?> Visit(s)
                 </span>
             </p>
         </div>
@@ -734,24 +695,9 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             <button onclick="window.print()" class="btn-header">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="lab_tests.php?branch=<?= $selected_branch_id ?>" class="btn-header">
+            <a href="lab_tests.php" class="btn-header">
                 <i class="fas fa-arrow-left"></i> All Lab Tests
             </a>
-        </div>
-    </div>
-
-    <!-- VIEW ONLY BANNER -->
-    <div class="view-only-banner">
-        <div class="vo-icon">
-            <i class="fas fa-eye"></i>
-        </div>
-        <div class="vo-content">
-            <div class="vo-title">
-                <i class="fas fa-lock"></i> View-Only Mode
-            </div>
-            <div class="vo-sub">
-                Audit access — You can view and print records only. To edit, add, or delete lab tests, please contact an administrator.
-            </div>
         </div>
     </div>
 
@@ -857,7 +803,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                             <span class="num"><?= $currency ?> <?= number_format($visit_total, 0) ?></span>
                         </span>
                         
-                        <!-- ✅ SCROLL ARROW BUTTONS -->
+                        <!-- SCROLL ARROW BUTTONS -->
                         <div class="scroll-buttons-group">
                             <button type="button" class="scroll-btn-header" 
                                     onclick="scrollVisitTable('<?= $wrapper_id ?>', 'left')" 
@@ -893,7 +839,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                             <?php $ti = 1; foreach ($visit_tests as $test): 
                                 $badge = getStatusBadge($test['status']);
                                 
-                                // ✅ Lab Technician Info - from lab_technician_id
+                                // Lab Technician Info - from lab_technician_id
                                 $tech_name = $test['technician_name'] ?? '';
                                 $tech_role = $test['technician_role'] ?? '';
                                 $tech_initials = '';
@@ -960,7 +906,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                             <span style="color:var(--text-muted);font-style:italic;">—</span>
                                         <?php endif; ?>
                                     </td>
-                                    <!-- ✅ LAB TECHNICIAN COLUMN -->
+                                    <!-- LAB TECHNICIAN COLUMN -->
                                     <td>
                                         <?php if (!empty($tech_name)): ?>
                                             <div class="tech-info">
@@ -988,9 +934,8 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                         </span>
                                     </td>
                                     <td>
-                                        <!-- VIEW ONLY: Only View button -->
                                         <div class="action-group">
-                                            <a href="view_lab_test.php?id=<?= $test['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                            <a href="view_lab_test.php?id=<?= $test['id'] ?>" 
                                                class="btn-act view" title="View Lab Test">
                                                 <i class="fas fa-eye"></i>
                                             </a>
@@ -1015,27 +960,23 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 
 <script>
 // ================================================================
-// ✅ SCROLL FUNCTION - Kila visit table ina scroll yake
+// SCROLL FUNCTION - Kila visit table ina scroll yake
 // ================================================================
 function scrollVisitTable(wrapperId, direction) {
     var wrapper = document.getElementById(wrapperId);
     if (!wrapper) return;
     
-    var amount = 300; // pixels za kusogeza
+    var amount = 300;
     wrapper.scrollBy({
         left: direction === 'left' ? -amount : amount,
         behavior: 'smooth'
     });
 }
 
-console.log('%c🔍 Audit - Patient Lab Tests (VIEW ONLY)', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ Arrow <> buttons kwenye kila visit table header', 'font-size:12px;color:#0891B2;font-weight:bold;');
-console.log('%c✅ Lab Technician column per test (lab_technician_id)', 'font-size:12px;color:#0891B2;font-weight:bold;');
-console.log('%c✅ Interpretation column', 'font-size:12px;color:#7C3AED;font-weight:bold;');
-console.log('%c❌ NO Edit/Add/Delete buttons', 'font-size:12px;color:#DC2626;font-weight:bold;');
-console.log('%c✅ Only View button per test', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c🔍 Audit - Patient Lab Tests', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
+console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px;color:#F59E0B;font-weight:bold;');
+console.log('%c✅ Inaonyesha data za branch: <?= htmlspecialchars($user_branch_name) ?> (ID: <?= $selected_branch_id ?>)', 'font-size:13px;color:#34D399;font-weight:bold;');
 console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:12px;color:#34D399;');
-console.log('%c🏥 Branch: <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?>', 'font-size:12px;color:#34D399;');
 console.log('%c📊 Total Tests: <?= $total_tests ?>', 'font-size:12px;color:#34D399;');
 console.log('%c📊 Total Visits: <?= $total_visits ?>', 'font-size:12px;color:#34D399;');
 </script>

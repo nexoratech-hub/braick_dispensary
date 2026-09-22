@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/dashboard.php
-// AUDIT ROLE - DASHBOARD V13 - SAWA KABISA NA ADMIN AUDIT V15.2
+// AUDIT ROLE - DASHBOARD V14 - BRANCH LOCKED
+// ✅ V14: Inaonyesha data za branch ya mtumiaji aliye login TU
 // ✅ V15.2: PRESCRIPTION CARD = GROSS (BILA round off)
 // ✅ V15.2: GROSS = Medication_RAW (total_price, bila discount, bila premium)
 // ✅ PAYMENTS-BASED: Patient Payments = payments.amount (fedha halisi)
@@ -46,7 +47,10 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 $user_email = $_SESSION['email'] ?? '';
 $user_username = $_SESSION['username'] ?? 'audit';
 
-$selected_branch_id = $_GET['branch'] ?? 'all';
+// ================================================================
+// ✅ V14: LAZIMISHA branch ya mtumiaji aliye login TU
+// ================================================================
+$selected_branch_id = (int)$user_branch_id;
 
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -64,42 +68,22 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// BRANCH CONDITIONS
+// ✅ BRANCH CONDITIONS - KILA KITU KINATUMIA BRANCH YA MTUMIAJI
 // ================================================================
-$branch_cond = "";
-$branch_params = [];
-if ($selected_branch_id !== 'all') {
-    $branch_cond = " AND branch_id = ?";
-    $branch_params[] = (int)$selected_branch_id;
-}
+$branch_cond = " AND branch_id = ?";
+$branch_params = [$selected_branch_id];
 
-$bi_branch_cond = "";
-$bi_branch_params = [];
-if ($selected_branch_id !== 'all') {
-    $bi_branch_cond = " AND bi.branch_id = ?";
-    $bi_branch_params[] = (int)$selected_branch_id;
-}
+$bi_branch_cond = " AND bi.branch_id = ?";
+$bi_branch_params = [$selected_branch_id];
 
-$b_branch_cond = "";
-$b_branch_params = [];
-if ($selected_branch_id !== 'all') {
-    $b_branch_cond = " AND b.branch_id = ?";
-    $b_branch_params[] = (int)$selected_branch_id;
-}
+$b_branch_cond = " AND b.branch_id = ?";
+$b_branch_params = [$selected_branch_id];
 
-$o_branch_cond = "";
-$o_branch_params = [];
-if ($selected_branch_id !== 'all') {
-    $o_branch_cond = " AND branch_id = ?";
-    $o_branch_params[] = (int)$selected_branch_id;
-}
+$o_branch_cond = " AND branch_id = ?";
+$o_branch_params = [$selected_branch_id];
 
-$p_branch_cond = "";
-$p_branch_params = [];
-if ($selected_branch_id !== 'all') {
-    $p_branch_cond = " AND p.branch_id = ?";
-    $p_branch_params[] = (int)$selected_branch_id;
-}
+$p_branch_cond = " AND p.branch_id = ?";
+$p_branch_params = [$selected_branch_id];
 
 // ================================================================
 // STATS - 8 CARDS + BREAKDOWN (SAME AS ADMIN AUDIT V15.2)
@@ -107,8 +91,8 @@ if ($selected_branch_id !== 'all') {
 $stats = [
     'total_revenue' => 0,
     'patient_payments_revenue' => 0,
-    'prescription_revenue' => 0,        // GROSS (total_price, bila discount, bila premium)
-    'medication_revenue_gross' => 0,    // GROSS (raw)
+    'prescription_revenue' => 0,
+    'medication_revenue_gross' => 0,
     'otc_revenue' => 0,
     'lab_revenue' => 0,
     'other_revenue' => 0,
@@ -221,11 +205,10 @@ try {
     $stats['pharmacy_premium_total'] = (float)($row['total'] ?? 0);
     
     // ============================================================
-    // ✅ V15.2 FIX: PRESCRIPTION REVENUE = GROSS
-    // Formula: GROSS = Medication_RAW (total_price, bila discount, bila premium)
+    // ✅ V15.2: PRESCRIPTION REVENUE = GROSS
     // ============================================================
     $stats['medication_revenue_gross'] = $stats['medication_revenue_raw'];
-    $stats['prescription_revenue'] = $stats['medication_revenue_gross']; // ✅ GROSS
+    $stats['prescription_revenue'] = $stats['medication_revenue_gross'];
     $stats['medication_revenue'] = $stats['medication_revenue_gross'];
     
     // ============================================================
@@ -440,7 +423,7 @@ try {
     // ============================================================
     // 16. OTHER STATS
     // ============================================================
-    $p_branch = $selected_branch_id !== 'all' ? " AND branch_id = ?" : "";
+    $p_branch = " AND branch_id = ?";
     
     $sql = "SELECT COUNT(*) as count FROM patients WHERE 1=1 $p_branch";
     $stmt = $db->prepare($sql); $stmt->execute($branch_params);
@@ -458,7 +441,7 @@ try {
     $stmt = $db->prepare($sql); $stmt->execute($branch_params);
     $stats['total_reception'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     
-    $al_branch = $selected_branch_id !== 'all' ? " AND branch_id = ?" : "";
+    $al_branch = " AND branch_id = ?";
     $sql = "SELECT COUNT(*) as count FROM activity_logs WHERE 1=1 $al_branch";
     $stmt = $db->prepare($sql); $stmt->execute($branch_params);
     $stats['total_audit_logs'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
@@ -588,7 +571,7 @@ try {
 // ================================================================
 $doctor_performance = [];
 try {
-    $d_branch = $selected_branch_id !== 'all' ? " AND u.branch_id = ?" : "";
+    $d_branch = " AND u.branch_id = ?";
     $sql = "SELECT u.id, u.full_name as doctor_name, 
             COUNT(DISTINCT v.id) as total_visits,
             COUNT(DISTINCT p.id) as total_prescriptions
@@ -603,7 +586,7 @@ try {
     $doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($doctors as $doc) {
-        $d_rev_branch = $selected_branch_id !== 'all' ? " AND b.branch_id = ?" : "";
+        $d_rev_branch = " AND b.branch_id = ?";
         $sql2 = "SELECT COALESCE(SUM(p.amount), 0) as total
                  FROM payments p
                  INNER JOIN bills b ON p.bill_id = b.id
@@ -621,8 +604,8 @@ try {
 // ================================================================
 $recent_transactions = [];
 try {
-    $pay_branch = $selected_branch_id !== 'all' ? " AND p.branch_id = ?" : "";
-    $otc_branch = $selected_branch_id !== 'all' ? " AND o.branch_id = ?" : "";
+    $pay_branch = " AND p.branch_id = ?";
+    $otc_branch = " AND o.branch_id = ?";
     
     $sql = "
         (SELECT 
@@ -679,10 +662,7 @@ try {
         LIMIT 10
     ";
     
-    $all_params = [];
-    if ($selected_branch_id !== 'all') {
-        $all_params = [(int)$selected_branch_id, (int)$selected_branch_id];
-    }
+    $all_params = [$selected_branch_id, $selected_branch_id];
     
     $stmt = $db->prepare($sql);
     $stmt->execute($all_params);
@@ -1428,7 +1408,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
         <div>
             <h1 class="page-title">
                 <i class="fas fa-shield-alt"></i>
-                Audit Dashboard V13
+                Audit Dashboard V14
                 <span class="role-badge"><i class="fas fa-user-shield"></i> AUDIT</span>
             </h1>
             <p class="page-subtitle">
@@ -1436,7 +1416,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                 Financial Overview — <strong style="color:#93C5FD;">Payments-Based</strong>
                 <span class="branch-tag">
                     <i class="fas fa-store-alt"></i> 
-                    <?= $selected_branch_id === 'all' ? 'All Branches' : htmlspecialchars($user_branch_name) ?>
+                    <?= htmlspecialchars($user_branch_name) ?>
                 </span>
                 <span class="branch-tag">
                     <i class="fas fa-calendar-alt"></i> <?= date('d M Y') ?>
@@ -1447,11 +1427,11 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
             </p>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="/dispensary_system/frontend/pages/audit/dashboard.php?branch=<?= $selected_branch_id ?>" 
+            <a href="/dispensary_system/frontend/pages/audit/dashboard.php" 
                class="btn-header" style="background: linear-gradient(135deg, #FCD34D, #F59E0B); color: #78350F; font-weight: 800;">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
-            <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="btn-header">
+            <a href="revenue.php" class="btn-header">
                 <i class="fas fa-chart-line"></i> Reports
             </a>
             <button onclick="window.location.reload()" class="btn-header">
@@ -1753,7 +1733,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                     <i class="fas fa-trophy"></i>
                     Top 10 Selling Medicines (Bill Items)
                 </div>
-                <a href="inventory.php?branch=<?= $selected_branch_id ?>" class="filter-btn">
+                <a href="inventory.php" class="filter-btn">
                     <i class="fas fa-arrow-right"></i> All
                 </a>
             </div>
@@ -1810,7 +1790,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                     <i class="fas fa-history"></i>
                     Recent Transactions (Payments + OTC)
                 </div>
-                <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="filter-btn">
+                <a href="revenue.php" class="filter-btn">
                     <i class="fas fa-arrow-right"></i> All
                 </a>
             </div>
@@ -1887,12 +1867,12 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                                     </td>
                                     <td style="text-align:center;">
                                         <?php if ($is_otc): ?>
-                                            <a href="view_otc.php?id=<?= $txn['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                            <a href="view_otc.php?id=<?= $txn['id'] ?>" 
                                                class="btn-action view" title="View" target="_blank">
                                                 <i class="fas fa-eye"></i>
                                             </a>
                                         <?php elseif ($is_payment && !empty($txn['bill_id'])): ?>
-                                            <a href="view_bill.php?id=<?= $txn['bill_id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                            <a href="view_bill.php?id=<?= $txn['bill_id'] ?>" 
                                                class="btn-action view" title="View Bill" target="_blank">
                                                 <i class="fas fa-file-invoice"></i>
                                             </a>
@@ -1922,7 +1902,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                     <i class="fas fa-user-md"></i>
                     Doctor Performance (Payments-based)
                 </div>
-                <a href="employees.php?branch=<?= $selected_branch_id ?>" class="filter-btn">
+                <a href="employees.php" class="filter-btn">
                     <i class="fas fa-arrow-right"></i> All
                 </a>
             </div>
@@ -2221,9 +2201,9 @@ if (breakdownCtx) {
     });
 }
 
-console.log('%c🔍 Audit Dashboard V13 - SAWA KABISA NA ADMIN AUDIT V15.2', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c🔍 Audit Dashboard V14 - BRANCH LOCKED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ Inaonyesha data za branch: <?= htmlspecialchars($user_branch_name) ?> (ID: <?= $selected_branch_id ?>)', 'font-size:13px; color:#34D399; font-weight:bold;');
 console.log('%c✅ V15.2: Prescription = GROSS (Medication_RAW, bila discount, bila premium)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Bila round off — inaonyesha 2 decimal places', 'font-size:13px; color:#34D399; font-weight:bold;');
 console.log('%c💰 Total Revenue: <?= $currency ?> <?= number_format($stats['total_revenue'], 2, '.', ',') ?>', 'font-size:12px; color:#0B5ED7;');
 console.log('%c💊 Prescription (GROSS): <?= $currency ?> <?= number_format($stats['prescription_revenue'], 2, '.', ',') ?>', 'font-size:12px; color:#7C3AED; font-weight:bold;');
 console.log('%c📊 Patient Payments (with premium): <?= $currency ?> <?= number_format($stats['patient_payments_revenue'], 2, '.', ',') ?>', 'font-size:12px; color:#059669;');

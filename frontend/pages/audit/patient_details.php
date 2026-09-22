@@ -2,12 +2,12 @@
 // ================================================================
 // FILE: frontend/pages/audit/patient_details.php
 // AUDIT - PATIENT DETAILS (V2 FINAL - SAWA NA ADMIN V6)
-// ✅ Allow both admin and audit roles
+// ✅ Branch ya aliye login TU
 // ✅ CSS nzuri sana (modern design)
 // ✅ Kila Visit na Card yake (blue margin)
 // ✅ Sections 9: Patient → Visit → Vitals → Labs → Diagnosis → Meds → Procedures → Equipment → Bills
 // ✅ Procedures kutoka bill_items (status = paid)
-// ✅ Doctor + Reception aliyecreate
+// ✅ Attending Doctor + Registered By (English labels)
 // ✅ View-only mode kwa audit
 // ================================================================
 
@@ -25,8 +25,9 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || !in_array($_SES
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Audit User';
 $user_role = $_SESSION['role'] ?? 'audit';
-$profile_pic = $_SESSION['profile_pic'] ?? '';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $is_admin = ($user_role === 'admin');
 $is_audit = ($user_role === 'audit');
@@ -37,10 +38,12 @@ $base_path = $is_admin
     : '/dispensary_system/frontend/pages/audit';
 
 $patient_id = (int)($_GET['id'] ?? 0);
-$selected_branch_id = $_GET['branch'] ?? 'all';
+
+// ✅ AUDIT anaona branch yake TU
+$selected_branch_id = (int)$user_branch_id;
 
 if ($patient_id <= 0) {
-    header('Location: ' . $base_path . '/patients.php?branch=' . urlencode($selected_branch_id));
+    header('Location: ' . $base_path . '/patients.php');
     exit;
 }
 
@@ -54,7 +57,7 @@ try {
 }
 
 // ================================================================
-// GET PATIENT
+// ✅ GET PATIENT - LAZIMA branch ya mtumiaji
 // ================================================================
 $patient = null;
 try {
@@ -66,15 +69,18 @@ try {
         LEFT JOIN branches b ON p.branch_id = b.id
         LEFT JOIN users u ON p.created_by = u.id
         LEFT JOIN users d ON p.assigned_doctor_id = d.id
-        WHERE p.id = ?
+        WHERE p.id = ? AND p.branch_id = ?
     ");
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $user_branch_id]);
     $patient = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     die("Error loading patient: " . $e->getMessage());
 }
 
-if (!$patient) die("Patient not found");
+if (!$patient) {
+    header('Location: ' . $base_path . '/patients.php');
+    exit;
+}
 
 // ================================================================
 // GET VISITS
@@ -94,10 +100,10 @@ try {
         LEFT JOIN users u_doctor ON v.doctor_id = u_doctor.id
         LEFT JOIN users u_reception ON v.receptionist_id = u_reception.id
         LEFT JOIN diseases d ON v.disease_id = d.id
-        WHERE v.patient_id = ?
+        WHERE v.patient_id = ? AND v.branch_id = ?
         ORDER BY v.visit_date DESC
     ");
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $user_branch_id]);
     $visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
@@ -110,10 +116,10 @@ try {
         SELECT vs.*, u.full_name AS recorded_by_name, u.role AS recorded_by_role
         FROM vital_signs vs
         LEFT JOIN users u ON vs.recorded_by = u.id
-        WHERE vs.patient_id = ?
+        WHERE vs.patient_id = ? AND vs.branch_id = ?
         ORDER BY vs.recorded_at DESC
     ");
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $user_branch_id]);
     $all_vitals = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($all_vitals as $v) {
@@ -136,10 +142,10 @@ try {
         FROM bills b 
         LEFT JOIN users u ON b.created_by = u.id
         LEFT JOIN users c ON b.created_by = c.id
-        WHERE b.patient_id = ? 
+        WHERE b.patient_id = ? AND b.branch_id = ?
         ORDER BY b.created_at DESC
     ");
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $user_branch_id]);
     $all_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
     foreach ($all_bills as $b) {
         $vid = $b['visit_id'] ?? 0;
@@ -151,7 +157,7 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// GET BILL ITEMS - GROUPED BY BILL + BY VISIT+TYPE
+// GET BILL ITEMS
 // ================================================================
 $bill_items_by_bill = [];
 $items_by_visit_type = [];
@@ -160,10 +166,10 @@ try {
         SELECT bi.*, b.visit_id 
         FROM bill_items bi 
         INNER JOIN bills b ON bi.bill_id = b.id
-        WHERE b.patient_id = ? 
+        WHERE b.patient_id = ? AND b.branch_id = ?
         ORDER BY bi.created_at DESC
     ");
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $user_branch_id]);
     $all_bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($all_bill_items as $item) {
@@ -189,10 +195,10 @@ try {
         FROM payments p 
         INNER JOIN bills b ON p.bill_id = b.id
         LEFT JOIN users u ON p.received_by = u.id
-        WHERE b.patient_id = ?
+        WHERE b.patient_id = ? AND b.branch_id = ?
         ORDER BY p.received_at DESC
     ");
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $user_branch_id]);
     $all_payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
     foreach ($all_payments as $p) {
         $bid = $p['bill_id'] ?? 0;
@@ -213,10 +219,10 @@ try {
         FROM prescriptions pr 
         LEFT JOIN users u ON pr.doctor_id = u.id
         LEFT JOIN users ph ON pr.pharmacy_id = ph.id
-        WHERE pr.patient_id = ? 
+        WHERE pr.patient_id = ? AND pr.branch_id = ?
         ORDER BY pr.created_at DESC
     ");
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $user_branch_id]);
     $all_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
     foreach ($all_prescriptions as $pr) {
         $vid = $pr['visit_id'] ?? 0;
@@ -230,9 +236,9 @@ try {
     $stmt = $db->prepare("
         SELECT pi.* FROM prescription_items pi
         INNER JOIN prescriptions pr ON pi.prescription_id = pr.id
-        WHERE pr.patient_id = ?
+        WHERE pr.patient_id = ? AND pr.branch_id = ?
     ");
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $user_branch_id]);
     $all_prescription_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
     foreach ($all_prescription_items as $item) {
         $pid = $item['prescription_id'] ?? 0;
@@ -253,10 +259,10 @@ try {
                u.specialty AS technician_specialty
         FROM lab_tests lt 
         LEFT JOIN users u ON lt.lab_technician_id = u.id
-        WHERE lt.patient_id = ? 
+        WHERE lt.patient_id = ? AND lt.branch_id = ?
         ORDER BY lt.created_at DESC
     ");
-    $stmt->execute([$patient_id]);
+    $stmt->execute([$patient_id, $user_branch_id]);
     $all_lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
     foreach ($all_lab_tests as $lt) {
         $vid = $lt['visit_id'] ?? 0;
@@ -452,7 +458,7 @@ html, body {
 }
 
 /* ================================================================
-   PAGE HEADER - MODERN GRADIENT
+   PAGE HEADER
    ================================================================ */
 .page-header {
     background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #7C3AED 100%);
@@ -1786,16 +1792,16 @@ html, body {
             <?php endif; ?>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="<?= $base_path ?>/patients.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
+            <a href="<?= $base_path ?>/patients.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
             <?php if ($is_admin): ?>
-            <a href="<?= $base_path ?>/patient_edit.php?id=<?= $patient_id ?>&branch=<?= $selected_branch_id ?>" 
+            <a href="<?= $base_path ?>/patient_edit.php?id=<?= $patient_id ?>" 
                class="btn-outline-light">
                 <i class="fas fa-edit"></i> Edit
             </a>
             <?php endif; ?>
-            <a href="<?= $base_path ?>/patient_pdf.php?id=<?= $patient_id ?>&branch=<?= $selected_branch_id ?>" 
+            <a href="<?= $base_path ?>/patient_pdf.php?id=<?= $patient_id ?>" 
                target="_blank"
                class="btn-export-pdf">
                 <i class="fas fa-file-pdf"></i> Export PDF
@@ -2002,12 +2008,14 @@ html, body {
                                         <div class="info-label"><i class="fas fa-calendar-alt"></i> Date & Time</div>
                                         <div class="info-value mono"><?= date('d M Y, H:i', strtotime($visit['visit_date'] ?? 'now')) ?></div>
                                     </div>
+                                    <!-- ✅ ATTENDING DOCTOR (English) -->
                                     <div class="info-item highlight-purple">
-                                        <div class="info-label"><i class="fas fa-user-md"></i> Doctor (Aliyehudumia)</div>
+                                        <div class="info-label"><i class="fas fa-user-md"></i> Attending Doctor</div>
                                         <div class="info-value"><?= htmlspecialchars($visit['doctor_name'] ?? 'Not assigned') ?></div>
                                     </div>
+                                    <!-- ✅ REGISTERED BY / RECEPTION (English) -->
                                     <div class="info-item highlight-purple">
-                                        <div class="info-label"><i class="fas fa-user-tie"></i> Reception (Aliyecreate)</div>
+                                        <div class="info-label"><i class="fas fa-user-tie"></i> Registered By (Reception)</div>
                                         <div class="info-value"><?= htmlspecialchars($visit['receptionist_name'] ?? 'N/A') ?></div>
                                     </div>
                                     <div class="info-item">
@@ -2389,7 +2397,7 @@ html, body {
                         </div>
                         <?php endif; ?>
                         
-                        <!-- SECTION 7: PROCEDURES (FROM bill_items) -->
+                        <!-- SECTION 7: PROCEDURES -->
                         <?php if (count($visit_procedures) > 0): ?>
                         <div class="visit-section-block">
                             <div class="section-header-bar">
@@ -2790,11 +2798,14 @@ html, body {
 <script>
 console.log('%c👤 Audit Patient Details V2 - SAWA NA ADMIN V6', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
 console.log('%c✅ Role: <?= $user_role ?>', 'font-size:12px; color:#34D399; font-weight:bold;');
+console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#10B981; font-weight:bold;');
+console.log('%c✅ Branch ya mtumiaji TU', 'font-size:12px; color:#34D399; font-weight:bold;');
+console.log('%c✅ English labels: Attending Doctor + Registered By (Reception)', 'font-size:12px; color:#34D399; font-weight:bold;');
 console.log('%c✅ CSS nzuri sana - modern design', 'font-size:12px; color:#34D399; font-weight:bold;');
 console.log('%c✅ Kila Visit na Card yake (blue margin)', 'font-size:12px; color:#34D399; font-weight:bold;');
 console.log('%c✅ Sections 9: Patient → Visit → Vitals → Labs → Diagnosis → Meds → Procedures → Equipment → Bills', 'font-size:12px; color:#34D399; font-weight:bold;');
 console.log('%c✅ Procedures kutoka bill_items (status = paid)', 'font-size:12px; color:#7C3AED; font-weight:bold;');
-console.log('%c✅ Doctor + Reception aliyecreate kila visit', 'font-size:12px; color:#7C3AED; font-weight:bold;');
+console.log('%c✅ Attending Doctor + Registered By (English labels)', 'font-size:12px; color:#7C3AED; font-weight:bold;');
 </script>
 
 </body>

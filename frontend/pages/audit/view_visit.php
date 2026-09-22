@@ -1,14 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/view_visit.php
-// AUDIT - VIEW VISIT DETAILS (V9 - FINAL)
+// AUDIT - VIEW VISIT DETAILS (V10 - BRANCH LOCKED CLEAN)
+// ✅ AUDIT ANAONA VISIT ZA BRANCH YAKE TU
+// ✅ ONDOA READ-ONLY notice na AUDIT MODE notice
 // ✅ V9: Bills table IMETOLEWA
 // ✅ V9: Payments = table MOJA (grouped by bill, partial payments)
 // ✅ V9: Summary cards ZOTE kwenye ROW MOJA
 // ✅ V9: Prescriptions - buttons zimetolewa
 // ✅ V9: Kila table inajifunga/kufunguka (toggle)
 // ✅ V9: Scroll buttons <> kwenye kila table header
-// ✅ V9: READ-ONLY: Bila buttons za Edit/Delete
 // ✅ Timezone: Africa/Dar_es_Salaam
 // ================================================================
 
@@ -36,10 +37,12 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $visit_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = $_GET['branch'] ?? 'all';
+
+// ✅ AUDIT ANAONA BRANCH YAKE TU
+$selected_branch_id = $user_branch_id;
 
 if ($visit_id <= 0) {
-    header('Location: dashboard.php?branch=' . $selected_branch_id);
+    header('Location: dashboard.php');
     exit;
 }
 
@@ -64,7 +67,7 @@ try {
     if ($row && !empty($row['setting_value'])) $currency = $row['setting_value'];
 } catch (Exception $e) {}
 
-// FETCH VISIT
+// FETCH VISIT - ✅ BRANCH YA ALIYE LOGIN TU
 $visit = null;
 try {
     $stmt = $db->prepare("SELECT 
@@ -80,20 +83,24 @@ try {
         LEFT JOIN users r ON v.receptionist_id = r.id
         LEFT JOIN users ab ON v.assigned_by_id = ab.id
         LEFT JOIN branches br ON v.branch_id = br.id
-        WHERE v.id = ?");
-    $stmt->execute([$visit_id]);
+        WHERE v.id = ? AND v.branch_id = ?");
+    $stmt->execute([$visit_id, $user_branch_id]);
     $visit = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) { die("Error: " . $e->getMessage()); }
 
-if (!$visit) die("Visit not found.");
+if (!$visit) {
+    $_SESSION['error_message'] = "Visit not found or you don't have permission to view this visit (different branch).";
+    header('Location: dashboard.php');
+    exit;
+}
 
 // FETCH BILLS
 $bills = [];
 try {
     $stmt = $db->prepare("SELECT b.*, u.full_name as created_by_name, u.role as created_by_role
         FROM bills b LEFT JOIN users u ON b.created_by = u.id
-        WHERE b.visit_id = ? ORDER BY b.created_at ASC");
-    $stmt->execute([$visit_id]);
+        WHERE b.visit_id = ? AND b.branch_id = ? ORDER BY b.created_at ASC");
+    $stmt->execute([$visit_id, $user_branch_id]);
     $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
@@ -146,12 +153,13 @@ foreach ($bill_items as $cat => $items) {
     $category_totals[$cat] = ['count' => count($items), 'subtotal' => $subtotal, 'discount' => $discount, 'final' => $final];
 }
 
-// FETCH PRESCRIPTIONS
+// FETCH PRESCRIPTIONS - ✅ BRANCH YA ALIYE LOGIN TU
 $prescriptions = [];
 try {
     $stmt = $db->prepare("SELECT p.*, u.full_name as doctor_name FROM prescriptions p
-        LEFT JOIN users u ON p.doctor_id = u.id WHERE p.visit_id = ? ORDER BY p.id");
-    $stmt->execute([$visit_id]);
+        LEFT JOIN users u ON p.doctor_id = u.id 
+        WHERE p.visit_id = ? AND p.branch_id = ? ORDER BY p.id");
+    $stmt->execute([$visit_id, $user_branch_id]);
     $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
@@ -336,6 +344,7 @@ body {
 .header-badge.green { background: linear-gradient(135deg, #10B981, #059669); border-color: rgba(255,255,255,0.25); font-weight: 800; }
 .header-badge.purple { background: linear-gradient(135deg, #7C3AED, #A78BFA); border-color: rgba(255,255,255,0.25); font-weight: 800; }
 .header-badge.cyan { background: linear-gradient(135deg, #0891B2, #22D3EE); border-color: rgba(255,255,255,0.25); font-weight: 800; }
+.header-badge.audit-tag { background: linear-gradient(135deg, #3B82F6, #2563EB); font-weight: 800; }
 
 .btn-header { 
     background: rgba(255,255,255,0.15); 
@@ -370,9 +379,7 @@ body {
     margin-bottom: 20px; 
 }
 
-/* ============================================================
-   COLLAPSIBLE CARD (Toggle)
-   ============================================================ */
+/* COLLAPSIBLE CARD (Toggle) */
 .collapsible-card { 
     background: var(--bg-card); 
     border-radius: var(--radius-lg); 
@@ -431,7 +438,6 @@ body {
 .collapsible-body { animation: fadeIn 0.3s ease; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
 
-/* Header right group with scroll buttons */
 .header-right-group {
     display: flex;
     align-items: center;
@@ -471,9 +477,7 @@ body {
     display: inline-flex; align-items: center; gap: 8px;
 }
 
-/* ============================================================
-   SUMMARY GRID - ZOTE KWENYE ROW MOJA
-   ============================================================ */
+/* SUMMARY GRID */
 .summary-grid-single-row {
     display: grid;
     grid-template-columns: repeat(6, 1fr);
@@ -533,9 +537,7 @@ body {
     .summary-grid-single-row { grid-template-columns: repeat(2, 1fr); }
 }
 
-/* ============================================================
-   INFO GRID
-   ============================================================ */
+/* INFO GRID */
 .info-grid { 
     display: grid; 
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); 
@@ -621,9 +623,7 @@ body {
 .patient-stat-label { font-size: 0.58rem; color: rgba(255,255,255,0.8); text-transform: uppercase; font-weight: 800; margin-bottom: 3px; }
 .patient-stat-value { font-size: 1rem; font-weight: 900; color: white; font-family: var(--font-mono); }
 
-/* ============================================================
-   ITEM CATEGORIES
-   ============================================================ */
+/* ITEM CATEGORIES */
 .item-category-block { border-bottom: 1px solid var(--border-color); }
 .item-category-block:last-child { border-bottom: none; }
 
@@ -679,9 +679,7 @@ body {
 }
 .category-scroll-btn:hover { background: rgba(0,0,0,0.3); transform: translateY(-2px); }
 
-/* ============================================================
-   TABLES
-   ============================================================ */
+/* TABLES */
 .items-table-wrapper { 
     overflow-x: auto; 
     scroll-behavior: smooth; 
@@ -793,9 +791,7 @@ body {
 .btn-action.view { background: rgba(11, 94, 215, 0.12); color: #0B5ED7; }
 .btn-action.view:hover { background: #0B5ED7; color: white; }
 
-/* ============================================================
-   PARTIAL PAYMENTS (BILL GROUP)
-   ============================================================ */
+/* PARTIAL PAYMENTS (BILL GROUP) */
 .partial-payments-badge {
     display: inline-flex;
     align-items: center;
@@ -919,11 +915,9 @@ body {
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-shield-alt"></i>
-                Visit Details (AUDIT V9)
-                <span style="background:rgba(255,255,255,0.25);padding:3px 12px;border-radius:20px;font-size:0.65rem;font-weight:800;">
-                    <i class="fas fa-lock"></i> READ-ONLY
-                </span>
+                <i class="fas fa-stethoscope"></i>
+                Visit Details
+                <span class="header-badge audit-tag"><i class="fas fa-shield-alt"></i> AUDIT</span>
             </h1>
             <p class="page-subtitle">
                 <span class="header-badge cyan"><i class="fas fa-hashtag"></i> <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span>
@@ -933,24 +927,16 @@ body {
                 <?php endif; ?>
                 <span class="header-badge green"><i class="fas fa-info-circle"></i> <?= htmlspecialchars(strtoupper($visit['status'] ?? 'N/A')) ?></span>
                 <span class="header-badge purple"><i class="fas fa-money-bill-wave"></i> <?= $currency ?> <?= number_format($total_billed, 0) ?></span>
+                <span class="header-badge"><i class="fas fa-store-alt"></i> <?= htmlspecialchars($visit['branch_name'] ?? $user_branch_name) ?></span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <button onclick="window.print()" class="btn-header success">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="dashboard.php?branch=<?= $selected_branch_id ?>" class="btn-header audit">
+            <a href="dashboard.php" class="btn-header audit">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
-        </div>
-    </div>
-
-    <!-- READ-ONLY NOTICE -->
-    <div style="background:linear-gradient(135deg, #EDE9FE, #DDD6FE);border:2px solid #C4B5FD;border-radius:var(--radius-md);padding:14px 20px;margin-bottom:20px;display:flex;align-items:center;gap:12px;">
-        <i class="fas fa-shield-alt" style="font-size:1.5rem;color:#7C3AED;"></i>
-        <div>
-            <strong style="color:#5B21B6;font-size:0.85rem;display:block;margin-bottom:2px;">AUDIT MODE — READ-ONLY ACCESS</strong>
-            <span style="color:#6D28D9;font-size:0.72rem;font-weight:600;">You can view all records but cannot edit or delete any data.</span>
         </div>
     </div>
 
@@ -1176,7 +1162,7 @@ body {
                                 <span class="status-badge <?= $status_class ?>"><i class="fas <?= $status_icon ?>"></i> <?= strtoupper($item_status) ?></span>
                             </td>
                             <td class="item-actions-cell">
-                                <a href="view_bill_item.php?id=<?= $item['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-action view" title="View"><i class="fas fa-eye"></i></a>
+                                <a href="view_bill_item.php?id=<?= $item['id'] ?>" class="btn-action view" title="View"><i class="fas fa-eye"></i></a>
                             </td>
                         </tr>
                         <?php endforeach; ?>
@@ -1203,7 +1189,7 @@ body {
         </div>
         <?php endif; ?>
         
-        <!-- ✅ SUMMARY - ZOTE KWENYE ROW MOJA -->
+        <!-- SUMMARY - ZOTE KWENYE ROW MOJA -->
         <?php if ($has_any_items): ?>
         <div class="summary-grid-single-row">
             <div class="summary-box-compact">
@@ -1236,9 +1222,7 @@ body {
         </div>
     </details>
 
-    <!-- ============================================================
-         PAYMENTS (TOGGLE) - GROUPED BY BILL, PARTIAL PAYMENTS
-         ============================================================ -->
+    <!-- PAYMENTS (TOGGLE) - GROUPED BY BILL, PARTIAL PAYMENTS -->
     <?php if (!empty($payments)): ?>
     <details class="collapsible-card green" open>
         <summary>
@@ -1341,7 +1325,7 @@ body {
                             <td style="font-size:0.7rem;"><?= !empty($pay['received_at']) ? date('d M Y, H:i', strtotime($pay['received_at'])) : '—' ?></td>
                             <td class="item-price-cell final" style="font-size:0.85rem;"><?= $currency ?> <?= number_format((float)($pay['amount'] ?? 0), 0) ?></td>
                             <td class="item-actions-cell">
-                                <a href="view_payment.php?id=<?= $pay['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-action view" title="View"><i class="fas fa-eye"></i></a>
+                                <a href="view_payment.php?id=<?= $pay['id'] ?>" class="btn-action view" title="View"><i class="fas fa-eye"></i></a>
                             </td>
                         </tr>
                         <?php endforeach; ?>
@@ -1389,9 +1373,7 @@ body {
     </details>
     <?php endif; ?>
 
-    <!-- ============================================================
-         PRESCRIPTIONS (TOGGLE) - Bila View/Edit buttons
-         ============================================================ -->
+    <!-- PRESCRIPTIONS (TOGGLE) - Bila View/Edit buttons -->
     <?php if (!empty($prescriptions)): ?>
     <details class="collapsible-card purple" open>
         <summary>
@@ -1438,13 +1420,9 @@ body {
     </details>
     <?php endif; ?>
 
-    <!-- ============================================================
-         BILLS TABLE — IMETOLEWA KABISA
-         ============================================================ -->
-
     <div style="text-align:center;padding:20px;font-size:0.72rem;color:var(--text-secondary);font-family:var(--font-mono);border-top:1px solid var(--border-color);">
-        <i class="fas fa-shield-alt" style="color:#7C3AED;"></i>
-        <strong>Audit Mode</strong> — Read-only. Data displayed for review only.
+        <i class="fas fa-store-alt" style="color:#0B5ED7;"></i>
+        <strong><?= htmlspecialchars($visit['branch_name'] ?? $user_branch_name) ?></strong>
         <span style="margin:0 8px;">|</span>
         <span id="footerTime"><?= date('H:i:s') ?></span>
     </div>
@@ -1466,14 +1444,12 @@ setInterval(function() {
     if (el) el.textContent = timeStr;
 }, 1000);
 
-console.log('%c🔍 AUDIT - View Visit V9 (FINAL)', 'font-size:16px; font-weight:bold; color:#7C3AED;');
+console.log('%c🔍 AUDIT - View Visit V10 (BRANCH LOCKED CLEAN)', 'font-size:16px; font-weight:bold; color:#7C3AED;');
+console.log('%c✅ AUDIT ANAONA BRANCH YAKE TU', 'font-size:12px; color:#34D399; font-weight:bold;');
+console.log('%c✅ READ-ONLY notice na AUDIT MODE notice zimeondolewa', 'font-size:12px; color:#34D399; font-weight:bold;');
+console.log('%c👥 Branch: <?= htmlspecialchars($visit['branch_name'] ?? $user_branch_name) ?>', 'font-size:12px; color:#0B5ED7; font-weight:bold;');
 console.log('%c👤 Patient: <?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?>', 'font-size:12px; color:#059669; font-weight:bold;');
 console.log('%c💰 Billed: <?= $currency ?> <?= number_format($total_billed, 0) ?> | Paid: <?= $currency ?> <?= number_format($total_paid, 0) ?>', 'font-size:12px; color:#7C3AED; font-weight:bold;');
-console.log('%c✅ V9: Bills table IMETOLEWA', 'font-size:12px; color:#10B981; font-weight:bold;');
-console.log('%c✅ V9: Payments - grouped by bill, partial payments', 'font-size:12px; color:#10B981; font-weight:bold;');
-console.log('%c✅ V9: Summary cards ZOTE kwenye ROW MOJA', 'font-size:12px; color:#10B981; font-weight:bold;');
-console.log('%c✅ V9: Prescriptions - buttons zimetolewa', 'font-size:12px; color:#10B981; font-weight:bold;');
-console.log('%c✅ V9: Tables zinajifunga/kufunguka (toggle)', 'font-size:12px; color:#10B981; font-weight:bold;');
 </script>
 
 </body>

@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/audit/view_otc_sale.php
 // AUDIT - VIEW OTC SALE DETAILS (V1 - VIEW ONLY)
-// ✅ Same as admin/audit/view_otc.php
+// ✅ Branch ya aliye login TU
 // ✅ NO Delete Item button
 // ✅ NO Delete Whole Sale button
 // ✅ NO Edit button
@@ -39,14 +39,17 @@ if ($_SESSION['role'] !== 'audit') {
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Audit User';
 $user_role = $_SESSION['role'] ?? 'audit';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $sale_id = (int)($_GET['id'] ?? 0);
-$selected_branch_id = $_GET['branch'] ?? 'all';
+
+// ✅ AUDIT anaona branch yake TU
+$selected_branch_id = (int)$user_branch_id;
 
 if ($sale_id <= 0) {
-    header('Location: other_services.php?tab=otc_bills&branch=' . urlencode($selected_branch_id));
+    header('Location: other_services.php?tab=otc_bills');
     exit;
 }
 
@@ -67,7 +70,7 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// GET OTC SALE DETAILS
+// ✅ GET OTC SALE DETAILS - LAZIMA branch ya mtumiaji
 // ================================================================
 $sale = null;
 try {
@@ -80,17 +83,18 @@ try {
     FROM otc_sales os
     LEFT JOIN users u ON os.sold_by = u.id
     LEFT JOIN branches b ON os.branch_id = b.id
-    WHERE os.id = ?";
+    WHERE os.id = ? AND os.branch_id = ?";
     
     $stmt = $db->prepare($sql);
-    $stmt->execute([$sale_id]);
+    $stmt->execute([$sale_id, $user_branch_id]);
     $sale = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     error_log("OTC fetch error: " . $e->getMessage());
 }
 
 if (!$sale) {
-    header('Location: other_services.php?tab=otc_bills&branch=' . urlencode($selected_branch_id));
+    // ✅ Sale haipo kwenye branch yake - redirect
+    header('Location: other_services.php?tab=otc_bills');
     exit;
 }
 
@@ -452,7 +456,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             <button onclick="window.print()" class="btn-header">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="other_services.php?tab=otc_bills&branch=<?= $selected_branch_id ?>" class="btn-header">
+            <a href="other_services.php?tab=otc_bills" class="btn-header">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
@@ -770,7 +774,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             <button onclick="window.print()" class="btn btn-secondary">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="other_services.php?tab=otc_bills&branch=<?= $selected_branch_id ?>" class="btn btn-primary">
+            <a href="other_services.php?tab=otc_bills" class="btn btn-primary">
                 <i class="fas fa-arrow-left"></i> Back to List
             </a>
         </div>
@@ -807,7 +811,7 @@ document.addEventListener('keydown', function(e) {
 });
 
 console.log('%c🔍 Audit - View OTC Sale (VIEW ONLY)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Same as admin/audit/view_otc.php', 'font-size:13px; color:#34D399;');
+console.log('%c✅ Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#10B981; font-weight:bold;');
 console.log('%c❌ NO Delete Item button', 'font-size:13px; color:#DC2626; font-weight:bold;');
 console.log('%c❌ NO Delete Whole Sale button', 'font-size:13px; color:#DC2626; font-weight:bold;');
 console.log('%c❌ NO Edit button', 'font-size:13px; color:#DC2626; font-weight:bold;');

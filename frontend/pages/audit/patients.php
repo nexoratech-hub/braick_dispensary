@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/audit/patients.php
 // AUDIT - PATIENTS REPORT (V2 - VIEW + EDIT ONLY)
-// ✅ Allow both admin and audit roles
+// ✅ Branch ya aliye login TU
 // ✅ View + Edit buttons (NO DELETE - audit haruhusiwi)
 // ✅ Buttons zenye labels (sawa na admin)
 // ✅ Path sahihi kwa pages/audit/ directory
@@ -13,26 +13,33 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ✅ ALLOW BOTH admin AND audit
-$allowed_roles = ['admin', 'audit'];
-
-if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || !in_array($_SESSION['role'], $allowed_roles)) {
-    header('Location: /dispensary_system/frontend/pages/login.php');
+// ✅ AUDIT ROLE TU
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role'] !== 'audit') {
+    $role = $_SESSION['role'] ?? '';
+    switch ($role) {
+        case 'admin': header('Location: /dispensary_system/frontend/pages/admin/dashboard.php'); break;
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: /dispensary_system/frontend/pages/cashier/dashboard.php'); break;
+        case 'reception': header('Location: /dispensary_system/frontend/pages/reception/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
     exit;
 }
 
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Audit User';
 $user_role = $_SESSION['role'] ?? 'audit';
-$profile_pic = $_SESSION['profile_pic'] ?? '';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$selected_branch_id = $_GET['branch'] ?? 'all';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ✅ Determine base path
-$is_admin = ($user_role === 'admin');
-$base_path = $is_admin 
-    ? '/dispensary_system/frontend/pages/admin/audit' 
-    : '/dispensary_system/frontend/pages/audit';
+// ✅ AUDIT anaona branch yake TU
+$selected_branch_id = (int)$user_branch_id;
+
+// ✅ Base path (audit only)
+$base_path = '/dispensary_system/frontend/pages/audit';
 
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -48,12 +55,9 @@ $gender_filter = $_GET['gender'] ?? 'all';
 $date_from = $_GET['date_from'] ?? date('Y-m-01');
 $date_to = $_GET['date_to'] ?? date('Y-m-d');
 
-$branch_cond = "";
-$branch_params = [];
-if ($selected_branch_id !== 'all') {
-    $branch_cond = " AND p.branch_id = ?";
-    $branch_params[] = (int)$selected_branch_id;
-}
+// ✅ LAZIMA branch ya mtumiaji tu
+$branch_cond = " AND p.branch_id = ?";
+$branch_params = [(int)$user_branch_id];
 
 $search_cond = "";
 $search_params = [];
@@ -71,7 +75,7 @@ if ($gender_filter !== 'all') {
 
 $date_params = [$date_from, $date_to];
 
-// STATS
+// STATS - ✅ branch ya mtumiaji tu
 $stats = ['total' => 0, 'today' => 0, 'period' => 0, 'with_visits' => 0];
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as c FROM patients p WHERE 1=1 $branch_cond");
@@ -87,7 +91,7 @@ try {
     $stats['period'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['c'] ?? 0);
 } catch (Exception $e) {}
 
-// GENDER STATS
+// GENDER STATS - ✅ branch ya mtumiaji tu
 $male_count = 0;
 $female_count = 0;
 try {
@@ -100,13 +104,13 @@ try {
     $female_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['c'] ?? 0);
 } catch (Exception $e) {}
 
-// PATIENTS
+// PATIENTS - ✅ branch ya mtumiaji tu
 $patients = [];
 try {
     $sql = "SELECT p.*, 
-        (SELECT COUNT(*) FROM visits v WHERE v.patient_id = p.id) as total_visits,
-        (SELECT COALESCE(SUM(b.total_amount), 0) FROM bills b WHERE b.patient_id = p.id AND b.status = 'paid') as total_spent,
-        (SELECT MAX(v2.visit_date) FROM visits v2 WHERE v2.patient_id = p.id) as last_visit
+        (SELECT COUNT(*) FROM visits v WHERE v.patient_id = p.id AND v.branch_id = p.branch_id) as total_visits,
+        (SELECT COALESCE(SUM(b.total_amount), 0) FROM bills b WHERE b.patient_id = p.id AND b.status = 'paid' AND b.branch_id = p.branch_id) as total_spent,
+        (SELECT MAX(v2.visit_date) FROM visits v2 WHERE v2.patient_id = p.id AND v2.branch_id = p.branch_id) as last_visit
         FROM patients p
         WHERE 1=1 $branch_cond $search_cond $gender_cond
         ORDER BY p.created_at DESC LIMIT 100";
@@ -829,9 +833,7 @@ html, body {
     margin-right: 2px;
 }
 
-/* ================================================================
-   ✅ V2: ACTION BUTTONS - VIEW + EDIT (NO DELETE)
-   ================================================================ */
+/* ACTION BUTTONS - VIEW + EDIT (NO DELETE) */
 .action-buttons {
     display: flex;
     gap: 6px;
@@ -1016,18 +1018,14 @@ mark.search-highlight {
             <h1 class="page-title">
                 <i class="fas fa-user-injured"></i>
                 Patients Report
-                <?php if ($is_admin): ?>
-                    <span class="role-tag"><i class="fas fa-crown"></i> ADMIN</span>
-                <?php else: ?>
-                    <span class="role-tag audit-role"><i class="fas fa-shield-alt"></i> AUDIT</span>
-                <?php endif; ?>
+                <span class="role-tag audit-role"><i class="fas fa-shield-alt"></i> AUDIT</span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-users"></i>
                 Patient Demographics & Activity
                 <span class="branch-tag">
                     <i class="fas fa-store-alt"></i> 
-                    <?= $selected_branch_id === 'all' ? 'All Branches' : htmlspecialchars($user_branch_name) ?>
+                    <?= htmlspecialchars($user_branch_name) ?>
                 </span>
                 <span class="branch-tag">
                     <i class="fas fa-calendar"></i> <?= date('d M Y') ?>
@@ -1035,7 +1033,7 @@ mark.search-highlight {
             </p>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="<?= $base_path ?>/dashboard.php?branch=<?= $selected_branch_id ?>" 
+            <a href="<?= $base_path ?>/dashboard.php" 
                class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
@@ -1048,7 +1046,6 @@ mark.search-highlight {
     <!-- FILTERS -->
     <div class="filter-card">
         <form method="GET" class="filter-form">
-            <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
             
             <div class="filter-group">
                 <label><i class="fas fa-search"></i> Search Patient</label>
@@ -1079,7 +1076,7 @@ mark.search-highlight {
                 <i class="fas fa-filter"></i> Filter
             </button>
             
-            <a href="?branch=<?= $selected_branch_id ?>" class="filter-btn-secondary">
+            <a href="?" class="filter-btn-secondary">
                 <i class="fas fa-redo"></i> Reset
             </a>
         </form>
@@ -1260,7 +1257,7 @@ mark.search-highlight {
                                 <td>
                                     <div class="action-buttons">
                                         <!-- ✅ VIEW Button -->
-                                        <a href="<?= $base_path ?>/patient_details.php?id=<?= $p['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                        <a href="<?= $base_path ?>/patient_details.php?id=<?= $p['id'] ?>" 
                                            class="btn-action view" 
                                            title="View Patient Details"
                                            target="_blank">
@@ -1269,7 +1266,7 @@ mark.search-highlight {
                                         </a>
                                         
                                         <!-- ✅ EDIT Button -->
-                                        <a href="<?= $base_path ?>/patient_edit.php?id=<?= $p['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                        <a href="<?= $base_path ?>/patient_edit.php?id=<?= $p['id'] ?>" 
                                            class="btn-action edit" 
                                            title="Edit Patient">
                                             <i class="fas fa-edit"></i>
@@ -1446,8 +1443,8 @@ document.addEventListener('keydown', function(e) {
 
 console.log('%c📋 Audit Patients Report V2', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
 console.log('%c✅ Role: <?= $user_role ?>', 'font-size:12px; color:#34D399;');
+console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#10B981; font-weight:bold;');
 console.log('%c✅ View + Edit buttons (NO DELETE)', 'font-size:12px; color:#34D399;');
-console.log('%c✅ Buttons zenye labels + icons', 'font-size:12px; color:#34D399;');
 console.log('%c♂ Male: <?= $male_count ?> | ♀ Female: <?= $female_count ?>', 'font-size:12px; color:#3B82F6;');
 </script>
 

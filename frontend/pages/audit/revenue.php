@@ -1,19 +1,16 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/revenue.php
-// AUDIT ROLE - REVENUE REPORT (V20 - FINAL - VIEW ONLY)
-// ✅ V20 FIX: PRESCRIPTION CARD = GROSS PEKEE (bila discount, bila premium)
-// ✅ AUDIT role only - VIEW ONLY (no Delete/Edit)
-// ✅ 8 CARDS TU (zile za awali) - Summary cards zimeondolewa
+// AUDIT ROLE - REVENUE REPORT (BRANCH LOCKED)
+// ✅ Inaonyesha data za branch ya mtumiaji aliye login TU
+// ✅ Jina la mtumiaji aliye login linaonekana kwenye header
+// ✅ PRESCRIPTION CARD = GROSS PEKEE (bila discount, bila premium)
+// ✅ AUDIT role only - no Delete/Edit
+// ✅ 8 CARDS TU - Summary cards
 // ✅ Discount & Premium = CARD MOJA yenye width kubwa (grid 6 cols)
-// ✅ Design inafanana na Audit Dashboard (compact cards)
 // ✅ Patient Group Cards with BLUE BORDER
-// ✅ Patient #N / Total badge (haifichiwi)
-// ✅ Patient Footer: END OF [NAME]
 // ✅ Visit Header 3-Row (info + DP cards + diagnosis)
 // ✅ OTC Sales as CARD per Sale
-// ✅ OTC Header: Sale ID, Customer, Discount, Premium, Grand Total, View, <>
-// ✅ OTC Items: Item Name, Qty, Unit Price, Total, Sold By, Payment, Date
 // ✅ Expenses: scroll arrows kwenye header
 // ✅ Timezone: Africa/Dar_es_Salaam
 // ================================================================
@@ -52,7 +49,10 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-$selected_branch_id = $_GET['branch'] ?? 'all';
+// ================================================================
+// ✅ LAZIMISHA branch ya mtumiaji aliye login TU
+// ================================================================
+$selected_branch_id = (int)$user_branch_id;
 
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -79,19 +79,15 @@ try {
     if ($row && !empty($row['setting_value'])) $currency = $row['setting_value'];
 } catch (Exception $e) {}
 
-// BRANCH
-$branch_name_display = 'All Branches';
-if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+// ================================================================
+// ✅ BRANCH - LAZIMISHA branch ya mtumiaji aliye login TU
+// ================================================================
+$branch_name_display = $user_branch_name;
+try {
     $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
-    $stmt->execute([(int)$selected_branch_id]);
+    $stmt->execute([$selected_branch_id]);
     $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($branch_data) $branch_name_display = $branch_data['name'];
-}
-
-$branches = [];
-try {
-    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
 // FILTERS
@@ -178,18 +174,17 @@ if ($payment_method !== 'all') {
     $pay_params = [$payment_method];
 }
 
-$branch_cond_p = ""; $branch_cond_o = ""; $branch_cond_e = ""; $branch_cond_bi = "";
-$branch_params_p = []; $branch_params_o = []; $branch_params_e = []; $branch_params_bi = [];
-if ($selected_branch_id !== 'all') {
-    $branch_cond_p = " AND p.branch_id = ?";
-    $branch_cond_o = " AND o.branch_id = ?";
-    $branch_cond_e = " AND e.branch_id = ?";
-    $branch_cond_bi = " AND bi.branch_id = ?";
-    $branch_params_p = [(int)$selected_branch_id];
-    $branch_params_o = [(int)$selected_branch_id];
-    $branch_params_e = [(int)$selected_branch_id];
-    $branch_params_bi = [(int)$selected_branch_id];
-}
+// ================================================================
+// ✅ BRANCH CONDITIONS - KILA KITU KINATUMIA BRANCH YA MTUMIAJI
+// ================================================================
+$branch_cond_p = " AND p.branch_id = ?";
+$branch_cond_o = " AND o.branch_id = ?";
+$branch_cond_e = " AND e.branch_id = ?";
+$branch_cond_bi = " AND bi.branch_id = ?";
+$branch_params_p = [$selected_branch_id];
+$branch_params_o = [$selected_branch_id];
+$branch_params_e = [$selected_branch_id];
+$branch_params_bi = [$selected_branch_id];
 
 // PATIENT PAYMENTS
 $patient_bills_revenue = 0; $patient_bills_count = 0;
@@ -296,12 +291,12 @@ $equipment_revenue = $breakdown_data['equipment']['revenue'];
 $equipment_count = $breakdown_data['equipment']['count'];
 
 // ================================================================
-// ✅ V20 FIX: PRESCRIPTION = GROSS PEKEE (bila discount, bila premium)
+// ✅ PRESCRIPTION = GROSS PEKEE (bila discount, bila premium)
 // ================================================================
-$prescription_gross = $medication_revenue_raw;   // GROSS (total_price bila discount)
+$prescription_gross = $medication_revenue_raw;
 $prescription_discount = 0;
 $prescription_premium = 0;
-$prescription_revenue = $prescription_gross;     // GROSS pekee
+$prescription_revenue = $prescription_gross;
 $prescription_count = $medication_count;
 
 $medication_revenue = $medication_revenue_raw;
@@ -309,7 +304,6 @@ $medication_revenue = $medication_revenue_raw;
 $clinical_services_revenue = $consultation_revenue + $procedure_revenue + $equipment_revenue;
 $clinical_services_count = $consultation_count + $procedure_count + $equipment_count;
 
-// Breakdown Total = GROSS (bila discount, bila premium)
 $breakdown_total_raw = $consultation_revenue + $lab_revenue + $procedure_revenue 
                      + $prescription_gross + $registration_revenue + $equipment_revenue;
 
@@ -350,17 +344,13 @@ $consultation_revenue = roundTo50($consultation_revenue);
 $lab_revenue = roundTo50($lab_revenue);
 $procedure_revenue = roundTo50($procedure_revenue);
 $prescription_gross = roundTo50($prescription_gross);
-$prescription_revenue = roundTo50($prescription_gross);   // ✅ V20: = GROSS
+$prescription_revenue = roundTo50($prescription_gross);
 $medication_revenue = roundTo50($medication_revenue_raw);
 $registration_revenue = roundTo50($registration_revenue);
 $equipment_revenue = roundTo50($equipment_revenue);
 $clinical_services_revenue = roundTo50($clinical_services_revenue);
 
 $breakdown_total = roundTo50($breakdown_total_raw);
-
-// Verification: Patient Payments = Breakdown Total + Premium - Discount
-$verification_total = $breakdown_total + $patient_premiums - $patient_discounts;
-$verification_match = (abs($verification_total - $patient_bills_revenue_rounded) < 1);
 
 // OTC SALES LIST - WITH ITEMS
 $otc_sales_list = [];
@@ -388,7 +378,6 @@ try {
     $stmt->execute(array_merge($branch_params_o, $date_params, $pay_params, $search_otc_params));
     $otc_sales_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Fetch items kwa kila sale
     if (!empty($otc_sales_list)) {
         $sale_ids = array_column($otc_sales_list, 'sale_id');
         $placeholders = implode(',', array_fill(0, count($sale_ids), '?'));
@@ -584,21 +573,19 @@ $monthly_labels = []; $monthly_patient = []; $monthly_otc = []; $monthly_expense
 for ($i = 11; $i >= 0; $i--) {
     $month = date('Y-m', strtotime("-$i months"));
     $monthly_labels[] = date('M Y', strtotime("-$i months"));
-    $p_p = [$month]; $p_o = [$month]; $p_e = [$month];
-    if ($selected_branch_id !== 'all') { $p_p[] = (int)$selected_branch_id; $p_o[] = (int)$selected_branch_id; $p_e[] = (int)$selected_branch_id; }
+    $p_p = [$month, $selected_branch_id]; 
+    $p_o = [$month, $selected_branch_id]; 
+    $p_e = [$month, $selected_branch_id];
 
-    $sql = "SELECT COALESCE(SUM(p.amount), 0) as total FROM payments p WHERE p.bill_id IS NOT NULL AND DATE_FORMAT(p.{$payments_date_col}, '%Y-%m') = ?";
-    if ($selected_branch_id !== 'all') $sql .= " AND p.branch_id = ?";
+    $sql = "SELECT COALESCE(SUM(p.amount), 0) as total FROM payments p WHERE p.bill_id IS NOT NULL AND DATE_FORMAT(p.{$payments_date_col}, '%Y-%m') = ? AND p.branch_id = ?";
     $stmt = $db->prepare($sql); $stmt->execute($p_p);
     $monthly_patient[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
-    $sql = "SELECT COALESCE(SUM(total_amount), 0) as total FROM otc_sales WHERE payment_status = 'paid' AND DATE_FORMAT({$otc_date_col}, '%Y-%m') = ?";
-    if ($selected_branch_id !== 'all') $sql .= " AND branch_id = ?";
+    $sql = "SELECT COALESCE(SUM(total_amount), 0) as total FROM otc_sales WHERE payment_status = 'paid' AND DATE_FORMAT({$otc_date_col}, '%Y-%m') = ? AND branch_id = ?";
     $stmt = $db->prepare($sql); $stmt->execute($p_o);
     $monthly_otc[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
-    $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE status = 'paid' AND DATE_FORMAT({$expenses_date_col}, '%Y-%m') = ?";
-    if ($selected_branch_id !== 'all') $sql .= " AND branch_id = ?";
+    $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE status = 'paid' AND DATE_FORMAT({$expenses_date_col}, '%Y-%m') = ? AND branch_id = ?";
     $stmt = $db->prepare($sql); $stmt->execute($p_e);
     $monthly_expenses[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 }
@@ -608,16 +595,14 @@ $daily_labels = []; $daily_patient = []; $daily_otc = [];
 for ($i = 29; $i >= 0; $i--) {
     $date = date('Y-m-d', strtotime("-$i days"));
     $daily_labels[] = date('d M', strtotime($date));
-    $p_p = [$date]; $p_o = [$date];
-    if ($selected_branch_id !== 'all') { $p_p[] = (int)$selected_branch_id; $p_o[] = (int)$selected_branch_id; }
+    $p_p = [$date, $selected_branch_id]; 
+    $p_o = [$date, $selected_branch_id];
 
-    $sql = "SELECT COALESCE(SUM(p.amount), 0) as total FROM payments p WHERE p.bill_id IS NOT NULL AND DATE(p.{$payments_date_col}) = ?";
-    if ($selected_branch_id !== 'all') $sql .= " AND p.branch_id = ?";
+    $sql = "SELECT COALESCE(SUM(p.amount), 0) as total FROM payments p WHERE p.bill_id IS NOT NULL AND DATE(p.{$payments_date_col}) = ? AND p.branch_id = ?";
     $stmt = $db->prepare($sql); $stmt->execute($p_p);
     $daily_patient[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
-    $sql = "SELECT COALESCE(SUM(total_amount), 0) as total FROM otc_sales WHERE payment_status = 'paid' AND DATE({$otc_date_col}) = ?";
-    if ($selected_branch_id !== 'all') $sql .= " AND branch_id = ?";
+    $sql = "SELECT COALESCE(SUM(total_amount), 0) as total FROM otc_sales WHERE payment_status = 'paid' AND DATE({$otc_date_col}) = ? AND branch_id = ?";
     $stmt = $db->prepare($sql); $stmt->execute($p_o);
     $daily_otc[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 }
@@ -682,6 +667,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .page-header .page-subtitle { color: rgba(255,255,255,0.9); font-size: 0.8rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; position: relative; z-index: 1; }
 .branch-tag { background: rgba(255,255,255,0.15); color: white; padding: 4px 12px; border-radius: var(--radius-full); font-size: 0.68rem; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.15); }
 .branch-tag.filter-tag { background: linear-gradient(135deg, #10B981, #059669); border-color: rgba(255,255,255,0.25); font-weight: 800; }
+.branch-tag.user-tag { background: linear-gradient(135deg, #FCD34D, #F59E0B); color: #78350F; font-weight: 800; box-shadow: 0 2px 8px rgba(252, 211, 77, 0.3); }
 .btn-header { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.25); padding: 10px 16px; border-radius: var(--radius-sm); font-weight: 700; font-size: 0.75rem; transition: all 0.25s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; backdrop-filter: blur(10px); position: relative; z-index: 1; cursor: pointer; }
 .btn-header:hover { background: rgba(255,255,255,0.3); transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.2); }
 
@@ -694,151 +680,24 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .quick-btn:hover { border-color: var(--primary); color: var(--primary); transform: translateY(-2px); }
 .quick-btn.active { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: white; border-color: transparent; box-shadow: 0 6px 16px rgba(11, 94, 215, 0.35); }
 
-/* STATS GRID - 8 CARDS */
-.stats-grid-8 {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 14px;
-    margin-bottom: 20px;
-}
+.stats-grid-8 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
 
-.stat-card {
-    background: var(--bg-card);
-    border-radius: 14px;
-    padding: 14px 16px;
-    border: 2px solid var(--border-color);
-    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: var(--shadow-sm);
-    position: relative;
-    overflow: hidden;
-    cursor: pointer;
-    min-height: 130px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-}
-
-.stat-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 3px;
-    transition: height 0.3s ease;
-}
-
+.stat-card { background: var(--bg-card); border-radius: 14px; padding: 14px 16px; border: 2px solid var(--border-color); transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: var(--shadow-sm); position: relative; overflow: hidden; cursor: pointer; min-height: 130px; display: flex; flex-direction: column; justify-content: space-between; }
+.stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; transition: height 0.3s ease; }
 .stat-card:hover::before { height: 5px; }
 .stat-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
-
-.stat-card .card-top {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 8px;
-}
-
-.stat-card .card-icon {
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1rem;
-    color: white;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.15);
-    transition: transform 0.3s ease;
-}
-
+.stat-card .card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+.stat-card .card-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1rem; color: white; box-shadow: 0 4px 10px rgba(0,0,0,0.15); transition: transform 0.3s ease; }
 .stat-card:hover .card-icon { transform: scale(1.1) rotate(-5deg); }
+.stat-card .card-badge { display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; border-radius: 8px; font-size: 0.55rem; font-weight: 800; text-transform: uppercase; white-space: nowrap; }
+.stat-card .card-label { font-size: 0.62rem; color: var(--text-secondary); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+.stat-card .card-value { font-size: 1.25rem; font-weight: 900; color: var(--text-primary); line-height: 1.1; letter-spacing: -0.03em; display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }
+.stat-card .card-value .currency { font-size: 0.72rem; font-weight: 700; color: var(--text-secondary); font-family: var(--font-primary); }
+.stat-card .card-footer { display: flex; align-items: center; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-color); font-size: 0.6rem; color: var(--text-secondary); font-weight: 600; flex-wrap: wrap; }
+.stat-card .card-footer .highlight { color: var(--text-primary); font-weight: 800; font-family: var(--font-mono); }
+.stat-card .card-footer .discount-badge { display: inline-flex; align-items: center; gap: 2px; padding: 1px 6px; border-radius: 6px; font-size: 0.55rem; font-weight: 800; font-family: var(--font-mono); background: var(--warning-bg); color: var(--warning); border: 1px solid rgba(217, 119, 6, 0.25); }
+.stat-card .card-footer .premium-badge { display: inline-flex; align-items: center; gap: 2px; padding: 1px 6px; border-radius: 6px; font-size: 0.55rem; font-weight: 800; font-family: var(--font-mono); background: var(--purple-bg); color: var(--purple); border: 1px solid rgba(124, 58, 237, 0.25); }
 
-.stat-card .card-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    padding: 2px 7px;
-    border-radius: 8px;
-    font-size: 0.55rem;
-    font-weight: 800;
-    text-transform: uppercase;
-    white-space: nowrap;
-}
-
-.stat-card .card-label {
-    font-size: 0.62rem;
-    color: var(--text-secondary);
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin-bottom: 4px;
-}
-
-.stat-card .card-value {
-    font-size: 1.25rem;
-    font-weight: 900;
-    color: var(--text-primary);
-    line-height: 1.1;
-    letter-spacing: -0.03em;
-    display: flex;
-    align-items: baseline;
-    gap: 4px;
-    flex-wrap: wrap;
-}
-
-.stat-card .card-value .currency {
-    font-size: 0.72rem;
-    font-weight: 700;
-    color: var(--text-secondary);
-    font-family: var(--font-primary);
-}
-
-.stat-card .card-footer {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px dashed var(--border-color);
-    font-size: 0.6rem;
-    color: var(--text-secondary);
-    font-weight: 600;
-    flex-wrap: wrap;
-}
-
-.stat-card .card-footer .highlight {
-    color: var(--text-primary);
-    font-weight: 800;
-    font-family: var(--font-mono);
-}
-
-.stat-card .card-footer .discount-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    padding: 1px 6px;
-    border-radius: 6px;
-    font-size: 0.55rem;
-    font-weight: 800;
-    font-family: var(--font-mono);
-    background: var(--warning-bg);
-    color: var(--warning);
-    border: 1px solid rgba(217, 119, 6, 0.25);
-}
-
-.stat-card .card-footer .premium-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    padding: 1px 6px;
-    border-radius: 6px;
-    font-size: 0.55rem;
-    font-weight: 800;
-    font-family: var(--font-mono);
-    background: var(--purple-bg);
-    color: var(--purple);
-    border: 1px solid rgba(124, 58, 237, 0.25);
-}
-
-/* CARD COLORS */
 .stat-card.revenue::before { background: linear-gradient(90deg, #0B5ED7, #3B82F6, #0B5ED7); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
 .stat-card.revenue:hover { border-color: #0B5ED7; }
 .stat-card.revenue .card-icon { background: linear-gradient(135deg, #0B5ED7, #3B82F6); }
@@ -897,139 +756,44 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
     100% { background-position: -200% 0; }
 }
 
-.pulse-dot {
-    display: inline-block;
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: currentColor;
-    margin-right: 3px;
-    animation: pulseDot 1.5s infinite;
-}
+.pulse-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; margin-right: 3px; animation: pulseDot 1.5s infinite; }
 
 @keyframes pulseDot {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
 }
 
-/* DISCOUNT & PREMIUM CARD MOJA YENYE WIDTH KUBWA */
-.discount-premium-card {
-    background: var(--bg-card);
-    border-radius: 14px;
-    padding: 18px 20px;
-    border: 2px solid var(--border-color);
-    margin-bottom: 20px;
-    box-shadow: var(--shadow-sm);
-    transition: all 0.3s ease;
-}
-
-.discount-premium-card:hover {
-    box-shadow: var(--shadow-md);
-    border-color: #0B5ED7;
-}
-
-.discount-premium-card .dp-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 14px;
-    padding-bottom: 10px;
-    border-bottom: 2px dashed var(--border-color);
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.discount-premium-card .dp-title {
-    font-size: 0.95rem;
-    font-weight: 800;
-    color: var(--text-primary);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
+.discount-premium-card { background: var(--bg-card); border-radius: 14px; padding: 18px 20px; border: 2px solid var(--border-color); margin-bottom: 20px; box-shadow: var(--shadow-sm); transition: all 0.3s ease; }
+.discount-premium-card:hover { box-shadow: var(--shadow-md); border-color: #0B5ED7; }
+.discount-premium-card .dp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 2px dashed var(--border-color); flex-wrap: wrap; gap: 8px; }
+.discount-premium-card .dp-title { font-size: 0.95rem; font-weight: 800; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
 .discount-premium-card .dp-title i { color: var(--primary); font-size: 1rem; }
-
-.dp-grid {
-    display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    gap: 12px;
-}
-
-.dp-item {
-    background: var(--bg-body);
-    border-radius: 10px;
-    padding: 12px 14px;
-    border: 2px solid var(--border-color);
-    transition: all 0.3s ease;
-    position: relative;
-    overflow: hidden;
-}
-
-.dp-item::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 3px;
-}
-
-.dp-item:hover {
-    transform: translateY(-3px);
-    box-shadow: var(--shadow-md);
-}
-
-.dp-item .dp-label {
-    font-size: 0.55rem;
-    color: var(--text-secondary);
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 6px;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    white-space: nowrap;
-}
-
-.dp-item .dp-value {
-    font-size: 1rem;
-    font-weight: 900;
-    font-family: var(--font-mono);
-    line-height: 1.1;
-}
-
-.dp-item .dp-sub {
-    font-size: 0.55rem;
-    color: var(--text-secondary);
-    margin-top: 4px;
-    font-weight: 600;
-}
-
+.dp-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+.dp-item { background: var(--bg-body); border-radius: 10px; padding: 12px 14px; border: 2px solid var(--border-color); transition: all 0.3s ease; position: relative; overflow: hidden; }
+.dp-item::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+.dp-item:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
+.dp-item .dp-label { font-size: 0.55rem; color: var(--text-secondary); font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.dp-item .dp-value { font-size: 1rem; font-weight: 900; font-family: var(--font-mono); line-height: 1.1; }
+.dp-item .dp-sub { font-size: 0.55rem; color: var(--text-secondary); margin-top: 4px; font-weight: 600; }
 .dp-item.pharmacy-disc::before { background: linear-gradient(90deg, #D97706, #F59E0B); }
 .dp-item.pharmacy-disc .dp-value { color: #D97706; }
 .dp-item.pharmacy-disc .dp-label i { color: #D97706; }
-
 .dp-item.cashier-disc::before { background: linear-gradient(90deg, #7C3AED, #A78BFA); }
 .dp-item.cashier-disc .dp-value { color: #7C3AED; }
 .dp-item.cashier-disc .dp-label i { color: #7C3AED; }
-
 .dp-item.total-disc::before { background: linear-gradient(90deg, #DC2626, #F87171); }
 .dp-item.total-disc .dp-value { color: #DC2626; }
 .dp-item.total-disc .dp-label i { color: #DC2626; }
-
 .dp-item.pharmacy-prem::before { background: linear-gradient(90deg, #059669, #34D399); }
 .dp-item.pharmacy-prem .dp-value { color: #059669; }
 .dp-item.pharmacy-prem .dp-label i { color: #059669; }
-
 .dp-item.cashier-prem::before { background: linear-gradient(90deg, #0891B2, #06B6D4); }
 .dp-item.cashier-prem .dp-value { color: #0891B2; }
 .dp-item.cashier-prem .dp-label i { color: #0891B2; }
-
 .dp-item.total-prem::before { background: linear-gradient(90deg, #0B5ED7, #3B82F6); }
 .dp-item.total-prem .dp-value { color: #0B5ED7; }
 .dp-item.total-prem .dp-label i { color: #0B5ED7; }
 
-/* CHARTS */
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
 .chart-card { background: var(--bg-card); border-radius: var(--radius-lg); border: 1px solid var(--border-color); overflow: hidden; box-shadow: var(--shadow-sm); }
 .chart-card .chart-header { padding: 14px 18px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: linear-gradient(135deg, var(--primary-bg), transparent); }
@@ -1037,7 +801,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .chart-card .chart-header .chart-title i { color: var(--primary); }
 .chart-card .chart-body { padding: 18px; height: 280px; position: relative; }
 
-/* PATIENT GROUP CARDS */
 .patient-group-card { background: var(--bg-card); border-radius: var(--radius-xl); border: 3px solid var(--primary); overflow: hidden; box-shadow: 0 8px 30px rgba(11, 94, 215, 0.15), 0 0 0 1px rgba(11, 94, 215, 0.1); margin-bottom: 36px; position: relative; transition: all 0.35s ease; }
 .patient-group-card::before { content: ''; position: absolute; inset: -8px; border-radius: calc(var(--radius-xl) + 8px); background: linear-gradient(135deg, rgba(11, 94, 215, 0.12), rgba(124, 58, 237, 0.08)); z-index: -1; pointer-events: none; }
 .patient-group-card:hover { border-color: var(--primary-light); box-shadow: 0 12px 40px rgba(11, 94, 215, 0.25), 0 0 0 1px rgba(11, 94, 215, 0.2); transform: translateY(-2px); }
@@ -1073,7 +836,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .patient-footer .footer-stat.success strong { color: var(--success); }
 .patient-footer .footer-stat.danger strong { color: var(--danger); }
 
-/* VISIT SECTION */
 .visit-section { border-top: 2px solid var(--border-color); padding: 0; }
 .visit-section:first-of-type { border-top: none; }
 
@@ -1131,7 +893,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .scroll-btn { width: 30px; height: 30px; border-radius: var(--radius-sm); border: 1.5px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 0.68rem; font-weight: 700; transition: all 0.25s; flex-shrink: 0; }
 .scroll-btn:hover { background: var(--primary); color: white; border-color: var(--primary); transform: translateY(-2px); }
 
-/* TABLES */
 .table-card { background: var(--bg-card); border-radius: var(--radius-lg); border: 1px solid var(--border-color); overflow: hidden; box-shadow: var(--shadow-sm); margin-bottom: 20px; }
 .table-card .table-header { padding: 14px 20px; background: linear-gradient(135deg, #0B5ED7, #0A4CA8); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
 .table-card .table-header.cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
@@ -1215,10 +976,8 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .category-group-row.other td .category-icon { background: linear-gradient(135deg, #94A3B8, #CBD5E1); }
 .category-group-row td .category-total { float: right; font-family: var(--font-mono); font-size: 0.82rem; color: var(--success); background: var(--success-bg); padding: 3px 10px; border-radius: 6px; font-weight: 900; }
 
-/* OTC SALE CARD */
 .otc-sale-card { background: var(--bg-card); border: 2px solid var(--cyan); border-radius: var(--radius-lg); margin: 16px; overflow: hidden; box-shadow: 0 4px 16px rgba(8, 145, 178, 0.1); transition: all 0.3s ease; }
 .otc-sale-card:hover { box-shadow: 0 8px 28px rgba(8, 145, 178, 0.2); border-color: var(--cyan-light); }
-
 .otc-sale-header { background: linear-gradient(135deg, #0891B2, #0E7490); padding: 14px 20px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; color: white; }
 .otc-header-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 1; min-width: 300px; }
 .otc-sale-id-badge { background: rgba(255,255,255,0.2); backdrop-filter: blur(10px); border: 1.5px solid rgba(255,255,255,0.4); color: white; padding: 6px 14px; border-radius: var(--radius-sm); font-size: 0.78rem; font-weight: 900; font-family: var(--font-mono); display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
@@ -1226,7 +985,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .otc-customer-name { font-size: 0.88rem; font-weight: 900; display: flex; align-items: center; gap: 6px; color: white; }
 .otc-customer-phone { font-size: 0.68rem; color: rgba(255,255,255,0.85); font-weight: 600; display: flex; align-items: center; gap: 4px; }
 .otc-header-middle { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-
 .otc-stat-chip { display: flex; flex-direction: column; gap: 2px; padding: 8px 14px; border-radius: var(--radius-md); min-width: 110px; border: 1.5px solid rgba(255,255,255,0.3); background: rgba(255,255,255,0.15); backdrop-filter: blur(10px); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
 .otc-stat-chip .stat-chip-label { font-size: 0.55rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: rgba(255,255,255,0.85); display: flex; align-items: center; gap: 4px; }
 .otc-stat-chip .stat-chip-value { font-size: 0.95rem; font-weight: 900; font-family: var(--font-mono); color: white; }
@@ -1236,28 +994,22 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .otc-stat-chip.premium .stat-chip-value { color: #EDE9FE; }
 .otc-stat-chip.grand-total { background: linear-gradient(135deg, rgba(5, 150, 105, 0.5), rgba(5, 150, 105, 0.3)); border-color: rgba(52, 211, 153, 0.7); box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3); }
 .otc-stat-chip.grand-total .stat-chip-value { color: #D1FAE5; font-size: 1.05rem; }
-
 .otc-header-right { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .otc-action-btn { padding: 8px 14px; border-radius: var(--radius-sm); font-weight: 800; font-size: 0.68rem; border: 1.5px solid rgba(255,255,255,0.3); cursor: pointer; transition: all 0.25s; display: inline-flex; align-items: center; gap: 5px; text-decoration: none; text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap; backdrop-filter: blur(10px); box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
 .otc-action-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.25); }
 .otc-action-btn.view { background: rgba(255,255,255,0.2); color: white; }
 .otc-action-btn.view:hover { background: rgba(255,255,255,0.35); }
-
 .otc-scroll-buttons { display: flex; gap: 5px; margin-left: 8px; }
 .otc-scroll-btn { width: 32px; height: 32px; border-radius: var(--radius-sm); border: 1.5px solid rgba(255,255,255,0.4); background: rgba(255,255,255,0.2); color: white; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 0.72rem; font-weight: 700; transition: all 0.25s; backdrop-filter: blur(10px); flex-shrink: 0; }
 .otc-scroll-btn:hover { background: rgba(255,255,255,0.4); transform: translateY(-2px); border-color: rgba(255,255,255,0.6); }
-
 .otc-items-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
 .otc-items-table thead th { text-align: left; padding: 10px 14px; font-weight: 800; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.08em; color: white; background: linear-gradient(135deg, #0891B2, #0E7490); white-space: nowrap; }
 .otc-items-table tbody td { padding: 10px 14px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); vertical-align: middle; font-weight: 500; }
 .otc-items-table tbody tr:hover td { background: var(--cyan-bg); }
 .otc-items-table tbody tr:last-child td { border-bottom: none; }
-
 .otc-item-name-cell { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--text-primary); }
 .otc-item-name-cell .item-icon { width: 26px; height: 26px; border-radius: 6px; background: linear-gradient(135deg, #0891B2, #22D3EE); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 0.7rem; flex-shrink: 0; }
-
 .otc-qty-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 36px; padding: 4px 10px; border-radius: 6px; background: var(--cyan-bg); color: var(--cyan); font-family: var(--font-mono); font-weight: 800; font-size: 0.78rem; border: 1.5px solid rgba(8, 145, 178, 0.3); }
-
 .otc-sale-footer { background: linear-gradient(135deg, rgba(8, 145, 178, 0.08), rgba(8, 145, 178, 0.03)); padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; border-top: 2px dashed var(--cyan); }
 .otc-footer-info { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
 .otc-footer-stat { display: inline-flex; align-items: center; gap: 5px; font-size: 0.65rem; font-weight: 700; color: var(--text-secondary); background: var(--bg-card); padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border-color); }
@@ -1321,8 +1073,12 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                 <span class="branch-tag" style="background:rgba(255,255,255,0.25);"><i class="fas fa-shield-alt"></i> AUDIT</span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-store-alt"></i>
-                <strong><?= htmlspecialchars($branch_name_display) ?></strong>
+                <i class="fas fa-user-circle"></i>
+                Karibu, <span class="branch-tag user-tag"><i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?></span>
+                <span class="branch-tag">
+                    <i class="fas fa-store-alt"></i>
+                    <strong><?= htmlspecialchars($branch_name_display) ?></strong>
+                </span>
                 <span class="branch-tag"><i class="fas fa-money-bill-wave"></i> <?= $currency ?> <?= number_format($total_revenue, 0) ?></span>
                 <span class="branch-tag"><i class="fas fa-receipt"></i> <?= number_format($total_transactions) ?> Payments</span>
                 <span class="branch-tag filter-tag"><i class="fas fa-filter"></i> <?= htmlspecialchars($date_label) ?></span>
@@ -1330,7 +1086,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <button onclick="window.print()" class="btn-header"><i class="fas fa-print"></i> Print</button>
-            <a href="dashboard.php?branch=<?= $selected_branch_id ?>" class="btn-header">
+            <a href="dashboard.php" class="btn-header">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
         </div>
@@ -1341,20 +1097,19 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
         <div class="filter-section">
             <div class="filter-section-title"><i class="fas fa-bolt"></i> Quick Filters</div>
             <div class="quick-filters">
-                <a href="?branch=<?= $selected_branch_id ?>&quick=today" class="quick-btn <?= $quick_filter === 'today' ? 'active' : '' ?>"><i class="fas fa-calendar-day"></i> Today</a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=yesterday" class="quick-btn <?= $quick_filter === 'yesterday' ? 'active' : '' ?>"><i class="fas fa-calendar-minus"></i> Yesterday</a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=1d" class="quick-btn <?= $quick_filter === '1d' ? 'active' : '' ?>"><i class="fas fa-clock"></i> 1D</a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=1w" class="quick-btn <?= $quick_filter === '1w' ? 'active' : '' ?>"><i class="fas fa-calendar-week"></i> 1W</a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=1m" class="quick-btn <?= $quick_filter === '1m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 1M</a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=3m" class="quick-btn <?= $quick_filter === '3m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 3M</a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=6m" class="quick-btn <?= $quick_filter === '6m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 6M</a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=1y" class="quick-btn <?= $quick_filter === '1y' ? 'active' : '' ?>"><i class="fas fa-calendar"></i> 1Y</a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=all" class="quick-btn <?= $quick_filter === 'all' ? 'active' : '' ?>"><i class="fas fa-infinity"></i> All</a>
-                <a href="?branch=<?= $selected_branch_id ?>&quick=custom&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="quick-btn <?= $quick_filter === 'custom' ? 'custom-active' : '' ?>"><i class="fas fa-calendar-check"></i> Custom</a>
+                <a href="?quick=today" class="quick-btn <?= $quick_filter === 'today' ? 'active' : '' ?>"><i class="fas fa-calendar-day"></i> Today</a>
+                <a href="?quick=yesterday" class="quick-btn <?= $quick_filter === 'yesterday' ? 'active' : '' ?>"><i class="fas fa-calendar-minus"></i> Yesterday</a>
+                <a href="?quick=1d" class="quick-btn <?= $quick_filter === '1d' ? 'active' : '' ?>"><i class="fas fa-clock"></i> 1D</a>
+                <a href="?quick=1w" class="quick-btn <?= $quick_filter === '1w' ? 'active' : '' ?>"><i class="fas fa-calendar-week"></i> 1W</a>
+                <a href="?quick=1m" class="quick-btn <?= $quick_filter === '1m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 1M</a>
+                <a href="?quick=3m" class="quick-btn <?= $quick_filter === '3m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 3M</a>
+                <a href="?quick=6m" class="quick-btn <?= $quick_filter === '6m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 6M</a>
+                <a href="?quick=1y" class="quick-btn <?= $quick_filter === '1y' ? 'active' : '' ?>"><i class="fas fa-calendar"></i> 1Y</a>
+                <a href="?quick=all" class="quick-btn <?= $quick_filter === 'all' ? 'active' : '' ?>"><i class="fas fa-infinity"></i> All</a>
+                <a href="?quick=custom&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="quick-btn <?= $quick_filter === 'custom' ? 'custom-active' : '' ?>"><i class="fas fa-calendar-check"></i> Custom</a>
             </div>
         </div>
         <form method="GET">
-            <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
             <input type="hidden" name="quick" value="<?= htmlspecialchars($quick_filter) ?>">
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;align-items:end;margin-top:12px;padding-top:14px;border-top:1.5px dashed var(--border-color);">
                 <?php if ($quick_filter === 'custom'): ?>
@@ -1377,12 +1132,12 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                     </select>
                 </div>
                 <button type="submit" style="padding:9px 18px;border-radius:8px;background:linear-gradient(135deg,var(--primary),var(--primary-dark));color:white;border:none;font-weight:700;font-size:0.78rem;cursor:pointer;height:38px;"><i class="fas fa-filter"></i> Apply</button>
-                <a href="?branch=<?= $selected_branch_id ?>" style="padding:9px 18px;border-radius:8px;background:transparent;color:var(--text-secondary);border:1.5px solid var(--border-color);font-weight:700;font-size:0.78rem;text-decoration:none;text-align:center;line-height:20px;"><i class="fas fa-redo"></i> Reset</a>
+                <a href="?" style="padding:9px 18px;border-radius:8px;background:transparent;color:var(--text-secondary);border:1.5px solid var(--border-color);font-weight:700;font-size:0.78rem;text-decoration:none;text-align:center;line-height:20px;"><i class="fas fa-redo"></i> Reset</a>
             </div>
         </form>
     </div>
 
-    <!-- ✅ 8 CARDS TU - COMPACT DESIGN -->
+    <!-- 8 CARDS -->
     <div class="stats-grid-8">
 
         <!-- CARD 1: TOTAL REVENUE -->
@@ -1429,7 +1184,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             </div>
         </div>
 
-        <!-- ✅ CARD 3: PRESCRIPTION (GROSS PEKEE) - V20 FIX -->
+        <!-- CARD 3: PRESCRIPTION (GROSS PEKEE) -->
         <div class="stat-card prescription">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-prescription"></i></div>
@@ -1554,7 +1309,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 
     </div>
 
-    <!-- ✅ DISCOUNT & PREMIUM - CARD MOJA YENYE WIDTH KUBWA -->
+    <!-- DISCOUNT & PREMIUM - CARD MOJA YENYE WIDTH KUBWA -->
     <div class="discount-premium-card">
         <div class="dp-header">
             <div class="dp-title">
@@ -1778,7 +1533,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                         <?php endif; ?>
                     </div>
                     <div class="visit-action-buttons">
-                        <a href="view_visit.php?id=<?= (int)$visit['visit_id'] ?>&branch=<?= $selected_branch_id ?>" class="visit-action-btn view">
+                        <a href="view_visit.php?id=<?= (int)$visit['visit_id'] ?>" class="visit-action-btn view">
                             <i class="fas fa-eye"></i> View
                         </a>
                     </div>
@@ -1993,7 +1748,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                 
                 <div class="otc-sale-card">
                     
-                    <!-- OTC SALE HEADER -->
                     <div class="otc-sale-header">
                         <div class="otc-header-left">
                             <span class="otc-sale-id-badge">
@@ -2042,7 +1796,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                         </div>
                         
                         <div class="otc-header-right">
-                            <a href="view_otc.php?id=<?= (int)$otc['sale_id'] ?>&branch=<?= $selected_branch_id ?>" class="otc-action-btn view" title="View OTC Sale">
+                            <a href="view_otc.php?id=<?= (int)$otc['sale_id'] ?>" class="otc-action-btn view" title="View OTC Sale">
                                 <i class="fas fa-eye"></i> View
                             </a>
                             <div class="otc-scroll-buttons">
@@ -2052,7 +1806,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                         </div>
                     </div>
                     
-                    <!-- OTC ITEMS TABLE -->
                     <div style="overflow-x:auto; scroll-behavior:smooth;" class="otc-items-wrapper">
                         <table class="otc-items-table" style="min-width:1100px;">
                             <thead>
@@ -2114,7 +1867,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                         </table>
                     </div>
                     
-                    <!-- OTC SALE FOOTER -->
                     <div class="otc-sale-footer">
                         <div class="otc-footer-info">
                             <span class="otc-footer-stat">
@@ -2320,7 +2072,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                             </td>
                             <td>
                                 <div class="action-buttons">
-                                    <a href="view_expense.php?id=<?= $exp['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-action view" title="View Expense"><i class="fas fa-eye"></i></a>
+                                    <a href="view_expense.php?id=<?= $exp['id'] ?>" class="btn-action view" title="View Expense"><i class="fas fa-eye"></i></a>
                                 </div>
                             </td>
                         </tr>
@@ -2454,8 +2206,10 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-console.log('%c📊 Revenue Report V20 - AUDIT (FINAL)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ V20 FIX: PRESCRIPTION CARD = GROSS PEKEE (bila discount, bila premium)', 'font-size:12px; color:#10B981; font-weight:bold;');
+console.log('%c📊 Revenue Report - BRANCH LOCKED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#F59E0B; font-weight:bold;');
+console.log('%c✅ Inaonyesha data za branch: <?= htmlspecialchars($branch_name_display) ?> (ID: <?= $selected_branch_id ?>)', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ PRESCRIPTION CARD = GROSS PEKEE (bila discount, bila premium)', 'font-size:12px; color:#10B981; font-weight:bold;');
 console.log('%c✅ AUDIT ROLE - VIEW ONLY (no Delete/Edit)', 'font-size:12px; color:#10B981; font-weight:bold;');
 console.log('%c✅ 8 CARDS TU - compact design', 'font-size:12px; color:#10B981; font-weight:bold;');
 console.log('%c✅ Discount & Premium = CARD MOJA yenye width kubwa (grid 6 cols)', 'font-size:12px; color:#10B981; font-weight:bold;');

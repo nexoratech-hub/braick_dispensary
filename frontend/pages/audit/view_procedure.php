@@ -1,11 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/view_procedure.php
-// AUDIT - VIEW PROCEDURE / EQUIPMENT DETAILS (VIEW ONLY)
+// AUDIT - VIEW PROCEDURE / EQUIPMENT DETAILS (V2 - CLEAN)
+// ✅ Branch ya aliye login TU
+// ✅ ONDOA VIEW ONLY notice na badges
 // ✅ Inatumia audit_header.php + audit_sidebar.php
 // ✅ AUDIT ROLE TU
-// ✅ HAKUNA Edit/Delete buttons - VIEW ONLY
-// ✅ Inaonyesha bill info, payments, activity logs
+// ✅ HAKUNA Edit/Delete buttons
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -21,9 +22,10 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Audit User';
 $user_role = $_SESSION['role'] ?? 'audit';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
-$is_audit = true; // Kila mtu hapa ni audit
+$is_audit = true;
 
 // ================================================================
 // PARAMETERS
@@ -31,10 +33,12 @@ $is_audit = true; // Kila mtu hapa ni audit
 $reference_id = (int)($_GET['id'] ?? 0);
 $bill_item_id = (int)($_GET['bill_item_id'] ?? 0);
 $item_type = $_GET['type'] ?? 'procedure';
-$selected_branch_id = $_GET['branch'] ?? 'all';
+
+// ✅ AUDIT anaona branch yake TU
+$selected_branch_id = (int)$user_branch_id;
 
 if ($reference_id <= 0 && $bill_item_id <= 0) {
-    header('Location: other_services.php?tab=procedures&branch=' . urlencode($selected_branch_id));
+    header('Location: other_services.php?tab=procedures');
     exit;
 }
 
@@ -46,9 +50,7 @@ try {
     die("Database connection error: " . $e->getMessage());
 }
 
-// ================================================================
 // CURRENCY
-// ================================================================
 $currency = 'TSh';
 try {
     $stmt = $db->query("SELECT setting_value FROM system_settings WHERE setting_key = 'currency'");
@@ -75,11 +77,10 @@ function logActivity($db, $user_id, $branch_id, $patient_id, $action, $details) 
 }
 
 // ================================================================
-// FETCH ITEM
+// ✅ FETCH ITEM - LAZIMA branch ya mtumiaji
 // ================================================================
 $item = null;
 try {
-    // Prefer bill_item_id
     if ($bill_item_id > 0) {
         $stmt = $db->prepare("
             SELECT bi.*,
@@ -123,14 +124,13 @@ try {
             LEFT JOIN branches br ON bi.branch_id = br.id
             LEFT JOIN procedures_catalog pc ON (bi.item_type = 'procedure' AND bi.reference_id = pc.id)
             LEFT JOIN medical_equipment me ON (bi.item_type = 'equipment' AND bi.reference_id = me.id)
-            WHERE bi.id = ?
+            WHERE bi.id = ? AND bi.branch_id = ?
             LIMIT 1
         ");
-        $stmt->execute([$bill_item_id]);
+        $stmt->execute([$bill_item_id, $user_branch_id]);
         $item = $stmt->fetch(PDO::FETCH_ASSOC);
     }
     
-    // Fallback: reference_id
     if (!$item && $reference_id > 0) {
         $stmt = $db->prepare("
             SELECT bi.*,
@@ -176,14 +176,14 @@ try {
             LEFT JOIN medical_equipment me ON (bi.item_type = 'equipment' AND bi.reference_id = me.id)
             WHERE bi.reference_id = ?
               AND bi.item_type IN ('procedure', 'equipment')
+              AND bi.branch_id = ?
             ORDER BY bi.id DESC
             LIMIT 1
         ");
-        $stmt->execute([$reference_id]);
+        $stmt->execute([$reference_id, $user_branch_id]);
         $item = $stmt->fetch(PDO::FETCH_ASSOC);
     }
     
-    // Final fallback: procedures table
     if (!$item && $reference_id > 0) {
         $stmt = $db->prepare("
             SELECT p.*,
@@ -221,10 +221,10 @@ try {
             LEFT JOIN users doc ON p.doctor_id = doc.id
             LEFT JOIN users rec ON v.receptionist_id = rec.id
             LEFT JOIN branches br ON p.branch_id = br.id
-            WHERE p.id = ?
+            WHERE p.id = ? AND p.branch_id = ?
             LIMIT 1
         ");
-        $stmt->execute([$reference_id]);
+        $stmt->execute([$reference_id, $user_branch_id]);
         $item = $stmt->fetch(PDO::FETCH_ASSOC);
     }
 } catch (Exception $e) {
@@ -232,8 +232,8 @@ try {
 }
 
 if (!$item) {
-    $_SESSION['error_message'] = "Procedure not found. ID: $reference_id, Bill Item ID: $bill_item_id";
-    header('Location: other_services.php?tab=procedures&branch=' . urlencode($selected_branch_id));
+    $_SESSION['error_message'] = "Procedure not found in your branch.";
+    header('Location: other_services.php?tab=procedures');
     exit;
 }
 
@@ -248,7 +248,7 @@ $item_id = $item['reference_id'] ?? $item['id'] ?? 0;
 $bill_item_row_id = $item['bill_item_row_id'] ?? 0;
 
 // ================================================================
-// FETCH PAYMENTS
+// ✅ FETCH PAYMENTS
 // ================================================================
 $payments = [];
 if (!empty($item['bill_id']) && ($item['bill_paid'] ?? 0) > 0) {
@@ -256,11 +256,12 @@ if (!empty($item['bill_id']) && ($item['bill_paid'] ?? 0) > 0) {
         $stmt = $db->prepare("
             SELECT p.*, u.full_name as received_by_name, u.role as received_by_role
             FROM payments p
+            INNER JOIN bills b ON p.bill_id = b.id
             LEFT JOIN users u ON p.received_by = u.id
-            WHERE p.bill_id = ?
+            WHERE p.bill_id = ? AND b.branch_id = ?
             ORDER BY p.received_at DESC
         ");
-        $stmt->execute([$item['bill_id']]);
+        $stmt->execute([$item['bill_id'], $user_branch_id]);
         $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
         error_log("Payments fetch error: " . $e->getMessage());
@@ -268,7 +269,7 @@ if (!empty($item['bill_id']) && ($item['bill_paid'] ?? 0) > 0) {
 }
 
 // ================================================================
-// FETCH AUDIT LOGS
+// ✅ FETCH AUDIT LOGS
 // ================================================================
 $audit_logs = [];
 try {
@@ -278,11 +279,12 @@ try {
         LEFT JOIN users u ON al.user_id = u.id
         LEFT JOIN branches b ON al.branch_id = b.id
         WHERE al.patient_id = ?
+          AND al.branch_id = ?
           AND al.action IN ('procedure_created', 'procedure_updated', 'procedure_deleted', 'bill_item_deleted')
         ORDER BY al.created_at DESC
         LIMIT 20
     ");
-    $stmt->execute([$item['patient_db_id'] ?? 0]);
+    $stmt->execute([$item['patient_db_id'] ?? 0, $user_branch_id]);
     $audit_logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     error_log("Audit fetch error: " . $e->getMessage());
@@ -409,30 +411,9 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .branch-tag.count-tag { background: linear-gradient(135deg, #10B981, #059669); font-weight: 700; }
 .branch-tag.cyan-tag { background: linear-gradient(135deg, #06B6D4, #0891B2); font-weight: 700; }
 .branch-tag.purple-tag { background: linear-gradient(135deg, #7C3AED, #6D28D9); font-weight: 700; }
-.branch-tag.view-only-tag { background: linear-gradient(135deg, #F59E0B, #D97706); font-weight: 800; }
 
 .btn-header { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.25); padding: 8px 14px; border-radius: 9px; font-weight: 600; font-size: 0.75rem; transition: all 0.3s ease; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; backdrop-filter: blur(4px); position: relative; z-index: 1; cursor: pointer; }
 .btn-header:hover { background: rgba(255,255,255,0.28); transform: translateY(-2px); color: white; }
-
-/* View Only Notice */
-.view-only-notice {
-    background: linear-gradient(135deg, var(--warning-bg), #FEF9E7);
-    border-left: 4px solid var(--warning);
-    border-radius: 10px; padding: 12px 18px; margin-bottom: 16px;
-    display: flex; align-items: center; gap: 12px;
-    font-size: 0.78rem; font-weight: 700; color: var(--warning);
-    box-shadow: var(--shadow-sm);
-}
-[data-theme="dark"] .view-only-notice { background: linear-gradient(135deg, #3A2A1A, #2D2015); color: #FBBF24; }
-.view-only-notice i { font-size: 1.15rem; flex-shrink: 0; }
-.view-only-notice .notice-text { flex: 1; line-height: 1.5; }
-.view-only-notice .notice-badge {
-    background: var(--warning); color: white;
-    padding: 4px 12px; border-radius: 8px;
-    font-size: 0.62rem; font-weight: 800;
-    text-transform: uppercase; letter-spacing: 0.05em;
-    white-space: nowrap;
-}
 
 .status-banner { border-radius: 14px; padding: 16px 22px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; position: relative; overflow: hidden; box-shadow: var(--shadow-md); }
 .status-banner.pending { background: linear-gradient(135deg, #D97706, #B45309); color: white; }
@@ -523,7 +504,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .audit-log-item .audit-meta { font-size: 0.68rem; color: var(--text-secondary); margin-top: 6px; display: flex; gap: 12px; flex-wrap: wrap; }
 .audit-log-item .audit-meta span { display: inline-flex; align-items: center; gap: 4px; }
 
-/* ✅ Action bar - VIEW ONLY (no edit/delete) */
 .action-bar { background: var(--bg-card); border-radius: 14px; border: 2px solid var(--border-color); padding: 16px 20px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; box-shadow: var(--shadow-sm); position: sticky; bottom: 20px; z-index: 10; }
 .action-bar .action-info { display: flex; align-items: center; gap: 12px; }
 .action-bar .action-info .info-icon { width: 42px; height: 42px; border-radius: 12px; background: var(--primary-bg); color: var(--primary); display: flex; align-items: center; justify-content: center; font-size: 1.1rem; }
@@ -553,7 +533,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     .btn { padding: 8px 14px; font-size: 0.75rem; }
 }
 @media print {
-    .action-bar, .btn-header, .view-only-notice { display: none !important; }
+    .action-bar, .btn-header { display: none !important; }
     .page-header { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; }
     .status-banner { -webkit-print-color-adjust: exact; }
 }
@@ -583,7 +563,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                 <i class="fas <?= $is_equipment ? 'fa-tools' : 'fa-syringe' ?>"></i>
                 <?= $item_label ?> Details
                 <span class="branch-tag audit-tag"><i class="fas fa-shield-alt"></i> AUDIT</span>
-                <span class="branch-tag view-only-tag"><i class="fas fa-eye"></i> VIEW ONLY</span>
                 <span class="branch-tag count-tag">
                     <i class="fas fa-hashtag"></i> #<?= $item_id ?>
                 </span>
@@ -610,25 +589,13 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             <button onclick="window.print()" class="btn-header">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="all_procedures.php?patient_id=<?= $item['patient_db_id'] ?? 0 ?>&branch=<?= $selected_branch_id ?>" class="btn-header">
+            <a href="all_procedures.php?patient_id=<?= $item['patient_db_id'] ?? 0 ?>" class="btn-header">
                 <i class="fas fa-list"></i> All Items
             </a>
-            <a href="other_services.php?tab=procedures&branch=<?= $selected_branch_id ?>" class="btn-header">
+            <a href="other_services.php?tab=procedures" class="btn-header">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
-    </div>
-
-    <!-- VIEW ONLY NOTICE -->
-    <div class="view-only-notice">
-        <i class="fas fa-info-circle"></i>
-        <span class="notice-text">
-            You are viewing this <?= strtolower($item_label) ?> in <strong>VIEW ONLY</strong> mode. 
-            You cannot edit or delete. For any changes, please contact your Administrator.
-        </span>
-        <span class="notice-badge">
-            <i class="fas fa-lock"></i> VIEW ONLY
-        </span>
     </div>
 
     <!-- STATUS BANNER -->
@@ -903,13 +870,12 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             </div>
             
             <div style="margin-top:10px;">
-                <a href="view_bill.php?id=<?= $item['bill_id'] ?>&branch=<?= $selected_branch_id ?>" 
+                <a href="view_bill.php?id=<?= $item['bill_id'] ?>" 
                    class="btn btn-secondary" style="font-size:0.72rem;padding:7px 14px;">
                     <i class="fas fa-file-invoice"></i> View Full Bill
                 </a>
             </div>
             
-            <!-- PAYMENTS TABLE -->
             <?php if (!empty($payments)): ?>
                 <div style="margin-top:20px;">
                     <h4 style="font-size:0.75rem;font-weight:800;color:var(--primary);text-transform:uppercase;margin-bottom:10px;">
@@ -992,16 +958,16 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     </div>
     <?php endif; ?>
 
-    <!-- ✅ ACTION BAR - VIEW ONLY (No Edit/Delete) -->
+    <!-- ACTION BAR -->
     <div class="action-bar">
         <div class="action-info">
             <div class="info-icon">
-                <i class="fas fa-eye"></i>
+                <i class="fas <?= $is_equipment ? 'fa-tools' : 'fa-syringe' ?>"></i>
             </div>
             <div class="info-text">
-                <div class="info-title">View Only Mode</div>
+                <div class="info-title"><?= $item_label ?> Details</div>
                 <div class="info-sub">
-                    <i class="fas fa-lock"></i> Audit role cannot edit or delete records
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($item['branch_name'] ?? $user_branch_name) ?>
                 </div>
             </div>
         </div>
@@ -1010,11 +976,11 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                 <i class="fas fa-print"></i> Print
             </button>
             
-            <a href="all_procedures.php?patient_id=<?= $item['patient_db_id'] ?? 0 ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary">
+            <a href="all_procedures.php?patient_id=<?= $item['patient_db_id'] ?? 0 ?>" class="btn btn-primary">
                 <i class="fas fa-list"></i> All Items
             </a>
             
-            <a href="other_services.php?tab=procedures&branch=<?= $selected_branch_id ?>" class="btn btn-secondary">
+            <a href="other_services.php?tab=procedures" class="btn btn-secondary">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
@@ -1024,7 +990,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span style="margin:0 8px;">|</span>
-            View <?= $item_label ?> #<?= $item_id ?> (View Only)
+            View <?= $item_label ?> #<?= $item_id ?>
             <span style="margin:0 8px;">|</span>
             <span><?= date('d M Y, H:i:s') ?></span>
         </p>
@@ -1033,9 +999,10 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 </main>
 
 <script>
-console.log('%c🔍 Audit - View <?= $item_label ?> (VIEW ONLY)', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ Uses audit_header + audit_sidebar', 'font-size:13px;color:#34D399;font-weight:bold;');
+console.log('%c🔍 Audit - View <?= $item_label ?> (CLEAN)', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px;color:#10B981;font-weight:bold;');
 console.log('%c✅ NO Edit/Delete buttons', 'font-size:13px;color:#F59E0B;font-weight:bold;');
+console.log('%c✅ VIEW ONLY notice na badges zimeondolewa', 'font-size:13px;color:#34D399;font-weight:bold;');
 console.log('%c✅ <?= htmlspecialchars($item['procedure_name']) ?>', 'font-size:13px;color:#34D399;font-weight:bold;');
 console.log('%c✅ Patient: <?= htmlspecialchars($item['patient_name'] ?? 'N/A') ?>', 'font-size:13px;color:#34D399;');
 console.log('%c💰 Price: <?= $currency ?> <?= number_format($item['procedure_price'] ?? 0, 0) ?>', 'font-size:13px;color:#0B5ED7;font-weight:bold;');

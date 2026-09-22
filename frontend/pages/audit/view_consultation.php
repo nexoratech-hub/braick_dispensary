@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/view_consultation.php
-// AUDIT - VIEW CONSULTATION DETAILS (VIEW ONLY)
+// AUDIT - VIEW CONSULTATION DETAILS (V2 - BRANCH LOCKED)
+// ✅ AUDIT ANAONA CONSULTATION ZA BRANCH YAKE TU
 // ✅ Inatumia audit_header.php + audit_sidebar.php
 // ✅ AUDIT ROLE TU
 // ✅ HAKUNA Edit button - VIEW ONLY
@@ -34,15 +35,18 @@ if ($_SESSION['role'] !== 'audit') {
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Audit User';
 $user_role = $_SESSION['role'] ?? 'audit';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 $is_audit = true;
 
 $visit_id = (int)($_GET['id'] ?? 0);
-$selected_branch_id = $_GET['branch'] ?? 'all';
+
+// ✅ AUDIT ANAONA BRANCH YAKE TU
+$selected_branch_id = $user_branch_id;
 
 if ($visit_id <= 0) {
-    header('Location: other_services.php?tab=consultations&branch=' . urlencode($selected_branch_id));
+    header('Location: other_services.php?tab=consultations');
     exit;
 }
 
@@ -103,7 +107,9 @@ function getInitials($name) {
     return strtoupper(substr($name, 0, 2));
 }
 
-// FETCH CONSULTATION
+// ================================================================
+// FETCH CONSULTATION - ✅ BRANCH YA ALIYE LOGIN TU
+// ================================================================
 $visit = null;
 try {
     $stmt = $db->prepare("
@@ -122,18 +128,18 @@ try {
         LEFT JOIN users r ON v.receptionist_id = r.id
         LEFT JOIN branches br ON v.branch_id = br.id
         LEFT JOIN diseases dis ON v.disease_id = dis.id
-        WHERE v.id = ?
+        WHERE v.id = ? AND v.branch_id = ?
         LIMIT 1
     ");
-    $stmt->execute([$visit_id]);
+    $stmt->execute([$visit_id, $user_branch_id]);
     $visit = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     error_log("Visit fetch error: " . $e->getMessage());
 }
 
 if (!$visit) {
-    $_SESSION['error_message'] = "Consultation not found.";
-    header('Location: other_services.php?tab=consultations&branch=' . urlencode($selected_branch_id));
+    $_SESSION['error_message'] = "Consultation not found or you don't have permission to view this consultation (different branch).";
+    header('Location: other_services.php?tab=consultations');
     exit;
 }
 
@@ -147,11 +153,11 @@ try {
         SELECT b.*,
                (SELECT COUNT(*) FROM payments WHERE bill_id = b.id) as payments_count
         FROM bills b
-        WHERE b.visit_id = ?
+        WHERE b.visit_id = ? AND b.branch_id = ?
         ORDER BY b.id DESC
         LIMIT 1
     ");
-    $stmt->execute([$visit_id]);
+    $stmt->execute([$visit_id, $user_branch_id]);
     $bill = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($bill) {
@@ -189,7 +195,7 @@ if ($bill) {
     } catch (Exception $e) {}
 }
 
-// FETCH LAB TESTS
+// FETCH LAB TESTS - ✅ BRANCH YA ALIYE LOGIN TU
 $lab_tests = [];
 try {
     $stmt = $db->prepare("
@@ -202,14 +208,14 @@ try {
         LEFT JOIN users tech ON lt.lab_technician_id = tech.id
         LEFT JOIN users doc ON lt.doctor_id = doc.id
         LEFT JOIN lab_tests_catalog ltc ON lt.test_id = ltc.id
-        WHERE lt.visit_id = ?
+        WHERE lt.visit_id = ? AND lt.branch_id = ?
         ORDER BY lt.created_at ASC
     ");
-    $stmt->execute([$visit_id]);
+    $stmt->execute([$visit_id, $user_branch_id]);
     $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-// FETCH PRESCRIPTIONS
+// FETCH PRESCRIPTIONS - ✅ BRANCH YA ALIYE LOGIN TU
 $prescriptions = [];
 try {
     $stmt = $db->prepare("
@@ -219,10 +225,10 @@ try {
         FROM prescriptions pr
         LEFT JOIN users doc ON pr.doctor_id = doc.id
         LEFT JOIN users pharm ON pr.pharmacy_id = pharm.id
-        WHERE pr.visit_id = ?
+        WHERE pr.visit_id = ? AND pr.branch_id = ?
         ORDER BY pr.created_at ASC
     ");
-    $stmt->execute([$visit_id]);
+    $stmt->execute([$visit_id, $user_branch_id]);
     $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($prescriptions as &$presc) {
@@ -243,7 +249,7 @@ try {
     unset($presc);
 } catch (Exception $e) {}
 
-// FETCH PROCEDURES
+// FETCH PROCEDURES - ✅ BRANCH YA ALIYE LOGIN TU
 $procedures = [];
 try {
     $stmt = $db->prepare("
@@ -253,10 +259,10 @@ try {
         FROM procedures pr
         LEFT JOIN users doc ON pr.doctor_id = doc.id
         LEFT JOIN procedures_catalog pc ON pr.procedure_id = pc.id
-        WHERE pr.visit_id = ?
+        WHERE pr.visit_id = ? AND pr.branch_id = ?
         ORDER BY pr.created_at ASC
     ");
-    $stmt->execute([$visit_id]);
+    $stmt->execute([$visit_id, $user_branch_id]);
     $procedures = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
@@ -352,30 +358,9 @@ html, body { background: var(--bg-body); color: var(--text-primary); margin: 0; 
 .page-header .page-subtitle { color: rgba(255,255,255,0.85); font-size: 0.78rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; position: relative; z-index: 1; }
 .branch-tag { background: rgba(255,255,255,0.15); color: white; padding: 3px 10px; border-radius: 16px; font-size: 0.65rem; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1); }
 .branch-tag.audit-tag { background: linear-gradient(135deg, #0EA5E9, #0284C7); font-weight: 800; }
-.branch-tag.view-only-tag { background: linear-gradient(135deg, #F59E0B, #D97706); font-weight: 800; }
 .branch-tag.count-tag { background: linear-gradient(135deg, #10B981, #059669); font-weight: 700; }
 .btn-header { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.25); padding: 8px 14px; border-radius: 9px; font-weight: 600; font-size: 0.75rem; transition: all 0.3s ease; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; backdrop-filter: blur(4px); position: relative; z-index: 1; cursor: pointer; }
 .btn-header:hover { background: rgba(255,255,255,0.28); transform: translateY(-2px); color: white; }
-
-/* View Only Notice */
-.view-only-notice {
-    background: linear-gradient(135deg, var(--warning-bg), #FEF9E7);
-    border-left: 4px solid var(--warning);
-    border-radius: 10px; padding: 12px 18px; margin-bottom: 16px;
-    display: flex; align-items: center; gap: 12px;
-    font-size: 0.78rem; font-weight: 700; color: var(--warning);
-    box-shadow: var(--shadow-sm);
-}
-[data-theme="dark"] .view-only-notice { background: linear-gradient(135deg, #3A2A1A, #2D2015); color: #FBBF24; }
-.view-only-notice i { font-size: 1.15rem; flex-shrink: 0; }
-.view-only-notice .notice-text { flex: 1; line-height: 1.5; }
-.view-only-notice .notice-badge {
-    background: var(--warning); color: white;
-    padding: 4px 12px; border-radius: 8px;
-    font-size: 0.62rem; font-weight: 800;
-    text-transform: uppercase; letter-spacing: 0.05em;
-    white-space: nowrap;
-}
 
 /* STATUS BANNER */
 .status-banner { border-radius: 14px; padding: 16px 22px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; position: relative; overflow: hidden; box-shadow: var(--shadow-md); }
@@ -508,7 +493,7 @@ html, body { background: var(--bg-body); color: var(--text-primary); margin: 0; 
     .btn { padding: 8px 14px; font-size: 0.75rem; }
 }
 @media print {
-    .action-bar, .btn-header, .view-only-notice { display: none !important; }
+    .action-bar, .btn-header { display: none !important; }
     .page-header { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; }
     .status-banner { -webkit-print-color-adjust: exact; }
 }
@@ -525,17 +510,14 @@ html, body { background: var(--bg-body); color: var(--text-primary); margin: 0; 
                 <i class="fas fa-stethoscope"></i>
                 Consultation Details
                 <span class="branch-tag audit-tag"><i class="fas fa-shield-alt"></i> AUDIT</span>
-                <span class="branch-tag view-only-tag"><i class="fas fa-eye"></i> VIEW ONLY</span>
                 <span class="branch-tag count-tag">
                     <i class="fas fa-hashtag"></i> <?= htmlspecialchars($visit['visit_number']) ?>
                 </span>
+                <span class="branch-tag"><i class="fas fa-store-alt"></i> <?= htmlspecialchars($visit['branch_name'] ?? $user_branch_name) ?></span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-calendar"></i>
                 <?= date('d M Y, H:i', strtotime($visit['visit_date'])) ?>
-                <span class="branch-tag">
-                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($visit['branch_name'] ?? 'N/A') ?>
-                </span>
                 <?php if (!empty($visit['visit_type'])): ?>
                     <span class="branch-tag">
                         <i class="fas fa-notes-medical"></i> <?= htmlspecialchars($visit['visit_type']) ?>
@@ -547,22 +529,10 @@ html, body { background: var(--bg-body); color: var(--text-primary); margin: 0; 
             <button onclick="window.print()" class="btn-header">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="other_services.php?tab=consultations&branch=<?= $selected_branch_id ?>" class="btn-header">
+            <a href="other_services.php?tab=consultations" class="btn-header">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
-    </div>
-
-    <!-- VIEW ONLY NOTICE -->
-    <div class="view-only-notice">
-        <i class="fas fa-info-circle"></i>
-        <span class="notice-text">
-            You are viewing this consultation in <strong>VIEW ONLY</strong> mode. 
-            You cannot edit or delete records. For any changes, please contact your Administrator.
-        </span>
-        <span class="notice-badge">
-            <i class="fas fa-lock"></i> VIEW ONLY
-        </span>
     </div>
 
     <!-- STATUS BANNER -->
@@ -842,7 +812,7 @@ html, body { background: var(--bg-body); color: var(--text-primary); margin: 0; 
     <div class="info-card">
         <div class="card-header">
             <span class="title"><i class="fas fa-file-invoice-dollar"></i> Bill Summary</span>
-            <a href="view_bill.php?id=<?= $bill['id'] ?>&branch=<?= $selected_branch_id ?>" 
+            <a href="view_bill.php?id=<?= $bill['id'] ?>" 
                style="text-decoration:none;background:var(--primary);color:white;padding:6px 14px;border-radius:8px;font-size:0.7rem;font-weight:700;">
                 <i class="fas fa-eye"></i> View Full Bill
             </a>
@@ -1182,14 +1152,14 @@ html, body { background: var(--bg-body); color: var(--text-primary); margin: 0; 
     </div>
     <?php endif; ?>
 
-    <!-- ✅ ACTION BAR - VIEW ONLY (No Edit) -->
+    <!-- ✅ ACTION BAR -->
     <div class="action-bar">
         <div class="action-info">
             <div class="info-icon"><i class="fas fa-eye"></i></div>
             <div class="info-text">
-                <div class="info-title">View Only Mode</div>
+                <div class="info-title">View Details</div>
                 <div class="info-sub">
-                    <i class="fas fa-lock"></i> Audit role cannot edit or delete records
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($visit['branch_name'] ?? $user_branch_name) ?>
                 </div>
             </div>
         </div>
@@ -1197,10 +1167,7 @@ html, body { background: var(--bg-body); color: var(--text-primary); margin: 0; 
             <button onclick="window.print()" class="btn btn-secondary">
                 <i class="fas fa-print"></i> Print
             </button>
-            
-            <!-- ❌ Edit button IMEONDOLEWA -->
-            
-            <a href="other_services.php?tab=consultations&branch=<?= $selected_branch_id ?>" class="btn btn-primary">
+            <a href="other_services.php?tab=consultations" class="btn btn-primary">
                 <i class="fas fa-arrow-left"></i> Back to Consultations
             </a>
         </div>
@@ -1210,7 +1177,7 @@ html, body { background: var(--bg-body); color: var(--text-primary); margin: 0; 
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span style="margin:0 8px;">|</span>
-            Consultation <?= htmlspecialchars($visit['visit_number']) ?> (View Only)
+            Consultation <?= htmlspecialchars($visit['visit_number']) ?>
             <span style="margin:0 8px;">|</span>
             <span><?= date('d M Y, H:i:s') ?></span>
         </p>
@@ -1219,9 +1186,9 @@ html, body { background: var(--bg-body); color: var(--text-primary); margin: 0; 
 </main>
 
 <script>
-console.log('%c🔍 Audit - View Consultation (VIEW ONLY)', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ Uses audit_header + audit_sidebar', 'font-size:13px;color:#34D399;font-weight:bold;');
-console.log('%c✅ NO Edit button', 'font-size:13px;color:#F59E0B;font-weight:bold;');
+console.log('%c🔍 Audit - View Consultation (BRANCH LOCKED)', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ AUDIT ANAONA BRANCH YAKE TU', 'font-size:13px;color:#34D399;font-weight:bold;');
+console.log('%c👥 Branch: <?= htmlspecialchars($visit['branch_name'] ?? $user_branch_name) ?>', 'font-size:13px;color:#0B5ED7;font-weight:bold;');
 console.log('%c🩺 Visit: <?= htmlspecialchars($visit['visit_number']) ?>', 'font-size:13px;color:#34D399;font-weight:bold;');
 console.log('%c👤 Patient: <?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?>', 'font-size:13px;color:#34D399;');
 console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($visit['doctor_name'] ?? 'N/A') ?>', 'font-size:13px;color:#34D399;');

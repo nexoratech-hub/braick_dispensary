@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/components/audit_sidebar.php
 // AUDIT - SIDEBAR (V10 - OTHER SERVICES = "All" BADGE)
+// ✅ Branch ya aliye login TU
 // ✅ Uses AUDIT links (/pages/audit/...) — NOT admin links
 // ✅ Revenue = Payments (received_at) + OTC (created_at) — TODAY ONLY
 // ✅ Other Services badge = "All" (static, haibadiliki)
@@ -42,7 +43,8 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 $user_is_online = $_SESSION['is_online'] ?? 1;
 
-$selected_branch_id = $_GET['branch'] ?? 'all';
+// ✅ AUDIT anaona branch yake TU
+$selected_branch_id = (int)$user_branch_id;
 
 // ================================================================
 // SESSION-BASED DATE RESET
@@ -69,28 +71,16 @@ if (!isset($db) || $db === null) {
 }
 
 // ================================================================
-// BRANCH CONDITIONS
+// ✅ BRANCH CONDITIONS - LAZIMA branch ya mtumiaji
 // ================================================================
-$branch_cond = "";
-$branch_params = [];
-if ($selected_branch_id !== 'all') {
-    $branch_cond = " AND branch_id = ?";
-    $branch_params[] = (int)$selected_branch_id;
-}
+$branch_cond = " AND branch_id = ?";
+$branch_params = [(int)$user_branch_id];
 
-$branch_cond_p = "";
-$branch_params_p = [];
-if ($selected_branch_id !== 'all') {
-    $branch_cond_p = " AND p.branch_id = ?";
-    $branch_params_p[] = (int)$selected_branch_id;
-}
+$branch_cond_p = " AND p.branch_id = ?";
+$branch_params_p = [(int)$user_branch_id];
 
-$branch_cond_o = "";
-$branch_params_o = [];
-if ($selected_branch_id !== 'all') {
-    $branch_cond_o = " AND o.branch_id = ?";
-    $branch_params_o[] = (int)$selected_branch_id;
-}
+$branch_cond_o = " AND o.branch_id = ?";
+$branch_params_o = [(int)$user_branch_id];
 
 // ================================================================
 // GET BADGE DATA
@@ -119,11 +109,12 @@ if ($db !== null) {
     try {
         $sql = "SELECT COALESCE(SUM(p.amount), 0) as total, COUNT(*) as count 
                 FROM payments p
+                INNER JOIN bills b ON p.bill_id = b.id
                 WHERE p.bill_id IS NOT NULL
                 AND DATE(p.received_at) = CURDATE()
-                $branch_cond_p";
+                AND b.branch_id = ?";
         $stmt = $db->prepare($sql);
-        $stmt->execute($branch_params_p);
+        $stmt->execute([(int)$user_branch_id]);
         $data = $stmt->fetch(PDO::FETCH_ASSOC);
         $bills_today = (float)($data['total'] ?? 0);
         $payments_today_count = (int)($data['count'] ?? 0);
@@ -231,7 +222,7 @@ if ($db !== null) {
     } catch (Exception $e) {}
     
     // ============================================================
-    // BRANCHES
+    // BRANCHES (kwa display tu - total branches count)
     // ============================================================
     try {
         $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
@@ -797,7 +788,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         
         <div class="nav-label"><span class="label-icon">📋</span> Main Menu</div>
         
-        <a href="/dispensary_system/frontend/pages/audit/dashboard.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/audit/dashboard.php" 
            class="sidebar-link <?= isActive('dashboard.php') ?>">
             <i class="fas fa-home"></i>
             <span class="link-text">Dashboard</span>
@@ -806,7 +797,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <div class="nav-label"><span class="label-icon">📊</span> Reports</div>
         
         <!-- REVENUE BADGE: LEO TU -->
-        <a href="/dispensary_system/frontend/pages/audit/revenue.php?branch=<?= $selected_branch_id ?>&quick=today" 
+        <a href="/dispensary_system/frontend/pages/audit/revenue.php?quick=today" 
            class="sidebar-link <?= isActive('revenue.php') || isAuditPage(['revenue_details.php']) ? 'active' : '' ?>">
             <i class="fas fa-chart-line"></i>
             <span class="link-text">Revenue</span>
@@ -814,7 +805,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         </a>
         
         <!-- INVENTORY -->
-        <a href="/dispensary_system/frontend/pages/audit/inventory.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/audit/inventory.php" 
            class="sidebar-link <?= isActive('inventory.php') || isAuditPage(['inventory_details.php']) ? 'active' : '' ?>">
             <i class="fas fa-pills"></i>
             <span class="link-text">Inventory</span>
@@ -825,7 +816,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         </a>
         
         <!-- LAB TESTS -->
-        <a href="/dispensary_system/frontend/pages/audit/lab_tests.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/audit/lab_tests.php" 
            class="sidebar-link <?= isActive('lab_tests.php') || isAuditPage(['lab_test_details.php', 'view_lab_test.php', 'edit_lab_test.php']) ? 'active' : '' ?>">
             <i class="fas fa-flask"></i>
             <span class="link-text">Lab Tests</span>
@@ -833,7 +824,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         </a>
         
         <!-- ✅ OTHER SERVICES - BADGE "All" (STATIC) -->
-        <a href="/dispensary_system/frontend/pages/audit/other_services.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/audit/other_services.php" 
            class="sidebar-link <?= isActive('other_services.php') || isAuditPage(['other_service_details.php', 'view_service.php', 'edit_service.php', 'consultations.php', 'procedures.php', 'equipment_services.php']) ? 'active' : '' ?>">
             <i class="fas fa-concierge-bell"></i>
             <span class="link-text">Other Services</span>
@@ -841,7 +832,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         </a>
         
         <!-- PATIENTS -->
-        <a href="/dispensary_system/frontend/pages/audit/patients.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/audit/patients.php" 
            class="sidebar-link <?= isActive('patients.php') || isAuditPage(['patient_details.php']) ? 'active' : '' ?>">
             <i class="fas fa-user-injured"></i>
             <span class="link-text">Patients</span>
@@ -853,7 +844,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         
         <div class="nav-label"><span class="label-icon">👥</span> Performance</div>
         
-        <a href="/dispensary_system/frontend/pages/audit/employees.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/audit/employees.php" 
            class="sidebar-link <?= isActive('employees.php') || isAuditPage(['employee_details.php']) ? 'active' : '' ?>">
             <i class="fas fa-users"></i>
             <span class="link-text">Employees</span>
@@ -862,7 +853,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         
         <div class="nav-label"><span class="label-icon">🔍</span> Audit</div>
         
-        <a href="/dispensary_system/frontend/pages/audit/audit_logs.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/audit/audit_logs.php" 
            class="sidebar-link <?= isActive('audit_logs.php') || isAuditPage(['audit_log_details.php']) ? 'active' : '' ?>">
             <i class="fas fa-clipboard-list"></i>
             <span class="link-text">Audit Logs</span>
@@ -1080,12 +1071,14 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 })();
 
 // ================================================================
-// AUTO REFRESH SIDEBAR BADGE KILA DAKIKA 1
+// ✅ AUTO REFRESH SIDEBAR BADGE KILA DAKIKA 1
 // (Other Services badge = "All" - STATIC, haibadiliki)
+// Branch ya mtumiaji TU - haitokani na URL
 // ================================================================
 (function() {
     var lastDate = new Date().toDateString();
-    var currentBranch = '<?= htmlspecialchars($selected_branch_id, ENT_QUOTES) ?>';
+    // ✅ Branch ya mtumiaji moja kwa moja kutoka PHP session
+    var userBranchId = <?= (int)$user_branch_id ?>;
     
     function refreshBadges() {
         var currentDate = new Date().toDateString();
@@ -1095,7 +1088,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             return;
         }
         
-        var url = '/dispensary_system/frontend/api/get_sidebar_badges.php?branch=' + encodeURIComponent(currentBranch) + '&role=audit&_t=' + Date.now();
+        // ✅ Tuma branch_id ya mtumiaji tu
+        var url = '/dispensary_system/frontend/api/get_sidebar_badges.php?branch=' + userBranchId + '&role=audit&_t=' + Date.now();
         
         fetch(url, { 
             cache: 'no-store',
@@ -1152,6 +1146,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 })();
 
 console.log('%c🔍 Audit Sidebar V10 - OTHER SERVICES = "All"', 'font-size:16px; font-weight:bold; color:#0B4EA8;');
+console.log('%c✅ Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#10B981; font-weight:bold;');
 console.log('%c✅ Links: /pages/audit/... (SIO /pages/admin/audit/...)', 'font-size:13px; color:#10B981; font-weight:bold;');
 console.log('%c✅ Revenue = Payments (received_at) + OTC (created_at) — LEO TU', 'font-size:13px; color:#10B981; font-weight:bold;');
 console.log('%c✅ Other Services Badge = "All" (STATIC)', 'font-size:13px; color:#0891B2; font-weight:bold;');

@@ -1,9 +1,10 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/view_medicine.php
-// AUDIT ROLE - VIEW MEDICINE DETAILS (READ ONLY)
+// AUDIT ROLE - VIEW MEDICINE DETAILS
+// ✅ Inaonyesha data za branch ya mtumiaji aliye login TU
+// ✅ Jina la mtumiaji aliye login linaonekana kwenye header
 // ✅ HAKUNA Edit/Delete buttons
-// ✅ VIEW ONLY - maelezo ya dawa
 // ✅ Blue theme (#0B5ED7)
 // ================================================================
 
@@ -42,10 +43,14 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $medicine_id = (int)($_GET['id'] ?? 0);
-$selected_branch_id = $_GET['branch'] ?? 'all';
+
+// ================================================================
+// ✅ LAZIMISHA branch ya mtumiaji aliye login TU
+// ================================================================
+$selected_branch_id = (int)$user_branch_id;
 
 if ($medicine_id <= 0) {
-    header('Location: /dispensary_system/frontend/pages/audit/inventory.php?branch=' . urlencode($selected_branch_id));
+    header('Location: /dispensary_system/frontend/pages/audit/inventory.php');
     exit;
 }
 
@@ -69,7 +74,7 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// GET MEDICINE DETAILS
+// ✅ GET MEDICINE DETAILS - LAZIMISHA BRANCH YA MTUMIAJI
 // ================================================================
 $medicine = null;
 try {
@@ -83,22 +88,22 @@ try {
             FROM medications_inventory m
             LEFT JOIN branches b ON m.branch_id = b.id
             LEFT JOIN users u ON m.added_by = u.id
-            WHERE m.id = ?";
+            WHERE m.id = ? AND m.branch_id = ?";
     
     $stmt = $db->prepare($sql);
-    $stmt->execute([$medicine_id]);
+    $stmt->execute([$medicine_id, $selected_branch_id]);
     $medicine = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     error_log("Medicine fetch error: " . $e->getMessage());
 }
 
 if (!$medicine) {
-    header('Location: /dispensary_system/frontend/pages/audit/inventory.php?branch=' . urlencode($selected_branch_id));
+    header('Location: /dispensary_system/frontend/pages/audit/inventory.php');
     exit;
 }
 
 // ================================================================
-// GET OTHER BATCHES (same medication_name)
+// GET OTHER BATCHES (same medication_name) - LAZIMISHA BRANCH
 // ================================================================
 $other_batches = [];
 try {
@@ -108,15 +113,15 @@ try {
                 b.name AS branch_name
             FROM medications_inventory m
             LEFT JOIN branches b ON m.branch_id = b.id
-            WHERE m.medication_name = ? AND m.id != ?
+            WHERE m.medication_name = ? AND m.id != ? AND m.branch_id = ?
             ORDER BY m.expiry_date ASC";
     $stmt = $db->prepare($sql);
-    $stmt->execute([$medicine['medication_name'], $medicine_id]);
+    $stmt->execute([$medicine['medication_name'], $medicine_id, $selected_branch_id]);
     $other_batches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
 // ================================================================
-// GET SALES HISTORY (medication sales from bill_items)
+// GET SALES HISTORY - LAZIMISHA BRANCH
 // ================================================================
 $sales_history = [];
 try {
@@ -137,10 +142,11 @@ try {
             WHERE bi.item_name = ?
             AND bi.item_type = 'medication'
             AND b.status = 'paid'
+            AND b.branch_id = ?
             ORDER BY bi.created_at DESC
             LIMIT 20";
     $stmt = $db->prepare($sql);
-    $stmt->execute([$medicine['medication_name']]);
+    $stmt->execute([$medicine['medication_name'], $selected_branch_id]);
     $sales_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
@@ -286,7 +292,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     letter-spacing: -0.02em;
 }
 
-/* PAGE HEADER */
 .page-header {
     background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
     border-radius: 16px; padding: 20px 24px; margin-bottom: 18px;
@@ -317,15 +322,12 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     font-weight: 500; display: inline-flex; align-items: center; gap: 4px;
     backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1);
 }
-.view-only-badge {
-    display: inline-flex; align-items: center; gap: 5px;
-    background: rgba(255,255,255,0.2); color: white;
-    padding: 3px 10px; border-radius: 12px;
-    font-size: 0.62rem; font-weight: 800; text-transform: uppercase;
-    letter-spacing: 0.05em; border: 1px solid rgba(255,255,255,0.3);
-    backdrop-filter: blur(4px);
+.branch-tag.user-tag {
+    background: linear-gradient(135deg, #FCD34D, #F59E0B);
+    color: #78350F;
+    font-weight: 800;
+    box-shadow: 0 2px 8px rgba(252, 211, 77, 0.3);
 }
-.view-only-badge i { font-size: 0.7rem; color: #FCD34D; }
 
 .btn-header {
     background: rgba(255,255,255,0.15); color: white;
@@ -338,7 +340,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 }
 .btn-header:hover { background: rgba(255,255,255,0.28); transform: translateY(-2px); }
 
-/* INFO CARD */
 .info-card {
     background: var(--bg-card);
     border-radius: 14px;
@@ -383,7 +384,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 
 .info-card .card-body { padding: 20px 22px; }
 
-/* MEDICINE PROFILE */
 .medicine-profile {
     display: flex;
     align-items: center;
@@ -441,7 +441,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 }
 .medicine-meta-item i { color: var(--primary); font-size: 0.65rem; }
 
-/* STATUS BADGES */
 .status-badge {
     display: inline-flex;
     align-items: center;
@@ -459,7 +458,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .status-badge.secondary { background: var(--border-color); color: var(--text-secondary); }
 .status-badge.primary { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); }
 
-/* STATS GRID */
 .stats-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -568,7 +566,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 .stat-card.danger .stat-icon { background: linear-gradient(135deg, #DC2626, #F87171); }
 .stat-card.danger .stat-value { color: var(--danger); }
 
-/* INFO ROWS */
 .info-row {
     display: flex;
     justify-content: space-between;
@@ -611,7 +608,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     font-weight: 900;
 }
 
-/* TABLE */
 .data-table {
     width: 100%;
     border-collapse: collapse;
@@ -655,7 +651,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     font-weight: 600;
 }
 
-/* EMPTY STATE */
 .empty-state {
     padding: 40px 20px;
     text-align: center;
@@ -672,7 +667,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     font-size: 0.82rem;
 }
 
-/* RESPONSIVE */
 @media (max-width: 1024px) {
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
 }
@@ -706,13 +700,14 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             <h1 class="page-title">
                 <i class="fas fa-pills"></i>
                 Medicine Details
-                <span class="view-only-badge">
-                    <i class="fas fa-eye"></i> VIEW ONLY
-                </span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-store-alt"></i>
-                <strong><?= htmlspecialchars($medicine['branch_name'] ?? 'N/A') ?></strong>
+                <i class="fas fa-user-circle"></i>
+                Karibu, <span class="branch-tag user-tag"><i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?></span>
+                <span class="branch-tag">
+                    <i class="fas fa-store-alt"></i>
+                    <strong><?= htmlspecialchars($medicine['branch_name'] ?? 'N/A') ?></strong>
+                </span>
                 <span class="branch-tag">
                     <i class="fas fa-hashtag"></i> ID: <?= (int)$medicine['id'] ?>
                 </span>
@@ -727,7 +722,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             <button onclick="window.print()" class="btn-header">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="/dispensary_system/frontend/pages/audit/inventory.php?branch=<?= $selected_branch_id ?>" 
+            <a href="/dispensary_system/frontend/pages/audit/inventory.php" 
                class="btn-header">
                 <i class="fas fa-arrow-left"></i> Back to Inventory
             </a>
@@ -1168,10 +1163,9 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
 </main>
 
 <script>
-console.log('%c💊 AUDIT View Medicine - READ ONLY', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ HAKUNA Edit button', 'font-size:13px; color:#DC2626; font-weight:bold;');
-console.log('%c✅ HAKUNA Delete button', 'font-size:13px; color:#DC2626; font-weight:bold;');
-console.log('%c✅ VIEW pekee', 'font-size:13px; color:#059669; font-weight:bold;');
+console.log('%c💊 AUDIT View Medicine', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#F59E0B; font-weight:bold;');
+console.log('%c✅ Inaonyesha data za branch: <?= htmlspecialchars($user_branch_name) ?> (ID: <?= $selected_branch_id ?>)', 'font-size:13px; color:#34D399; font-weight:bold;');
 console.log('%c💊 Medicine: <?= htmlspecialchars($medicine['medication_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
 console.log('%c📦 Quantity: <?= number_format($quantity) ?>', 'font-size:13px; color:#3B82F6;');
 console.log('%c💰 Stock Value: <?= $currency ?> <?= number_format($stock_value, 0) ?>', 'font-size:13px; color:#059669;');

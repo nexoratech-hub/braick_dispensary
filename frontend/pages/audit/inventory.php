@@ -1,13 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/inventory.php
-// AUDIT - INVENTORY, EQUIPMENT & PHARMACY SALES (V8 - PRESCRIPTION GROSS)
-// ✅ V8: Prescription = 436,000 (GROSS - sawa na revenue.php V47)
-// ✅ V7: Matches admin/audit/inventory.php design
-// ✅ OTC section - CARD per Sale (design sawa na revenue.php)
+// AUDIT - INVENTORY, EQUIPMENT & PHARMACY SALES
+// ✅ Inaonyesha data za branch ya mtumiaji aliye login TU
+// ✅ Jina la mtumiaji aliye login linaonekana kwenye header
+// ✅ Prescription = GROSS (sawa na revenue.php)
+// ✅ OTC section - CARD per Sale
 // ✅ Premium + Discount per patient + per visit
 // ✅ Tab + Sub-tab zinabaki baada ya filter
-// ✅ VIEW ONLY - No View/Edit/Delete on Medicines & Equipment
 // ✅ Received By = ONLY shown when PAID
 // ================================================================
 
@@ -43,7 +43,10 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $user_username = $_SESSION['username'] ?? 'audit';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-$selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
+// ================================================================
+// ✅ LAZIMISHA branch ya mtumiaji aliye login TU
+// ================================================================
+$selected_branch_id = (int)$user_branch_id;
 
 $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'medicines';
 if (!in_array($active_tab, ['medicines', 'equipment', 'pharmacy'])) {
@@ -88,34 +91,26 @@ function calculateAge($dob) {
 }
 
 // ================================================================
-// BRANCH FILTER
+// ✅ BRANCH FILTER - KILA KITU KINATUMIA BRANCH YA MTUMIAJI
 // ================================================================
-$filter_by_branch = false;
-$filter_branch_id = 0;
-if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    $filter_by_branch = true;
-    $filter_branch_id = (int)$selected_branch_id;
-}
+$branch_cond_med = " AND m.branch_id = ?";
+$branch_cond_eq  = " AND e.branch_id = ?";
+$branch_cond_bi  = " AND bi.branch_id = ?";
+$branch_cond_p   = " AND p.branch_id = ?";
+$branch_cond_b   = " AND b.branch_id = ?";
+$branch_cond_os  = " AND os.branch_id = ?";
+$branch_params   = [$selected_branch_id];
 
-$branch_cond_med = $filter_by_branch ? " AND m.branch_id = ?" : "";
-$branch_cond_eq  = $filter_by_branch ? " AND e.branch_id = ?" : "";
-$branch_cond_bi  = $filter_by_branch ? " AND bi.branch_id = ?" : "";
-$branch_cond_p   = $filter_by_branch ? " AND p.branch_id = ?" : "";
-$branch_cond_b   = $filter_by_branch ? " AND b.branch_id = ?" : "";
-$branch_cond_os  = $filter_by_branch ? " AND os.branch_id = ?" : "";
-$branch_params   = $filter_by_branch ? [$filter_branch_id] : [];
-
+// Branch info (kwa display)
 $branches = [];
 try {
     $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-$display_branch_name = 'All Branches';
-if ($filter_by_branch) {
-    foreach ($branches as $b) {
-        if ($b['id'] == $filter_branch_id) { $display_branch_name = $b['name']; break; }
-    }
+$display_branch_name = $user_branch_name;
+foreach ($branches as $b) {
+    if ($b['id'] == $selected_branch_id) { $display_branch_name = $b['name']; break; }
 }
 
 // DATE FILTERS
@@ -281,13 +276,12 @@ foreach ($equipment as $e) {
 $total_inventory_value = $med_value + $eq_value;
 
 // ================================================================
-// ✅ V8: PRESCRIPTIONS - GROSS PEKEE (436,000)
+// PRESCRIPTIONS - GROSS PEKEE
 // ================================================================
 $presc_total_items_amount = 0;
 $presc_total_items_count = 0;
 
 try {
-    // ✅ GROSS = SUM(bi.total_price) - bila discount kwenye bill_items
     $sql = "
         SELECT 
             COALESCE(SUM(bi.total_price), 0) as total_amount,
@@ -351,11 +345,11 @@ try {
     $presc_pharmacy_premium = (float)($presc_disc_result['pharmacy_premium'] ?? 0);
 } catch (Exception $e) {}
 
-// ✅ V8: PRESCRIPTION = GROSS PEKEE (436,000)
+// PRESCRIPTION = GROSS PEKEE
 $presc_gross = $presc_total_items_amount;
 $presc_discount = $presc_pharmacy_discount;
 $presc_premium = $presc_pharmacy_premium;
-$presc_final_revenue = $presc_gross;  // ✅ GROSS pekee (bila discount/premium)
+$presc_final_revenue = $presc_gross;
 
 // Get patient-level data for prescriptions
 $grouped_prescriptions = [];
@@ -490,10 +484,10 @@ try {
                 $visits_map[$pid][$vid]['dates'][] = $item['item_created_at'];
             }
             
-            // ✅ V8: GROSS price (bila discount kwenye item)
+            // GROSS price (bila discount kwenye item)
             $item_total_price = (float)($item['total_price'] ?? 0);
             $item_discount = (float)($item['discount_amount'] ?? 0);
-            $item_final = $item_total_price;  // ✅ GROSS pekee
+            $item_final = $item_total_price;
             
             $visits_map[$pid][$vid]['items'][] = [
                 'item_id' => (int)($item['item_id'] ?? 0),
@@ -503,7 +497,7 @@ try {
                 'unit_price' => (float)($item['unit_price'] ?? 0),
                 'total_price' => $item_total_price,
                 'discount_amount' => $item_discount,
-                'final_price' => $item_final,  // ✅ GROSS
+                'final_price' => $item_final,
                 'status' => $item_status,
                 'bill_status' => $bill_status,
                 'prescription_id' => (int)($item['prescription_id'] ?? 0),
@@ -608,7 +602,7 @@ try {
 }
 
 // ================================================================
-// OTC SALES - V8
+// OTC SALES
 // ================================================================
 $otc_sales = [];
 try {
@@ -657,13 +651,13 @@ if (!empty($otc_sales)) {
 }
 
 // ================================================================
-// ✅ V8: STATS - PRESCRIPTIONS (GROSS PEKEE)
+// STATS - PRESCRIPTIONS (GROSS PEKEE)
 // ================================================================
-$presc_total_amount = $presc_gross;  // ✅ GROSS = 436,000
+$presc_total_amount = $presc_gross;
 $presc_paid_amount = 0;
 $presc_pending_amount = 0;
-$presc_premium = 0;   // ✅ Haijajumuishwa kwenye GROSS
-$presc_discount = 0;  // ✅ Haijajumuishwa kwenye GROSS
+$presc_premium = 0;
+$presc_discount = 0;
 
 foreach ($grouped_prescriptions as $group) {
     $presc_paid_amount += (float)($group['paid_amount'] ?? 0);
@@ -688,8 +682,8 @@ foreach ($otc_sales as $sale) {
 }
 
 $total_paid = $presc_paid_amount + $otc_paid_amount;
-$total_discount = $otc_discount;   // ✅ OTC pekee
-$total_premium = $otc_premium;     // ✅ OTC pekee
+$total_discount = $otc_discount;
+$total_premium = $otc_premium;
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 $profile_pic_url = !empty($profile_pic) 
@@ -805,10 +799,11 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1);
 }
 .branch-tag.filter-tag { background: linear-gradient(135deg, #10B981, #059669); font-weight: 700; }
-.branch-tag.view-only-tag {
-    background: linear-gradient(135deg, #F59E0B, #D97706);
+.branch-tag.user-tag {
+    background: linear-gradient(135deg, #FCD34D, #F59E0B);
+    color: #78350F;
     font-weight: 800;
-    box-shadow: 0 2px 8px rgba(245, 158, 11, 0.4);
+    box-shadow: 0 2px 8px rgba(252, 211, 77, 0.3);
 }
 
 .btn-header {
@@ -821,25 +816,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     backdrop-filter: blur(4px); position: relative; z-index: 1; cursor: pointer;
 }
 .btn-header:hover { background: rgba(255,255,255,0.28); transform: translateY(-2px); }
-
-.view-only-notice {
-    background: linear-gradient(135deg, var(--warning-bg), #FEF9E7);
-    border-left: 4px solid var(--warning);
-    border-radius: 10px; padding: 12px 18px; margin-bottom: 16px;
-    display: flex; align-items: center; gap: 12px;
-    font-size: 0.78rem; font-weight: 700; color: var(--warning);
-    box-shadow: var(--shadow-sm);
-}
-[data-theme="dark"] .view-only-notice { background: linear-gradient(135deg, #3A2A1A, #2D2015); color: #FBBF24; }
-.view-only-notice i { font-size: 1.15rem; flex-shrink: 0; }
-.view-only-notice .notice-text { flex: 1; line-height: 1.5; }
-.view-only-notice .notice-badge {
-    background: var(--warning); color: white;
-    padding: 4px 12px; border-radius: 8px;
-    font-size: 0.62rem; font-weight: 800;
-    text-transform: uppercase; letter-spacing: 0.05em;
-    white-space: nowrap;
-}
 
 .filter-card {
     background: var(--bg-card); border-radius: 14px; padding: 16px 18px;
@@ -1203,9 +1179,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     font-family: var(--font-mono);
 }
 
-/* ================================================================ */
 /* OTC SALE CARD */
-/* ================================================================ */
 .otc-sale-card {
     background: var(--bg-card);
     border: 2px solid var(--cyan);
@@ -1693,11 +1667,14 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                 <i class="fas fa-warehouse"></i>
                 Inventory & Pharmacy Sales
                 <span class="branch-tag"><i class="fas fa-user-shield"></i> AUDIT</span>
-                <span class="branch-tag view-only-tag"><i class="fas fa-eye"></i> VIEW ONLY</span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-store-alt"></i>
-                <strong><?= htmlspecialchars($display_branch_name) ?></strong>
+                <i class="fas fa-user-circle"></i>
+                Karibu, <span class="branch-tag user-tag"><i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?></span>
+                <span class="branch-tag">
+                    <i class="fas fa-store-alt"></i> 
+                    <strong><?= htmlspecialchars($display_branch_name) ?></strong>
+                </span>
                 <span class="branch-tag">
                     <i class="fas fa-pills"></i> <?= number_format($med_total) ?> Medicines
                 </span>
@@ -1716,23 +1693,11 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
             <button onclick="window.print()" class="btn-header">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="/dispensary_system/frontend/pages/audit/dashboard.php?branch=<?= $selected_branch_id ?>" 
+            <a href="/dispensary_system/frontend/pages/audit/dashboard.php" 
                class="btn-header">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
         </div>
-    </div>
-
-    <!-- VIEW ONLY NOTICE -->
-    <div class="view-only-notice">
-        <i class="fas fa-info-circle"></i>
-        <span class="notice-text">
-            You are viewing this report in <strong>VIEW ONLY</strong> mode. 
-            You cannot edit or delete items. For any changes, please contact your Administrator.
-        </span>
-        <span class="notice-badge">
-            <i class="fas fa-lock"></i> VIEW ONLY
-        </span>
     </div>
 
     <!-- FILTER CARD -->
@@ -1767,7 +1732,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
         <form method="GET" id="filterForm">
             <input type="hidden" name="tab" id="filterTabInput" value="<?= htmlspecialchars($active_tab) ?>">
             <input type="hidden" name="sub_tab" id="filterSubTabInput" value="<?= htmlspecialchars($active_sub_tab) ?>">
-            <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
             
             <div class="filter-form">
                 <div class="filter-group">
@@ -1799,7 +1763,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                     <i class="fas fa-filter"></i> Apply
                 </button>
                 
-                <a href="?branch=<?= $selected_branch_id ?>" class="filter-btn-secondary">
+                <a href="?" class="filter-btn-secondary">
                     <i class="fas fa-redo"></i> Reset
                 </a>
             </div>
@@ -1823,7 +1787,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     </div>
 
     <!-- ================================================================ -->
-    <!-- TAB 1: MEDICINES - VIEW ONLY -->
+    <!-- TAB 1: MEDICINES -->
     <!-- ================================================================ -->
     <div id="tab-medicines" class="tab-content <?= $active_tab === 'medicines' ? 'active' : '' ?>">
         <div class="stats-grid">
@@ -1855,7 +1819,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
         
         <div class="table-card">
             <div class="table-header">
-                <span class="title"><i class="fas fa-pills"></i> Medicines Inventory Report (View Only)</span>
+                <span class="title"><i class="fas fa-pills"></i> Medicines Inventory Report</span>
                 <span class="count"><?= count($medicines) ?> items</span>
             </div>
             
@@ -1985,7 +1949,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
     </div>
 
     <!-- ================================================================ -->
-    <!-- TAB 2: EQUIPMENT - VIEW ONLY -->
+    <!-- TAB 2: EQUIPMENT -->
     <!-- ================================================================ -->
     <div id="tab-equipment" class="tab-content <?= $active_tab === 'equipment' ? 'active' : '' ?>">
         <div class="stats-grid">
@@ -2017,7 +1981,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
         
         <div class="table-card">
             <div class="table-header">
-                <span class="title"><i class="fas fa-tools"></i> Equipment Inventory Report (View Only)</span>
+                <span class="title"><i class="fas fa-tools"></i> Equipment Inventory Report</span>
                 <span class="count"><?= count($equipment) ?> items</span>
             </div>
             
@@ -2166,7 +2130,6 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                 <div class="stat-sub"><i class="fas fa-check"></i> Paid only</div>
             </div>
             
-            <!-- ✅ V8: PRESCRIPTION = GROSS PEKEE (436,000) -->
             <div class="stat-card purple">
                 <div class="stat-icon"><i class="fas fa-prescription"></i></div>
                 <div class="stat-label">Prescription (GROSS)</div>
@@ -2387,7 +2350,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                                 
                                                 <?php if ($visit_primary_prescription_id > 0): ?>
                                                     <div class="visit-header-actions">
-                                                        <a href="/dispensary_system/frontend/pages/audit/view_prescription.php?id=<?= $visit_primary_prescription_id ?>&visit_id=<?= $visit_id ?>&patient_id=<?= $patient_id ?>&branch=<?= $selected_branch_id ?>" 
+                                                        <a href="/dispensary_system/frontend/pages/audit/view_prescription.php?id=<?= $visit_primary_prescription_id ?>&visit_id=<?= $visit_id ?>&patient_id=<?= $patient_id ?>" 
                                                            class="visit-action-btn view" 
                                                            title="View Prescription Details"
                                                            target="_blank"
@@ -2421,7 +2384,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                                                 if (!is_array($item)) continue;
                                                                 $med_name = $item['medication_name'] ?? 'N/A';
                                                                 $med_qty = (int)($item['quantity'] ?? 0);
-                                                                $med_price = (float)($item['final_price'] ?? 0);  // ✅ GROSS
+                                                                $med_price = (float)($item['final_price'] ?? 0);
                                                                 $pres_num = $item['prescription_number'] ?? 'N/A';
                                                                 $item_status = strtolower($item['status'] ?? $visit_status);
                                                                 $item_bill_status = strtolower($item['bill_status'] ?? '');
@@ -2573,7 +2536,7 @@ html, body { font-family: var(--font-primary); background: var(--bg-body); color
                                     </div>
                                     
                                     <div class="otc-header-right">
-                                        <a href="/dispensary_system/frontend/pages/audit/view_otc.php?id=<?= $sale_id ?>&branch=<?= $selected_branch_id ?>" 
+                                        <a href="/dispensary_system/frontend/pages/audit/view_otc.php?id=<?= $sale_id ?>" 
                                            class="otc-action-btn view" title="View OTC Sale" target="_blank">
                                             <i class="fas fa-eye"></i> View
                                         </a>
@@ -2916,11 +2879,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-console.log('%c📦 Audit Inventory V8 - PRESCRIPTION GROSS = 436,000', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Prescription: GROSS pekee (436,000) - sawa na revenue.php V47', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ OTC: CARD per Sale (design sawa na revenue)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Medicines tab: NO View button (pure view-only)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Equipment tab: NO View button (pure view-only)', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c📦 Audit Inventory - BRANCH LOCKED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#F59E0B; font-weight:bold;');
+console.log('%c✅ Inaonyesha data za branch: <?= htmlspecialchars($display_branch_name) ?> (ID: <?= $selected_branch_id ?>)', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Prescription: GROSS pekee', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ OTC: CARD per Sale', 'font-size:13px; color:#34D399; font-weight:bold;');
 console.log('%c✅ Received By = ONLY shown when PAID', 'font-size:13px; color:#34D399; font-weight:bold;');
 console.log('%c✅ Tab + Sub-tab persist after filter', 'font-size:13px; color:#34D399; font-weight:bold;');
 </script>
