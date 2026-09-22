@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/dashboard.php
-// ADMIN - AUDIT DASHBOARD V15.2
+// ADMIN - AUDIT DASHBOARD V15.3
+// ✅ V15.3: DECIMALS ZIMEONDOLEWA - NAMBA KAMILI TU
 // ✅ V15.2: PRESCRIPTION CARD = GROSS (BILA round off)
 // ✅ V15.2: GROSS = Medication_RAW (total_price, bila discount, bila premium)
 // ✅ V15.1: Premium inaonekana kwenye Patient Payments card pekee
@@ -92,8 +93,8 @@ if ($selected_branch_id !== 'all') {
 $stats = [
     'total_revenue' => 0,
     'patient_payments_revenue' => 0,
-    'prescription_revenue' => 0,        // GROSS (total_price, bila discount, bila premium)
-    'medication_revenue_gross' => 0,    // GROSS (raw)
+    'prescription_revenue' => 0,
+    'medication_revenue_gross' => 0,
     'otc_revenue' => 0,
     'lab_revenue' => 0,
     'other_revenue' => 0,
@@ -207,15 +208,9 @@ try {
     
     // ============================================================
     // ✅ V15.2 FIX: PRESCRIPTION REVENUE = GROSS
-    // Formula: GROSS = Medication_RAW (total_price, bila discount, bila premium)
-    // 
-    // SABABU: 
-    //   - Patient Payments = SUM(payments.amount) TAYARI ina premium ndani
-    //   - Prescription card inaonyesha GROSS ya medications tu (bila discount)
-    //   - Discount & Premium zinaonyeshwa kwenye card yake maalum
     // ============================================================
     $stats['medication_revenue_gross'] = $stats['medication_revenue_raw'];
-    $stats['prescription_revenue'] = $stats['medication_revenue_gross']; // ✅ GROSS
+    $stats['prescription_revenue'] = $stats['medication_revenue_gross'];
     $stats['medication_revenue'] = $stats['medication_revenue_gross'];
     
     // ============================================================
@@ -1425,7 +1420,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
         <div>
             <h1 class="page-title">
                 <i class="fas fa-shield-alt"></i>
-                Audit Dashboard V15.2
+                Audit Dashboard V15.3
                 <span class="role-badge"><i class="fas fa-user-shield"></i> ADMIN</span>
             </h1>
             <p class="page-subtitle">
@@ -1470,12 +1465,12 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                 <div class="card-label"><i class="fas fa-coins"></i> Total Revenue</div>
                 <div class="card-value">
                     <span class="currency"><?= $currency ?></span>
-                    <?= number_format($stats['total_revenue'], 2, '.', ',') ?>
+                    <?= number_format($stats['total_revenue'], 0, '.', ',') ?>
                 </div>
             </div>
             <div class="card-footer">
                 <i class="fas fa-calendar-day"></i>
-                Today: <span class="highlight"><?= $currency ?> <?= number_format($stats['today_revenue'], 2, '.', ',') ?></span>
+                Today: <span class="highlight"><?= $currency ?> <?= number_format($stats['today_revenue'], 0, '.', ',') ?></span>
             </div>
         </div>
 
@@ -1489,22 +1484,22 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                 <div class="card-label"><i class="fas fa-file-invoice"></i> Patient Payments</div>
                 <div class="card-value">
                     <span class="currency"><?= $currency ?></span>
-                    <?= number_format($stats['patient_payments_revenue'], 2, '.', ',') ?>
+                    <?= number_format($stats['patient_payments_revenue'], 0, '.', ',') ?>
                 </div>
             </div>
             <div class="card-footer">
                 <i class="fas fa-check-circle"></i>
                 Payments: <span class="highlight"><?= number_format($stats['payments_count']) ?></span>
                 <?php if ($stats['discount_total'] > 0): ?>
-                    <span class="discount-badge"><i class="fas fa-tag"></i> <?= number_format($stats['discount_total'], 2, '.', ',') ?></span>
+                    <span class="discount-badge"><i class="fas fa-tag"></i> <?= number_format($stats['discount_total'], 0, '.', ',') ?></span>
                 <?php endif; ?>
                 <?php if ($stats['premium_revenue'] > 0): ?>
-                    <span class="premium-badge"><i class="fas fa-star"></i> <?= number_format($stats['premium_revenue'], 2, '.', ',') ?></span>
+                    <span class="premium-badge"><i class="fas fa-star"></i> <?= number_format($stats['premium_revenue'], 0, '.', ',') ?></span>
                 <?php endif; ?>
             </div>
         </div>
 
-        <!-- CARD 3: PRESCRIPTION (V15.2 - GROSS, BILA ROUND OFF) -->
+        <!-- CARD 3: PRESCRIPTION -->
         <div class="stat-card prescription">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-prescription"></i></div>
@@ -1514,7 +1509,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                 <div class="card-label"><i class="fas fa-prescription-bottle-medical"></i> Prescription (Gross)</div>
                 <div class="card-value" style="font-size:1.1rem;">
                     <span class="currency"><?= $currency ?></span>
-                    <?= number_format($stats['prescription_revenue'], 2, '.', ',') ?>
+                    <?= number_format($stats['prescription_revenue'], 0, '.', ',') ?>
                 </div>
             </div>
             <div class="card-footer">
@@ -1533,7 +1528,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                 <div class="card-label"><i class="fas fa-shopping-cart"></i> OTC Sale</div>
                 <div class="card-value">
                     <span class="currency"><?= $currency ?></span>
-                    <?= number_format($stats['otc_revenue'], 2, '.', ',') ?>
+                    <?= number_format($stats['otc_revenue'], 0, '.', ',') ?>
                 </div>
             </div>
             <div class="card-footer">
@@ -1552,7 +1547,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                 <div class="card-label"><i class="fas fa-microscope"></i> Lab Tests</div>
                 <div class="card-value">
                     <span class="currency"><?= $currency ?></span>
-                    <?= number_format($stats['lab_revenue'], 2, '.', ',') ?>
+                    <?= number_format($stats['lab_revenue'], 0, '.', ',') ?>
                 </div>
             </div>
             <div class="card-footer">
@@ -1573,21 +1568,21 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                 </div>
                 <div class="card-value">
                     <span class="currency"><?= $currency ?></span>
-                    <?= number_format($combined_consultation_revenue, 2, '.', ',') ?>
+                    <?= number_format($combined_consultation_revenue, 0, '.', ',') ?>
                 </div>
             </div>
             <div class="card-footer" style="flex-wrap:wrap;gap:6px;">
                 <span style="display:inline-flex;align-items:center;gap:3px;">
                     <i class="fas fa-stethoscope" style="color:#059669;"></i>
-                    Cons: <span class="highlight"><?= number_format($stats['consultation_revenue'], 2, '.', ',') ?></span>
+                    Cons: <span class="highlight"><?= number_format($stats['consultation_revenue'], 0, '.', ',') ?></span>
                 </span>
                 <span style="display:inline-flex;align-items:center;gap:3px;">
                     <i class="fas fa-syringe" style="color:#D97706;"></i>
-                    Proc: <span class="highlight"><?= number_format($stats['procedure_revenue'], 2, '.', ',') ?></span>
+                    Proc: <span class="highlight"><?= number_format($stats['procedure_revenue'], 0, '.', ',') ?></span>
                 </span>
                 <span style="display:inline-flex;align-items:center;gap:3px;">
                     <i class="fas fa-tools" style="color:#7C3AED;"></i>
-                    Equip: <span class="highlight"><?= number_format($stats['equipment_revenue'], 2, '.', ',') ?></span>
+                    Equip: <span class="highlight"><?= number_format($stats['equipment_revenue'], 0, '.', ',') ?></span>
                 </span>
                 <span style="display:inline-flex;align-items:center;gap:3px;">
                     <i class="fas fa-list"></i>
@@ -1606,7 +1601,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                 <div class="card-label"><i class="fas fa-wallet"></i> Total Expenses</div>
                 <div class="card-value">
                     <span class="currency"><?= $currency ?></span>
-                    <?= number_format($stats['total_expenses'], 2, '.', ',') ?>
+                    <?= number_format($stats['total_expenses'], 0, '.', ',') ?>
                 </div>
             </div>
             <div class="card-footer">
@@ -1633,7 +1628,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                 </div>
                 <div class="card-value">
                     <span class="currency"><?= $currency ?></span>
-                    <?= number_format(abs($stats['profit']), 2, '.', ',') ?>
+                    <?= number_format(abs($stats['profit']), 0, '.', ',') ?>
                 </div>
             </div>
             <div class="card-footer">
@@ -1653,7 +1648,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                 <i class="fas fa-tags"></i>
                 Discount & Premium Breakdown
                 <span style="font-size:0.65rem;background:var(--primary-bg);color:var(--primary);padding:2px 8px;border-radius:6px;font-weight:700;">
-                    Total: <?= $currency ?> <?= number_format($stats['discount_total'] + $stats['premium_revenue'], 2, '.', ',') ?>
+                    Total: <?= $currency ?> <?= number_format($stats['discount_total'] + $stats['premium_revenue'], 0, '.', ',') ?>
                 </span>
             </div>
             <div style="font-size:0.65rem;color:var(--text-secondary);font-weight:600;">
@@ -1666,7 +1661,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                     <i class="fas fa-prescription-bottle-medical"></i>
                     Pharmacy Discount
                 </div>
-                <div class="dp-value"><?= $currency ?> <?= number_format($stats['pharmacy_discount_total'], 2, '.', ',') ?></div>
+                <div class="dp-value"><?= $currency ?> <?= number_format($stats['pharmacy_discount_total'], 0, '.', ',') ?></div>
                 <div class="dp-sub">From medications</div>
             </div>
             <div class="dp-item cashier-disc">
@@ -1674,7 +1669,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                     <i class="fas fa-cash-register"></i>
                     Cashier Discount
                 </div>
-                <div class="dp-value"><?= $currency ?> <?= number_format($stats['cashier_discount_total'], 2, '.', ',') ?></div>
+                <div class="dp-value"><?= $currency ?> <?= number_format($stats['cashier_discount_total'], 0, '.', ',') ?></div>
                 <div class="dp-sub">From cashier</div>
             </div>
             <div class="dp-item total-disc">
@@ -1682,7 +1677,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                     <i class="fas fa-tag"></i>
                     Total Discount
                 </div>
-                <div class="dp-value"><?= $currency ?> <?= number_format($stats['discount_total'], 2, '.', ',') ?></div>
+                <div class="dp-value"><?= $currency ?> <?= number_format($stats['discount_total'], 0, '.', ',') ?></div>
                 <div class="dp-sub">Pharmacy + Cashier</div>
             </div>
             <div class="dp-item pharmacy-prem">
@@ -1690,7 +1685,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                     <i class="fas fa-prescription-bottle-medical"></i>
                     Pharmacy Premium
                 </div>
-                <div class="dp-value"><?= $currency ?> <?= number_format($stats['pharmacy_premium_total'], 2, '.', ',') ?></div>
+                <div class="dp-value"><?= $currency ?> <?= number_format($stats['pharmacy_premium_total'], 0, '.', ',') ?></div>
                 <div class="dp-sub">From medications</div>
             </div>
             <div class="dp-item cashier-prem">
@@ -1698,7 +1693,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                     <i class="fas fa-cash-register"></i>
                     Cashier Premium
                 </div>
-                <div class="dp-value"><?= $currency ?> <?= number_format($stats['cashier_premium_total'], 2, '.', ',') ?></div>
+                <div class="dp-value"><?= $currency ?> <?= number_format($stats['cashier_premium_total'], 0, '.', ',') ?></div>
                 <div class="dp-sub">From cashier</div>
             </div>
             <div class="dp-item total-prem">
@@ -1706,7 +1701,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                     <i class="fas fa-star"></i>
                     Total Premium
                 </div>
-                <div class="dp-value"><?= $currency ?> <?= number_format($stats['premium_revenue'], 2, '.', ',') ?></div>
+                <div class="dp-value"><?= $currency ?> <?= number_format($stats['premium_revenue'], 0, '.', ',') ?></div>
                 <div class="dp-sub">Pharmacy + Cashier</div>
             </div>
         </div>
@@ -1721,7 +1716,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                     Monthly Revenue (12 Months) — Payments + OTC
                 </div>
                 <span style="font-size:0.68rem;color:var(--text-secondary);background:var(--primary-bg);padding:4px 10px;border-radius:8px;font-weight:600;">
-                    Total: <?= $currency ?> <?= number_format(array_sum($monthly_sales), 2, '.', ',') ?>
+                    Total: <?= $currency ?> <?= number_format(array_sum($monthly_sales), 0, '.', ',') ?>
                 </span>
             </div>
             <div class="chart-container">
@@ -1784,7 +1779,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                                     <td style="text-align:right;font-weight:800;color:var(--primary);font-family:var(--font-mono);"><?= number_format($med['total_qty'] ?? 0) ?></td>
                                     <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= $med['times_sold'] ?? 0 ?>×</td>
                                     <td class="money-cell">
-                                        <span class="currency-prefix"><?= $currency ?></span><?= number_format($med['total_revenue'] ?? 0, 2, '.', ',') ?>
+                                        <span class="currency-prefix"><?= $currency ?></span><?= number_format($med['total_revenue'] ?? 0, 0, '.', ',') ?>
                                     </td>
                                 </tr>
                             <?php $rank++; endforeach; ?>
@@ -1873,12 +1868,12 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                                     </td>
                                     <td style="text-align:right;">
                                         <div class="money-cell" style="color:var(--success);">
-                                            <span class="currency-prefix"><?= $currency ?></span><?= number_format($txn['total_amount'] ?? 0, 2, '.', ',') ?>
+                                            <span class="currency-prefix"><?= $currency ?></span><?= number_format($txn['total_amount'] ?? 0, 0, '.', ',') ?>
                                         </div>
                                         
                                         <?php if (!$is_otc && $bill_status === 'partial' && $bill_balance > 0): ?>
                                             <div style="font-size:0.6rem;color:var(--danger);font-weight:700;font-family:var(--font-mono);margin-top:2px;">
-                                                Bal: <?= $currency ?> <?= number_format($bill_balance, 2, '.', ',') ?>
+                                                Bal: <?= $currency ?> <?= number_format($bill_balance, 0, '.', ',') ?>
                                             </div>
                                         <?php endif; ?>
                                     </td>
@@ -1953,7 +1948,7 @@ html, body { font-family: var(--font-primary); -webkit-font-smoothing: antialias
                                     <td style="text-align:center;font-weight:800;color:var(--primary);font-family:var(--font-mono);"><?= number_format($doc['total_visits'] ?? 0) ?></td>
                                     <td style="text-align:center;font-weight:700;color:var(--purple);font-family:var(--font-mono);"><?= number_format($doc['total_prescriptions'] ?? 0) ?></td>
                                     <td class="money-cell">
-                                        <span class="currency-prefix"><?= $currency ?></span><?= number_format($doc['total_revenue'] ?? 0, 2, '.', ',') ?>
+                                        <span class="currency-prefix"><?= $currency ?></span><?= number_format($doc['total_revenue'] ?? 0, 0, '.', ',') ?>
                                     </td>
                                 </tr>
                             <?php $rank++; endforeach; ?>
@@ -2043,7 +2038,7 @@ if (monthlyCtx) {
                     cornerRadius: 8,
                     callbacks: {
                         label: function(context) {
-                            return '💰 <?= $currency ?> ' + context.parsed.y.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                            return '💰 <?= $currency ?> ' + context.parsed.y.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
                         }
                     }
                 }
@@ -2122,7 +2117,7 @@ if (hourlyCtx) {
                     cornerRadius: 8,
                     callbacks: {
                         label: function(context) {
-                            return '💰 <?= $currency ?> ' + context.parsed.y.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                            return '💰 <?= $currency ?> ' + context.parsed.y.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
                         }
                     }
                 }
@@ -2209,7 +2204,7 @@ if (breakdownCtx) {
                             var value = context.parsed;
                             var total = context.dataset.data.reduce((a, b) => a + b, 0);
                             var pct = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
-                            return context.label + ': <?= $currency ?> ' + value.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' (' + pct + '%)';
+                            return context.label + ': <?= $currency ?> ' + value.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0}) + ' (' + pct + '%)';
                         }
                     }
                 }
@@ -2218,13 +2213,13 @@ if (breakdownCtx) {
     });
 }
 
-console.log('%c👑 Admin Audit Dashboard V15.2 - PRESCRIPTION = GROSS (Bila Round Off)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c👑 Admin Audit Dashboard V15.3 - NAMBA KAMILI', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ V15.3: Decimals zimeondolewa — namba kamili tu', 'font-size:13px; color:#34D399; font-weight:bold;');
 console.log('%c✅ V15.2: Prescription = GROSS (Medication_RAW, bila discount, bila premium)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Bila round off — inaonyesha 2 decimal places', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c💰 Total Revenue: <?= $currency ?> <?= number_format($stats['total_revenue'], 2, '.', ',') ?>', 'font-size:12px; color:#0B5ED7;');
-console.log('%c💊 Prescription (GROSS): <?= $currency ?> <?= number_format($stats['prescription_revenue'], 2, '.', ',') ?>', 'font-size:12px; color:#7C3AED; font-weight:bold;');
-console.log('%c📊 Patient Payments (with premium): <?= $currency ?> <?= number_format($stats['patient_payments_revenue'], 2, '.', ',') ?>', 'font-size:12px; color:#059669;');
-console.log('%c⭐ Premium (kwenye Patient Payments): <?= $currency ?> <?= number_format($stats['premium_revenue'], 2, '.', ',') ?>', 'font-size:12px; color:#7C3AED;');
+console.log('%c💰 Total Revenue: <?= $currency ?> <?= number_format($stats['total_revenue'], 0, '.', ',') ?>', 'font-size:12px; color:#0B5ED7;');
+console.log('%c💊 Prescription (GROSS): <?= $currency ?> <?= number_format($stats['prescription_revenue'], 0, '.', ',') ?>', 'font-size:12px; color:#7C3AED; font-weight:bold;');
+console.log('%c📊 Patient Payments (with premium): <?= $currency ?> <?= number_format($stats['patient_payments_revenue'], 0, '.', ',') ?>', 'font-size:12px; color:#059669;');
+console.log('%c⭐ Premium: <?= $currency ?> <?= number_format($stats['premium_revenue'], 0, '.', ',') ?>', 'font-size:12px; color:#7C3AED;');
 </script>
 
 </body>
