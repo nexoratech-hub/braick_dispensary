@@ -1,15 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/stock_movement.php
-// AUDIT - STOCK MOVEMENT REPORT V6.2 (BRANCH LOCKED) - FULL FINAL
+// AUDIT - STOCK MOVEMENT REPORT V6.3 (BRANCH LOCKED - FULLY FIXED)
 // ================================================================
-// ✅ V6.2: Period Overview (Stock at Start + Added + Movements + Current)
-// ✅ V6.2: Last Added Stock with Correct Logic (Previous + Last = Available)
-// ✅ V6.2: Movements since Last Purchase (not all-time)
-// ✅ V6: Expiry Alerts + Days to Stockout + Export CSV
-// ✅ V5: Remaining Stock Card + Stock Health Bar
-// ✅ V4: Top 5 Most Used + English placeholders
-// ✅ V3: Full Medicine & Equipment Tracking
+// ✅ V6.3: Branch filter INAFANYA KAZI kwenye queries zote
+// ✅ V6.2: Period Overview + Last Added Stock + Expiry + Stockout
+// ✅ V6: Export CSV + Top 5 + Remaining Stock
+// ✅ V5: Stock Health Bar
+// ✅ Branch LOCKED - Audit anaona branch yake pekee
 // ================================================================
 
 date_default_timezone_set('Africa/Dar_es_Salaam');
@@ -61,7 +59,7 @@ try {
     if ($row && !empty($row['setting_value'])) $currency = $row['setting_value'];
 } catch (Exception $e) {}
 
-// Branch LOCKED
+// ✅ AUDIT: Branch LOCKED
 $selected_branch_id = (int)$user_branch_id;
 $branch_name_display = $user_branch_name;
 try {
@@ -141,12 +139,14 @@ switch ($quick_filter) {
         break;
 }
 
-// Branch locked
+// ✅ V6.3: Branch conditions - LAZIMA kwenye queries ZOTE
 $branch_cond_p = " AND p.branch_id = ?";
 $branch_cond_o = " AND os.branch_id = ?";
 $branch_cond_pr = " AND pr.branch_id = ?";
 $branch_cond_lt = " AND lt.branch_id = ?";
 $branch_cond_bi = " AND bi.branch_id = ?";
+$branch_cond_mi = " AND mi.branch_id = ?"; // Medications inventory direct
+$branch_cond_ei = " AND ei.branch_id = ?"; // Equipment inventory direct
 $branch_params_p = [$selected_branch_id];
 $branch_params_o = [$selected_branch_id];
 $branch_params_pr = [$selected_branch_id];
@@ -197,7 +197,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'search') {
 }
 
 // ================================================================
-// TOP 5 MOST USED
+// ✅ V6.3: TOP 5 MOST USED - BRANCH LOCKED
 // ================================================================
 $top5_medicines = [];
 $top5_equipment = [];
@@ -206,7 +206,9 @@ try {
     $sql = "SELECT 
                 combined.med_name as name,
                 SUM(combined.total_qty) as total_qty,
-                (SELECT id FROM medications_inventory WHERE medication_name = combined.med_name AND status='active' AND branch_id = ? LIMIT 1) as item_id
+                (SELECT id FROM medications_inventory 
+                    WHERE medication_name = combined.med_name AND status='active' AND branch_id = ?
+                    LIMIT 1) as item_id
             FROM (
                 SELECT pi.medication_name as med_name, SUM(pi.quantity) as total_qty
                 FROM prescription_items pi
@@ -227,6 +229,7 @@ try {
                 GROUP BY osi.item_name
             ) as combined
             GROUP BY combined.med_name
+            HAVING item_id IS NOT NULL
             ORDER BY total_qty DESC
             LIMIT 5";
     
@@ -240,7 +243,9 @@ try {
     $sql = "SELECT 
                 combined.eq_name as name,
                 SUM(combined.total_qty) as total_qty,
-                (SELECT id FROM medical_equipment WHERE equipment_name = combined.eq_name AND status='active' AND branch_id = ? LIMIT 1) as item_id
+                (SELECT id FROM medical_equipment 
+                    WHERE equipment_name = combined.eq_name AND status='active' AND branch_id = ?
+                    LIMIT 1) as item_id
             FROM (
                 SELECT me.equipment_name as eq_name, COUNT(lt.id) as total_qty
                 FROM lab_tests lt
@@ -262,6 +267,7 @@ try {
                 GROUP BY bi.item_name
             ) as combined
             GROUP BY combined.eq_name
+            HAVING item_id IS NOT NULL
             ORDER BY total_qty DESC
             LIMIT 5";
     
@@ -272,12 +278,8 @@ try {
 } catch (Exception $e) { error_log("Top 5 equipment: " . $e->getMessage()); }
 
 // ================================================================
-// LOAD DETAILS
+// HELPER FUNCTIONS
 // ================================================================
-$medicine_details = null;
-$equipment_details = null;
-
-// Helper: Get period start date
 function getPeriodStartDate($quick_filter, $date_from = null) {
     switch ($quick_filter) {
         case 'today': return date('Y-m-d 00:00:00');
@@ -292,8 +294,23 @@ function getPeriodStartDate($quick_filter, $date_from = null) {
     }
 }
 
+function isInPeriod($date_str, $period_start, $period_end = null) {
+    if ($period_start === null) return true;
+    $ts = strtotime($date_str);
+    if ($ts < strtotime($period_start)) return false;
+    if ($period_end !== null && $ts > strtotime($period_end)) return false;
+    return true;
+}
+
+// ================================================================
+// LOAD DETAILS
+// ================================================================
+$medicine_details = null;
+$equipment_details = null;
+
 // ================ MEDICINE DETAILS ================
 if ($active_tab === 'medicine' && $selected_item_id > 0) {
+    // ✅ V6.3: Verify item belongs to user's branch
     $stmt = $db->prepare("SELECT medication_name FROM medications_inventory WHERE id = ? AND branch_id = ?");
     $stmt->execute([$selected_item_id, $selected_branch_id]);
     $med_row = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -301,7 +318,15 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
     if ($med_row) {
         $med_name = $med_row['medication_name'];
         
-        // CURRENT STOCK
+        // ✅ V6.3: Get inventory IDs - BRANCH FILTERED
+        $inventory_ids = [];
+        try {
+            $stmt = $db->prepare("SELECT id FROM medications_inventory WHERE medication_name = ? AND branch_id = ?");
+            $stmt->execute([$med_name, $selected_branch_id]);
+            $inventory_ids = array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'id');
+        } catch (Exception $e) {}
+        
+        // CURRENT STOCK - Branch locked
         $current_stock = [];
         try {
             $sql = "SELECT id, medication_name, category, unit, quantity, reorder_level, 
@@ -319,18 +344,10 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
         foreach ($current_stock as $cs) { $total_current_stock += (int)$cs['quantity']; }
         
         $medicine_info = !empty($current_stock) ? $current_stock[0] : [
-            'medication_name' => $med_name,
-            'category' => 'N/A', 'unit' => 'N/A', 'selling_price' => 0
+            'medication_name' => $med_name, 'category' => 'N/A', 'unit' => 'N/A', 'selling_price' => 0
         ];
         
-        // PURCHASE HISTORY - ALL TIME (no date filter) for calculations
-        $inventory_ids = [];
-        try {
-            $stmt = $db->prepare("SELECT id FROM medications_inventory WHERE medication_name = ? AND branch_id = ?");
-            $stmt->execute([$med_name, $selected_branch_id]);
-            $inventory_ids = array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'id');
-        } catch (Exception $e) {}
-        
+        // ✅ V6.3: PURCHASE HISTORY - BRANCH FILTERED
         $purchase_history_all = [];
         if (!empty($inventory_ids)) {
             try {
@@ -345,39 +362,26 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
                         WHERE pi.item_type = 'medicine' 
                         AND pi.item_id IN ($placeholders)
                         AND p.status = 'COMPLETED'
+                        $branch_cond_p
                         ORDER BY p.created_at DESC";
                 $stmt = $db->prepare($sql);
-                $stmt->execute($inventory_ids);
+                $stmt->execute(array_merge($inventory_ids, $branch_params_p));
                 $purchase_history_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
             } catch (Exception $e) {}
         }
         
-        // PURCHASE HISTORY - FILTERED (for display)
+        // Period filter
+        $period_start = getPeriodStartDate($quick_filter, $date_from);
+        $period_end = ($quick_filter === 'custom') ? $date_to . ' 23:59:59' : null;
+        
         $purchase_history = [];
         foreach ($purchase_history_all as $ph) {
-            $in_period = true;
-            if (!empty($date_cond_purchases)) {
-                if ($quick_filter === 'custom') {
-                    $ph_date = date('Y-m-d', strtotime($ph['added_at']));
-                    if ($ph_date < $date_from || $ph_date > $date_to) $in_period = false;
-                } elseif ($quick_filter === 'today') {
-                    if (date('Y-m-d', strtotime($ph['added_at'])) !== date('Y-m-d')) $in_period = false;
-                } elseif ($quick_filter === '1w') {
-                    if (strtotime($ph['added_at']) < strtotime('-7 days')) $in_period = false;
-                } elseif ($quick_filter === '1m') {
-                    if (strtotime($ph['added_at']) < strtotime('-1 month')) $in_period = false;
-                } elseif ($quick_filter === '3m') {
-                    if (strtotime($ph['added_at']) < strtotime('-3 months')) $in_period = false;
-                } elseif ($quick_filter === '6m') {
-                    if (strtotime($ph['added_at']) < strtotime('-6 months')) $in_period = false;
-                } elseif ($quick_filter === '1y') {
-                    if (strtotime($ph['added_at']) < strtotime('-1 year')) $in_period = false;
-                }
+            if (isInPeriod($ph['added_at'], $period_start, $period_end)) {
+                $purchase_history[] = $ph;
             }
-            if ($in_period) $purchase_history[] = $ph;
         }
         
-        // PRESCRIPTIONS - ALL TIME
+        // ✅ PRESCRIPTIONS - BRANCH FILTERED
         $prescriptions_all = [];
         try {
             $sql = "SELECT pi.id as item_id, pi.quantity, pi.dosage, pi.frequency, pi.route,
@@ -404,32 +408,14 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
             $prescriptions_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (Exception $e) {}
         
-        // Prescriptions - filtered
         $prescriptions = [];
         foreach ($prescriptions_all as $p) {
-            $in_period = true;
-            if (!empty($date_cond_prescriptions)) {
-                if ($quick_filter === 'custom') {
-                    $p_date = date('Y-m-d', strtotime($p['prescribed_at']));
-                    if ($p_date < $date_from || $p_date > $date_to) $in_period = false;
-                } elseif ($quick_filter === 'today') {
-                    if (date('Y-m-d', strtotime($p['prescribed_at'])) !== date('Y-m-d')) $in_period = false;
-                } elseif ($quick_filter === '1w') {
-                    if (strtotime($p['prescribed_at']) < strtotime('-7 days')) $in_period = false;
-                } elseif ($quick_filter === '1m') {
-                    if (strtotime($p['prescribed_at']) < strtotime('-1 month')) $in_period = false;
-                } elseif ($quick_filter === '3m') {
-                    if (strtotime($p['prescribed_at']) < strtotime('-3 months')) $in_period = false;
-                } elseif ($quick_filter === '6m') {
-                    if (strtotime($p['prescribed_at']) < strtotime('-6 months')) $in_period = false;
-                } elseif ($quick_filter === '1y') {
-                    if (strtotime($p['prescribed_at']) < strtotime('-1 year')) $in_period = false;
-                }
+            if (isInPeriod($p['prescribed_at'], $period_start, $period_end)) {
+                $prescriptions[] = $p;
             }
-            if ($in_period) $prescriptions[] = $p;
         }
         
-        // OTC SALES - ALL TIME
+        // ✅ OTC SALES - BRANCH FILTERED
         $otc_sales_all = [];
         try {
             $sql = "SELECT osi.id as item_id, osi.quantity, osi.unit_price, osi.total_price,
@@ -449,32 +435,14 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
             $otc_sales_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (Exception $e) {}
         
-        // OTC - filtered
         $otc_sales = [];
         foreach ($otc_sales_all as $os) {
-            $in_period = true;
-            if (!empty($date_cond_otc)) {
-                if ($quick_filter === 'custom') {
-                    $os_date = date('Y-m-d', strtotime($os['sold_at']));
-                    if ($os_date < $date_from || $os_date > $date_to) $in_period = false;
-                } elseif ($quick_filter === 'today') {
-                    if (date('Y-m-d', strtotime($os['sold_at'])) !== date('Y-m-d')) $in_period = false;
-                } elseif ($quick_filter === '1w') {
-                    if (strtotime($os['sold_at']) < strtotime('-7 days')) $in_period = false;
-                } elseif ($quick_filter === '1m') {
-                    if (strtotime($os['sold_at']) < strtotime('-1 month')) $in_period = false;
-                } elseif ($quick_filter === '3m') {
-                    if (strtotime($os['sold_at']) < strtotime('-3 months')) $in_period = false;
-                } elseif ($quick_filter === '6m') {
-                    if (strtotime($os['sold_at']) < strtotime('-6 months')) $in_period = false;
-                } elseif ($quick_filter === '1y') {
-                    if (strtotime($os['sold_at']) < strtotime('-1 year')) $in_period = false;
-                }
+            if (isInPeriod($os['sold_at'], $period_start, $period_end)) {
+                $otc_sales[] = $os;
             }
-            if ($in_period) $otc_sales[] = $os;
         }
         
-        // BILL ITEMS
+        // ✅ BILL ITEMS - BRANCH FILTERED
         $bill_items = [];
         try {
             $sql = "SELECT bi.id, bi.bill_id, bi.item_name, bi.quantity, bi.unit_price, 
@@ -500,7 +468,7 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
             $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (Exception $e) {}
         
-        // ============ SUMMARIES (Period-based for display) ============
+        // SUMMARIES
         $summary = [
             'purchase_qty' => 0, 'purchase_count' => 0,
             'pending_qty' => 0, 'pending_count' => 0,
@@ -543,7 +511,7 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
         $summary['unique_visits'] = count($visit_keys);
         $summary['unique_patients'] = count($patient_keys);
         
-        // ============ REMAINING STOCK ============
+        // REMAINING STOCK
         $stock_value = 0; $average_selling_price = 0; $price_count = 0;
         foreach ($current_stock as $cs) {
             $stock_value += (int)$cs['quantity'] * (float)($cs['selling_price'] ?? 0);
@@ -585,32 +553,28 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
             $remaining_stock['status_icon'] = 'fa-exclamation-circle';
         }
         
-        // ============ V6.2: PERIOD OVERVIEW ============
-        $period_start_date = getPeriodStartDate($quick_filter, $date_from);
-        
-        // Stock at period start = Total purchased BEFORE period - Total movements BEFORE period
+        // PERIOD OVERVIEW
         $total_purchased_before = 0;
         foreach ($purchase_history_all as $ph) {
-            if ($period_start_date === null || strtotime($ph['added_at']) < strtotime($period_start_date)) {
+            if ($period_start === null || strtotime($ph['added_at']) < strtotime($period_start)) {
                 $total_purchased_before += (int)$ph['quantity'];
             }
         }
         
         $total_movements_before = 0;
         foreach ($prescriptions_all as $p) {
-            if ($period_start_date === null || strtotime($p['prescribed_at']) < strtotime($period_start_date)) {
+            if ($period_start === null || strtotime($p['prescribed_at']) < strtotime($period_start)) {
                 $total_movements_before += (int)$p['quantity'];
             }
         }
         foreach ($otc_sales_all as $os) {
-            if ($period_start_date === null || strtotime($os['sold_at']) < strtotime($period_start_date)) {
+            if ($period_start === null || strtotime($os['sold_at']) < strtotime($period_start)) {
                 $total_movements_before += (int)$os['quantity'];
             }
         }
         
         $stock_at_period_start = max(0, $total_purchased_before - $total_movements_before);
         
-        // Period purchases
         $period_purchases_total = 0;
         $period_purchases_users = [];
         foreach ($purchase_history as $ph) {
@@ -618,7 +582,6 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
             if (!empty($ph['added_by_name'])) $period_purchases_users[$ph['added_by_name']] = true;
         }
         
-        // Period movements
         $period_prescriptions_qty = 0;
         $period_otc_qty = 0;
         foreach ($prescriptions as $p) $period_prescriptions_qty += (int)$p['quantity'];
@@ -626,7 +589,7 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
         
         $period_info = [
             'filter_label' => $date_label,
-            'period_start' => $period_start_date,
+            'period_start' => $period_start,
             'stock_at_period_start' => $stock_at_period_start,
             'purchases_count' => count($purchase_history),
             'purchases_total_qty' => $period_purchases_total,
@@ -638,20 +601,18 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
             'total_movements_before_period' => $total_movements_before
         ];
         
-        // ============ V6.2: LAST ADDED STOCK (Correct Logic) ============
+        // LAST ADDED STOCK
         if (count($purchase_history_all) > 0) {
-            $last_purchase = $purchase_history_all[0]; // Most recent
+            $last_purchase = $purchase_history_all[0];
             $last_added_qty = (int)$last_purchase['quantity'];
             $last_added_date = $last_purchase['added_at'];
             $last_date_ts = strtotime($last_added_date);
             
-            // Purchased BEFORE last add (all time)
             $purchased_before_last = 0;
             for ($i = 1; $i < count($purchase_history_all); $i++) {
                 $purchased_before_last += (int)$purchase_history_all[$i]['quantity'];
             }
             
-            // Movements BEFORE last purchase (all time)
             $movements_before_last = 0;
             foreach ($prescriptions_all as $p) {
                 if (strtotime($p['prescribed_at']) < $last_date_ts) {
@@ -664,13 +625,9 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
                 }
             }
             
-            // Previous stock = Purchased before - Movements before
             $previous_stock_before_last = max(0, $purchased_before_last - $movements_before_last);
-            
-            // Available after last add = Previous + Last Added
             $available_after_last_add = $previous_stock_before_last + $last_added_qty;
             
-            // Movements AFTER last add
             $movements_after_last = 0;
             foreach ($prescriptions_all as $p) {
                 if (strtotime($p['prescribed_at']) >= $last_date_ts) {
@@ -716,7 +673,7 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
             ];
         }
         
-        // ============ DAYS UNTIL STOCKOUT ============
+        // DAYS UNTIL STOCKOUT
         $days_in_period = 30;
         if ($quick_filter === 'custom') $days_in_period = max(1, (strtotime($date_to) - strtotime($date_from)) / 86400);
         elseif ($quick_filter === '1w') $days_in_period = 7;
@@ -750,12 +707,21 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
 
 // ================ EQUIPMENT DETAILS ================
 if ($active_tab === 'equipment' && $selected_item_id > 0) {
+    // ✅ V6.3: Verify item belongs to user's branch
     $stmt = $db->prepare("SELECT equipment_name FROM medical_equipment WHERE id = ? AND branch_id = ?");
     $stmt->execute([$selected_item_id, $selected_branch_id]);
     $eq_row = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($eq_row) {
         $eq_name = $eq_row['equipment_name'];
+        
+        // ✅ V6.3: Equipment IDs - BRANCH FILTERED
+        $equipment_ids = [];
+        try {
+            $stmt = $db->prepare("SELECT id FROM medical_equipment WHERE equipment_name = ? AND branch_id = ?");
+            $stmt->execute([$eq_name, $selected_branch_id]);
+            $equipment_ids = array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'id');
+        } catch (Exception $e) {}
         
         // CURRENT STOCK
         $current_stock = [];
@@ -774,18 +740,13 @@ if ($active_tab === 'equipment' && $selected_item_id > 0) {
         foreach ($current_stock as $cs) { $total_current_stock += (int)$cs['quantity']; }
         
         $equipment_info = !empty($current_stock) ? $current_stock[0] : [
-            'equipment_name' => $eq_name,
-            'category' => 'N/A', 'unit' => 'N/A', 'selling_price' => 0
+            'equipment_name' => $eq_name, 'category' => 'N/A', 'unit' => 'N/A', 'selling_price' => 0
         ];
         
-        $equipment_ids = [];
-        try {
-            $stmt = $db->prepare("SELECT id FROM medical_equipment WHERE equipment_name = ? AND branch_id = ?");
-            $stmt->execute([$eq_name, $selected_branch_id]);
-            $equipment_ids = array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'id');
-        } catch (Exception $e) {}
+        $period_start = getPeriodStartDate($quick_filter, $date_from);
+        $period_end = ($quick_filter === 'custom') ? $date_to . ' 23:59:59' : null;
         
-        // PURCHASE HISTORY - ALL TIME
+        // ✅ PURCHASE HISTORY - BRANCH FILTERED
         $purchase_history_all = [];
         if (!empty($equipment_ids)) {
             try {
@@ -799,37 +760,22 @@ if ($active_tab === 'equipment' && $selected_item_id > 0) {
                         WHERE pi.item_type = 'equipment'
                         AND pi.item_id IN ($placeholders)
                         AND p.status = 'COMPLETED'
+                        $branch_cond_p
                         ORDER BY p.created_at DESC";
                 $stmt = $db->prepare($sql);
-                $stmt->execute($equipment_ids);
+                $stmt->execute(array_merge($equipment_ids, $branch_params_p));
                 $purchase_history_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
             } catch (Exception $e) {}
         }
         
-        // Filtered purchases
         $purchase_history = [];
         foreach ($purchase_history_all as $ph) {
-            $in_period = true;
-            if ($quick_filter === 'custom') {
-                $ph_date = date('Y-m-d', strtotime($ph['added_at']));
-                if ($ph_date < $date_from || $ph_date > $date_to) $in_period = false;
-            } elseif ($quick_filter === 'today') {
-                if (date('Y-m-d', strtotime($ph['added_at'])) !== date('Y-m-d')) $in_period = false;
-            } elseif ($quick_filter === '1w') {
-                if (strtotime($ph['added_at']) < strtotime('-7 days')) $in_period = false;
-            } elseif ($quick_filter === '1m') {
-                if (strtotime($ph['added_at']) < strtotime('-1 month')) $in_period = false;
-            } elseif ($quick_filter === '3m') {
-                if (strtotime($ph['added_at']) < strtotime('-3 months')) $in_period = false;
-            } elseif ($quick_filter === '6m') {
-                if (strtotime($ph['added_at']) < strtotime('-6 months')) $in_period = false;
-            } elseif ($quick_filter === '1y') {
-                if (strtotime($ph['added_at']) < strtotime('-1 year')) $in_period = false;
+            if (isInPeriod($ph['added_at'], $period_start, $period_end)) {
+                $purchase_history[] = $ph;
             }
-            if ($in_period) $purchase_history[] = $ph;
         }
         
-        // BILL ITEMS - ALL TIME
+        // ✅ BILL ITEMS - BRANCH FILTERED
         $bill_items_all = [];
         if (!empty($equipment_ids)) {
             try {
@@ -849,38 +795,22 @@ if ($active_tab === 'equipment' && $selected_item_id > 0) {
                         LEFT JOIN branches br ON b.branch_id = br.id
                         WHERE bi.item_type = 'equipment'
                         AND bi.item_id IN (" . implode(',', array_fill(0, count($equipment_ids), '?')) . ")
-                        AND bi.branch_id = ?
+                        $branch_cond_bi
                         ORDER BY b.created_at DESC";
                 $stmt = $db->prepare($sql);
-                $stmt->execute(array_merge($equipment_ids, [$selected_branch_id]));
+                $stmt->execute(array_merge($equipment_ids, $branch_params_bi));
                 $bill_items_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
             } catch (Exception $e) {}
         }
         
-        // Filtered bill items
         $bill_items = [];
         foreach ($bill_items_all as $bi) {
-            $in_period = true;
-            if ($quick_filter === 'custom') {
-                $bi_date = date('Y-m-d', strtotime($bi['item_created_at']));
-                if ($bi_date < $date_from || $bi_date > $date_to) $in_period = false;
-            } elseif ($quick_filter === 'today') {
-                if (date('Y-m-d', strtotime($bi['item_created_at'])) !== date('Y-m-d')) $in_period = false;
-            } elseif ($quick_filter === '1w') {
-                if (strtotime($bi['item_created_at']) < strtotime('-7 days')) $in_period = false;
-            } elseif ($quick_filter === '1m') {
-                if (strtotime($bi['item_created_at']) < strtotime('-1 month')) $in_period = false;
-            } elseif ($quick_filter === '3m') {
-                if (strtotime($bi['item_created_at']) < strtotime('-3 months')) $in_period = false;
-            } elseif ($quick_filter === '6m') {
-                if (strtotime($bi['item_created_at']) < strtotime('-6 months')) $in_period = false;
-            } elseif ($quick_filter === '1y') {
-                if (strtotime($bi['item_created_at']) < strtotime('-1 year')) $in_period = false;
+            if (isInPeriod($bi['item_created_at'], $period_start, $period_end)) {
+                $bill_items[] = $bi;
             }
-            if ($in_period) $bill_items[] = $bi;
         }
         
-        // LAB TESTS - ALL TIME
+        // ✅ LAB TESTS - BRANCH FILTERED
         $lab_tests_all = [];
         if (!empty($equipment_ids)) {
             try {
@@ -899,35 +829,19 @@ if ($active_tab === 'equipment' && $selected_item_id > 0) {
                         LEFT JOIN users u_lab ON lt.lab_technician_id = u_lab.id
                         LEFT JOIN branches br ON lt.branch_id = br.id
                         WHERE lte.equipment_id IN (" . implode(',', array_fill(0, count($equipment_ids), '?')) . ")
-                        AND lt.branch_id = ?
+                        $branch_cond_lt
                         ORDER BY lt.created_at DESC";
                 $stmt = $db->prepare($sql);
-                $stmt->execute(array_merge($equipment_ids, [$selected_branch_id]));
+                $stmt->execute(array_merge($equipment_ids, $branch_params_lt));
                 $lab_tests_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
             } catch (Exception $e) {}
         }
         
-        // Filtered lab tests
         $lab_tests = [];
         foreach ($lab_tests_all as $lt) {
-            $in_period = true;
-            if ($quick_filter === 'custom') {
-                $lt_date = date('Y-m-d', strtotime($lt['test_created_at']));
-                if ($lt_date < $date_from || $lt_date > $date_to) $in_period = false;
-            } elseif ($quick_filter === 'today') {
-                if (date('Y-m-d', strtotime($lt['test_created_at'])) !== date('Y-m-d')) $in_period = false;
-            } elseif ($quick_filter === '1w') {
-                if (strtotime($lt['test_created_at']) < strtotime('-7 days')) $in_period = false;
-            } elseif ($quick_filter === '1m') {
-                if (strtotime($lt['test_created_at']) < strtotime('-1 month')) $in_period = false;
-            } elseif ($quick_filter === '3m') {
-                if (strtotime($lt['test_created_at']) < strtotime('-3 months')) $in_period = false;
-            } elseif ($quick_filter === '6m') {
-                if (strtotime($lt['test_created_at']) < strtotime('-6 months')) $in_period = false;
-            } elseif ($quick_filter === '1y') {
-                if (strtotime($lt['test_created_at']) < strtotime('-1 year')) $in_period = false;
+            if (isInPeriod($lt['test_created_at'], $period_start, $period_end)) {
+                $lab_tests[] = $lt;
             }
-            if ($in_period) $lab_tests[] = $lt;
         }
         
         // SUMMARIES
@@ -1019,23 +933,21 @@ if ($active_tab === 'equipment' && $selected_item_id > 0) {
         }
         
         // PERIOD OVERVIEW
-        $period_start_date = getPeriodStartDate($quick_filter, $date_from);
-        
         $total_purchased_before = 0;
         foreach ($purchase_history_all as $ph) {
-            if ($period_start_date === null || strtotime($ph['added_at']) < strtotime($period_start_date)) {
+            if ($period_start === null || strtotime($ph['added_at']) < strtotime($period_start)) {
                 $total_purchased_before += (int)$ph['quantity'];
             }
         }
         
         $total_movements_before = 0;
         foreach ($bill_items_all as $bi) {
-            if ($period_start_date === null || strtotime($bi['item_created_at']) < strtotime($period_start_date)) {
+            if ($period_start === null || strtotime($bi['item_created_at']) < strtotime($period_start)) {
                 $total_movements_before += (int)$bi['quantity'];
             }
         }
         foreach ($lab_tests_all as $lt) {
-            if ($period_start_date === null || strtotime($lt['test_created_at']) < strtotime($period_start_date)) {
+            if ($period_start === null || strtotime($lt['test_created_at']) < strtotime($period_start)) {
                 $total_movements_before += 1;
             }
         }
@@ -1056,7 +968,7 @@ if ($active_tab === 'equipment' && $selected_item_id > 0) {
         
         $period_info = [
             'filter_label' => $date_label,
-            'period_start' => $period_start_date,
+            'period_start' => $period_start,
             'stock_at_period_start' => $stock_at_period_start,
             'purchases_count' => count($purchase_history),
             'purchases_total_qty' => $period_purchases_total,
@@ -1318,7 +1230,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .autocomplete-item .item-stock.low { background: var(--danger-bg); color: var(--danger); }
 .autocomplete-empty { padding: 20px; text-align: center; color: var(--text-secondary); font-size: 0.85rem; }
 
-/* PERIOD OVERVIEW */
 .period-overview-card { background: linear-gradient(135deg, #EFF6FF, #DBEAFE); border: 2px solid #93C5FD; border-radius: var(--radius-lg); padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(11, 94, 215, 0.12); position: relative; overflow: hidden; }
 [data-theme="dark"] .period-overview-card { background: linear-gradient(135deg, #12294A, #1E3A5F); border-color: #1E40AF; }
 .period-overview-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, #0B5ED7, #3B82F6, #7C3AED, #3B82F6, #0B5ED7); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
@@ -1356,7 +1267,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .po-users-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .po-user-tag { display: inline-flex; align-items: center; gap: 5px; background: linear-gradient(135deg, #0B5ED7, #3B82F6); color: white; padding: 5px 12px; border-radius: var(--radius-full); font-size: 0.7rem; font-weight: 700; }
 
-/* LAST ADDED STOCK */
 .last-stock-card { background: var(--bg-card); border-radius: var(--radius-lg); padding: 20px 24px; margin-bottom: 20px; border: 2px solid var(--border-color); box-shadow: 0 4px 20px rgba(0,0,0,0.08); position: relative; overflow: hidden; }
 .last-stock-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; }
 .last-stock-card.accurate { border-color: #34D399; background: linear-gradient(135deg, #ECFDF5, var(--bg-card) 60%); }
@@ -1410,7 +1320,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .ls-v-vs { font-size: 1.3rem; color: var(--text-secondary); text-align: center; }
 .ls-note { margin-top: 14px; padding: 14px 18px; background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-left: 4px solid #D97706; border-radius: var(--radius-md); font-size: 0.78rem; color: #78350F; line-height: 1.6; }
 
-/* REMAINING STOCK */
 .remaining-stock-card { background: var(--bg-card); border-radius: var(--radius-lg); padding: 20px 24px; margin-bottom: 20px; border: 2px solid var(--border-color); box-shadow: 0 4px 20px rgba(0,0,0,0.08); position: relative; overflow: hidden; }
 .remaining-stock-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; }
 .remaining-stock-card.success { border-color: #34D399; background: linear-gradient(135deg, #ECFDF5, var(--bg-card) 70%); }
@@ -1466,7 +1375,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .rs-bar-fill.warning { background: linear-gradient(90deg, #D97706, #FBBF24); }
 .rs-bar-fill.danger { background: linear-gradient(90deg, #DC2626, #F87171); }
 
-/* TOP 5 */
 .top5-section { background: linear-gradient(135deg, #FFFBEB, #FEF3C7); border: 2px solid #FCD34D; border-radius: var(--radius-lg); padding: 16px 20px; margin-top: 16px; box-shadow: 0 4px 16px rgba(217, 119, 6, 0.15); }
 [data-theme="dark"] .top5-section { background: linear-gradient(135deg, #3A2A0F, #4A3A12); border-color: #78350F; }
 .top5-section.equipment { background: linear-gradient(135deg, #EFF6FF, #DBEAFE); border-color: #93C5FD; }
@@ -1681,7 +1589,9 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
     <div class="top5-section">
         <div class="top5-header">
             <i class="fas fa-fire"></i> Top 5 Most Used Medicines
-            <span class="top5-badge"><?= htmlspecialchars($date_label) ?></span>
+            <span class="top5-badge">
+                <?= htmlspecialchars($date_label) ?> • <?= htmlspecialchars($branch_name_display) ?>
+            </span>
         </div>
         <div class="top5-grid">
             <?php foreach ($top5_medicines as $idx => $tm): ?>
@@ -1702,7 +1612,9 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
     <div class="top5-section equipment">
         <div class="top5-header">
             <i class="fas fa-fire"></i> Top 5 Most Used Equipment
-            <span class="top5-badge"><?= htmlspecialchars($date_label) ?></span>
+            <span class="top5-badge">
+                <?= htmlspecialchars($date_label) ?> • <?= htmlspecialchars($branch_name_display) ?>
+            </span>
         </div>
         <div class="top5-grid">
             <?php foreach ($top5_equipment as $idx => $te): ?>
@@ -1742,6 +1654,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                             <span><i class="fas fa-tag"></i> <?= htmlspecialchars($med['category'] ?? 'N/A') ?></span>
                             <span><i class="fas fa-flask"></i> Unit: <?= htmlspecialchars($med['unit'] ?? 'N/A') ?></span>
                             <span><i class="fas fa-money-bill"></i> Selling: <?= $currency ?> <?= number_format($med['selling_price'] ?? 0, 0) ?></span>
+                            <span style="color:var(--warning);font-weight:800;"><i class="fas fa-lock"></i> <?= htmlspecialchars($branch_name_display) ?></span>
                         </div>
                     </div>
                 </div>
@@ -1750,7 +1663,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                 <div class="period-overview-card">
                     <div class="po-header">
                         <div class="po-title"><i class="fas fa-calendar-check"></i> Period Overview</div>
-                        <div class="po-badge"><i class="fas fa-filter"></i> <?= htmlspecialchars($pi['filter_label']) ?></div>
+                        <div class="po-badge"><i class="fas fa-filter"></i> <?= htmlspecialchars($pi['filter_label']) ?> • <?= htmlspecialchars($branch_name_display) ?></div>
                     </div>
                     
                     <div class="po-grid">
@@ -2248,6 +2161,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                             <span><i class="fas fa-tag"></i> <?= htmlspecialchars($eq['category'] ?? 'N/A') ?></span>
                             <span><i class="fas fa-box"></i> Unit: <?= htmlspecialchars($eq['unit'] ?? 'N/A') ?></span>
                             <span><i class="fas fa-money-bill"></i> Selling: <?= $currency ?> <?= number_format($eq['selling_price'] ?? 0, 0) ?></span>
+                            <span style="color:var(--warning);font-weight:800;"><i class="fas fa-lock"></i> <?= htmlspecialchars($branch_name_display) ?></span>
                         </div>
                     </div>
                 </div>
@@ -2256,7 +2170,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                 <div class="period-overview-card">
                     <div class="po-header">
                         <div class="po-title"><i class="fas fa-calendar-check"></i> Period Overview</div>
-                        <div class="po-badge"><i class="fas fa-filter"></i> <?= htmlspecialchars($pi['filter_label']) ?></div>
+                        <div class="po-badge"><i class="fas fa-filter"></i> <?= htmlspecialchars($pi['filter_label']) ?> • <?= htmlspecialchars($branch_name_display) ?></div>
                     </div>
                     <div class="po-grid">
                         <div class="po-item po-start">
