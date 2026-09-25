@@ -1,11 +1,14 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/lab_tests.php
-// ADMIN AUDIT - LAB TESTS GROUPED BY PATIENT → VISIT (V4 - BLUE THEME)
+// ADMIN AUDIT - LAB TESTS GROUPED BY PATIENT → VISIT (V5 - FIXED)
 // ✅ Group by Patient → Visit
 // ✅ Table header ina < > buttons kwa kuslide left/right (horizontal scroll)
 // ✅ Blue theme
 // ✅ Column ya "Paid By" imeondolewa
+// ✅ FIX: Quick filters (All, Today, 1W, 1M, 3M, 1Y, Custom) zinafanya kazi
+// ✅ FIX: Branch filtering - inachuja patient/doctor wasio wa branch moja
+// ✅ FIX: COALESCE(test_date, created_at) kwa sababu test_date inaweza kuwa NULL
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -47,32 +50,40 @@ $quick_filter = isset($_GET['quick']) ? $_GET['quick'] : 'all';
 $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
+// ================================================================
+// ✅ FIX: Quick filter date calculation (with time boundaries)
+// ================================================================
 $quick_date_from = '';
-$quick_date_to = date('Y-m-d');
+$quick_date_to = '';
 
 switch ($quick_filter) {
     case 'today':
-        $quick_date_from = date('Y-m-d');
-        $quick_date_to = date('Y-m-d');
+        $quick_date_from = date('Y-m-d 00:00:00');
+        $quick_date_to = date('Y-m-d 23:59:59');
         break;
     case '1w':
-        $quick_date_from = date('Y-m-d', strtotime('-7 days'));
+        $quick_date_from = date('Y-m-d 00:00:00', strtotime('-7 days'));
+        $quick_date_to = date('Y-m-d 23:59:59');
         break;
     case '1m':
-        $quick_date_from = date('Y-m-d', strtotime('-1 month'));
+        $quick_date_from = date('Y-m-d 00:00:00', strtotime('-1 month'));
+        $quick_date_to = date('Y-m-d 23:59:59');
         break;
     case '3m':
-        $quick_date_from = date('Y-m-d', strtotime('-3 months'));
+        $quick_date_from = date('Y-m-d 00:00:00', strtotime('-3 months'));
+        $quick_date_to = date('Y-m-d 23:59:59');
         break;
     case '6m':
-        $quick_date_from = date('Y-m-d', strtotime('-6 months'));
+        $quick_date_from = date('Y-m-d 00:00:00', strtotime('-6 months'));
+        $quick_date_to = date('Y-m-d 23:59:59');
         break;
     case '1y':
-        $quick_date_from = date('Y-m-d', strtotime('-1 year'));
+        $quick_date_from = date('Y-m-d 00:00:00', strtotime('-1 year'));
+        $quick_date_to = date('Y-m-d 23:59:59');
         break;
     case 'custom':
-        $quick_date_from = $date_from;
-        $quick_date_to = $date_to;
+        $quick_date_from = !empty($date_from) ? $date_from . ' 00:00:00' : '';
+        $quick_date_to = !empty($date_to) ? $date_to . ' 23:59:59' : '';
         break;
     case 'all':
     default:
@@ -122,23 +133,25 @@ if (!empty($status_filter)) {
     $params[] = $status_filter;
 }
 
+// ✅ FIX: Branch filter
 if ($selected_branch_id !== 'all') {
     $where_clause .= " AND lt.branch_id = ?";
     $params[] = (int)$selected_branch_id;
 }
 
+// ✅ FIX: Tumia COALESCE kwa test_date (kwa sababu test_date inaweza kuwa NULL)
 if (!empty($quick_date_from)) {
-    $where_clause .= " AND DATE(lt.test_date) >= ?";
+    $where_clause .= " AND COALESCE(lt.test_date, lt.created_at) >= ?";
     $params[] = $quick_date_from;
 }
 
 if (!empty($quick_date_to)) {
-    $where_clause .= " AND DATE(lt.test_date) <= ?";
+    $where_clause .= " AND COALESCE(lt.test_date, lt.created_at) <= ?";
     $params[] = $quick_date_to;
 }
 
 // ================================================================
-// FETCH ALL LAB TESTS (received_by_name imeondolewa kwenye SQL)
+// FETCH ALL LAB TESTS
 // ================================================================
 $sql = "
     SELECT 
@@ -148,7 +161,9 @@ $sql = "
         pat.phone as patient_phone,
         pat.gender as patient_gender,
         pat.date_of_birth,
+        pat.branch_id as patient_branch_id,
         doc.full_name as doctor_name,
+        doc.branch_id as doctor_branch_id,
         tech.full_name as lab_technician_name,
         b.name as branch_name,
         v.visit_number,
@@ -162,12 +177,52 @@ $sql = "
     LEFT JOIN branches b ON lt.branch_id = b.id
     LEFT JOIN visits v ON lt.visit_id = v.id
     $where_clause
-    ORDER BY lt.created_at DESC
+    ORDER BY COALESCE(lt.test_date, lt.created_at) DESC
 ";
 
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $all_lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================================================================
+// ✅ FIX: FILTER OUT MISMATCHED BRANCH DATA
+// Kanuni:
+// 1. Kama test ina branch_id, patient lazima awe na branch_id sawa AU hana branch
+// 2. Kama test ina branch_id, doctor lazima awe na branch_id sawa AU hana branch
+// 3. Kama patient ana branch_id na test ina branch_id tofauti → Ondoa
+// ================================================================
+$all_lab_tests = array_filter($all_lab_tests, function($test) use ($selected_branch_id) {
+    $test_branch = $test['branch_id'] ?? null;
+    $patient_branch = $test['patient_branch_id'] ?? null;
+    $doctor_branch = $test['doctor_branch_id'] ?? null;
+    
+    // Kama hakuna branch kwenye test, ruksa (au chuja kwa branch iliyochaguliwa)
+    if (empty($test_branch)) {
+        if ($selected_branch_id !== 'all' && $patient_branch != $selected_branch_id) {
+            return false;
+        }
+        return true;
+    }
+    
+    // Kama patient ana branch na ni tofauti na test branch → Ondoa
+    if (!empty($patient_branch) && $patient_branch != $test_branch) {
+        return false;
+    }
+    
+    // Kama doctor ana branch na ni tofauti na test branch → Ondoa
+    if (!empty($doctor_branch) && $doctor_branch != $test_branch) {
+        return false;
+    }
+    
+    // Kama branch iliyochaguliwa ni specific, test branch lazima ilingane
+    if ($selected_branch_id !== 'all' && $test_branch != $selected_branch_id) {
+        return false;
+    }
+    
+    return true;
+});
+
+$all_lab_tests = array_values($all_lab_tests);
 
 // ================================================================
 // GROUP BY PATIENT → VISIT
@@ -212,8 +267,10 @@ foreach ($all_lab_tests as $test) {
     
     $patients_data[$patient_id]['total_amount'] += $test['test_price'] ?? 0;
     $patients_data[$patient_id]['total_tests']++;
-    if (!$patients_data[$patient_id]['latest_date'] || $test['created_at'] > $patients_data[$patient_id]['latest_date']) {
-        $patients_data[$patient_id]['latest_date'] = $test['created_at'];
+    
+    $test_date = $test['test_date'] ?? $test['created_at'];
+    if (!$patients_data[$patient_id]['latest_date'] || $test_date > $patients_data[$patient_id]['latest_date']) {
+        $patients_data[$patient_id]['latest_date'] = $test_date;
     }
 }
 
@@ -242,52 +299,108 @@ foreach ($patients_array as &$p) {
 unset($p);
 
 // ================================================================
-// STATS
+// STATS (with branch consistency)
 // ================================================================
 $stats_where = " WHERE 1=1";
 $stats_params = [];
+
+// ✅ FIX: Branch filter
 if ($selected_branch_id !== 'all') {
     $stats_where .= " AND lt.branch_id = ?";
     $stats_params[] = (int)$selected_branch_id;
 }
+
+// ✅ FIX: Tumia COALESCE kwa test_date
 if (!empty($quick_date_from)) {
-    $stats_where .= " AND DATE(lt.test_date) >= ?";
+    $stats_where .= " AND COALESCE(lt.test_date, lt.created_at) >= ?";
     $stats_params[] = $quick_date_from;
 }
 if (!empty($quick_date_to)) {
-    $stats_where .= " AND DATE(lt.test_date) <= ?";
+    $stats_where .= " AND COALESCE(lt.test_date, lt.created_at) <= ?";
     $stats_params[] = $quick_date_to;
 }
 
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM lab_tests lt $stats_where");
+// ✅ FIX: Branch consistency check kwenye stats
+$branch_consistency = " AND (pat.branch_id IS NULL OR pat.branch_id = lt.branch_id) 
+                       AND (doc.branch_id IS NULL OR doc.branch_id = lt.branch_id)";
+
+$stmt = $db->prepare("
+    SELECT COUNT(*) as total 
+    FROM lab_tests lt 
+    LEFT JOIN patients pat ON lt.patient_id = pat.id
+    LEFT JOIN users doc ON lt.doctor_id = doc.id
+    $stats_where $branch_consistency
+");
 $stmt->execute($stats_params);
 $total_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM lab_tests lt $stats_where AND lt.status = 'pending'");
+$stmt = $db->prepare("
+    SELECT COUNT(*) as total 
+    FROM lab_tests lt 
+    LEFT JOIN patients pat ON lt.patient_id = pat.id
+    LEFT JOIN users doc ON lt.doctor_id = doc.id
+    $stats_where AND lt.status = 'pending' $branch_consistency
+");
 $stmt->execute($stats_params);
 $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM lab_tests lt $stats_where AND lt.status = 'in_progress'");
+$stmt = $db->prepare("
+    SELECT COUNT(*) as total 
+    FROM lab_tests lt 
+    LEFT JOIN patients pat ON lt.patient_id = pat.id
+    LEFT JOIN users doc ON lt.doctor_id = doc.id
+    $stats_where AND lt.status = 'in_progress' $branch_consistency
+");
 $stmt->execute($stats_params);
 $in_progress_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM lab_tests lt $stats_where AND lt.status = 'completed'");
+$stmt = $db->prepare("
+    SELECT COUNT(*) as total 
+    FROM lab_tests lt 
+    LEFT JOIN patients pat ON lt.patient_id = pat.id
+    LEFT JOIN users doc ON lt.doctor_id = doc.id
+    $stats_where AND lt.status = 'completed' $branch_consistency
+");
 $stmt->execute($stats_params);
 $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM lab_tests lt $stats_where AND lt.status = 'cancelled'");
+$stmt = $db->prepare("
+    SELECT COUNT(*) as total 
+    FROM lab_tests lt 
+    LEFT JOIN patients pat ON lt.patient_id = pat.id
+    LEFT JOIN users doc ON lt.doctor_id = doc.id
+    $stats_where AND lt.status = 'cancelled' $branch_consistency
+");
 $stmt->execute($stats_params);
 $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(lt.test_price), 0) as total FROM lab_tests lt $stats_where");
+$stmt = $db->prepare("
+    SELECT COALESCE(SUM(lt.test_price), 0) as total 
+    FROM lab_tests lt 
+    LEFT JOIN patients pat ON lt.patient_id = pat.id
+    LEFT JOIN users doc ON lt.doctor_id = doc.id
+    $stats_where $branch_consistency
+");
 $stmt->execute($stats_params);
 $total_amount_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(lt.test_price), 0) as total FROM lab_tests lt $stats_where AND lt.status = 'completed'");
+$stmt = $db->prepare("
+    SELECT COALESCE(SUM(lt.test_price), 0) as total 
+    FROM lab_tests lt 
+    LEFT JOIN patients pat ON lt.patient_id = pat.id
+    LEFT JOIN users doc ON lt.doctor_id = doc.id
+    $stats_where AND lt.status = 'completed' $branch_consistency
+");
 $stmt->execute($stats_params);
 $completed_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(lt.test_price), 0) as total FROM lab_tests lt $stats_where AND lt.status = 'pending'");
+$stmt = $db->prepare("
+    SELECT COALESCE(SUM(lt.test_price), 0) as total 
+    FROM lab_tests lt 
+    LEFT JOIN patients pat ON lt.patient_id = pat.id
+    LEFT JOIN users doc ON lt.doctor_id = doc.id
+    $stats_where AND lt.status = 'pending' $branch_consistency
+");
 $stmt->execute($stats_params);
 $pending_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
@@ -304,12 +417,24 @@ function calculateAge($dob) {
     return (new DateTime($dob))->diff(new DateTime('today'))->y;
 }
 
+// ✅ FIX: buildFilterUrl - ondoa date_from/date_to kwa quick filters zisizo custom
 function buildFilterUrl($params_to_update = []) {
     $current = $_GET;
-    foreach ($params_to_update as $key => $value) {
-        if ($value === null || $value === '') unset($current[$key]);
-        else $current[$key] = $value;
+    
+    // Kama tunabadilisha quick filter, ondoa date_from/date_to
+    if (isset($params_to_update['quick']) && $params_to_update['quick'] !== 'custom') {
+        unset($current['date_from']);
+        unset($current['date_to']);
     }
+    
+    foreach ($params_to_update as $key => $value) {
+        if ($value === null || $value === '') {
+            unset($current[$key]);
+        } else {
+            $current[$key] = $value;
+        }
+    }
+    
     return '?' . http_build_query($current);
 }
 
@@ -1304,7 +1429,7 @@ body { font-family: var(--font-main) !important; }
 
     <!-- STATS - BLUE THEME -->
     <div class="stats-grid-5">
-        <a href="lab_tests.php?branch=<?= $selected_branch_id ?>" class="stat-card-custom card-blue-1">
+        <a href="<?= buildFilterUrl(['status' => null]) ?>" class="stat-card-custom card-blue-1">
             <div class="stat-icon"><i class="fas fa-flask"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Total Tests</p>
@@ -1312,7 +1437,7 @@ body { font-family: var(--font-main) !important; }
                 <p class="stat-amount">TSh <?= number_format($total_amount_all, 0) ?></p>
             </div>
         </a>
-        <a href="lab_tests.php?branch=<?= $selected_branch_id ?>&status=pending" class="stat-card-custom card-blue-2">
+        <a href="<?= buildFilterUrl(['status' => 'pending']) ?>" class="stat-card-custom card-blue-2">
             <div class="stat-icon"><i class="fas fa-clock"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Pending</p>
@@ -1320,7 +1445,7 @@ body { font-family: var(--font-main) !important; }
                 <p class="stat-amount">TSh <?= number_format($pending_amount, 0) ?></p>
             </div>
         </a>
-        <a href="lab_tests.php?branch=<?= $selected_branch_id ?>&status=in_progress" class="stat-card-custom card-blue-3">
+        <a href="<?= buildFilterUrl(['status' => 'in_progress']) ?>" class="stat-card-custom card-blue-3">
             <div class="stat-icon"><i class="fas fa-spinner"></i></div>
             <div class="stat-content">
                 <p class="stat-label">In Progress</p>
@@ -1328,7 +1453,7 @@ body { font-family: var(--font-main) !important; }
                 <p class="stat-amount">In Progress</p>
             </div>
         </a>
-        <a href="lab_tests.php?branch=<?= $selected_branch_id ?>&status=completed" class="stat-card-custom card-blue-4">
+        <a href="<?= buildFilterUrl(['status' => 'completed']) ?>" class="stat-card-custom card-blue-4">
             <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Completed</p>
@@ -1336,7 +1461,7 @@ body { font-family: var(--font-main) !important; }
                 <p class="stat-amount">TSh <?= number_format($completed_amount, 0) ?></p>
             </div>
         </a>
-        <a href="lab_tests.php?branch=<?= $selected_branch_id ?>&status=cancelled" class="stat-card-custom card-blue-5">
+        <a href="<?= buildFilterUrl(['status' => 'cancelled']) ?>" class="stat-card-custom card-blue-5">
             <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Cancelled</p>
@@ -1346,31 +1471,50 @@ body { font-family: var(--font-main) !important; }
         </a>
     </div>
 
+    <!-- ✅ BRANCH FILTER -->
+    <div class="filter-section">
+        <span class="filter-label"><i class="fas fa-store-alt"></i> Branch:</span>
+        <a href="<?= buildFilterUrl(['branch' => 'all']) ?>" 
+           class="filter-btn <?= $selected_branch_id === 'all' ? 'active' : '' ?>">
+            <i class="fas fa-globe"></i> All Branches
+        </a>
+        <?php foreach ($branches_list as $branch): ?>
+            <a href="<?= buildFilterUrl(['branch' => $branch['id']]) ?>" 
+               class="filter-btn <?= $selected_branch_id == $branch['id'] ? 'active' : '' ?>">
+                <i class="fas fa-store"></i> <?= htmlspecialchars($branch['name']) ?>
+            </a>
+        <?php endforeach; ?>
+    </div>
+
     <!-- QUICK DATE FILTERS -->
     <div class="quick-filters">
         <span class="filter-label"><i class="fas fa-bolt"></i> Quick:</span>
         
-        <a href="<?= buildFilterUrl(['quick' => 'all', 'date_from' => null, 'date_to' => null]) ?>" 
+        <a href="<?= buildFilterUrl(['quick' => 'all']) ?>" 
            class="quick-filter-btn <?= $quick_filter === 'all' ? 'active' : '' ?>">
             <i class="fas fa-infinity"></i> All
         </a>
-        <a href="<?= buildFilterUrl(['quick' => 'today', 'date_from' => null, 'date_to' => null]) ?>" 
+        <a href="<?= buildFilterUrl(['quick' => 'today']) ?>" 
            class="quick-filter-btn today <?= $quick_filter === 'today' ? 'active' : '' ?>">
             <i class="fas fa-calendar-day"></i> Today
         </a>
-        <a href="<?= buildFilterUrl(['quick' => '1w', 'date_from' => null, 'date_to' => null]) ?>" 
+        <a href="<?= buildFilterUrl(['quick' => '1w']) ?>" 
            class="quick-filter-btn <?= $quick_filter === '1w' ? 'active' : '' ?>">
             <i class="fas fa-calendar-week"></i> 1 Week
         </a>
-        <a href="<?= buildFilterUrl(['quick' => '1m', 'date_from' => null, 'date_to' => null]) ?>" 
+        <a href="<?= buildFilterUrl(['quick' => '1m']) ?>" 
            class="quick-filter-btn <?= $quick_filter === '1m' ? 'active' : '' ?>">
             <i class="fas fa-calendar-alt"></i> 1 Month
         </a>
-        <a href="<?= buildFilterUrl(['quick' => '3m', 'date_from' => null, 'date_to' => null]) ?>" 
+        <a href="<?= buildFilterUrl(['quick' => '3m']) ?>" 
            class="quick-filter-btn <?= $quick_filter === '3m' ? 'active' : '' ?>">
             <i class="fas fa-calendar-alt"></i> 3 Months
         </a>
-        <a href="<?= buildFilterUrl(['quick' => '1y', 'date_from' => null, 'date_to' => null]) ?>" 
+        <a href="<?= buildFilterUrl(['quick' => '6m']) ?>" 
+           class="quick-filter-btn <?= $quick_filter === '6m' ? 'active' : '' ?>">
+            <i class="fas fa-calendar-alt"></i> 6 Months
+        </a>
+        <a href="<?= buildFilterUrl(['quick' => '1y']) ?>" 
            class="quick-filter-btn <?= $quick_filter === '1y' ? 'active' : '' ?>">
             <i class="fas fa-calendar"></i> 1 Year
         </a>
@@ -1379,8 +1523,8 @@ body { font-family: var(--font-main) !important; }
             <i class="fas fa-calendar-check"></i> Custom
         </a>
         
-        <?php if ($quick_filter !== 'all' || $status_filter || $search): ?>
-            <a href="lab_tests.php?branch=<?= $selected_branch_id ?>" 
+        <?php if ($quick_filter !== 'all' || $status_filter || $search || $selected_branch_id !== 'all'): ?>
+            <a href="lab_tests.php" 
                class="quick-filter-btn" 
                style="border-color:var(--danger);color:var(--danger);margin-left:auto;">
                 <i class="fas fa-times"></i> Clear All
@@ -1978,12 +2122,13 @@ setInterval(function() {
     if (ftEl) ftEl.textContent = 'Last updated: ' + timeStr;
 }, 1000);
 
-console.log('%c🧪 Braick - Lab Tests (V4 - Table < > Navigation)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ < > Buttons kwenye TABLE HEADER', 'font-size:12px;color:#34D399;font-weight:bold;');
-console.log('%c✅ Slide table left/right kwa kila visit', 'font-size:12px;color:#34D399;');
+console.log('%c🧪 Braick - Lab Tests (V5 - FIXED)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ Quick filters zinafanya kazi (All, Today, 1W, 1M, 3M, 6M, 1Y, Custom)', 'font-size:12px;color:#34D399;font-weight:bold;');
+console.log('%c✅ Branch filtering - inachuja patient/doctor wasio wa branch moja', 'font-size:12px;color:#34D399;');
+console.log('%c✅ COALESCE(test_date, created_at) - inashughulikia NULL test_date', 'font-size:12px;color:#34D399;');
+console.log('%c✅ < > Buttons kwenye TABLE HEADER', 'font-size:12px;color:#0891B2;');
 console.log('%c✅ Indicator % inaonyesha scroll position', 'font-size:12px;color:#0891B2;');
 console.log('%c✅ Blue theme', 'font-size:12px;color:#0B5ED7;font-weight:bold;');
-console.log('%c✅ Column ya "Paid By" imeondolewa', 'font-size:12px;color:#F59E0B;font-weight:bold;');
 </script>
 
 </body>

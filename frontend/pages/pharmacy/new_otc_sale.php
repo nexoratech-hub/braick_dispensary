@@ -1,16 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/new_otc_sale.php
-// PHARMACY - NEW OTC SALE (V2 - Fixed)
-// ✅ BLUE THEME
-// ✅ REMOVED: Redirect to otc_history (stays on page after sale)
-// ✅ REMOVED: "Send to Cashier" — Only "Pay Now (Self)" remains
-// ✅ FIXED: Multiple items stock deduction
-// ✅ FIXED: Quantity input starts empty, no scroll change
-// ✅ FIXED: Better FIFO - handles all expiry dates correctly
-// ✅ Auto-format money with commas
-// ✅ Premium/Extra Bill feature
-// ✅ Search bar + Checkbox + Quantity/Dosage/Frequency/Route
+// V2.1 - MEDICINE + EQUIPMENT TABS (V2.0 Design Preserved)
+// ================================================================
+// ✅ V2.1: Medicine tab + Equipment tab
+// ✅ V2.1: Full screen design kama V2.0
+// ✅ V2.1: Stock movements - inventory_id / equipment_id
+// ✅ V2.1: Bei OTC tu (bill_id = NULL)
+// ✅ V2.0: Medicine picker, cart items, dosage/freq/route/instr
 // ================================================================
 
 session_start();
@@ -34,6 +31,11 @@ try {
 } catch (Exception $e) {
     die("Database connection failed: " . $e->getMessage());
 }
+
+// ================================================================
+// TAB
+// ================================================================
+$active_tab = $_GET['tab'] ?? 'medicine';
 
 // ================================================================
 // PRE-DEFINED OPTIONS
@@ -76,113 +78,160 @@ $predefined_instructions = [
 ];
 
 // ================================================================
-// GET ALL MEDICINES
+// GET MEDICINES (for medicine tab)
 // ================================================================
-$stmt_meds = $db->prepare("
-    SELECT id, medication_name, quantity, selling_price, batch_number, expiry_date,
-           DATEDIFF(expiry_date, CURDATE()) as days_remaining
-    FROM medications_inventory 
-    WHERE branch_id = ? AND status = 'active'
-    ORDER BY medication_name, expiry_date ASC
-");
-$stmt_meds->execute([$user_branch_id]);
-$all_medicines = $stmt_meds->fetchAll(PDO::FETCH_ASSOC);
-
-$medicines_grouped = [];
-foreach ($all_medicines as $med) {
-    $name = $med['medication_name'];
-    if (!isset($medicines_grouped[$name])) {
-        $medicines_grouped[$name] = [];
-    }
-    $medicines_grouped[$name][] = $med;
-}
-
 $medicines_list = [];
-foreach ($medicines_grouped as $name => $batches) {
-    $total_qty = array_sum(array_column($batches, 'quantity'));
-    $first_batch = $batches[0];
-    $medicines_list[] = [
-        'id' => $first_batch['id'],
-        'name' => $name,
-        'total_qty' => $total_qty,
-        'batches' => $batches,
-        'price' => $first_batch['selling_price'] ?? 0,
-        'batch_number' => $first_batch['batch_number'] ?? '',
-        'expiry_date' => $first_batch['expiry_date'] ?? '',
-        'days_remaining' => $first_batch['days_remaining'] ?? null,
-        'is_available' => $total_qty > 0
-    ];
+
+if ($active_tab === 'medicine') {
+    $stmt_meds = $db->prepare("
+        SELECT id, medication_name, quantity, selling_price, batch_number, expiry_date,
+               DATEDIFF(expiry_date, CURDATE()) as days_remaining
+        FROM medications_inventory 
+        WHERE branch_id = ? AND status = 'active'
+        ORDER BY medication_name, expiry_date ASC
+    ");
+    $stmt_meds->execute([$user_branch_id]);
+    $all_medicines = $stmt_meds->fetchAll(PDO::FETCH_ASSOC);
+
+    $medicines_grouped = [];
+    foreach ($all_medicines as $med) {
+        $name = $med['medication_name'];
+        if (!isset($medicines_grouped[$name])) $medicines_grouped[$name] = [];
+        $medicines_grouped[$name][] = $med;
+    }
+
+    foreach ($medicines_grouped as $name => $batches) {
+        $total_qty = array_sum(array_column($batches, 'quantity'));
+        $first_batch = $batches[0];
+        $medicines_list[] = [
+            'id' => $first_batch['id'],
+            'name' => $name,
+            'total_qty' => $total_qty,
+            'batches' => $batches,
+            'price' => $first_batch['selling_price'] ?? 0,
+            'batch_number' => $first_batch['batch_number'] ?? '',
+            'expiry_date' => $first_batch['expiry_date'] ?? '',
+            'days_remaining' => $first_batch['days_remaining'] ?? null,
+            'is_available' => $total_qty > 0,
+            'item_type' => 'medicine'
+        ];
+    }
+
+    usort($medicines_list, function($a, $b) {
+        if ($a['is_available'] !== $b['is_available']) return $b['is_available'] - $a['is_available'];
+        return strcasecmp($a['name'], $b['name']);
+    });
 }
 
-usort($medicines_list, function($a, $b) {
-    if ($a['is_available'] !== $b['is_available']) {
-        return $b['is_available'] - $a['is_available'];
+// ================================================================
+// GET EQUIPMENT (for equipment tab)
+// ================================================================
+$equipment_list = [];
+
+if ($active_tab === 'equipment') {
+    $stmt_eq = $db->prepare("
+        SELECT id, equipment_name, quantity, selling_price, batch_number, expiry_date,
+               DATEDIFF(expiry_date, CURDATE()) as days_remaining
+        FROM medical_equipment 
+        WHERE branch_id = ? AND status = 'active'
+        ORDER BY equipment_name ASC
+    ");
+    $stmt_eq->execute([$user_branch_id]);
+    $all_equipment = $stmt_eq->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($all_equipment as $eq) {
+        $medicines_list[] = [
+            'id' => $eq['id'],
+            'name' => $eq['equipment_name'],
+            'total_qty' => (int)$eq['quantity'],
+            'batches' => [$eq],
+            'price' => $eq['selling_price'] ?? 0,
+            'batch_number' => $eq['batch_number'] ?? '',
+            'expiry_date' => $eq['expiry_date'] ?? '',
+            'days_remaining' => $eq['days_remaining'] ?? null,
+            'is_available' => (int)$eq['quantity'] > 0,
+            'item_type' => 'equipment'
+        ];
     }
-    return strcasecmp($a['name'], $b['name']);
-});
+
+    usort($medicines_list, function($a, $b) {
+        if ($a['is_available'] !== $b['is_available']) return $b['is_available'] - $a['is_available'];
+        return strcasecmp($a['name'], $b['name']);
+    });
+}
 
 // ================================================================
-// STATISTICS
+// LOW STOCK
 // ================================================================
 $low_stock_count = 0;
 try {
-    $stmt_low = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM medications_inventory 
-        WHERE branch_id = ? AND quantity <= reorder_level AND quantity > 0 AND status = 'active'
-    ");
+    if ($active_tab === 'medicine') {
+        $stmt_low = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM medications_inventory 
+            WHERE branch_id = ? AND quantity <= reorder_level AND quantity > 0 AND status = 'active'
+        ");
+    } else {
+        $stmt_low = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM medical_equipment 
+            WHERE branch_id = ? AND quantity <= reorder_level AND quantity > 0 AND status = 'active'
+        ");
+    }
     $stmt_low->execute([$user_branch_id]);
     $low_stock_count = $stmt_low->fetch()['count'] ?? 0;
 } catch (Exception $e) { $low_stock_count = 0; }
 
 // ================================================================
-// PROCESS OTC SALE - PAY NOW (SELF) ONLY
-// ✅ NO REDIRECT after sale — stays on page
+// PROCESS SALE
 // ================================================================
 $message = '';
 $message_type = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'complete_sale') {
+    $sale_type = $_POST['sale_type'] ?? 'medicine';
     $customer_name = trim($_POST['customer_name'] ?? 'Walk-in Customer');
     $customer_phone = trim($_POST['customer_phone'] ?? '');
     $payment_method = $_POST['payment_method'] ?? 'cash';
     $discount_amount = (float)str_replace(',', '', $_POST['discount_amount'] ?? 0);
     $items = json_decode($_POST['items_json'] ?? '[]', true);
-    
+
     $premium_amount = (float)str_replace(',', '', $_POST['premium_amount'] ?? 0);
     $premium_note = trim($_POST['premium_note'] ?? '');
-    
+
     if ($premium_amount < 0) $premium_amount = 0;
-    
+
     $subtotal = 0;
     foreach ($items as &$item) {
         $item['total'] = $item['quantity'] * $item['price'];
         $subtotal += $item['total'];
     }
     unset($item);
-    
+
     if ($discount_amount > $subtotal) $discount_amount = $subtotal;
-    
+
     $grand_total = $subtotal - $discount_amount + $premium_amount;
     if ($grand_total < 0) $grand_total = 0;
-    
+
     $errors = [];
-    if (empty($items)) $errors[] = 'Please add at least one medicine';
-    
-    // Validate quantity
+    if (empty($items)) $errors[] = 'Please add at least one item';
+
     foreach ($items as $it) {
         if (empty($it['quantity']) || $it['quantity'] <= 0) {
             $errors[] = "Please enter quantity for: " . $it['name'];
         }
     }
-    
+
     // Check stock
+    $table_check = $sale_type === 'equipment' ? 'medical_equipment' : 'medications_inventory';
+    $name_check = $sale_type === 'equipment' ? 'equipment_name' : 'medication_name';
+
     $stock_errors = [];
     foreach ($items as $item) {
         $stmt_check_stock = $db->prepare("
             SELECT SUM(quantity) as total_qty 
-            FROM medications_inventory 
-            WHERE medication_name = ? 
+            FROM {$table_check}
+            WHERE {$name_check} = ? 
               AND branch_id = ? 
               AND status = 'active' 
               AND quantity > 0
@@ -190,172 +239,195 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $stmt_check_stock->execute([$item['name'], $user_branch_id]);
         $stock = $stmt_check_stock->fetch(PDO::FETCH_ASSOC);
         $available = (int)($stock['total_qty'] ?? 0);
-        
+
         if ($available < $item['quantity']) {
             $stock_errors[] = "Insufficient stock for {$item['name']} (Available: $available, Requested: {$item['quantity']})";
         }
     }
-    
+
     if (!empty($stock_errors)) $errors = array_merge($errors, $stock_errors);
-    
+
     if (empty($errors)) {
         try {
             $db->beginTransaction();
-            
-            $sale_number = 'OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-            
+
+            $prefix = $sale_type === 'equipment' ? 'OTC-EQP' : 'OTC';
+            $sale_number = $prefix . '-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
+
             $patient_id = null;
-            $otc_payment_status = 'paid'; // ✅ Always PAID (self-pay only)
             $payment_notes = 'Paid by Pharmacy (Self)';
-            
-            // ✅ OTC SALE INSERT
+
+            // Insert otc_sales
             $stmt_otc = $db->prepare("
                 INSERT INTO otc_sales (
                     sale_number, customer_name, customer_phone, 
                     patient_id, subtotal, discount_amount, premium_amount, premium_note, total_amount, bill_id,
                     payment_method, payment_status, sold_by, branch_id, notes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NOW())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'paid', ?, ?, ?, NOW())
             ");
             $stmt_otc->execute([
                 $sale_number, $customer_name, $customer_phone, $patient_id,
                 $subtotal, $discount_amount, $premium_amount, $premium_note, $grand_total,
-                $payment_method, $otc_payment_status, $user_id, $user_branch_id,
+                $payment_method, $user_id, $user_branch_id,
                 $payment_notes . ' - Customer: ' . $customer_name . ($premium_amount > 0 ? ' | Premium: TSh ' . number_format($premium_amount) . ' - ' . $premium_note : '')
             ]);
             $sale_id = $db->lastInsertId();
-            
-            // ✅ OTC SALE ITEMS INSERT
+
+            // Insert otc_sale_items
             foreach ($items as $item) {
+                $inventory_id = $sale_type === 'medicine' ? ($item['inventory_id'] ?? null) : null;
+
                 $stmt_otc_item = $db->prepare("
                     INSERT INTO otc_sale_items (
-                        sale_id, patient_id, branch_id,
+                        sale_id, patient_id, inventory_id, medicine_name, branch_id,
                         item_name, quantity, unit_price, total_price, 
                         dosage, frequency, route, instructions, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                 ");
                 $stmt_otc_item->execute([
-                    $sale_id, $patient_id, $user_branch_id,
+                    $sale_id, $patient_id,
+                    $inventory_id,
+                    $sale_type === 'medicine' ? $item['name'] : null,
+                    $user_branch_id,
                     $item['name'], $item['quantity'], $item['price'], $item['total'],
                     $item['dosage'] ?? '', $item['frequency'] ?? '', $item['route'] ?? '', $item['instructions'] ?? ''
                 ]);
             }
-            
+
             // ================================================================
-            // STOCK DEDUCTION - FIFO (Always deduct since payment is PAID)
+            // STOCK DEDUCTION + MOVEMENTS
             // ================================================================
-            error_log("=== OTC STOCK DEDUCTION START ===");
-            error_log("Sale #$sale_id ($sale_number) | Branch: $user_branch_id");
-            error_log("Total items: " . count($items));
-            
             foreach ($items as $item_index => $item) {
                 $remaining_qty = (int)$item['quantity'];
                 $item_name = $item['name'];
-                
-                error_log("--- ITEM " . ($item_index + 1) . ": $item_name | Need: $remaining_qty ---");
-                
-                $stmt_fetch_batches = $db->prepare("
-                    SELECT id, medication_name, quantity, batch_number, expiry_date
-                    FROM medications_inventory 
-                    WHERE medication_name = ? 
-                      AND branch_id = ? 
-                      AND status = 'active' 
-                      AND quantity > 0
-                    ORDER BY 
-                        CASE 
-                            WHEN expiry_date IS NULL THEN 2
-                            WHEN expiry_date = '0000-00-00' THEN 2
-                            ELSE 1
-                        END ASC,
-                        expiry_date ASC,
-                        id ASC
-                ");
-                $stmt_fetch_batches->execute([$item_name, $user_branch_id]);
-                $batches = $stmt_fetch_batches->fetchAll(PDO::FETCH_ASSOC);
-                $stmt_fetch_batches->closeCursor();
-                
-                error_log("    Batches found: " . count($batches));
-                
-                if (empty($batches)) {
-                    error_log("    ⚠️ NO BATCHES FOUND for $item_name!");
-                    continue;
-                }
-                
-                $total_deducted = 0;
-                $batch_index = 0;
-                
-                foreach ($batches as $batch) {
-                    if ($remaining_qty <= 0) break;
-                    
-                    $batch_index++;
-                    $batch_id = (int)$batch['id'];
-                    $batch_qty_available = (int)$batch['quantity'];
-                    $deduct_qty = min($remaining_qty, $batch_qty_available);
-                    
-                    error_log("    Batch #$batch_index (ID: $batch_id): deducting $deduct_qty from $batch_qty_available");
-                    
-                    $stmt_deduct = $db->prepare("
-                        UPDATE medications_inventory 
-                        SET quantity = quantity - ?, updated_at = NOW()
-                        WHERE id = ? AND branch_id = ?
+
+                if ($sale_type === 'medicine') {
+                    // FIFO for medicine
+                    $stmt_fetch_batches = $db->prepare("
+                        SELECT id, medication_name, quantity, batch_number, expiry_date
+                        FROM medications_inventory 
+                        WHERE medication_name = ? 
+                          AND branch_id = ? 
+                          AND status = 'active' 
+                          AND quantity > 0
+                        ORDER BY 
+                            CASE 
+                                WHEN expiry_date IS NULL THEN 2
+                                WHEN expiry_date = '0000-00-00' THEN 2
+                                ELSE 1
+                            END ASC,
+                            expiry_date ASC,
+                            id ASC
                     ");
-                    $stmt_deduct->execute([$deduct_qty, $batch_id, $user_branch_id]);
-                    $rows_affected = $stmt_deduct->rowCount();
-                    $stmt_deduct->closeCursor();
-                    
-                    error_log("       UPDATE rows affected: $rows_affected");
-                    
-                    $stmt_verify = $db->prepare("SELECT quantity, medication_name FROM medications_inventory WHERE id = ?");
-                    $stmt_verify->execute([$batch_id]);
-                    $verified = $stmt_verify->fetch(PDO::FETCH_ASSOC);
-                    $stmt_verify->closeCursor();
-                    
-                    if ($verified) {
-                        error_log("       ✅ VERIFIED: {$verified['medication_name']} now has qty = {$verified['quantity']}");
+                    $stmt_fetch_batches->execute([$item_name, $user_branch_id]);
+                    $batches = $stmt_fetch_batches->fetchAll(PDO::FETCH_ASSOC);
+                    $stmt_fetch_batches->closeCursor();
+
+                    if (empty($batches)) continue;
+
+                    foreach ($batches as $batch) {
+                        if ($remaining_qty <= 0) break;
+
+                        $batch_id = (int)$batch['id'];
+                        $batch_qty_available = (int)$batch['quantity'];
+                        $deduct_qty = min($remaining_qty, $batch_qty_available);
+                        $new_stock = $batch_qty_available - $deduct_qty;
+
+                        // Update inventory
+                        $stmt_deduct = $db->prepare("
+                            UPDATE medications_inventory 
+                            SET quantity = quantity - ?, updated_at = NOW()
+                            WHERE id = ? AND branch_id = ?
+                        ");
+                        $stmt_deduct->execute([$deduct_qty, $batch_id, $user_branch_id]);
+                        $stmt_deduct->closeCursor();
+
+                        // ✅ Stock movement WITH inventory_id + previous/new stock
+                        $stmt_log_move = $db->prepare("
+                            INSERT INTO stock_movements (
+                                inventory_id, equipment_id, patient_id,
+                                movement_type, quantity, previous_stock, new_stock,
+                                reference_type, reference_id,
+                                performed_by, branch_id, notes, created_at
+                            ) VALUES (?, NULL, ?, 'out', ?, ?, ?, 'otc', ?, ?, ?, ?, NOW())
+                        ");
+                        $stmt_log_move->execute([
+                            $batch_id,
+                            $patient_id,
+                            $deduct_qty,
+                            $batch_qty_available,
+                            $new_stock,
+                            $sale_id,
+                            $user_id, $user_branch_id,
+                            'OTC Sale - PAID: ' . $sale_number . ' - Customer: ' . $customer_name . ' - Item: ' . $item_name
+                        ]);
+                        $stmt_log_move->closeCursor();
+
+                        $remaining_qty -= $deduct_qty;
                     }
-                    
+                } else {
+                    // Equipment — no batch, direct deduction
+                    $stmt_eq = $db->prepare("
+                        SELECT id, equipment_name, quantity
+                        FROM medical_equipment 
+                        WHERE equipment_name = ? 
+                          AND branch_id = ? 
+                          AND status = 'active' 
+                          AND quantity > 0
+                        LIMIT 1
+                    ");
+                    $stmt_eq->execute([$item_name, $user_branch_id]);
+                    $eq_row = $stmt_eq->fetch(PDO::FETCH_ASSOC);
+
+                    if (!$eq_row) continue;
+
+                    $eq_id = (int)$eq_row['id'];
+                    $prev_stock = (int)$eq_row['quantity'];
+                    $deduct_qty = min($remaining_qty, $prev_stock);
+                    $new_stock = $prev_stock - $deduct_qty;
+
+                    // Update equipment
+                    $db->prepare("
+                        UPDATE medical_equipment 
+                        SET quantity = ?, updated_at = NOW()
+                        WHERE id = ? AND branch_id = ?
+                    ")->execute([$new_stock, $eq_id, $user_branch_id]);
+
+                    // ✅ Stock movement WITH equipment_id
                     $stmt_log_move = $db->prepare("
                         INSERT INTO stock_movements (
-                            inventory_id, patient_id,
-                            movement_type, quantity,
+                            inventory_id, equipment_id, patient_id,
+                            movement_type, quantity, previous_stock, new_stock,
                             reference_type, reference_id,
                             performed_by, branch_id, notes, created_at
-                        ) VALUES (?, ?, 'out', ?, 'otc', ?, ?, ?, ?, NOW())
+                        ) VALUES (NULL, ?, ?, 'out', ?, ?, ?, 'otc_equipment', ?, ?, ?, ?, NOW())
                     ");
                     $stmt_log_move->execute([
-                        $batch_id, $patient_id,
+                        $eq_id,
+                        $patient_id,
                         $deduct_qty,
+                        $prev_stock,
+                        $new_stock,
                         $sale_id,
                         $user_id, $user_branch_id,
-                        'OTC Sale - PAID: ' . $sale_number . ' - Customer: ' . $customer_name
+                        'OTC Equipment Sale - PAID: ' . $sale_number . ' - Customer: ' . $customer_name . ' - Item: ' . $item_name
                     ]);
                     $stmt_log_move->closeCursor();
-                    
+
                     $remaining_qty -= $deduct_qty;
-                    $total_deducted += $deduct_qty;
-                }
-                
-                error_log("    ✅ TOTAL DEDUCTED for $item_name: $total_deducted");
-                
-                if ($remaining_qty > 0) {
-                    error_log("    ⚠️ WARNING: Could not fully deduct for $item_name. Remaining: $remaining_qty");
                 }
             }
-            
-            error_log("=== OTC STOCK DEDUCTION END ===");
-            
+
             $db->commit();
-            
-            $message = "✅ OTC Sale completed! Sale: <strong>$sale_number</strong> | Total: <strong>TSh " . number_format($grand_total) . "</strong> | Stock deducted for all items.";
+
+            $message = "✅ OTC Sale completed! Sale: <strong>$sale_number</strong> | Total: <strong>TSh " . number_format($grand_total) . "</strong> | Stock deducted.";
             if ($premium_amount > 0) $message .= " Premium: TSh " . number_format($premium_amount) . " added.";
             $message_type = 'success';
-            
-            // ✅ NO REDIRECT — stays on page
-            
+
         } catch (Exception $e) {
             $db->rollBack();
             $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
-            error_log("OTC Sale Error: " . $e->getMessage());
         }
     } else {
         $message = implode('<br>', $errors);
@@ -399,6 +471,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             --purple: #7C3AED; --purple-light: #EDE9FE;
             --gold: #F59E0B; --gold-light: #FEF3C7;
             --sky: #0288D1; --sky-light: #E1F5FE;
+            --cyan: #0891B2; --cyan-dark: #0E7490; --cyan-light: #CFFAFE;
             --bg-body: #F1F5F9; --bg-card: #FFFFFF; --border-color: #E2E8F0;
             --text-primary: #0F172A; --text-secondary: #475569; --text-muted: #94A3B8;
         }
@@ -408,12 +481,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             --primary-light: #1E3A5F; --success-light: #1A3A2A;
             --warning-light: #3D2E0A; --danger-light: #3A1A1A;
             --purple-light: #2A1A3A; --sky-light: #0A2A3A;
+            --cyan-light: #0A2E3A;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif; background: var(--bg-body); color: var(--text-primary); transition: background 0.3s ease; }
         .main-content { margin-left: 270px; margin-top: 68px; padding: 28px 32px; min-height: calc(100vh - 68px); }
         
-        /* PAGE HEADER - BLUE THEME */
+        /* HEADER */
         .page-header {
             background: linear-gradient(135deg, #0B5ED7, #0A3D8A);
             border-radius: 16px; padding: 24px 32px; margin-bottom: 24px;
@@ -421,6 +495,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             color: white; display: flex; flex-wrap: wrap;
             justify-content: space-between; align-items: center; gap: 16px;
             position: relative; overflow: hidden;
+        }
+        .page-header.equipment-theme {
+            background: linear-gradient(135deg, #0891B2, #0E7490, #155E75);
+            box-shadow: 0 8px 32px rgba(8, 145, 178, 0.25);
         }
         .page-header::before {
             content: ''; position: absolute; top: -60%; right: -10%;
@@ -435,28 +513,42 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .page-header .btn-outline-light { background: rgba(255,255,255,0.12); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 8px 16px; border-radius: 10px; font-weight: 500; font-size: 0.82rem; transition: all 0.3s; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; backdrop-filter: blur(4px); position: relative; z-index: 1; }
         .page-header .btn-outline-light:hover { background: rgba(255,255,255,0.25); transform: translateY(-2px); }
         
-        /* STATS - BLUE THEME CARDS */
+        /* TABS */
+        .otc-tabs { display: flex; gap: 8px; margin-bottom: 24px; background: var(--bg-card); padding: 6px; border-radius: 16px; border: 1px solid var(--border-color); box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+        .otc-tab { flex: 1; padding: 16px 24px; border-radius: 12px; font-weight: 700; font-size: 0.9rem; display: flex; align-items: center; justify-content: center; gap: 10px; text-decoration: none; color: var(--text-secondary); transition: all 0.3s; }
+        .otc-tab:hover { background: var(--bg-body); }
+        .otc-tab.active-medicine { background: linear-gradient(135deg, #0B5ED7, #0A3D8A); color: white; box-shadow: 0 6px 20px rgba(11,94,215,0.35); }
+        .otc-tab.active-equipment { background: linear-gradient(135deg, #0891B2, #0E7490); color: white; box-shadow: 0 6px 20px rgba(8,145,178,0.35); }
+        
+        /* STATS - keep from V2.0 */
         .stats-2-cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px; }
         .stat-card-2 { border-radius: 14px; padding: 18px 22px; display: flex; align-items: center; gap: 16px; color: white; min-height: 100px; transition: all 0.4s; }
         .stat-card-2:hover { transform: translateY(-4px) scale(1.01); }
         .stat-card-2 .stat-icon { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink: 0; background: rgba(255,255,255,0.18); }
         .stat-card-2 .stat-label { font-size: 0.65rem; color: rgba(255,255,255,0.85); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin: 0; }
         .stat-card-2 .stat-number { font-size: 2.2rem; font-weight: 800; color: white; margin: 0; line-height: 1.1; }
-        
         .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
         .card-blue-light { background: linear-gradient(135deg, #1E88E5, #1565C0); }
+        .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
+        .card-cyan-light { background: linear-gradient(135deg, #22D3EE, #0891B2); }
         
         .sale-form-card { background: var(--bg-card); border-radius: 16px; padding: 28px 32px; border: 2px solid var(--border-color); margin-bottom: 20px; transition: all 0.3s; }
         .sale-form-card:hover { border-color: var(--primary); box-shadow: 0 8px 30px rgba(0,0,0,0.12); }
+        .sale-form-card.equipment-theme:hover { border-color: var(--cyan); }
+        
         .section-title { font-size: 0.85rem; font-weight: 700; color: var(--text-primary); padding-bottom: 10px; margin-bottom: 16px; border-bottom: 2px solid var(--border-color); display: flex; align-items: center; gap: 10px; }
         .section-title i { color: var(--primary); font-size: 1.1rem; }
+        .section-title.equipment-theme i { color: var(--cyan); }
         .section-title .badge-count { background: var(--primary); color: white; font-size: 0.6rem; padding: 1px 10px; border-radius: 12px; margin-left: auto; }
+        .section-title.equipment-theme .badge-count { background: var(--cyan); }
+        
         .form-label { font-size: 0.78rem; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; display: block; }
         .form-label .required { color: var(--danger); margin-left: 2px; }
         .form-control { width: 100%; padding: 10px 16px; border: 2px solid var(--border-color); border-radius: 10px; font-size: 0.88rem; outline: none; background: var(--bg-card); color: var(--text-primary); }
         .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1); }
         .form-row { margin-bottom: 16px; }
         
+        /* MEDICINE PICKER - unchanged */
         .medicine-picker { position: relative; }
         .medicine-picker .picker-trigger { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 10px 16px; border: 2px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-primary); font-size: 0.88rem; cursor: pointer; min-height: 44px; }
         .medicine-picker .picker-trigger:hover { border-color: var(--primary); }
@@ -497,18 +589,23 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .picker-footer { padding: 10px 14px; border-top: 2px solid var(--border-color); background: var(--bg-body); display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
         .picker-footer .footer-info { font-size: 0.7rem; color: var(--text-secondary); }
         .btn-add-selected { background: var(--primary); color: white; padding: 8px 20px; border-radius: 8px; font-weight: 700; font-size: 0.8rem; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+        .btn-add-selected.equipment-theme { background: var(--cyan); }
         .btn-add-selected:hover:not(:disabled) { background: var(--primary-dark); transform: translateY(-2px); }
+        .btn-add-selected.equipment-theme:hover:not(:disabled) { background: var(--cyan-dark); }
         .btn-add-selected:disabled { opacity: 0.4; cursor: not-allowed; }
         .no-med-results { text-align: center; padding: 24px 16px; color: var(--text-secondary); }
         .no-med-results i { font-size: 2rem; color: var(--border-color); display: block; margin-bottom: 8px; }
         
+        /* CART - unchanged */
         .cart-container { border: 2px solid var(--border-color); border-radius: 12px; overflow: hidden; min-height: 80px; }
         .cart-item { padding: 18px 20px; border-bottom: 2px solid var(--border-color); background: var(--bg-card); }
         .cart-item:last-child { border-bottom: none; }
         .cart-item:hover { background: var(--primary-light); }
+        .cart-item.equipment-item:hover { background: var(--cyan-light); }
         .cart-item .item-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px dashed var(--border-color); }
         .cart-item .item-header .item-info { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 1; }
         .cart-item .item-header .item-name { font-weight: 700; font-size: 1rem; color: var(--primary); display: flex; align-items: center; gap: 8px; }
+        .cart-item.equipment-item .item-header .item-name { color: var(--cyan); }
         .cart-item .item-header .item-price-badge { font-size: 0.75rem; background: var(--success-light); color: var(--success); padding: 3px 12px; border-radius: 12px; font-weight: 700; font-family: 'Courier New', monospace; }
         .cart-item .item-header .item-total { font-weight: 800; color: var(--success); font-size: 1.1rem; font-family: 'Courier New', monospace; background: var(--success-light); padding: 4px 14px; border-radius: 8px; }
         .cart-item .item-header .btn-remove { background: var(--danger); color: white; border: none; border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 0.72rem; font-weight: 700; display: inline-flex; align-items: center; gap: 5px; }
@@ -520,6 +617,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .cart-item .detail-field { display: flex; flex-direction: column; gap: 4px; }
         .cart-item .detail-field label { font-size: 0.65rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; display: flex; align-items: center; gap: 4px; }
         .cart-item .detail-field label i { color: var(--primary); font-size: 0.7rem; }
+        .cart-item.equipment-item .detail-field label i { color: var(--cyan); }
         .cart-item .detail-field input, .cart-item .detail-field select { padding: 8px 12px; border: 2px solid var(--border-color); border-radius: 8px; font-size: 0.82rem; background: var(--bg-card); color: var(--text-primary); outline: none; width: 100%; height: 38px; }
         .cart-item .detail-field input:focus, .cart-item .detail-field select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1); }
         .cart-item .detail-field input.qty-input { text-align: center; font-weight: 700; font-size: 1rem; color: var(--primary); -moz-appearance: textfield; }
@@ -570,7 +668,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .premium-display { display: none; margin-top: 10px; padding-top: 10px; border-top: 2px dashed var(--border-color); }
         .premium-display .premium-info { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
         
-        /* PAYMENT INFO - SINGLE OPTION (PAY NOW) */
         .payment-info-box {
             background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
             border: 2px solid var(--success);
@@ -656,6 +753,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         @media (max-width: 1024px) { .main-content { margin-left: 0; padding: 16px; } }
         @media (max-width: 768px) {
             .stats-2-cards { grid-template-columns: 1fr; }
+            .otc-tabs { flex-direction: column; }
             .action-buttons { flex-direction: column; }
             .action-buttons .btn-complete-sale, .action-buttons .btn-clear-cart, .action-buttons .btn-outline { width: 100%; justify-content: center; }
         }
@@ -665,19 +763,22 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
 <main class="main-content">
 
-    <!-- PAGE HEADER - BLUE THEME -->
-    <div class="page-header">
+    <!-- HEADER -->
+    <div class="page-header <?= $active_tab === 'equipment' ? 'equipment-theme' : '' ?>">
         <div>
-            <h1 class="page-title"><i class="fas fa-plus-circle"></i> New OTC Sale</h1>
+            <h1 class="page-title">
+                <i class="fas fa-plus-circle"></i> 
+                New OTC <?= $active_tab === 'equipment' ? 'Equipment' : 'Medicine' ?> Sale
+            </h1>
             <p class="page-subtitle">
-                Sell medicines over-the-counter
+                Sell <?= $active_tab === 'equipment' ? 'equipment' : 'medicines' ?> over-the-counter
                 <strong><?= htmlspecialchars($user_branch_name) ?></strong>
-                <span class="stat-chip"><i class="fas fa-pills"></i> <?= count($medicines_list) ?> medicines</span>
+                <span class="stat-chip">
+                    <i class="fas fa-<?= $active_tab === 'equipment' ? 'tools' : 'pills' ?>"></i> 
+                    <?= count($medicines_list) ?> <?= $active_tab ?>s
+                </span>
                 <span class="stat-chip" style="background:rgba(52,211,153,0.25);color:#A7F3D0;">
                     <i class="fas fa-hand-holding-usd"></i> Pay Now (Self)
-                </span>
-                <span class="stat-chip" style="background:rgba(52,211,153,0.2);color:#A7F3D0;">
-                    <i class="fas fa-boxes"></i> Stock: <span id="stockModeDisplay">Deduct Instantly</span>
                 </span>
                 <span class="stat-chip" style="background:rgba(255,255,255,0.15);color:white;">
                     <i class="fas fa-star"></i> Premium: Optional
@@ -690,6 +791,24 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     </div>
 
+    <!-- TABS -->
+    <div class="otc-tabs">
+        <a href="?tab=medicine" class="otc-tab <?= $active_tab === 'medicine' ? 'active-medicine' : '' ?>">
+            <i class="fas fa-pills"></i>
+            MEDICINE SALE
+            <?php if ($active_tab === 'medicine'): ?>
+                <span style="background:rgba(255,255,255,0.25);padding:2px 10px;border-radius:12px;font-size:0.68rem;"><?= count($medicines_list) ?></span>
+            <?php endif; ?>
+        </a>
+        <a href="?tab=equipment" class="otc-tab <?= $active_tab === 'equipment' ? 'active-equipment' : '' ?>">
+            <i class="fas fa-tools"></i>
+            EQUIPMENT SALE
+            <?php if ($active_tab === 'equipment'): ?>
+                <span style="background:rgba(255,255,255,0.25);padding:2px 10px;border-radius:12px;font-size:0.68rem;"><?= count($medicines_list) ?></span>
+            <?php endif; ?>
+        </a>
+    </div>
+
     <?php if ($message): ?>
         <div class="message-box <?= $message_type ?>" id="messageBox">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
@@ -698,16 +817,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- STATS - BLUE THEME -->
+    <!-- STATS -->
     <div class="stats-2-cards">
-        <div class="stat-card-2 card-blue">
-            <div class="stat-icon"><i class="fas fa-pills"></i></div>
+        <div class="stat-card-2 <?= $active_tab === 'equipment' ? 'card-cyan' : 'card-blue' ?>">
+            <div class="stat-icon"><i class="fas fa-<?= $active_tab === 'equipment' ? 'tools' : 'pills' ?>"></i></div>
             <div>
-                <p class="stat-label">Medicines in Stock</p>
+                <p class="stat-label"><?= $active_tab === 'equipment' ? 'Equipment' : 'Medicines' ?> in Stock</p>
                 <p class="stat-number"><?= count(array_filter($medicines_list, function($m) { return $m['is_available']; })) ?></p>
             </div>
         </div>
-        <div class="stat-card-2 card-blue-light">
+        <div class="stat-card-2 <?= $active_tab === 'equipment' ? 'card-cyan-light' : 'card-blue-light' ?>">
             <div class="stat-icon"><i class="fas fa-exclamation-triangle"></i></div>
             <div>
                 <p class="stat-label">Low Stock Alerts</p>
@@ -716,15 +835,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     </div>
 
-    <div class="sale-form-card">
+    <div class="sale-form-card <?= $active_tab === 'equipment' ? 'equipment-theme' : '' ?>">
         <form method="POST" action="" id="otcSaleForm">
             <input type="hidden" name="action" value="complete_sale">
+            <input type="hidden" name="sale_type" value="<?= $active_tab ?>">
             <input type="hidden" name="items_json" id="itemsJson" value="[]">
             <input type="hidden" name="discount_amount" id="discountAmountHidden" value="0">
             <input type="hidden" name="premium_amount" id="premiumAmountHidden" value="0">
             <input type="hidden" name="premium_note" id="premiumNoteHidden" value="">
             
-            <div class="section-title">
+            <div class="section-title <?= $active_tab === 'equipment' ? 'equipment-theme' : '' ?>">
                 <i class="fas fa-user"></i> Customer Information
                 <span class="badge-count" style="background:var(--success);">Pay Now (Self)</span>
             </div>
@@ -741,8 +861,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </div>
             
             <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-                <div class="section-title">
-                    <i class="fas fa-pills"></i> Add Medicine
+                <div class="section-title <?= $active_tab === 'equipment' ? 'equipment-theme' : '' ?>">
+                    <i class="fas fa-<?= $active_tab === 'equipment' ? 'tools' : 'pills' ?>"></i> 
+                    Add <?= $active_tab === 'equipment' ? 'Equipment' : 'Medicine' ?>
                     <span class="badge-count"><?= count($medicines_list) ?> available</span>
                 </div>
                 
@@ -750,7 +871,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                     <div class="picker-trigger" id="pickerTrigger" onclick="toggleMedicinePicker()">
                         <div class="picker-label" id="pickerLabel">
                             <i class="fas fa-search"></i>
-                            <span id="pickerLabelText">Click to select medicine(s)...</span>
+                            <span id="pickerLabelText">Click to select <?= $active_tab ?>(s)...</span>
                         </div>
                         <i class="fas fa-chevron-down picker-arrow"></i>
                     </div>
@@ -758,7 +879,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                     <div class="picker-dropdown" id="pickerDropdown">
                         <div class="picker-search">
                             <i class="fas fa-search search-icon"></i>
-                            <input type="text" id="medSearchInput" placeholder="Search medicine..." autocomplete="off" oninput="filterMedicineList(this.value)">
+                            <input type="text" id="medSearchInput" placeholder="Search <?= $active_tab ?>..." autocomplete="off" oninput="filterMedicineList(this.value)">
                             <span class="clear-search" id="clearSearchBtn" onclick="clearSearch()">&times;</span>
                         </div>
                         
@@ -787,6 +908,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                      data-med-price="<?= $med['price'] ?>"
                                      data-med-stock="<?= $med['total_qty'] ?>"
                                      data-med-available="<?= $is_available ? '1' : '0' ?>"
+                                     data-item-type="<?= $med['item_type'] ?>"
                                      data-search-text="<?= htmlspecialchars($search_text) ?>"
                                      onclick="toggleMedicineSelection(this)">
                                     <div class="med-checkbox"></div>
@@ -811,13 +933,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                             
                             <div class="no-med-results" id="noMedResults" style="display:none;">
                                 <i class="fas fa-search-minus"></i>
-                                <p style="font-size:0.85rem;font-weight:600;">No medicines match your search</p>
+                                <p style="font-size:0.85rem;font-weight:600;">No <?= $active_tab ?> match your search</p>
                             </div>
                         </div>
                         
                         <div class="picker-footer">
-                            <div class="footer-info"><i class="fas fa-info-circle"></i> <span id="footerInfoText">Select medicines and click "Add Selected"</span></div>
-                            <button type="button" class="btn-add-selected" id="addSelectedBtn" onclick="addSelectedToCart()" disabled>
+                            <div class="footer-info"><i class="fas fa-info-circle"></i> <span id="footerInfoText">Select <?= $active_tab ?>s and click "Add Selected"</span></div>
+                            <button type="button" class="btn-add-selected <?= $active_tab === 'equipment' ? 'equipment-theme' : '' ?>" id="addSelectedBtn" onclick="addSelectedToCart()" disabled>
                                 <i class="fas fa-cart-plus"></i> Add Selected to Cart
                             </button>
                         </div>
@@ -826,7 +948,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </div>
             
             <div class="mt-4">
-                <div class="section-title">
+                <div class="section-title <?= $active_tab === 'equipment' ? 'equipment-theme' : '' ?>">
                     <i class="fas fa-shopping-cart"></i> Cart
                     <span class="badge-count" id="cartCount">0 items</span>
                 </div>
@@ -894,9 +1016,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 </div>
             </div>
             
-            <!-- ✅ PAYMENT INFO — SINGLE OPTION (PAY NOW) -->
             <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-                <div class="section-title"><i class="fas fa-credit-card"></i> Payment Method <span class="badge-count" style="background:var(--success);">Pay Now</span></div>
+                <div class="section-title <?= $active_tab === 'equipment' ? 'equipment-theme' : '' ?>">
+                    <i class="fas fa-credit-card"></i> Payment Method 
+                    <span class="badge-count" style="background:var(--success);">Pay Now</span>
+                </div>
                 
                 <div class="payment-info-box">
                     <div class="pay-icon"><i class="fas fa-hand-holding-usd"></i></div>
@@ -938,11 +1062,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span>|</span> New OTC Sale
+            <span>|</span> New OTC <?= $active_tab === 'equipment' ? 'Equipment' : 'Medicine' ?> Sale
             <span>|</span>
-            <span style="color:var(--success);font-size:0.6rem;"><i class="fas fa-hand-holding-usd"></i> Pay Now (Self) Only</span>
+            <span style="color:var(--success);font-size:0.6rem;"><i class="fas fa-hand-holding-usd"></i> Pay Now (Self)</span>
             <span>|</span>
-            <span style="color:var(--success);font-size:0.6rem;"><i class="fas fa-boxes"></i> Stock: <span id="stockStatusDisplay">Deduct Instantly</span></span>
+            <span style="color:var(--success);font-size:0.6rem;"><i class="fas fa-boxes"></i> Stock: Deduct Instantly</span>
             <span>|</span> &copy; <?= date('Y') ?>
         </p>
     </footer>
@@ -958,6 +1082,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 </div>
 
 <script>
+    var saleType = '<?= $active_tab ?>';
+    
     function formatMoneyInput(input) {
         var raw = input.value.replace(/,/g, '').replace(/[^0-9.]/g, '');
         if (raw === '' || raw === '.') { input.value = '0'; return; }
@@ -975,7 +1101,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         if (mb) { mb.style.opacity = '0'; setTimeout(function() { mb.style.display = 'none'; }, 500); }
     }
     
-    // ✅ AUTO-DISMISS SUCCESS MESSAGE (No redirect)
     document.addEventListener('DOMContentLoaded', function() {
         var mb = document.getElementById('messageBox');
         if (mb) setTimeout(dismissMessage, 6000);
@@ -1035,8 +1160,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         document.getElementById('noMedResults').style.display = (visibleCount === 0) ? 'block' : 'none';
         
         var footerText = document.getElementById('footerInfoText');
-        if (query) footerText.textContent = 'Found ' + visibleCount + ' medicine(s)';
-        else footerText.textContent = 'Select medicines and click "Add Selected"';
+        if (query) footerText.textContent = 'Found ' + visibleCount + ' ' + saleType + '(s)';
+        else footerText.textContent = 'Select ' + saleType + 's and click "Add Selected"';
     }
     
     function clearSearch() {
@@ -1076,10 +1201,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         if (count > 0) {
             label.classList.add('has-selection');
-            labelText.textContent = count + ' medicine(s) selected';
+            labelText.textContent = count + ' ' + saleType + '(s) selected';
         } else {
             label.classList.remove('has-selection');
-            labelText.textContent = 'Click to select medicine(s)...';
+            labelText.textContent = 'Click to select ' + saleType + '(s)...';
         }
     }
     
@@ -1091,7 +1216,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             }
         });
         updateSelectedCount();
-        showToast('Success', 'All available medicines selected', 'success');
+        showToast('Success', 'All available ' + saleType + 's selected', 'success');
     }
     
     function clearAllSelected() {
@@ -1116,7 +1241,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     
     function addSelectedToCart() {
         var selectedIds = Object.keys(selectedMedicines);
-        if (selectedIds.length === 0) { showToast('Warning', 'Please select at least one medicine', 'warning'); return; }
+        if (selectedIds.length === 0) { showToast('Warning', 'Please select at least one ' + saleType, 'warning'); return; }
         
         var addedCount = 0, skippedCount = 0;
         
@@ -1151,11 +1276,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         document.getElementById('pickerDropdown').classList.remove('show');
         
         if (addedCount > 0) {
-            var msg = addedCount + ' medicine(s) added to cart - Please enter quantity';
+            var msg = addedCount + ' ' + saleType + '(s) added to cart';
             if (skippedCount > 0) msg += ' | ' + skippedCount + ' skipped';
             showToast('Success', msg, 'success');
         } else {
-            showToast('Error', 'No medicines were added', 'error');
+            showToast('Error', 'No ' + saleType + 's were added', 'error');
         }
     }
     
@@ -1196,35 +1321,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         if (totalEl) totalEl.textContent = 'TSh ' + item.total.toLocaleString();
         
         updateTotals();
-    }
-    
-    function attachQuantityWheelBlocker() {
-        document.querySelectorAll('.qty-input').forEach(function(input) {
-            if (input.dataset.wheelBlocked === '1') return;
-            input.dataset.wheelBlocked = '1';
-            
-            input.addEventListener('wheel', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                this.blur();
-                return false;
-            }, { passive: false });
-        });
-    }
-    
-    function attachQuantityInputHandler() {
-        document.querySelectorAll('.qty-input').forEach(function(input) {
-            if (input.dataset.inputHandlerAttached === '1') return;
-            input.dataset.inputHandlerAttached = '1';
-            
-            input.addEventListener('input', function() {
-                this.value = this.value.replace(/[^0-9]/g, '');
-            });
-            
-            input.addEventListener('focus', function() {
-                this.select();
-            });
-        });
     }
     
     function updateDosage(id, value) {
@@ -1386,9 +1482,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         emptyDiv.style.display = 'none'; itemsDiv.style.display = 'block';
         
         var html = '';
+        var isEquipment = saleType === 'equipment';
         
         cart.forEach(function(item) {
             var instrText = item.instructions || '';
+            var itemClass = isEquipment ? 'equipment-item' : '';
+            var iconClass = isEquipment ? 'fa-tools' : 'fa-pills';
+            var iconColor = isEquipment ? 'color:var(--cyan);' : 'color:var(--primary);';
             
             var freqOptions = '<option value="">-- Select Frequency --</option>';
             predefinedFrequencies.forEach(function(f) {
@@ -1418,10 +1518,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             var totalDisplay = item.total > 0 ? item.total.toLocaleString() : '0';
             
             html += `
-                <div class="cart-item">
+                <div class="cart-item ${itemClass}">
                     <div class="item-header">
                         <div class="item-info">
-                            <div class="item-name"><i class="fas fa-pills" style="color:var(--primary);"></i> ${item.name}</div>
+                            <div class="item-name"><i class="fas ${iconClass}" style="${iconColor}"></i> ${item.name}</div>
                             <span class="item-price-badge">TSh ${item.price.toLocaleString()} / unit</span>
                             <span style="font-size:0.7rem;color:var(--text-secondary);"><i class="fas fa-boxes"></i> Max: ${item.maxStock}</span>
                         </div>
@@ -1431,19 +1531,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         </div>
                     </div>
                     
+                    ${!isEquipment ? `
                     <div class="item-details-grid">
                         <div class="detail-field">
                             <label><i class="fas fa-sort-numeric-up"></i> Quantity</label>
-                            <input type="text" 
-                                   inputmode="numeric" 
-                                   pattern="[0-9]*"
-                                   id="qty_input_${item.id}" 
-                                   class="qty-input" 
-                                   value="${qtyValue}" 
-                                   placeholder="0"
-                                   maxlength="6"
-                                   onchange="updateQuantity(${item.id}, this.value)"
-                                   oninput="updateQuantity(${item.id}, this.value)">
+                            <input type="text" inputmode="numeric" pattern="[0-9]*" id="qty_input_${item.id}" class="qty-input" value="${qtyValue}" placeholder="0" maxlength="6" onchange="updateQuantity(${item.id}, this.value)" oninput="updateQuantity(${item.id}, this.value)">
                         </div>
                         <div class="detail-field">
                             <label><i class="fas fa-prescription-bottle"></i> Dosage</label>
@@ -1467,7 +1559,20 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                             </div>
                         </div>
                     </div>
+                    ` : `
+                    <div class="item-details-grid" style="grid-template-columns: 110px 1fr 1fr 1fr;">
+                        <div class="detail-field">
+                            <label><i class="fas fa-sort-numeric-up"></i> Quantity</label>
+                            <input type="text" inputmode="numeric" pattern="[0-9]*" id="qty_input_${item.id}" class="qty-input" value="${qtyValue}" placeholder="0" maxlength="6" onchange="updateQuantity(${item.id}, this.value)" oninput="updateQuantity(${item.id}, this.value)">
+                        </div>
+                        <div class="detail-field" style="grid-column: span 3;">
+                            <label><i class="fas fa-sticky-note"></i> Notes (Optional)</label>
+                            <input type="text" id="instr_input_${item.id}" value="${instrText}" placeholder="Optional notes for this equipment..." oninput="updateInstructionsFromTextarea(${item.id}, this.value)">
+                        </div>
+                    </div>
+                    `}
                     
+                    ${!isEquipment ? `
                     <div class="instructions-section">
                         <div class="instr-label"><i class="fas fa-sticky-note"></i> Instructions</div>
                         <div class="instr-textarea-wrapper">
@@ -1486,6 +1591,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                             }).join('') : '<span style="font-size:0.7rem;color:var(--text-muted);">No instructions added</span>'}
                         </div>
                     </div>
+                    ` : ''}
                 </div>
             `;
         });
@@ -1494,8 +1600,19 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         btn.disabled = false;
         
         setTimeout(function() {
-            attachQuantityWheelBlocker();
-            attachQuantityInputHandler();
+            document.querySelectorAll('.qty-input').forEach(function(input) {
+                if (input.dataset.wheelBlocked === '1') return;
+                input.dataset.wheelBlocked = '1';
+                input.addEventListener('wheel', function(e) {
+                    e.preventDefault();
+                    this.blur();
+                    return false;
+                }, { passive: false });
+                input.addEventListener('input', function() {
+                    this.value = this.value.replace(/[^0-9]/g, '');
+                });
+                input.addEventListener('focus', function() { this.select(); });
+            });
         }, 50);
     }
 
@@ -1629,11 +1746,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         if (e.key === 'Enter' && document.activeElement?.id === 'premiumAmountInput') { e.preventDefault(); applyPremium(); }
     });
 
-    // ✅ CONFIRM BEFORE SUBMIT
     document.getElementById('otcSaleForm').addEventListener('submit', function(e) {
         if (cart.length === 0) {
             e.preventDefault();
-            showToast('Error', 'Please add at least one medicine', 'error');
+            showToast('Error', 'Please add at least one ' + saleType, 'error');
             return false;
         }
         
@@ -1644,17 +1760,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             return false;
         }
         
-        if (!confirm('Complete this OTC sale?\n\nStock will be deducted and payment recorded.')) {
+        if (!confirm('Complete this OTC ' + saleType + ' sale?\n\nStock will be deducted and payment recorded.')) {
             e.preventDefault();
             return false;
         }
     });
 
-    console.log('%c💊 Braick OTC - V2 (Pay Now Only)', 'font-size:18px;font-weight:bold;color:#059669;');
-    console.log('%c✅ NO redirect after sale', 'font-size:13px;color:#34D399;font-weight:bold;');
-    console.log('%c✅ ONLY "Pay Now (Self)" option', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ Stock deducted instantly', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ Sale stored in otc_sales table', 'font-size:13px;color:#34D399;');
+    console.log('%c💊 Braick OTC - V2.1 (Medicine + Equipment)', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
+    console.log('%c✅ Medicine tab + Equipment tab', 'font-size:13px;color:#0B5ED7;');
+    console.log('%c✅ Stock movements na inventory_id / equipment_id', 'font-size:13px;color:#0891B2;');
 </script>
 
 </body>

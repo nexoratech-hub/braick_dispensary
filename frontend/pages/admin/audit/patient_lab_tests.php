@@ -10,6 +10,9 @@
 // ✅ Bill auto-update
 // ✅ BLUE THEME
 // ✅ ALL ENGLISH INSTRUCTIONS
+// ✅ FIX V2: Delete test inafanya kazi (bill_items haina visit_id)
+// ✅ FIX V2: Update test inafanya kazi (JOIN na bills kwa visit_id)
+// ✅ FIX V2: Fallback 3 za kutafuta bill_item
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -58,6 +61,55 @@ function parseMoney($value) {
     if (is_numeric($value)) return (float)$value;
     $clean = preg_replace('/[^0-9.]/', '', (string)$value);
     return (float)($clean ?: 0);
+}
+
+// ================================================================
+// RECALCULATE BILL HELPER
+// ================================================================
+function recalculateBill($db, $bill_id) {
+    $stmt = $db->prepare("
+        SELECT 
+            COALESCE(SUM(total_price), 0) as new_subtotal,
+            COALESCE(SUM(discount_amount), 0) as new_items_discount
+        FROM bill_items 
+        WHERE bill_id = ? AND status != 'cancelled'
+    ");
+    $stmt->execute([$bill_id]);
+    $recalc = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    $new_subtotal = (float)($recalc['new_subtotal'] ?? 0);
+    $new_items_discount = (float)($recalc['new_items_discount'] ?? 0);
+    
+    $stmt = $db->prepare("SELECT discount_amount, premium_amount, paid_amount FROM bills WHERE id = ?");
+    $stmt->execute([$bill_id]);
+    $bill_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    $bill_discount = (float)($bill_data['discount_amount'] ?? 0);
+    $premium = (float)($bill_data['premium_amount'] ?? 0);
+    $paid = (float)($bill_data['paid_amount'] ?? 0);
+    
+    $new_total_discount = $new_items_discount + $bill_discount;
+    $new_total_amount = $new_subtotal - $new_total_discount + $premium;
+    if ($new_total_amount < 0) $new_total_amount = 0;
+    
+    $new_balance = $new_total_amount - $paid;
+    if ($new_balance < 0) $new_balance = 0;
+    
+    $new_status = 'pending';
+    if ($new_balance <= 0 && $new_total_amount > 0) {
+        $new_status = 'paid';
+    } elseif ($paid > 0 && $new_balance > 0) {
+        $new_status = 'partial';
+    }
+    
+    $sql = "UPDATE bills SET 
+        subtotal = ?, total_discount = ?, total_amount = ?,
+        balance = ?, status = ?, updated_at = NOW()
+        WHERE id = ?";
+    $db->prepare($sql)->execute([
+        $new_subtotal, $new_total_discount, $new_total_amount,
+        $new_balance, $new_status, $bill_id
+    ]);
 }
 
 // ================================================================
@@ -124,13 +176,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $bill_id = $existing_bill['id'];
                 
                 $sql_item = "INSERT INTO bill_items 
-                    (bill_id, patient_id, visit_id, branch_id, item_type, item_name, 
+                    (bill_id, patient_id, branch_id, item_type, item_id, item_name, 
                      quantity, unit_price, total_price, discount_amount, final_price, 
                      status, reference_id, reference_type, created_at) 
-                    VALUES (?, ?, ?, ?, 'lab_test', ?, 1, ?, ?, 0, ?, 'pending', ?, 'lab_test', NOW())";
+                    VALUES (?, ?, ?, 'lab_test', ?, ?, 1, ?, ?, 0, ?, 'pending', ?, 'lab_test', NOW())";
                 $db->prepare($sql_item)->execute([
-                    $bill_id, $patient_id, $visit_id, $branch_id,
-                    $test_name, $test_price, $test_price, $test_price, $new_test_id
+                    $bill_id, $patient_id, $branch_id,
+                    $new_test_id, $test_name,
+                    $test_price, $test_price, $test_price,
+                    $new_test_id
                 ]);
                 
                 recalculateBill($db, $bill_id);
@@ -161,6 +215,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     
     // ============================================================
     // 2. UPDATE EXISTING TEST
+    // ✅ FIX: bill_items haina visit_id → JOIN na bills
     // ============================================================
     if ($_POST['action'] === 'update_test') {
         try {
@@ -177,7 +232,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $reference_range = trim($_POST['reference_range'] ?? '');
             $notes = trim($_POST['notes'] ?? '');
             
-            $stmt = $db->prepare("SELECT test_name, test_price, status, visit_id FROM lab_tests WHERE id = ?");
+            $stmt = $db->prepare("SELECT test_name, test_price, status, visit_id, patient_id, branch_id FROM lab_tests WHERE id = ?");
             $stmt->execute([$test_id]);
             $old_test = $stmt->fetch(PDO::FETCH_ASSOC);
             
@@ -198,18 +253,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $test_id
             ]);
             
-            // Update bill item
+            // ✅ FIX: Tafuta bill_item kwa reference_id kwanza
+            $bill_item = null;
+            
             $stmt = $db->prepare("
                 SELECT bi.* FROM bill_items bi
                 WHERE bi.item_type = 'lab_test'
-                AND (
-                    (bi.reference_id = ? AND bi.reference_type = 'lab_test')
-                    OR (bi.item_name = ? AND bi.visit_id = ?)
-                )
+                AND bi.reference_id = ?
+                AND bi.reference_type = 'lab_test'
                 ORDER BY bi.id DESC LIMIT 1
             ");
-            $stmt->execute([$test_id, $old_test['test_name'], $old_test['visit_id']]);
+            $stmt->execute([$test_id]);
             $bill_item = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            // Fallback: tafuta kwa item_name + patient_id
+            if (!$bill_item) {
+                $stmt = $db->prepare("
+                    SELECT bi.* FROM bill_items bi
+                    WHERE bi.item_type = 'lab_test'
+                    AND bi.item_name = ?
+                    AND bi.patient_id = ?
+                    ORDER BY bi.id DESC LIMIT 1
+                ");
+                $stmt->execute([$old_test['test_name'], $old_test['patient_id']]);
+                $bill_item = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
             
             if ($bill_item) {
                 $bill_id = $bill_item['bill_id'];
@@ -238,7 +306,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                               VALUES (?, ?, 'update_lab_test', ?, ?, NOW())")
                    ->execute([
                        $user_id,
-                       $selected_branch_id !== 'all' ? (int)$selected_branch_id : 1,
+                       $old_test['branch_id'] ?? ($selected_branch_id !== 'all' ? (int)$selected_branch_id : 1),
                        "Updated lab test: $test_name (ID: $test_id) | " . implode(' | ', $changes),
                        $_SERVER['REMOTE_ADDR'] ?? 'unknown'
                    ]);
@@ -258,6 +326,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     
     // ============================================================
     // 3. DELETE TEST
+    // ✅ FIX: bill_items haina visit_id → tunatafuta kwa reference_id TU
+    // ✅ FIX: Fallback 3 - reference_id, item_name+patient_id, item_name+bill
+    // ✅ FIX: Tunaondoa bill_items, kisha recalculate au delete bill
     // ============================================================
     if ($_POST['action'] === 'delete_test') {
         try {
@@ -265,7 +336,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             
             $test_id = (int)($_POST['test_id'] ?? 0);
             
-            $stmt = $db->prepare("SELECT test_name, test_price, status, visit_id FROM lab_tests WHERE id = ?");
+            // Step 1: Pata test info
+            $stmt = $db->prepare("SELECT test_name, test_price, status, visit_id, patient_id, branch_id FROM lab_tests WHERE id = ?");
             $stmt->execute([$test_id]);
             $test = $stmt->fetch(PDO::FETCH_ASSOC);
             
@@ -273,57 +345,114 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 throw new Exception("Test not found!");
             }
             
+            $bill_item = null;
+            $bill_id = null;
+            $bill_number = null;
+            
+            // Step 2: Tafuta bill_item kwa reference_id (njia kuu)
             $stmt = $db->prepare("
-                SELECT bi.*, b.bill_number 
+                SELECT bi.*, b.bill_number, b.id as bill_id
                 FROM bill_items bi
                 INNER JOIN bills b ON bi.bill_id = b.id
                 WHERE bi.item_type = 'lab_test'
-                AND (
-                    (bi.reference_id = ? AND bi.reference_type = 'lab_test')
-                    OR (bi.item_name = ? AND bi.visit_id = ?)
-                )
-                ORDER BY bi.id DESC LIMIT 1
+                AND bi.reference_id = ?
+                AND bi.reference_type = 'lab_test'
+                ORDER BY bi.id DESC 
+                LIMIT 1
             ");
-            $stmt->execute([$test_id, $test['test_name'], $test['visit_id']]);
+            $stmt->execute([$test_id]);
             $bill_item = $stmt->fetch(PDO::FETCH_ASSOC);
             
+            // Step 3: Fallback - tafuta kwa item_name + patient_id
+            if (!$bill_item) {
+                $stmt = $db->prepare("
+                    SELECT bi.*, b.bill_number, b.id as bill_id
+                    FROM bill_items bi
+                    INNER JOIN bills b ON bi.bill_id = b.id
+                    WHERE bi.item_type = 'lab_test'
+                    AND bi.item_name = ?
+                    AND bi.patient_id = ?
+                    ORDER BY bi.id DESC 
+                    LIMIT 1
+                ");
+                $stmt->execute([$test['test_name'], $test['patient_id']]);
+                $bill_item = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
+            
+            // Step 4: Fallback - tafuta kwa item_name + visit (kupitia bills)
+            if (!$bill_item && !empty($test['visit_id'])) {
+                $stmt = $db->prepare("
+                    SELECT bi.*, b.bill_number, b.id as bill_id
+                    FROM bill_items bi
+                    INNER JOIN bills b ON bi.bill_id = b.id
+                    WHERE bi.item_type = 'lab_test'
+                    AND bi.item_name = ?
+                    AND b.visit_id = ?
+                    ORDER BY bi.id DESC 
+                    LIMIT 1
+                ");
+                $stmt->execute([$test['test_name'], $test['visit_id']]);
+                $bill_item = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
+            
+            // Step 5: Kama bill_item imepatikana, iondoe
             if ($bill_item) {
                 $bill_id = $bill_item['bill_id'];
                 $bill_number = $bill_item['bill_number'];
                 
+                // Ondoa bill_item
                 $db->prepare("DELETE FROM bill_items WHERE id = ?")->execute([$bill_item['id']]);
                 
+                // Angalia kama bill bado ina items nyingine
                 $stmt = $db->prepare("SELECT COUNT(*) as cnt FROM bill_items WHERE bill_id = ? AND status != 'cancelled'");
                 $stmt->execute([$bill_id]);
                 $remaining = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
                 
                 if ($remaining === 0) {
-                    $db->prepare("DELETE FROM payments WHERE bill_id = ?")->execute([$bill_id]);
+                    // Hakuna items zilizobaki → Ondoa payments na bill
+                    try {
+                        $db->prepare("DELETE FROM payments WHERE bill_id = ?")->execute([$bill_id]);
+                    } catch (Exception $e) {
+                        error_log("Delete payments error: " . $e->getMessage());
+                    }
+                    
                     $db->prepare("DELETE FROM bills WHERE id = ?")->execute([$bill_id]);
                 } else {
+                    // Bado kuna items → Recalculate bill
                     recalculateBill($db, $bill_id);
                 }
             }
             
+            // Step 6: Ondoa lab_test
             $db->prepare("DELETE FROM lab_tests WHERE id = ?")->execute([$test_id]);
             
+            // Step 7: Audit log
             try {
                 $log = "Deleted lab test: {$test['test_name']} (ID: $test_id)";
-                if ($bill_item) $log .= " | Bill $bill_number auto-updated";
+                if ($bill_item) {
+                    $log .= " | Bill $bill_number auto-updated";
+                } else {
+                    $log .= " | No bill item found";
+                }
                 
                 $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, ip_address, created_at) 
                               VALUES (?, ?, 'delete_lab_test', ?, ?, NOW())")
                    ->execute([
                        $user_id,
-                       $selected_branch_id !== 'all' ? (int)$selected_branch_id : 1,
+                       $test['branch_id'] ?? ($selected_branch_id !== 'all' ? (int)$selected_branch_id : 1),
                        $log,
                        $_SERVER['REMOTE_ADDR'] ?? 'unknown'
                    ]);
-            } catch (Exception $e) {}
+            } catch (Exception $e) {
+                error_log("Audit log error: " . $e->getMessage());
+            }
             
             $db->commit();
             
             $alert_message = "Lab test \"{$test['test_name']}\" deleted successfully!";
+            if ($bill_item) {
+                $alert_message .= " Bill updated.";
+            }
             $alert_type = 'success';
             
         } catch (Exception $e) {
@@ -332,55 +461,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $alert_type = 'error';
         }
     }
-}
-
-// ================================================================
-// RECALCULATE BILL HELPER
-// ================================================================
-function recalculateBill($db, $bill_id) {
-    $stmt = $db->prepare("
-        SELECT 
-            COALESCE(SUM(total_price), 0) as new_subtotal,
-            COALESCE(SUM(discount_amount), 0) as new_items_discount
-        FROM bill_items 
-        WHERE bill_id = ? AND status != 'cancelled'
-    ");
-    $stmt->execute([$bill_id]);
-    $recalc = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    $new_subtotal = (float)($recalc['new_subtotal'] ?? 0);
-    $new_items_discount = (float)($recalc['new_items_discount'] ?? 0);
-    
-    $stmt = $db->prepare("SELECT discount_amount, premium_amount, paid_amount FROM bills WHERE id = ?");
-    $stmt->execute([$bill_id]);
-    $bill_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    $bill_discount = (float)($bill_data['discount_amount'] ?? 0);
-    $premium = (float)($bill_data['premium_amount'] ?? 0);
-    $paid = (float)($bill_data['paid_amount'] ?? 0);
-    
-    $new_total_discount = $new_items_discount + $bill_discount;
-    $new_total_amount = $new_subtotal - $new_total_discount + $premium;
-    if ($new_total_amount < 0) $new_total_amount = 0;
-    
-    $new_balance = $new_total_amount - $paid;
-    if ($new_balance < 0) $new_balance = 0;
-    
-    $new_status = 'pending';
-    if ($new_balance <= 0 && $new_total_amount > 0) {
-        $new_status = 'paid';
-    } elseif ($paid > 0 && $new_balance > 0) {
-        $new_status = 'partial';
-    }
-    
-    $sql = "UPDATE bills SET 
-        subtotal = ?, total_discount = ?, total_amount = ?,
-        balance = ?, status = ?, updated_at = NOW()
-        WHERE id = ?";
-    $db->prepare($sql)->execute([
-        $new_subtotal, $new_total_discount, $new_total_amount,
-        $new_balance, $new_status, $bill_id
-    ]);
 }
 
 // ================================================================
@@ -2427,13 +2507,13 @@ document.addEventListener('DOMContentLoaded', function() {
     initCatalogSearch();
 });
 
-console.log('%c🧪 Patient Lab Tests (Branch-Filtered, No Lab Tech)', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
+console.log('%c🧪 Patient Lab Tests (V2 - FIXED DELETE)', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
 console.log('%c✅ Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:12px;color:#34D399;');
 console.log('%c✅ Branch: <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?>', 'font-size:12px;color:#34D399;');
 console.log('%c✅ Total Visits: <?= $total_visits ?>', 'font-size:12px;color:#34D399;');
 console.log('%c✅ Total Tests: <?= $total_tests ?>', 'font-size:12px;color:#34D399;');
-console.log('%c✅ Catalog: <?= count($lab_catalog) ?> tests (<?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?> branch only)', 'font-size:12px;color:#7C3AED;font-weight:bold;');
-console.log('%c✅ No Lab Tech assignment needed', 'font-size:12px;color:#F59E0B;font-weight:bold;');
+console.log('%c✅ Catalog: <?= count($lab_catalog) ?> tests', 'font-size:12px;color:#7C3AED;font-weight:bold;');
+console.log('%c✅ DELETE FIXED - bill_items haina visit_id', 'font-size:12px;color:#F59E0B;font-weight:bold;');
 </script>
 
 </body>

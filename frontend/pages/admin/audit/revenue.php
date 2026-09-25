@@ -1,9 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/revenue.php
-// ADMIN AUDIT - REVENUE REPORT (V59 - FIX PENDING BILLS)
+// ADMIN AUDIT - REVENUE REPORT (V60 - OTC EQUIPMENT SEPARATION)
 // ================================================================
-// ✅ V59: FIX - Pending bills zinaonekana bila kuhitaji payments
+// ✅ V60: OTC split into OTC Products + Equipment Sales
+// ✅ V60: OTC Card inaonyesha JUMLA ya OTC + Equipment
+// ✅ V60: Clinical Services inaonyesha Cons + Proc + Equip (za daktari pekee)
+// ✅ V59: Pending bills zinaonekana bila kuhitaji payments
 // ✅ V59: Pending filter inafanya kazi (bills zenye status pending)
 // ✅ V59: All filter inaonyesha pending + paid + partial
 // ✅ V58: Quick Filters (Today...Custom) JUU kabla ya Cards
@@ -306,6 +309,48 @@ if ($selected_branch_id !== 'all') {
     $branch_params_b = [(int)$selected_branch_id];
 }
 
+// ================================================================
+// ✅ V60: OTC SPLIT - OTC PRODUCTS vs EQUIPMENT SALES
+// ================================================================
+// OTC sale_number format:
+//   - OTC-YYYYMMDD-XXXX     → OTC Products (medicines)
+//   - OTC-EQP-YYYYMMDD-XXXX → Equipment Sales
+// ================================================================
+
+// OTC PRODUCTS REVENUE (excluding EQP)
+$otc_products_revenue = 0; $otc_products_count = 0;
+try {
+    $sql = "SELECT COALESCE(SUM(o.total_amount), 0) as total, COUNT(*) as count 
+            FROM otc_sales o 
+            WHERE o.payment_status IN ('paid', 'partial') 
+            AND o.sale_number NOT LIKE 'OTC-EQP-%'
+            $branch_cond_o $date_cond_otc $pay_cond_otc";
+    $stmt = $db->prepare($sql);
+    $stmt->execute(array_merge($branch_params_o, $date_params, $pay_params));
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $otc_products_revenue = (float)($data['total'] ?? 0);
+    $otc_products_count = (int)($data['count'] ?? 0);
+} catch (Exception $e) {}
+
+// EQUIPMENT SALES REVENUE (only EQP)
+$otc_equipment_revenue = 0; $otc_equipment_count = 0;
+try {
+    $sql = "SELECT COALESCE(SUM(o.total_amount), 0) as total, COUNT(*) as count 
+            FROM otc_sales o 
+            WHERE o.payment_status IN ('paid', 'partial') 
+            AND o.sale_number LIKE 'OTC-EQP-%'
+            $branch_cond_o $date_cond_otc $pay_cond_otc";
+    $stmt = $db->prepare($sql);
+    $stmt->execute(array_merge($branch_params_o, $date_params, $pay_params));
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $otc_equipment_revenue = (float)($data['total'] ?? 0);
+    $otc_equipment_count = (int)($data['count'] ?? 0);
+} catch (Exception $e) {}
+
+// TOTAL OTC (Products + Equipment)
+$otc_revenue = $otc_products_revenue + $otc_equipment_revenue;
+$otc_count = $otc_products_count + $otc_equipment_count;
+
 // PATIENT PAYMENTS
 $patient_bills_revenue = 0; $patient_bills_count = 0;
 try {
@@ -322,19 +367,6 @@ try {
     $data = $stmt->fetch(PDO::FETCH_ASSOC);
     $patient_bills_revenue = (float)($data['total'] ?? 0);
     $patient_bills_count = (int)($data['count'] ?? 0);
-} catch (Exception $e) {}
-
-// OTC REVENUE
-$otc_revenue = 0; $otc_count = 0;
-try {
-    $sql = "SELECT COALESCE(SUM(o.total_amount), 0) as total, COUNT(*) as count 
-            FROM otc_sales o WHERE o.payment_status IN ('paid', 'partial') 
-            $branch_cond_o $date_cond_otc $pay_cond_otc";
-    $stmt = $db->prepare($sql);
-    $stmt->execute(array_merge($branch_params_o, $date_params, $pay_params));
-    $data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $otc_revenue = (float)($data['total'] ?? 0);
-    $otc_count = (int)($data['count'] ?? 0);
 } catch (Exception $e) {}
 
 // PENDING
@@ -392,7 +424,7 @@ try {
 
 $total_pending = $pending_bills_amount + $partial_remaining + $pending_otc_amount + $partial_otc_amount;
 
-// BREAKDOWN
+// BREAKDOWN (from bill_items - these are doctor-linked services, NOT OTC)
 $breakdown_types = ['consultation', 'lab_test', 'procedure', 'medication', 'registration', 'equipment'];
 $breakdown_data = [];
 foreach ($breakdown_types as $type) {
@@ -481,7 +513,13 @@ try {
 $total_discounts = $patient_discounts + $otc_discounts;
 $total_premiums = $patient_premiums + $otc_premiums;
 
-// CATEGORIES
+// ================================================================
+// ✅ V60: CATEGORIES - CLINICAL SERVICES (Doctor-linked only)
+// ================================================================
+// Hizi ni kutoka bill_items za visits (SIYO OTC)
+// Equipment hapa ni zile zilizotumika na daktari kwenye visit
+// ================================================================
+
 $consultation_revenue = $breakdown_data['consultation']['gross'];
 $consultation_count = $breakdown_data['consultation']['count'];
 $lab_revenue = $breakdown_data['lab_test']['gross'];
@@ -499,6 +537,7 @@ $prescription_gross = $medication_revenue;
 $prescription_revenue = $prescription_gross;
 $prescription_count = $medication_count;
 
+// Clinical Services = Consultation + Procedure + Equipment (zote za daktari)
 $clinical_services_revenue = $consultation_revenue + $procedure_revenue + $equipment_revenue;
 $clinical_services_count = $consultation_count + $procedure_count + $equipment_count;
 
@@ -525,6 +564,8 @@ $profit_percentage = ($total_revenue > 0) ? round(($net_profit / $total_revenue)
 // ROUND
 $patient_bills_revenue_rounded = roundTo50($patient_bills_revenue);
 $otc_revenue_rounded = roundTo50($otc_revenue);
+$otc_products_revenue_rounded = roundTo50($otc_products_revenue);
+$otc_equipment_revenue_rounded = roundTo50($otc_equipment_revenue);
 $total_revenue = roundTo50($total_revenue);
 $total_expenses = roundTo50($total_expenses);
 $net_profit = roundTo50($net_profit);
@@ -586,15 +627,7 @@ try {
     error_log("OTC sales list error: " . $e->getMessage());
 }
 
-// ================================================================
-// ✅ V59 FIX: PATIENT-GROUPED BILLS - PENDING BILLS ZINAONEKANA
-// ================================================================
-// TATIZO LA V58: Query ilikuwa na `IN (SELECT ... FROM payments)` 
-// ambayo ilifuta pending bills (hazina payments).
-//
-// SULUHISHO: Kwa 'pending' na 'all' filter, HATUTUMII payments condition.
-// Kwa 'paid'/'partial', tunatumia payments condition.
-// ================================================================
+// PATIENT-GROUPED BILLS
 $patient_groups = [];
 
 try {
@@ -613,7 +646,6 @@ try {
         ];
     }
 
-    // ✅ Patient filter condition
     $patient_filter_cond = "";
     if ($patient_filter === 'partial') {
         $patient_filter_cond = " AND b.status = 'partial'";
@@ -622,17 +654,11 @@ try {
     } elseif ($patient_filter === 'paid') {
         $patient_filter_cond = " AND b.status = 'paid'";
     }
-    // 'all' - hakuna cond, inaonyesha zote
 
-    // ✅ Payment requirement - TUNAPUNGUKA KWA PENDING/ALL
-    // Kwa paid/partial: inahitaji payment (ndio zilizolipwa)
-    // Kwa pending: HAITAJI payment (hazijalipwa bado)
-    // Kwa all: HAITAJI payment (tunataka pia pending zionekane)
     $payment_require_cond = "";
     $extra_params_payment = [];
     
     if ($patient_filter === 'paid' || $patient_filter === 'partial') {
-        // Kwa paid/partial — inahitaji payment kweli
         $payment_require_cond = " AND b.id IN (SELECT DISTINCT p.bill_id FROM payments p 
             INNER JOIN bills b2 ON p.bill_id = b2.id
             WHERE p.bill_id IS NOT NULL 
@@ -641,13 +667,7 @@ try {
             AND b2.bill_number NOT LIKE 'BILL-OTC-%'
             $branch_cond_p $date_cond_payments $pay_cond_payments)";
         
-        // ✅ Tunahitaji params za payment kwa filter hii
         $extra_params_payment = array_merge($branch_params_p, $date_params, $pay_params);
-    } else {
-        // Kwa 'pending' na 'all' — HAITAJI payment
-        // Pending bills hazina payments, hivyo lazima zionekane
-        $payment_require_cond = "";
-        $extra_params_payment = [];
     }
 
     $sql_bills = "SELECT b.id as bill_id, b.bill_number, b.patient_id as patient_db_id, b.visit_id,
@@ -681,8 +701,6 @@ try {
 
     $stmt = $db->prepare($sql_bills);
     
-    // ✅ Params: 
-    // [branch, dates, search] + (payment params ikiwa paid/partial)
     $final_params = array_merge(
         $branch_params_b, 
         $date_params_bills, 
@@ -865,7 +883,7 @@ include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Revenue Report V59 • Braick Admin Audit</title>
+<title>Revenue Report V60 • Braick Admin Audit</title>
 <link rel="icon" href="<?= $logo_path ?>" type="image/png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1160,6 +1178,110 @@ mark.search-highlight {
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 .pulse-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; margin-right: 3px; animation: pulseDot 1.5s infinite; }
 @keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* OTC CARD SPLIT STYLES */
+.otc-split-container {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border-color);
+}
+.otc-split-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.58rem;
+    font-weight: 700;
+}
+.otc-split-item .split-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-secondary);
+}
+.otc-split-item .split-label i {
+    font-size: 0.55rem;
+    width: 14px;
+    text-align: center;
+}
+.otc-split-item.otc-products .split-label i { color: #0891B2; }
+.otc-split-item.otc-equipment .split-label i { color: #0D9488; }
+.otc-split-item .split-value {
+    font-family: var(--font-mono);
+    font-weight: 900;
+    font-size: 0.62rem;
+    padding: 1px 6px;
+    border-radius: 5px;
+    white-space: nowrap;
+}
+.otc-split-item.otc-products .split-value {
+    color: #0891B2;
+    background: rgba(8, 145, 178, 0.1);
+    border: 1px solid rgba(8, 145, 178, 0.2);
+}
+.otc-split-item.otc-equipment .split-value {
+    color: #0D9488;
+    background: rgba(13, 148, 136, 0.1);
+    border: 1px solid rgba(13, 148, 136, 0.2);
+}
+
+/* CLINICAL CARD BREAKDOWN STYLES */
+.clinical-breakdown-container {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border-color);
+}
+.clinical-breakdown-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.58rem;
+    font-weight: 700;
+}
+.clinical-breakdown-item .cb-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-secondary);
+}
+.clinical-breakdown-item .cb-label i {
+    font-size: 0.55rem;
+    width: 14px;
+    text-align: center;
+}
+.clinical-breakdown-item.consultation .cb-label i { color: #059669; }
+.clinical-breakdown-item.procedure .cb-label i { color: #0D9488; }
+.clinical-breakdown-item.equipment .cb-label i { color: #7C3AED; }
+.clinical-breakdown-item .cb-value {
+    font-family: var(--font-mono);
+    font-weight: 900;
+    font-size: 0.62rem;
+    padding: 1px 6px;
+    border-radius: 5px;
+    white-space: nowrap;
+}
+.clinical-breakdown-item.consultation .cb-value {
+    color: #059669;
+    background: rgba(5, 150, 105, 0.1);
+    border: 1px solid rgba(5, 150, 105, 0.2);
+}
+.clinical-breakdown-item.procedure .cb-value {
+    color: #0D9488;
+    background: rgba(13, 148, 136, 0.1);
+    border: 1px solid rgba(13, 148, 136, 0.2);
+}
+.clinical-breakdown-item.equipment .cb-value {
+    color: #7C3AED;
+    background: rgba(124, 58, 237, 0.1);
+    border: 1px solid rgba(124, 58, 237, 0.2);
+}
 
 .pending-partial-card { background: var(--bg-card); border-radius: 16px; padding: 20px 24px; border: 2px solid var(--warning); margin-bottom: 20px; box-shadow: 0 6px 24px rgba(217, 119, 6, 0.15); position: relative; overflow: hidden; transition: all 0.35s ease; }
 .pending-partial-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, #D97706, #F59E0B, #FBBF24, #F59E0B, #D97706); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
@@ -1688,9 +1810,9 @@ mark.search-highlight {
         <div>
             <h1 class="page-title">
                 <i class="fas fa-chart-line"></i>
-                Revenue Report V59
+                Revenue Report V60
                 <span class="branch-tag" style="background:rgba(255,255,255,0.25);"><i class="fas fa-shield-alt"></i> ADMIN</span>
-                <span class="branch-tag live-tag"><i class="fas fa-check-circle"></i> PENDING FIXED</span>
+                <span class="branch-tag live-tag"><i class="fas fa-check-circle"></i> OTC EQUIPMENT SPLIT</span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-store-alt"></i>
@@ -1774,6 +1896,7 @@ mark.search-highlight {
 
     <!-- 8 CARDS -->
     <div class="stats-grid-8">
+        <!-- TOTAL REVENUE -->
         <div class="stat-card revenue">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-money-bill-wave"></i></div>
@@ -1786,6 +1909,7 @@ mark.search-highlight {
             <div class="card-footer"><i class="fas fa-info-circle"></i> Payments + OTC</div>
         </div>
 
+        <!-- PATIENT PAYMENTS -->
         <div class="stat-card payments">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-file-invoice"></i></div>
@@ -1807,6 +1931,7 @@ mark.search-highlight {
             </div>
         </div>
 
+        <!-- PRESCRIPTION (GROSS) -->
         <div class="stat-card prescription">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-prescription"></i></div>
@@ -1819,21 +1944,30 @@ mark.search-highlight {
             <div class="card-footer"><i class="fas fa-list"></i> Items: <span class="highlight"><?= number_format($prescription_count) ?></span></div>
         </div>
 
+        <!-- ✅ V60: OTC CARD - JUMLA YA OTC + EQUIPMENT -->
         <div class="stat-card otc">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-cash-register"></i></div>
-                <span class="card-badge"><i class="fas fa-store"></i> OTC</span>
+                <span class="card-badge"><i class="fas fa-store"></i> OTC + EQP</span>
             </div>
             <div>
-                <div class="card-label"><i class="fas fa-shopping-cart"></i> OTC Sales</div>
+                <div class="card-label"><i class="fas fa-shopping-cart"></i> OTC Sales (Total)</div>
                 <div class="card-value"><span class="currency"><?= $currency ?></span><?= number_format($otc_revenue, 0) ?></div>
             </div>
-            <div class="card-footer">
-                <i class="fas fa-receipt"></i>
-                Sales: <span class="highlight"><?= number_format($otc_count) ?></span>
+            <!-- ✅ V60: Split breakdown - OTC Products vs Equipment -->
+            <div class="otc-split-container">
+                <div class="otc-split-item otc-products">
+                    <span class="split-label"><i class="fas fa-pills"></i> OTC Products:</span>
+                    <span class="split-value"><?= number_format($otc_products_revenue_rounded, 0) ?> <span style="font-weight:600;font-size:0.5rem;">(<?= $otc_products_count ?>)</span></span>
+                </div>
+                <div class="otc-split-item otc-equipment">
+                    <span class="split-label"><i class="fas fa-tools"></i> Equipment:</span>
+                    <span class="split-value"><?= number_format($otc_equipment_revenue_rounded, 0) ?> <span style="font-weight:600;font-size:0.5rem;">(<?= $otc_equipment_count ?>)</span></span>
+                </div>
             </div>
         </div>
 
+        <!-- ✅ V60: CLINICAL SERVICES CARD - Cons + Proc + Equip (za daktari) -->
         <div class="stat-card consultation">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-stethoscope"></i></div>
@@ -1843,14 +1977,24 @@ mark.search-highlight {
                 <div class="card-label"><i class="fas fa-notes-medical"></i> Clinical Services</div>
                 <div class="card-value"><span class="currency"><?= $currency ?></span><?= number_format($clinical_services_revenue, 0) ?></div>
             </div>
-            <div class="card-footer">
-                <i class="fas fa-list"></i>
-                Cons: <span class="highlight"><?= number_format($consultation_count) ?></span> •
-                Proc: <span class="highlight"><?= number_format($procedure_count) ?></span> •
-                Equip: <span class="highlight"><?= number_format($equipment_count) ?></span>
+            <!-- ✅ V60: Breakdown - Consultation, Procedures, Equipment (doctor-linked only) -->
+            <div class="clinical-breakdown-container">
+                <div class="clinical-breakdown-item consultation">
+                    <span class="cb-label"><i class="fas fa-stethoscope"></i> Cons:</span>
+                    <span class="cb-value"><?= number_format($consultation_revenue, 0) ?> <span style="font-weight:600;font-size:0.5rem;">(<?= $consultation_count ?>)</span></span>
+                </div>
+                <div class="clinical-breakdown-item procedure">
+                    <span class="cb-label"><i class="fas fa-procedures"></i> Proc:</span>
+                    <span class="cb-value"><?= number_format($procedure_revenue, 0) ?> <span style="font-weight:600;font-size:0.5rem;">(<?= $procedure_count ?>)</span></span>
+                </div>
+                <div class="clinical-breakdown-item equipment">
+                    <span class="cb-label"><i class="fas fa-tools"></i> Equip (Doctor):</span>
+                    <span class="cb-value"><?= number_format($equipment_revenue, 0) ?> <span style="font-weight:600;font-size:0.5rem;">(<?= $equipment_count ?>)</span></span>
+                </div>
             </div>
         </div>
 
+        <!-- LAB TESTS -->
         <div class="stat-card lab">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-flask"></i></div>
@@ -1863,6 +2007,7 @@ mark.search-highlight {
             <div class="card-footer"><i class="fas fa-check-circle"></i> Tests: <span class="highlight"><?= number_format($lab_count) ?></span></div>
         </div>
 
+        <!-- EXPENSES -->
         <div class="stat-card expenses">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-receipt"></i></div>
@@ -1875,6 +2020,7 @@ mark.search-highlight {
             <div class="card-footer"><i class="fas fa-list"></i> Records: <span class="highlight"><?= number_format($expenses_count) ?></span></div>
         </div>
 
+        <!-- PROFIT -->
         <div class="stat-card profit <?= $net_profit < 0 ? 'loss' : '' ?>">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-<?= $net_profit >= 0 ? 'chart-line' : 'exclamation-triangle' ?>"></i></div>
@@ -2306,7 +2452,7 @@ mark.search-highlight {
                                     'lab_test' => ['label' => 'Lab Tests', 'icon' => 'fa-flask', 'class' => 'lab_test'],
                                     'medication' => ['label' => 'Medications / Prescriptions', 'icon' => 'fa-pills', 'class' => 'medication'],
                                     'procedure' => ['label' => 'Procedures', 'icon' => 'fa-procedures', 'class' => 'procedure'],
-                                    'equipment' => ['label' => 'Medical Equipment', 'icon' => 'fa-tools', 'class' => 'equipment'],
+                                    'equipment' => ['label' => 'Medical Equipment (Doctor)', 'icon' => 'fa-tools', 'class' => 'equipment'],
                                     'registration' => ['label' => 'Registration', 'icon' => 'fa-user-plus', 'class' => 'registration'],
                                     'other' => ['label' => 'Other Items', 'icon' => 'fa-box', 'class' => 'other']
                                 ];
@@ -2699,10 +2845,22 @@ mark.search-highlight {
                         <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= number_format($patient_bills_count) ?></td>
                     </tr>
                     <tr>
-                        <td><span class="dot-indicator" style="background:#0891B2;"></span> OTC Sales</td>
+                        <td><span class="dot-indicator" style="background:#0891B2;"></span> OTC Sales (Products + Equipment)</td>
                         <td class="money-cell cyan"><span class="currency-prefix"><?= $currency ?></span><?= number_format($otc_revenue, 0) ?></td>
                         <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= $total_revenue > 0 ? round(($otc_revenue / $total_revenue) * 100, 1) : 0 ?>%</td>
                         <td style="text-align:right;color:var(--text-secondary);font-weight:600;"><?= number_format($otc_count) ?></td>
+                    </tr>
+                    <tr>
+                        <td style="padding-left:36px;font-size:0.7rem;color:var(--text-secondary);"><i class="fas fa-caret-right" style="color:#0891B2;"></i> OTC Products</td>
+                        <td class="money-cell cyan"><?= number_format($otc_products_revenue_rounded, 0) ?></td>
+                        <td style="text-align:right;color:var(--text-secondary);">—</td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= number_format($otc_products_count) ?></td>
+                    </tr>
+                    <tr>
+                        <td style="padding-left:36px;font-size:0.7rem;color:var(--text-secondary);"><i class="fas fa-caret-right" style="color:#0D9488;"></i> Equipment Sales (OTC)</td>
+                        <td class="money-cell" style="color:#0D9488;"><?= number_format($otc_equipment_revenue_rounded, 0) ?></td>
+                        <td style="text-align:right;color:var(--text-secondary);">—</td>
+                        <td style="text-align:right;color:var(--text-secondary);"><?= number_format($otc_equipment_count) ?></td>
                     </tr>
                     <tr style="background:var(--primary-bg);">
                         <td colspan="4" style="padding:10px 16px;font-weight:800;font-size:0.75rem;color:var(--primary);text-transform:uppercase;"><i class="fas fa-info-circle"></i> Patient Payments Breakdown (GROSS)</td>
@@ -2714,7 +2872,7 @@ mark.search-highlight {
                         <td style="text-align:right;color:var(--text-secondary);"><?= number_format($medication_count) ?></td>
                     </tr>
                     <tr>
-                        <td><span class="dot-indicator" style="background:#059669;"></span> <strong>Clinical Services</strong> (Cons + Proc + Equip)</td>
+                        <td><span class="dot-indicator" style="background:#059669;"></span> <strong>Clinical Services</strong> (Cons + Proc + Equip Doctor)</td>
                         <td class="money-cell" style="color:#059669;font-weight:900;"><span class="currency-prefix"><?= $currency ?></span><?= number_format($clinical_services_revenue, 0) ?></td>
                         <td style="text-align:right;color:var(--text-secondary);">—</td>
                         <td style="text-align:right;color:var(--text-secondary);"><?= number_format($clinical_services_count) ?></td>
@@ -2732,7 +2890,7 @@ mark.search-highlight {
                         <td style="text-align:right;color:var(--text-secondary);"><?= number_format($procedure_count) ?></td>
                     </tr>
                     <tr>
-                        <td style="padding-left:48px;font-size:0.7rem;color:var(--text-secondary);"><i class="fas fa-caret-right" style="color:#7C3AED;"></i> Equipment</td>
+                        <td style="padding-left:48px;font-size:0.7rem;color:var(--text-secondary);"><i class="fas fa-caret-right" style="color:#7C3AED;"></i> Equipment (Doctor-linked)</td>
                         <td class="money-cell" style="color:#7C3AED;"><?= number_format($equipment_revenue, 0) ?></td>
                         <td style="text-align:right;color:var(--text-secondary);">—</td>
                         <td style="text-align:right;color:var(--text-secondary);"><?= number_format($equipment_count) ?></td>
@@ -2964,7 +3122,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 
                 textNodes.forEach(textNode => {
-                    const text = node.nodeValue || textNode.nodeValue;
+                    const text = textNode.nodeValue;
                     if (regex.test(text)) {
                         const span = document.createElement('span');
                         span.innerHTML = text.replace(regex, '<mark class="search-highlight">$1</mark>');
@@ -3202,11 +3360,13 @@ document.addEventListener('DOMContentLoaded', function() {
     <?php endif; ?>
 });
 
-console.log('%c📊 Revenue Report V59 - ADMIN (PENDING BILLS FIXED)', 'font-size:18px; font-weight:bold; color:#059669;');
-console.log('%c✅ V59: Pending bills zinaonekana bila kuhitaji payments', 'font-size:13px; color:#059669; font-weight:bold;');
-console.log('%c✅ V59: All filter inaonyesha pending + paid + partial', 'font-size:13px; color:#7C3AED; font-weight:bold;');
-console.log('%c✅ V58: Quick Filters JUU + Patients Filter CHINI', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
+console.log('%c📊 Revenue Report V60 - ADMIN (OTC EQUIPMENT SPLIT)', 'font-size:18px; font-weight:bold; color:#0891B2;');
+console.log('%c✅ V60: OTC Card = OTC Products + Equipment (Total shown)', 'font-size:13px; color:#0891B2; font-weight:bold;');
+console.log('%c✅ V60: Clinical = Cons + Proc + Equip (Doctor-linked only)', 'font-size:13px; color:#059669; font-weight:bold;');
 console.log('%c💰 Total Revenue: <?= $currency ?> <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
+console.log('%c💰 OTC Products: <?= $currency ?> <?= number_format($otc_products_revenue_rounded, 0) ?> (<?= $otc_products_count ?>)', 'font-size:13px; color:#0891B2; font-weight:bold;');
+console.log('%c💰 OTC Equipment: <?= $currency ?> <?= number_format($otc_equipment_revenue_rounded, 0) ?> (<?= $otc_equipment_count ?>)', 'font-size:13px; color:#0D9488; font-weight:bold;');
+console.log('%c💰 Clinical Services: <?= $currency ?> <?= number_format($clinical_services_revenue, 0) ?>', 'font-size:13px; color:#059669; font-weight:bold;');
 </script>
 
 </body>

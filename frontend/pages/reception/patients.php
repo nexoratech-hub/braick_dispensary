@@ -1,10 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/patients.php
-// RECEPTION - PATIENT MANAGEMENT (V3 - FIXED DOCTOR STATUS)
+// RECEPTION - PATIENT MANAGEMENT (V4 - 3 BUTTONS ONLY)
 // ✅ Doctor status inatokana na VISIT ACTIVE (sio patients.assigned_doctor_id)
 // ✅ Auto-sync: patients.assigned_doctor_id inasafishwa kama hakuna visit active
-// ✅ 3 Buttons: View, Edit, Assign/Change
+// ✅ 3 BUTTONS TU: View, Edit, Assign (HAKUNA Change Doctor)
+// ✅ Assign inaunda NEW VISIT kila click
 // ✅ AUTO-FILTER: Search & Filter work automatically
 // ✅ Scroll < > buttons on table header
 // ✅ Registered By column
@@ -760,7 +761,7 @@ include_once '../../components/reception_sidebar.php';
         }
         
         .patient-table .col-actions {
-            width: 180px;
+            width: 140px;
             text-align: center;
         }
         
@@ -913,6 +914,7 @@ include_once '../../components/reception_sidebar.php';
             box-shadow: 0 4px 12px rgba(124, 58, 237, 0.5);
         }
         
+        /* ✅ ASSIGN button - kijani kila wakati */
         .action-btn.assign {
             background: linear-gradient(135deg, #059669, #047857);
             color: white;
@@ -924,13 +926,14 @@ include_once '../../components/reception_sidebar.php';
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.5);
         }
         
-        .action-btn.change {
+        /* ✅ NEW - Reassign button (kama ana doctor tayari) */
+        .action-btn.reassign {
             background: linear-gradient(135deg, #D97706, #B45309);
             color: white;
             box-shadow: 0 2px 8px rgba(217, 119, 6, 0.3);
         }
         
-        .action-btn.change:hover {
+        .action-btn.reassign:hover {
             background: linear-gradient(135deg, #B45309, #92400E);
             box-shadow: 0 4px 12px rgba(217, 119, 6, 0.5);
         }
@@ -1501,7 +1504,7 @@ include_once '../../components/reception_sidebar.php';
                                     <span style="font-size:0.65rem;color:#7C3AED;display:block;">📅 <?= $appointment_count ?> appt(s)</span>
                                 <?php endif; ?>
                             </td>
-                            <!-- ✅ ACTION BUTTONS - 3 BUTTONS -->
+                            <!-- ✅ ACTION BUTTONS - 3 BUTTONS TU (View, Edit, Assign) -->
                             <td class="col-actions">
                                 <div class="action-buttons-group">
                                     <!-- 1. VIEW -->
@@ -1520,19 +1523,22 @@ include_once '../../components/reception_sidebar.php';
                                         <i class="fas fa-edit"></i>
                                     </a>
                                     
-                                    <!-- 3. ASSIGN / CHANGE -->
+                                    <!-- 3. ASSIGN DOCTOR (kila click = NEW VISIT) -->
+                                    <!-- ✅ V4: HAKUNA Change Doctor button - Assign kila wakati -->
                                     <?php if ($is_assigned): ?>
-                                        <a href="assign_doctor.php?patient_id=<?= (int)$patient['id'] ?>&change=1" 
-                                           class="action-btn change" 
-                                           data-tooltip="Change Doctor"
-                                           title="Change Doctor">
-                                            <i class="fas fa-exchange-alt"></i>
+                                        <!-- Kama ana doctor, Assign = Reassign (new visit kwa doctor mwingine) -->
+                                        <a href="assign_doctor.php?patient_id=<?= (int)$patient['id'] ?>&reassign=1" 
+                                           class="action-btn reassign" 
+                                           data-tooltip="Reassign Doctor (New Visit)"
+                                           title="Reassign Doctor - Itaunda Visit Mpya">
+                                            <i class="fas fa-user-plus"></i>
                                         </a>
                                     <?php else: ?>
+                                        <!-- Kama hana doctor, Assign = New Visit -->
                                         <a href="assign_doctor.php?patient_id=<?= (int)$patient['id'] ?>" 
                                            class="action-btn assign" 
-                                           data-tooltip="Assign Doctor"
-                                           title="Assign Doctor">
+                                           data-tooltip="Assign Doctor (New Visit)"
+                                           title="Assign Doctor - Itaunda Visit Mpya">
                                             <i class="fas fa-user-md"></i>
                                         </a>
                                     <?php endif; ?>
@@ -1841,10 +1847,10 @@ include_once '../../components/reception_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c👤 Braick - Patients V3 (FIXED DOCTOR STATUS)', 'font-size:18px; font-weight:bold; color:#2563EB;');
-    console.log('%c✅ Doctor status inatokana na VISIT ACTIVE', 'font-size:13px; color:#34D399; font-weight:bold;');
-    console.log('%c✅ patients.assigned_doctor_id inasafishwa auto', 'font-size:13px; color:#F59E0B;');
-    console.log('%c✅ 3 Buttons: View, Edit, Assign/Change', 'font-size:13px; color:#7C3AED;');
+    console.log('%c👤 Braick - Patients V4 (3 BUTTONS: View, Edit, Assign)', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c✅ Assign inaunda NEW VISIT kila click', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ HAKUNA Change Doctor button', 'font-size:13px; color:#F59E0B;');
+    console.log('%c✅ Doctor status = VISIT ACTIVE', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>

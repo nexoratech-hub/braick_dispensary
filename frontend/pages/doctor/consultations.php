@@ -1,30 +1,26 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/consultations.php
-// DOCTOR - CONSULTATIONS LIST WITH AUTO-UPDATE
-// FIXED: Waiting filter now shows correct consultations
-// FIXED: Auto-complete ONLY for WAITING status
-// FIXED: Auto-complete runs automatically when all bills paid
-// FIXED: NO auto-complete on page load
+// DOCTOR - CONSULTATIONS LIST V3 (FIXED: hl() redeclare error)
+// ================================================================
+// ✅ FIXED V3: hl() function sasa ipo nje ya loop (mara moja pekee)
+// ✅ FIXED V3: Function_exists guard imeongezwa
+// ✅ NEW: Live search bar kwenye KILA tab
+// ✅ NEW: Search ina-highlight matokeo (yellow mark)
+// ✅ FIXED: Waiting filter now shows correct consultations
+// ✅ FIXED: Auto-complete ONLY for WAITING status
 // BRAICK DISPENSARY
 // ================================================================
 
-// Start session
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// CHECK IF USER IS DOCTOR OR ADMIN
-// ================================================================
 if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -37,9 +33,6 @@ if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
     exit;
 }
 
-// ================================================================
-// GET DOCTOR INFO FROM SESSION
-// ================================================================
 $doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
@@ -48,27 +41,48 @@ $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 $is_admin = ($_SESSION['role'] === 'admin');
 
-// ================================================================
-// GET FILTER PARAMETER
-// ================================================================
 $filter = isset($_GET['filter']) ? $_GET['filter'] : 'pending';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
-// Allowed filters - INCLUDING 'waiting'
 $allowed_filters = ['pending', 'lab_test', 'prescribed', 'waiting', 'completed', 'cancelled'];
 if (!in_array($filter, $allowed_filters)) {
     $filter = 'pending';
 }
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     die('Database connection error: ' . $e->getMessage());
+}
+
+// ================================================================
+// ✅ V3 FIXED: GLOBAL HELPER FUNCTIONS (nje ya loop!)
+// ================================================================
+
+if (!function_exists('hl')) {
+    /**
+     * Highlight search term in text
+     */
+    function hl($text, $s) {
+        if (empty($s) || $text === null || $text === '') {
+            return htmlspecialchars($text ?? '');
+        }
+        $esc = htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+        $se = preg_quote($s, '/');
+        return preg_replace('/(' . $se . ')/iu', '<mark class="search-highlight">$1</mark>', $esc);
+    }
+}
+
+if (!function_exists('getUserColorSafe')) {
+    /**
+     * Get consistent color for user based on name
+     */
+    function getUserColorSafe($name) {
+        $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
+        return $colors[abs(crc32($name ?? 'U')) % count($colors)];
+    }
 }
 
 // ================================================================
@@ -79,7 +93,6 @@ function autoCompleteWaitingVisits($db, $doctor_id, $is_admin) {
     $error_count = 0;
     
     try {
-        // Get all visits with status 'waiting' that are not completed
         if ($is_admin) {
             $stmt = $db->prepare("
                 SELECT v.id, v.visit_number, v.patient_id, v.diagnosis
@@ -101,13 +114,10 @@ function autoCompleteWaitingVisits($db, $doctor_id, $is_admin) {
         $waiting_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         foreach ($waiting_visits as $visit) {
-            // Check if diagnosis exists
             if (empty($visit['diagnosis'])) {
-                error_log("❌ Auto-complete SKIPPED: Visit #{$visit['visit_number']} has no diagnosis");
                 continue;
             }
             
-            // Check bills - ALL bills must be paid
             $stmt = $db->prepare("
                 SELECT 
                     COUNT(*) as total_bills,
@@ -123,9 +133,7 @@ function autoCompleteWaitingVisits($db, $doctor_id, $is_admin) {
             $pending_count = (int)($result['pending_count'] ?? 0);
             $paid_count = (int)($result['paid_count'] ?? 0);
             
-            // ✅ AUTO-COMPLETE: ALL bills must be paid (no pending bills)
             if ($total_bills > 0 && $pending_count == 0 && $paid_count > 0) {
-                // DOUBLE CHECK: Verify balance is 0
                 $stmt = $db->prepare("
                     SELECT COALESCE(SUM(balance), 0) as total_balance
                     FROM bills 
@@ -135,15 +143,12 @@ function autoCompleteWaitingVisits($db, $doctor_id, $is_admin) {
                 $balance_check = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 if ((float)$balance_check['total_balance'] > 0) {
-                    error_log("❌ Auto-complete SKIPPED: Visit #{$visit['visit_number']} has balance of " . $balance_check['total_balance']);
                     continue;
                 }
                 
-                // ✅ ALL CHECKS PASSED - AUTO-COMPLETE!
                 $db->beginTransaction();
                 
                 try {
-                    // Update visit to completed
                     $stmt = $db->prepare("
                         UPDATE visits 
                         SET status = 'completed', 
@@ -155,7 +160,6 @@ function autoCompleteWaitingVisits($db, $doctor_id, $is_admin) {
                     $stmt->execute([$visit['id']]);
                     
                     if ($stmt->rowCount() > 0) {
-                        // Update bills to paid
                         $stmt = $db->prepare("
                             UPDATE bills 
                             SET status = 'paid', updated_at = NOW()
@@ -163,7 +167,6 @@ function autoCompleteWaitingVisits($db, $doctor_id, $is_admin) {
                         ");
                         $stmt->execute([$visit['id']]);
                         
-                        // Log auto-completion
                         try {
                             $stmt = $db->prepare("
                                 INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
@@ -174,210 +177,138 @@ function autoCompleteWaitingVisits($db, $doctor_id, $is_admin) {
                                 $doctor_branch_id,
                                 "Consultation #{$visit['visit_number']} auto-completed (all bills paid, diagnosis exists)"
                             ]);
-                        } catch (Exception $e) {
-                            // Log error but don't rollback
-                            error_log("Activity log error: " . $e->getMessage());
-                        }
+                        } catch (Exception $e) {}
                         
                         $db->commit();
                         $completed_count++;
-                        error_log("✅ AUTO-COMPLETE SUCCESS: Visit #{$visit['visit_number']} auto-completed");
                     } else {
                         $db->rollBack();
-                        error_log("❌ Auto-complete FAILED: Visit #{$visit['visit_number']} - update failed");
                     }
                 } catch (Exception $e) {
                     $db->rollBack();
                     $error_count++;
-                    error_log("❌ Auto-complete ERROR for visit #{$visit['visit_number']}: " . $e->getMessage());
                 }
-            } else {
-                error_log("ℹ️ Auto-complete check: Visit #{$visit['visit_number']} - Pending: {$pending_count}, Total: {$total_bills}");
             }
         }
-    } catch (Exception $e) {
-        error_log("❌ Auto-complete error: " . $e->getMessage());
-    }
+    } catch (Exception $e) {}
     
     return ['completed' => $completed_count, 'errors' => $error_count];
 }
 
-// ✅ Run auto-complete ONLY for waiting status - runs automatically
 $auto_complete_result = autoCompleteWaitingVisits($db, $doctor_id, $is_admin);
-if ($auto_complete_result['completed'] > 0) {
-    error_log("✅ Auto-complete: {$auto_complete_result['completed']} consultation(s) auto-completed");
-}
 
 // ================================================================
-// GET COUNTS FOR BADGES - WITH WAITING
+// GET COUNTS FOR BADGES
 // ================================================================
 if ($is_admin) {
-    // Pending count
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM visits v
-        WHERE v.status IN ('pending', 'assigned', 'with_doctor') 
-        AND v.is_completed = 0
-    ");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits v WHERE v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0");
     $stmt->execute();
     $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Lab Test count
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE status = 'lab_test' AND is_completed = 0");
     $stmt->execute();
     $lab_test_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Prescribed count
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE status = 'prescribed' AND is_completed = 0");
     $stmt->execute();
     $prescribed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // WAITING count
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE status = 'waiting' AND is_completed = 0");
     $stmt->execute();
     $waiting_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Completed count
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE status = 'completed' AND is_completed = 1");
     $stmt->execute();
     $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Cancelled count
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE status = 'cancelled'");
     $stmt->execute();
     $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 } else {
-    // Pending count
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM visits v
-        WHERE (
-            (v.doctor_id = ? AND v.is_referred = 0)
-            OR v.referred_to_doctor_id = ?
-        )
-        AND v.status IN ('pending', 'assigned', 'with_doctor') 
-        AND v.is_completed = 0
-    ");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits v WHERE ((v.doctor_id = ? AND v.is_referred = 0) OR v.referred_to_doctor_id = ?) AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0");
     $stmt->execute([$doctor_id, $doctor_id]);
     $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Lab Test count
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM visits v
-        WHERE (
-            (v.doctor_id = ? AND v.is_referred = 0)
-            OR v.referred_to_doctor_id = ?
-        )
-        AND v.status = 'lab_test' 
-        AND v.is_completed = 0
-    ");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits v WHERE ((v.doctor_id = ? AND v.is_referred = 0) OR v.referred_to_doctor_id = ?) AND v.status = 'lab_test' AND v.is_completed = 0");
     $stmt->execute([$doctor_id, $doctor_id]);
     $lab_test_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Prescribed count
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM visits v
-        WHERE (
-            (v.doctor_id = ? AND v.is_referred = 0)
-            OR v.referred_to_doctor_id = ?
-        )
-        AND v.status = 'prescribed' 
-        AND v.is_completed = 0
-    ");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits v WHERE ((v.doctor_id = ? AND v.is_referred = 0) OR v.referred_to_doctor_id = ?) AND v.status = 'prescribed' AND v.is_completed = 0");
     $stmt->execute([$doctor_id, $doctor_id]);
     $prescribed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // WAITING count
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM visits v
-        WHERE (
-            (v.doctor_id = ? AND v.is_referred = 0)
-            OR v.referred_to_doctor_id = ?
-        )
-        AND v.status = 'waiting' 
-        AND v.is_completed = 0
-    ");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits v WHERE ((v.doctor_id = ? AND v.is_referred = 0) OR v.referred_to_doctor_id = ?) AND v.status = 'waiting' AND v.is_completed = 0");
     $stmt->execute([$doctor_id, $doctor_id]);
     $waiting_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Completed count
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM visits v
-        WHERE (
-            (v.doctor_id = ? AND v.is_referred = 0)
-            OR v.referred_to_doctor_id = ?
-        )
-        AND v.status = 'completed' 
-        AND v.is_completed = 1
-    ");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits v WHERE ((v.doctor_id = ? AND v.is_referred = 0) OR v.referred_to_doctor_id = ?) AND v.status = 'completed' AND v.is_completed = 1");
     $stmt->execute([$doctor_id, $doctor_id]);
     $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Cancelled count
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM visits v
-        WHERE (
-            (v.doctor_id = ? AND v.is_referred = 0)
-            OR v.referred_to_doctor_id = ?
-        )
-        AND v.status = 'cancelled'
-    ");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits v WHERE ((v.doctor_id = ? AND v.is_referred = 0) OR v.referred_to_doctor_id = ?) AND v.status = 'cancelled'");
     $stmt->execute([$doctor_id, $doctor_id]);
     $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 }
 
 // ================================================================
-// GET CONSULTATIONS WITH REFERRAL INFO
+// ✅ HELPER: Build WHERE clause kwa filter na search
 // ================================================================
-$params = [];
-$search_condition = "";
-$status_condition = "";
-$doctor_condition = "";
-
-if ($filter === 'pending') {
-    $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
-} else {
-    switch ($filter) {
-        case 'lab_test':
-            $status_condition = "AND v.status = 'lab_test' AND v.is_completed = 0";
-            break;
-        case 'prescribed':
-            $status_condition = "AND v.status = 'prescribed' AND v.is_completed = 0";
-            break;
-        case 'waiting':
-            $status_condition = "AND v.status = 'waiting' AND v.is_completed = 0";
-            break;
-        case 'completed':
-            $status_condition = "AND v.status = 'completed' AND v.is_completed = 1";
-            break;
-        case 'cancelled':
-            $status_condition = "AND v.status = 'cancelled'";
-            break;
-        default:
-            $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
-            break;
-    }
-}
-
-if ($is_admin) {
+function buildConsultationQuery($filter, $search, $is_admin, $doctor_id) {
+    $params = [];
+    $search_condition = "";
+    $status_condition = "";
     $doctor_condition = "";
-} else {
-    $doctor_condition = "((v.doctor_id = ? AND v.is_referred = 0) OR v.referred_to_doctor_id = ?)";
-    $params[] = $doctor_id;
-    $params[] = $doctor_id;
+    
+    if ($filter === 'pending') {
+        $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
+    } else {
+        switch ($filter) {
+            case 'lab_test':
+                $status_condition = "AND v.status = 'lab_test' AND v.is_completed = 0";
+                break;
+            case 'prescribed':
+                $status_condition = "AND v.status = 'prescribed' AND v.is_completed = 0";
+                break;
+            case 'waiting':
+                $status_condition = "AND v.status = 'waiting' AND v.is_completed = 0";
+                break;
+            case 'completed':
+                $status_condition = "AND v.status = 'completed' AND v.is_completed = 1";
+                break;
+            case 'cancelled':
+                $status_condition = "AND v.status = 'cancelled'";
+                break;
+            default:
+                $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
+                break;
+        }
+    }
+    
+    if ($is_admin) {
+        $doctor_condition = "";
+    } else {
+        $doctor_condition = "((v.doctor_id = ? AND v.is_referred = 0) OR v.referred_to_doctor_id = ?)";
+        $params[] = $doctor_id;
+        $params[] = $doctor_id;
+    }
+    
+    if (!empty($search)) {
+        $search_condition = "AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR v.visit_number LIKE ? OR p.phone LIKE ?)";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+    }
+    
+    $where = "WHERE 1=1 " . ($is_admin ? "" : "AND " . $doctor_condition) . " " . $status_condition . " " . $search_condition;
+    
+    return ['where' => $where, 'params' => $params];
 }
 
-if (!empty($search)) {
-    $search_condition = "AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR v.visit_number LIKE ?)";
-    $params[] = "%$search%";
-    $params[] = "%$search%";
-    $params[] = "%$search%";
-}
+// ================================================================
+// GET CONSULTATIONS
+// ================================================================
+$query_data = buildConsultationQuery($filter, $search, $is_admin, $doctor_id);
 
 $sql = "
     SELECT 
@@ -426,10 +357,7 @@ $sql = "
     LEFT JOIN referrals r ON v.referral_id = r.id
     LEFT JOIN users ru ON v.referred_by_doctor_id = ru.id
     LEFT JOIN users rtu ON v.referred_to_doctor_id = rtu.id
-    WHERE 1=1
-    " . ($is_admin ? "" : "AND " . $doctor_condition) . "
-    $status_condition
-    $search_condition
+    " . $query_data['where'] . "
     ORDER BY 
         CASE 
             WHEN v.status = 'assigned' THEN 0 
@@ -445,20 +373,20 @@ $sql = "
 ";
 
 $stmt = $db->prepare($sql);
-$stmt->execute($params);
+$stmt->execute($query_data['params']);
 $consultations = $stmt->fetchAll(PDO::FETCH_ASSOC);
 $total_consultations = count($consultations);
 
 // ================================================================
-// AJAX ENDPOINT FOR GET_CONSULTATIONS
+// ✅ AJAX ENDPOINT
 // ================================================================
 if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
     header('Content-Type: application/json');
     
-    // ✅ Run auto-complete on AJAX refresh too (for waiting status)
+    // Run auto-complete on AJAX refresh too
     $auto_complete_result = autoCompleteWaitingVisits($db, $doctor_id, $is_admin);
     
-    // Get fresh counts
+    // Fresh counts
     if ($is_admin) {
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE status IN ('pending', 'assigned', 'with_doctor') AND is_completed = 0");
         $stmt->execute();
@@ -510,80 +438,24 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
     }
     
     // Get filtered consultations
-    $params2 = [];
-    $search_condition2 = "";
-    $status_condition2 = "";
-    $doctor_condition2 = "";
-    
-    if ($filter === 'pending') {
-        $status_condition2 = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
-    } else {
-        switch ($filter) {
-            case 'lab_test':
-                $status_condition2 = "AND v.status = 'lab_test' AND v.is_completed = 0";
-                break;
-            case 'prescribed':
-                $status_condition2 = "AND v.status = 'prescribed' AND v.is_completed = 0";
-                break;
-            case 'waiting':
-                $status_condition2 = "AND v.status = 'waiting' AND v.is_completed = 0";
-                break;
-            case 'completed':
-                $status_condition2 = "AND v.status = 'completed' AND v.is_completed = 1";
-                break;
-            case 'cancelled':
-                $status_condition2 = "AND v.status = 'cancelled'";
-                break;
-            default:
-                $status_condition2 = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
-                break;
-        }
-    }
-    
-    if ($is_admin) {
-        $doctor_condition2 = "";
-    } else {
-        $doctor_condition2 = "((v.doctor_id = ? AND v.is_referred = 0) OR v.referred_to_doctor_id = ?)";
-        $params2[] = $doctor_id;
-        $params2[] = $doctor_id;
-    }
-    
-    if (!empty($search)) {
-        $search_condition2 = "AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR v.visit_number LIKE ?)";
-        $params2[] = "%$search%";
-        $params2[] = "%$search%";
-        $params2[] = "%$search%";
-    }
+    $query_data2 = buildConsultationQuery($filter, $search, $is_admin, $doctor_id);
     
     $sql2 = "
         SELECT 
             v.*,
             p.full_name as patient_name,
             p.patient_id as patient_code,
-            p.phone,
-            p.gender,
-            p.date_of_birth,
-            p.address,
-            p.blood_group,
-            p.allergies,
+            p.phone, p.gender, p.date_of_birth, p.address, p.blood_group, p.allergies,
             u.full_name as doctor_name,
             b.name as branch_name,
             ru.full_name as referred_by_doctor_name,
             ru.id as referred_by_doctor_id,
             rtu.full_name as referred_to_doctor_name,
             rtu.id as referred_to_doctor_id,
-            r.id as referral_id,
-            r.referral_number,
-            r.referral_type,
-            r.reason as referral_reason,
-            r.internal_notes,
-            r.external_notes,
-            r.urgency as referral_urgency,
-            r.status as referral_status,
-            r.referral_date,
-            r.to_hospital_name,
-            r.to_hospital_address,
-            r.to_hospital_phone,
+            r.id as referral_id, r.referral_number, r.referral_type,
+            r.reason as referral_reason, r.internal_notes, r.external_notes,
+            r.urgency as referral_urgency, r.status as referral_status,
+            r.referral_date, r.to_hospital_name, r.to_hospital_address, r.to_hospital_phone,
             (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id AND status IN ('pending', 'in_progress')) as pending_lab_count,
             (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id AND status = 'completed') as completed_lab_count,
             (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id AND status IN ('pending', 'dispensed')) as total_prescriptions,
@@ -602,10 +474,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
         LEFT JOIN referrals r ON v.referral_id = r.id
         LEFT JOIN users ru ON v.referred_by_doctor_id = ru.id
         LEFT JOIN users rtu ON v.referred_to_doctor_id = rtu.id
-        WHERE 1=1
-        " . ($is_admin ? "" : "AND " . $doctor_condition2) . "
-        $status_condition2
-        $search_condition2
+        " . $query_data2['where'] . "
         ORDER BY 
             CASE 
                 WHEN v.status = 'assigned' THEN 0 
@@ -621,7 +490,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
     ";
     
     $stmt2 = $db->prepare($sql2);
-    $stmt2->execute($params2);
+    $stmt2->execute($query_data2['params']);
     $consultations2 = $stmt2->fetchAll(PDO::FETCH_ASSOC);
     $total2 = count($consultations2);
     
@@ -629,9 +498,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
     ob_start();
     if ($total2 > 0) {
         foreach ($consultations2 as $consultation) {
+            // ✅ V3: Use global helper functions (no redeclare!)
             $initial = strtoupper(substr($consultation['patient_name'] ?? 'U', 0, 1));
-            $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
-            $color = $colors[abs(crc32($consultation['patient_name'] ?? 'U')) % count($colors)];
+            $color = getUserColorSafe($consultation['patient_name'] ?? 'U');
             
             $pending_lab = (int)($consultation['pending_lab_count'] ?? 0);
             $completed_lab = (int)($consultation['completed_lab_count'] ?? 0);
@@ -652,7 +521,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
             $to_hospital = $consultation['to_hospital_name'] ?? '';
             $is_referred_to_me = ($consultation['referred_to_doctor_id'] == $doctor_id);
             
-            // Check if this is a waiting visit that should auto-complete soon
             $is_waiting = ($consultation['status'] === 'waiting');
             $can_auto_complete = ($is_waiting && $total_balance <= 0 && !empty($consultation['diagnosis']));
             ?>
@@ -663,11 +531,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
                             <?= $initial ?>
                         </div>
                         <div>
-                            <div class="patient-name"><?= htmlspecialchars($consultation['patient_name'] ?? 'N/A') ?></div>
-                            <div class="patient-id">ID: <?= htmlspecialchars($consultation['patient_code'] ?? 'N/A') ?></div>
+                            <div class="patient-name"><?= hl($consultation['patient_name'] ?? 'N/A', $search) ?></div>
+                            <div class="patient-id">ID: <?= hl($consultation['patient_code'] ?? 'N/A', $search) ?></div>
                             <div class="patient-details">
                                 <?= htmlspecialchars($consultation['gender'] ?? 'N/A') ?> • 
-                                <?= htmlspecialchars($consultation['phone'] ?? 'N/A') ?>
+                                <?= hl($consultation['phone'] ?? 'N/A', $search) ?>
                                 <?php if (!empty($consultation['blood_group'])): ?>
                                     • Blood: <?= htmlspecialchars($consultation['blood_group']) ?>
                                 <?php endif; ?>
@@ -675,7 +543,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
                         </div>
                     </div>
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                        <span class="visit-number"><?= htmlspecialchars($consultation['visit_number'] ?? 'N/A') ?></span>
+                        <span class="visit-number"><?= hl($consultation['visit_number'] ?? 'N/A', $search) ?></span>
                         <span class="status-badge <?= $consultation['status'] ?? 'pending' ?>">
                             <?= ucfirst(str_replace('_', ' ', $consultation['status'] ?? 'Pending')) ?>
                         </span>
@@ -746,7 +614,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
                     <?php if ($paid_bills > 0): ?>
                         <span class="bill-indicator"><i class="fas fa-check-circle paid"></i> <?= $paid_bills ?> bill(s) paid <span class="bill-amount">(TSh <?= number_format($total_paid) ?>)</span></span>
                     <?php endif; ?>
-                    <?php if ($is_waiting && $total_balance <= 0 && !empty($consultation['diagnosis'])): ?>
+                    <?php if ($can_auto_complete): ?>
                         <span class="bill-indicator" style="color:#059669;">
                             <i class="fas fa-check-circle"></i> Balance: TSh 0 ✅ Auto-completing...
                         </span>
@@ -766,12 +634,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
                             <span class="mx-1">•</span>
                             <i class="fas fa-receipt"></i> Bills: <?= $paid_bills ?>/<?= $total_bills ?>
                         <?php endif; ?>
-                        <?php if ($is_waiting && $total_balance <= 0): ?>
-                            <span class="mx-1">•</span>
-                            <span style="color:#059669;font-weight:600;">
-                                <i class="fas fa-check-circle"></i> Balance: TSh 0
-                            </span>
-                        <?php endif; ?>
                     </div>
                     <div style="display:flex;gap:6px;flex-wrap:wrap;">
                         <?php if (in_array($filter, ['pending', 'lab_test', 'prescribed', 'waiting']) || $is_referred_to_me): ?>
@@ -783,16 +645,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
                                 <i class="fas fa-eye"></i> View
                             </a>
                         <?php endif; ?>
-                        <?php if ($filter === 'prescribed' && $pending_bills > 0): ?>
-                            <span class="text-xs text-gray-400 self-center">
-                                <i class="fas fa-clock"></i> Waiting for payment...
-                            </span>
-                        <?php endif; ?>
-                        <?php if ($is_waiting && $total_balance <= 0 && !empty($consultation['diagnosis'])): ?>
-                            <span style="font-size:0.65rem;color:#059669;font-weight:600;align-self:center;">
-                                <i class="fas fa-sync-alt fa-spin"></i> Auto-completing...
-                            </span>
-                        <?php endif; ?>
                     </div>
                 </div>
             </div>
@@ -800,43 +652,37 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
         }
     } else {
         $filter_icons = [
-            'pending' => 'clock',
-            'lab_test' => 'flask',
-            'prescribed' => 'hourglass-half',
-            'waiting' => 'hourglass-start',
-            'completed' => 'check-circle',
-            'cancelled' => 'times-circle'
+            'pending' => 'clock', 'lab_test' => 'flask', 'prescribed' => 'hourglass-half',
+            'waiting' => 'hourglass-start', 'completed' => 'check-circle', 'cancelled' => 'times-circle'
         ];
         $filter_titles = [
-            'pending' => 'pending',
-            'lab_test' => 'lab test',
-            'prescribed' => 'prescribed',
-            'waiting' => 'waiting for payment',
-            'completed' => 'completed',
-            'cancelled' => 'cancelled'
-        ];
-        $filter_sub_messages = [
-            'pending' => 'All consultations have been processed or no pending consultations',
-            'lab_test' => 'No consultations waiting for lab results',
-            'prescribed' => 'All consultations have been prescribed or no prescribed consultations',
-            'waiting' => 'No consultations waiting for payment. When doctor saves, they appear here.',
-            'completed' => 'No completed consultations yet',
-            'cancelled' => 'No cancelled consultations'
+            'pending' => 'pending', 'lab_test' => 'lab test', 'prescribed' => 'prescribed',
+            'waiting' => 'waiting for payment', 'completed' => 'completed', 'cancelled' => 'cancelled'
         ];
         $icon = $filter_icons[$filter] ?? 'clock';
         $title = $filter_titles[$filter] ?? 'pending';
-        $sub_msg = $filter_sub_messages[$filter] ?? 'No consultations found';
+        
+        if (!empty($search)) {
+            $sub_msg = 'No results for "<strong>' . htmlspecialchars($search) . '</strong>" in ' . $title . ' consultations';
+        } else {
+            $sub_msg = 'No ' . $title . ' consultations found';
+        }
         ?>
         <div class="empty-state" style="max-width:1200px;margin:0 auto;">
             <i class="fas fa-<?= $icon ?>"></i>
             <div class="empty-title">No <?= $title ?> consultations</div>
             <div class="empty-sub"><?= $sub_msg ?></div>
+            <?php if (!empty($search)): ?>
+                <button onclick="clearSearch()" class="btn btn-primary" style="margin-top:12px;">
+                    <i class="fas fa-times"></i> Clear Search
+                </button>
+            <?php endif; ?>
         </div>
         <?php
     }
     $html = ob_get_clean();
     
-    $hash = md5($html . $total2);
+    $hash = md5($html . $total2 . $filter . $search);
     
     echo json_encode([
         'success' => true,
@@ -853,7 +699,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
             'completed' => $completed_count,
             'cancelled' => $cancelled_count
         ],
-        'filter' => $filter
+        'filter' => $filter,
+        'search' => $search
     ]);
     exit;
 }
@@ -867,9 +714,6 @@ $profile_pic_url = !empty($profile_pic)
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
@@ -885,60 +729,29 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     
     <style>
         :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #E8F0FE;
-            --success: #059669;
-            --success-bg: #D1FAE5;
-            --danger: #DC2626;
-            --danger-bg: #FEE2E2;
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            --orange: #EA580C;
-            --orange-bg: #FFEDD5;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            --bg-body: #F1F5F9;
-            --bg-card: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
+            --primary: #0B5ED7; --primary-dark: #0A4CA8; --primary-light: #6EA8FE; --primary-bg: #E8F0FE;
+            --success: #059669; --success-bg: #D1FAE5;
+            --danger: #DC2626; --danger-bg: #FEE2E2;
+            --warning: #D97706; --warning-bg: #FEF3C7;
+            --purple: #7C3AED; --purple-bg: #EDE9FE;
+            --orange: #EA580C; --orange-bg: #FFEDD5;
+            --gray-50: #F8FAFC; --gray-100: #F1F5F9; --gray-200: #E2E8F0; --gray-300: #CBD5E1;
+            --gray-400: #94A3B8; --gray-500: #64748B; --gray-600: #475569;
+            --gray-700: #334155; --gray-800: #1E293B; --gray-900: #0F172A;
+            --bg-body: #F1F5F9; --bg-card: #FFFFFF;
+            --text-primary: #1E293B; --text-secondary: #64748B; --border-color: #E2E8F0;
             --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
             --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
             --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
         }
         
         [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --gray-50: #1A1A2E;
-            --gray-100: #1E293B;
-            --gray-200: #2D3748;
-            --gray-300: #4A5568;
-            --gray-400: #718096;
-            --gray-500: #A0AEC0;
-            --gray-600: #CBD5E1;
-            --gray-700: #E2E8F0;
-            --primary-bg: #1E3A5F;
-            --success-bg: #1A3A2A;
-            --danger-bg: #3A1A1A;
-            --warning-bg: #3A2A1A;
-            --purple-bg: #2D1B5F;
-            --orange-bg: #3D1F0A;
+            --bg-body: #0F172A; --bg-card: #1E293B;
+            --text-primary: #F1F5F9; --text-secondary: #94A3B8; --border-color: #334155;
+            --gray-50: #1A1A2E; --gray-100: #1E293B; --gray-200: #2D3748; --gray-300: #4A5568;
+            --gray-400: #718096; --gray-500: #A0AEC0; --gray-600: #CBD5E1; --gray-700: #E2E8F0;
+            --primary-bg: #1E3A5F; --success-bg: #1A3A2A; --danger-bg: #3A1A1A;
+            --warning-bg: #3A2A1A; --purple-bg: #2D1B5F; --orange-bg: #3D1F0A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -986,10 +799,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .page-header-custom::before {
             content: '';
             position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 300px;
-            height: 300px;
+            top: -50%; right: -20%;
+            width: 300px; height: 300px;
             background: rgba(255,255,255,0.05);
             border-radius: 50%;
             pointer-events: none;
@@ -1007,10 +818,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             z-index: 1;
         }
         
-        .page-header-custom .page-title i {
-            font-size: 1.8rem;
-            opacity: 0.9;
-        }
+        .page-header-custom .page-title i { font-size: 1.8rem; opacity: 0.9; }
         
         .page-header-custom .page-subtitle {
             color: rgba(255,255,255,0.85);
@@ -1021,11 +829,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             flex-wrap: wrap;
             position: relative;
             z-index: 1;
-        }
-        
-        .page-header-custom .page-subtitle strong {
-            color: white;
-            font-weight: 600;
         }
         
         .role-badge-display {
@@ -1068,6 +871,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             backdrop-filter: blur(4px);
             position: relative;
             z-index: 1;
+            cursor: pointer;
         }
         
         .btn-outline-light:hover {
@@ -1075,12 +879,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             transform: translateY(-2px);
         }
         
-        /* FILTER TABS */
         .filter-tabs-wrapper {
             display: grid;
             grid-template-columns: repeat(6, 1fr);
             gap: 8px;
-            margin-bottom: 20px;
+            margin-bottom: 16px;
             max-width: 1200px;
             margin-left: auto;
             margin-right: auto;
@@ -1126,8 +929,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             text-align: center;
         }
         
-        /* PENDING */
-        .filter-tab[data-filter="pending"] { border-color: #FCD34D; background: var(--bg-card); }
+        .filter-tab[data-filter="pending"] { border-color: #FCD34D; }
         .filter-tab[data-filter="pending"] i { color: #D97706; }
         .filter-tab[data-filter="pending"] .tab-badge { background: #D97706; }
         .filter-tab[data-filter="pending"]:hover { border-color: #D97706; background: #FEF3C7; }
@@ -1136,8 +938,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .filter-tab[data-filter="pending"].active .tab-badge { background: rgba(255,255,255,0.3); color: white; }
         [data-theme="dark"] .filter-tab[data-filter="pending"]:hover { background: #3D2E0A; }
         
-        /* LAB TEST */
-        .filter-tab[data-filter="lab_test"] { border-color: #C4B5FD; background: var(--bg-card); }
+        .filter-tab[data-filter="lab_test"] { border-color: #C4B5FD; }
         .filter-tab[data-filter="lab_test"] i { color: #7C3AED; }
         .filter-tab[data-filter="lab_test"] .tab-badge { background: #7C3AED; }
         .filter-tab[data-filter="lab_test"]:hover { border-color: #7C3AED; background: #EDE9FE; }
@@ -1146,8 +947,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .filter-tab[data-filter="lab_test"].active .tab-badge { background: rgba(255,255,255,0.3); color: white; }
         [data-theme="dark"] .filter-tab[data-filter="lab_test"]:hover { background: #2D1B5F; }
         
-        /* PRESCRIBED */
-        .filter-tab[data-filter="prescribed"] { border-color: #6EE7B7; background: var(--bg-card); }
+        .filter-tab[data-filter="prescribed"] { border-color: #6EE7B7; }
         .filter-tab[data-filter="prescribed"] i { color: #059669; }
         .filter-tab[data-filter="prescribed"] .tab-badge { background: #059669; }
         .filter-tab[data-filter="prescribed"]:hover { border-color: #059669; background: #D1FAE5; }
@@ -1156,8 +956,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .filter-tab[data-filter="prescribed"].active .tab-badge { background: rgba(255,255,255,0.3); color: white; }
         [data-theme="dark"] .filter-tab[data-filter="prescribed"]:hover { background: #1A3A2A; }
         
-        /* WAITING */
-        .filter-tab[data-filter="waiting"] { border-color: #93C5FD; background: var(--bg-card); }
+        .filter-tab[data-filter="waiting"] { border-color: #93C5FD; }
         .filter-tab[data-filter="waiting"] i { color: #2563EB; }
         .filter-tab[data-filter="waiting"] .tab-badge { background: #2563EB; }
         .filter-tab[data-filter="waiting"]:hover { border-color: #2563EB; background: #DBEAFE; }
@@ -1166,8 +965,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .filter-tab[data-filter="waiting"].active .tab-badge { background: rgba(255,255,255,0.3); color: white; }
         [data-theme="dark"] .filter-tab[data-filter="waiting"]:hover { background: #1A2A4A; }
         
-        /* COMPLETED */
-        .filter-tab[data-filter="completed"] { border-color: #34D399; background: var(--bg-card); }
+        .filter-tab[data-filter="completed"] { border-color: #34D399; }
         .filter-tab[data-filter="completed"] i { color: #059669; }
         .filter-tab[data-filter="completed"] .tab-badge { background: #059669; }
         .filter-tab[data-filter="completed"]:hover { border-color: #059669; background: #D1FAE5; }
@@ -1176,8 +974,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .filter-tab[data-filter="completed"].active .tab-badge { background: rgba(255,255,255,0.3); color: white; }
         [data-theme="dark"] .filter-tab[data-filter="completed"]:hover { background: #1A3A2A; }
         
-        /* CANCELLED */
-        .filter-tab[data-filter="cancelled"] { border-color: #FCA5A5; background: var(--bg-card); }
+        .filter-tab[data-filter="cancelled"] { border-color: #FCA5A5; }
         .filter-tab[data-filter="cancelled"] i { color: #DC2626; }
         .filter-tab[data-filter="cancelled"] .tab-badge { background: #DC2626; }
         .filter-tab[data-filter="cancelled"]:hover { border-color: #DC2626; background: #FEE2E2; }
@@ -1186,7 +983,167 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .filter-tab[data-filter="cancelled"].active .tab-badge { background: rgba(255,255,255,0.3); color: white; }
         [data-theme="dark"] .filter-tab[data-filter="cancelled"]:hover { background: #3A1A1A; }
         
-        /* Consultation Cards */
+        .search-bar-wrapper {
+            max-width: 1200px;
+            margin: 0 auto 16px;
+            padding: 14px 18px;
+            background: var(--bg-card);
+            border-radius: 14px;
+            border: 2px solid var(--primary);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.12);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .search-bar-wrapper::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--primary), var(--purple), var(--primary));
+            background-size: 200% 100%;
+            animation: shimmer 3s infinite linear;
+        }
+        
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+        
+        .search-bar-wrapper .sb-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            flex-shrink: 0;
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .search-bar-wrapper .sb-input-wrapper {
+            flex: 1;
+            min-width: 200px;
+            position: relative;
+        }
+        
+        .search-bar-wrapper .sb-input-wrapper input {
+            width: 100%;
+            padding: 10px 42px 10px 16px;
+            border-radius: 10px;
+            border: 2px solid var(--border-color);
+            background: var(--bg-body);
+            color: var(--text-primary);
+            font-size: 0.85rem;
+            font-weight: 600;
+            transition: all 0.25s;
+            font-family: inherit;
+        }
+        
+        .search-bar-wrapper .sb-input-wrapper input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.15);
+            background: var(--bg-card);
+        }
+        
+        .search-bar-wrapper .sb-input-wrapper input::placeholder {
+            color: var(--text-secondary);
+            font-weight: 400;
+            font-size: 0.8rem;
+        }
+        
+        .search-bar-wrapper .sb-clear {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--danger-bg);
+            color: var(--danger);
+            border: none;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            transition: all 0.25s;
+        }
+        
+        .search-bar-wrapper .sb-clear:hover {
+            background: var(--danger);
+            color: white;
+            transform: translateY(-50%) scale(1.1);
+        }
+        
+        .search-bar-wrapper .sb-clear.show {
+            display: inline-flex;
+        }
+        
+        .search-bar-wrapper .sb-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 800;
+            background: var(--primary-bg);
+            color: var(--primary);
+            border: 1.5px solid rgba(11, 94, 215, 0.2);
+            white-space: nowrap;
+        }
+        
+        .search-bar-wrapper .sb-status.no-results {
+            background: var(--danger-bg);
+            color: var(--danger);
+            border-color: rgba(220, 38, 38, 0.2);
+        }
+        
+        .search-bar-wrapper .sb-status.has-results {
+            background: var(--success-bg);
+            color: var(--success);
+            border-color: rgba(5, 150, 105, 0.2);
+        }
+        
+        .search-bar-wrapper .sb-scope {
+            font-size: 0.62rem;
+            color: var(--text-secondary);
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: var(--bg-body);
+            padding: 4px 10px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            white-space: nowrap;
+        }
+        
+        mark.search-highlight {
+            background: linear-gradient(135deg, #FEF08A, #FDE047);
+            color: #78350F;
+            font-weight: 900;
+            padding: 1px 4px;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(250, 204, 21, 0.4);
+            animation: highlightPulse 0.6s ease-out;
+            border: 1px solid rgba(250, 204, 21, 0.6);
+        }
+        
+        @keyframes highlightPulse {
+            0% { background: #FDE047; transform: scale(1.15); box-shadow: 0 0 12px rgba(250, 204, 21, 0.8); }
+            100% { background: linear-gradient(135deg, #FEF08A, #FDE047); transform: scale(1); }
+        }
+        
         .consultation-card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -1289,16 +1246,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-size: 0.75rem;
         }
         [data-theme="dark"] .referral-info { background: #1A1A2E; }
-        .referral-info .referral-reason {
-            color: var(--text-secondary);
-            font-style: italic;
-            margin-top: 2px;
-            padding: 4px 8px;
-            background: var(--bg-body);
-            border-radius: 4px;
-            border-left: 2px solid #D97706;
-        }
-        [data-theme="dark"] .referral-info .referral-reason { background: #1A1A2E; }
         
         .lab-indicator { font-size: 0.7rem; color: var(--purple); }
         .lab-indicator .pending { color: var(--warning); }
@@ -1307,7 +1254,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .bill-indicator .pending { color: var(--warning); }
         .bill-indicator .paid { color: var(--success); }
         .bill-amount { font-size: 0.7rem; color: var(--text-secondary); }
-        .bill-amount .amount { font-weight: 600; }
         
         .card-footer {
             display: flex;
@@ -1336,8 +1282,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .btn-primary { background: var(--primary); color: white; }
         .btn-primary:hover { background: var(--primary-dark); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(11,94,215,0.3); }
-        .btn-success { background: var(--success); color: white; }
-        .btn-success:hover { background: #047857; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(5,150,105,0.3); }
         .btn-outline { background: transparent; color: var(--text-secondary); border: 2px solid var(--border-color); }
         .btn-outline:hover { background: var(--bg-body); border-color: var(--primary); color: var(--primary); }
         .btn-sm { padding: 4px 10px; font-size: 0.65rem; border-radius: 6px; }
@@ -1419,6 +1363,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .filter-tab i { font-size: 0.8rem; }
             .filter-tab .tab-label { font-size: 0.55rem; }
             .filter-tab .tab-badge { font-size: 0.5rem; padding: 1px 6px; }
+            .search-bar-wrapper { padding: 10px 12px; gap: 8px; }
+            .search-bar-wrapper .sb-icon { width: 34px; height: 34px; font-size: 0.85rem; }
+            .search-bar-wrapper .sb-input-wrapper input { font-size: 0.78rem; padding: 8px 36px 8px 12px; }
+            .search-bar-wrapper .sb-status { font-size: 0.62rem; padding: 4px 10px; }
         }
         
         @media (max-width: 480px) {
@@ -1430,6 +1378,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .filter-tab i { font-size: 0.7rem; }
             .filter-tab .tab-label { font-size: 0.45rem; }
             .filter-tab .tab-badge { font-size: 0.4rem; padding: 1px 4px; min-width: 14px; }
+            .search-bar-wrapper .sb-scope { display: none; }
         }
         
         @media (max-width: 380px) {
@@ -1439,14 +1388,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 </head>
 <body>
 
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
     <div class="page-header-custom">
         <div>
             <h1 class="page-title">
@@ -1494,46 +1437,43 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FILTER TABS -->
-    <!-- ================================================================ -->
     <div class="filter-tabs-wrapper" id="filterTabs">
-        <a href="consultations.php?filter=pending<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+        <a href="consultations.php?filter=pending" 
            class="filter-tab <?= $filter === 'pending' ? 'active' : '' ?>" data-filter="pending">
             <i class="fas fa-clock"></i>
             <span class="tab-label">Pending</span>
             <span class="tab-badge" id="badgePending"><?= $pending_count ?></span>
         </a>
         
-        <a href="consultations.php?filter=lab_test<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+        <a href="consultations.php?filter=lab_test" 
            class="filter-tab <?= $filter === 'lab_test' ? 'active' : '' ?>" data-filter="lab_test">
             <i class="fas fa-flask"></i>
             <span class="tab-label">Lab Test</span>
             <span class="tab-badge" id="badgeLabTest"><?= $lab_test_count ?></span>
         </a>
         
-        <a href="consultations.php?filter=prescribed<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+        <a href="consultations.php?filter=prescribed" 
            class="filter-tab <?= $filter === 'prescribed' ? 'active' : '' ?>" data-filter="prescribed">
             <i class="fas fa-hourglass-half"></i>
             <span class="tab-label">Prescribed</span>
             <span class="tab-badge" id="badgePrescribed"><?= $prescribed_count ?></span>
         </a>
         
-        <a href="consultations.php?filter=waiting<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+        <a href="consultations.php?filter=waiting" 
            class="filter-tab <?= $filter === 'waiting' ? 'active' : '' ?>" data-filter="waiting">
             <i class="fas fa-hourglass-start"></i>
             <span class="tab-label">Waiting</span>
             <span class="tab-badge" id="badgeWaiting"><?= $waiting_count ?></span>
         </a>
         
-        <a href="consultations.php?filter=completed<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+        <a href="consultations.php?filter=completed" 
            class="filter-tab <?= $filter === 'completed' ? 'active' : '' ?>" data-filter="completed">
             <i class="fas fa-check-circle"></i>
             <span class="tab-label">Completed</span>
             <span class="tab-badge" id="badgeCompleted"><?= $completed_count ?></span>
         </a>
         
-        <a href="consultations.php?filter=cancelled<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+        <a href="consultations.php?filter=cancelled" 
            class="filter-tab <?= $filter === 'cancelled' ? 'active' : '' ?>" data-filter="cancelled">
             <i class="fas fa-times-circle"></i>
             <span class="tab-label">Cancelled</span>
@@ -1541,15 +1481,43 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </a>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- CONSULTATIONS LIST -->
-    <!-- ================================================================ -->
+    <div class="search-bar-wrapper">
+        <span class="sb-icon"><i class="fas fa-search"></i></span>
+        
+        <span class="sb-scope" id="searchScope">
+            <i class="fas fa-filter"></i> <?= strtoupper(str_replace('_', ' ', $filter)) ?>
+        </span>
+        
+        <div class="sb-input-wrapper">
+            <input type="text" 
+                   id="liveSearchInput" 
+                   placeholder="🔍 Search name, ID, phone, visit number... (in <?= $filter ?> only)"
+                   value="<?= htmlspecialchars($search) ?>"
+                   autocomplete="off">
+            <button type="button" 
+                    class="sb-clear <?= !empty($search) ? 'show' : '' ?>" 
+                    id="sbClearBtn" 
+                    onclick="clearSearch()"
+                    title="Clear search">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        
+        <span class="sb-status <?= !empty($search) ? 'has-results' : '' ?>" id="searchStatus">
+            <?php if (!empty($search)): ?>
+                <i class="fas fa-filter"></i> Filtered
+            <?php else: ?>
+                <i class="fas fa-info-circle"></i> Type to search
+            <?php endif; ?>
+        </span>
+    </div>
+
     <div class="consultations-list-wrapper" id="consultationsContainer">
         <?php if (count($consultations) > 0): ?>
             <?php foreach ($consultations as $consultation): 
+                // ✅ V3: Use global helper functions (no redeclare!)
                 $initial = strtoupper(substr($consultation['patient_name'] ?? 'U', 0, 1));
-                $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
-                $color = $colors[abs(crc32($consultation['patient_name'] ?? 'U')) % count($colors)];
+                $color = getUserColorSafe($consultation['patient_name'] ?? 'U');
                 
                 $pending_lab = (int)($consultation['pending_lab_count'] ?? 0);
                 $completed_lab = (int)($consultation['completed_lab_count'] ?? 0);
@@ -1582,11 +1550,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 <?= $initial ?>
                             </div>
                             <div>
-                                <div class="patient-name"><?= htmlspecialchars($consultation['patient_name'] ?? 'N/A') ?></div>
-                                <div class="patient-id">ID: <?= htmlspecialchars($consultation['patient_code'] ?? 'N/A') ?></div>
+                                <div class="patient-name"><?= hl($consultation['patient_name'] ?? 'N/A', $search) ?></div>
+                                <div class="patient-id">ID: <?= hl($consultation['patient_code'] ?? 'N/A', $search) ?></div>
                                 <div class="patient-details">
                                     <?= htmlspecialchars($consultation['gender'] ?? 'N/A') ?> • 
-                                    <?= htmlspecialchars($consultation['phone'] ?? 'N/A') ?>
+                                    <?= hl($consultation['phone'] ?? 'N/A', $search) ?>
                                     <?php if (!empty($consultation['blood_group'])): ?>
                                         • Blood: <?= htmlspecialchars($consultation['blood_group']) ?>
                                     <?php endif; ?>
@@ -1594,7 +1562,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             </div>
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                            <span class="visit-number"><?= htmlspecialchars($consultation['visit_number'] ?? 'N/A') ?></span>
+                            <span class="visit-number"><?= hl($consultation['visit_number'] ?? 'N/A', $search) ?></span>
                             <span class="status-badge <?= $consultation['status'] ?? 'pending' ?>">
                                 <?= ucfirst(str_replace('_', ' ', $consultation['status'] ?? 'Pending')) ?>
                             </span>
@@ -1730,20 +1698,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <div class="empty-state" style="max-width:1200px;margin:0 auto;">
                 <?php 
                 $filter_icons = [
-                    'pending' => 'clock',
-                    'lab_test' => 'flask',
-                    'prescribed' => 'hourglass-half',
-                    'waiting' => 'hourglass-start',
-                    'completed' => 'check-circle',
-                    'cancelled' => 'times-circle'
+                    'pending' => 'clock', 'lab_test' => 'flask', 'prescribed' => 'hourglass-half',
+                    'waiting' => 'hourglass-start', 'completed' => 'check-circle', 'cancelled' => 'times-circle'
                 ];
                 $filter_titles = [
-                    'pending' => 'pending',
-                    'lab_test' => 'lab test',
-                    'prescribed' => 'prescribed',
-                    'waiting' => 'waiting for payment',
-                    'completed' => 'completed',
-                    'cancelled' => 'cancelled'
+                    'pending' => 'pending', 'lab_test' => 'lab test', 'prescribed' => 'prescribed',
+                    'waiting' => 'waiting for payment', 'completed' => 'completed', 'cancelled' => 'cancelled'
                 ];
                 $filter_sub_messages = [
                     'pending' => 'All consultations have been processed or no pending consultations',
@@ -1760,18 +1720,20 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <i class="fas fa-<?= $icon ?>"></i>
                 <div class="empty-title">No <?= $title ?> consultations</div>
                 <div class="empty-sub">
-                    <?= $sub_msg ?>
                     <?php if (!empty($search)): ?>
-                        <br>Try adjusting your search criteria
+                        No results for "<strong><?= htmlspecialchars($search) ?></strong>" in <?= $title ?> consultations
+                        <br>
+                        <button onclick="clearSearch()" class="btn btn-primary" style="margin-top:12px;">
+                            <i class="fas fa-times"></i> Clear Search
+                        </button>
+                    <?php else: ?>
+                        <?= $sub_msg ?>
                     <?php endif; ?>
                 </div>
             </div>
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1786,9 +1748,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1797,9 +1756,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT - AUTO-UPDATE EVERY 3 SECONDS -->
-<!-- ================================================================ -->
 <script>
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
@@ -1824,9 +1780,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
         var footerTimestamp = document.getElementById('footerTimestamp');
-        if (footerTimestamp) {
-            footerTimestamp.textContent = 'Last updated: ' + timeStr;
-        }
+        if (footerTimestamp) footerTimestamp.textContent = 'Last updated: ' + timeStr;
         var liveTime = document.getElementById('liveTime');
         if (liveTime) liveTime.textContent = timeStr;
     }
@@ -1857,10 +1811,66 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     var lastHash = null;
     var updateCount = 0;
     
-    // Get filter and search from URL parameters
     var urlParams = new URLSearchParams(window.location.search);
     var filter = urlParams.get('filter') || 'pending';
     var search = urlParams.get('search') || '';
+    var searchInput = document.getElementById('liveSearchInput');
+
+    var liveSearchTimeout = null;
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            var query = this.value;
+            var clearBtn = document.getElementById('sbClearBtn');
+            
+            if (clearBtn) {
+                clearBtn.classList.toggle('show', query.length > 0);
+            }
+            
+            clearTimeout(liveSearchTimeout);
+            liveSearchTimeout = setTimeout(function() {
+                search = query;
+                var url = new URL(window.location.href);
+                if (query.trim() === '') {
+                    url.searchParams.delete('search');
+                } else {
+                    url.searchParams.set('search', query);
+                }
+                url.searchParams.set('filter', filter);
+                window.history.replaceState({}, '', url.toString());
+                
+                lastHash = null;
+                fetchAndUpdateConsultations();
+            }, 300);
+        });
+        
+        document.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                if (searchInput) {
+                    searchInput.focus();
+                    searchInput.select();
+                }
+            }
+            if (e.key === 'Escape' && document.activeElement === searchInput) {
+                clearSearch();
+            }
+        });
+    }
+
+    function clearSearch() {
+        if (searchInput) searchInput.value = '';
+        search = '';
+        var clearBtn = document.getElementById('sbClearBtn');
+        if (clearBtn) clearBtn.classList.remove('show');
+        
+        var url = new URL(window.location.href);
+        url.searchParams.delete('search');
+        window.history.replaceState({}, '', url.toString());
+        
+        lastHash = null;
+        fetchAndUpdateConsultations();
+        showToast('🔄 Cleared', 'Search cleared', 'info');
+    }
 
     function fetchAndUpdateConsultations() {
         if (isUpdating) return;
@@ -1872,9 +1882,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         
         fetch(url)
             .then(function(response) { 
-                if (!response.ok) {
-                    throw new Error('Network response was not ok: ' + response.status);
-                }
+                if (!response.ok) throw new Error('Network error: ' + response.status);
                 return response.json(); 
             })
             .then(function(data) {
@@ -1886,13 +1894,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         updateFooterTime();
                         
                         var updateCountEl = document.getElementById('updateCount');
-                        if (updateCountEl) {
-                            updateCountEl.textContent = updateCount;
-                        }
+                        if (updateCountEl) updateCountEl.textContent = updateCount;
                         
-                        // Show toast on auto-complete
                         if (data.auto_completed && data.auto_completed > 0) {
-                            showToast('✅ Auto-Completed!', data.auto_completed + ' consultation(s) auto-completed (all bills paid)', 'success');
+                            showToast('✅ Auto-Completed!', data.auto_completed + ' consultation(s) auto-completed', 'success');
                         }
                     }
                 }
@@ -1908,14 +1913,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         var container = document.getElementById('consultationsContainer');
         if (!container) return;
         
-        // Update badge counts
         var badgeMap = {
-            'pending': 'badgePending',
-            'lab_test': 'badgeLabTest',
-            'prescribed': 'badgePrescribed',
-            'waiting': 'badgeWaiting',
-            'completed': 'badgeCompleted',
-            'cancelled': 'badgeCancelled'
+            'pending': 'badgePending', 'lab_test': 'badgeLabTest',
+            'prescribed': 'badgePrescribed', 'waiting': 'badgeWaiting',
+            'completed': 'badgeCompleted', 'cancelled': 'badgeCancelled'
         };
         
         for (var key in badgeMap) {
@@ -1926,11 +1927,25 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         var totalBadge = document.getElementById('totalCount');
-        if (totalBadge) {
-            totalBadge.textContent = data.total;
-        }
+        if (totalBadge) totalBadge.textContent = data.total;
         
         container.innerHTML = data.html;
+        
+        var searchStatus = document.getElementById('searchStatus');
+        if (searchStatus) {
+            if (search.trim() !== '') {
+                if (data.total > 0) {
+                    searchStatus.className = 'sb-status has-results';
+                    searchStatus.innerHTML = '<i class="fas fa-check-circle"></i> ' + data.total + ' found';
+                } else {
+                    searchStatus.className = 'sb-status no-results';
+                    searchStatus.innerHTML = '<i class="fas fa-times-circle"></i> 0 found';
+                }
+            } else {
+                searchStatus.className = 'sb-status';
+                searchStatus.innerHTML = '<i class="fas fa-info-circle"></i> Type to search';
+            }
+        }
         
         var cards = container.querySelectorAll('.consultation-card');
         cards.forEach(function(card, index) {
@@ -1943,21 +1958,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
 
     function startAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-        }
+        if (updateInterval) clearInterval(updateInterval);
         fetchAndUpdateConsultations();
         updateInterval = setInterval(fetchAndUpdateConsultations, 3000);
-        console.log('%c🔄 Auto-update started (every 3s) via AJAX', 'font-size:12px; color:#34D399;');
-        console.log('%c📋 Current filter: ' + filter, 'font-size:13px; color:#2563EB;');
-        console.log('%c✅ Auto-complete runs on WAITING status only (all bills paid)', 'font-size:13px; color:#059669;');
+        console.log('%c🔄 Auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
     }
     
     function stopAutoUpdate() {
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
-            console.log('%c⏹️ Auto-update stopped', 'font-size:12px; color:#DC2626;');
         }
     }
 
@@ -1972,7 +1982,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         setTimeout(function() {
             btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
             btn.disabled = false;
-            showToast('✅ Refreshed', 'Consultations updated manually', 'success');
+            showToast('✅ Refreshed', 'Consultations updated', 'success');
         }, 1500);
     }
 
@@ -1984,35 +1994,25 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
     });
 
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-            e.preventDefault();
-            var searchInput = document.getElementById('searchInput');
-            if (searchInput) {
-                searchInput.focus();
-                searchInput.select();
-            }
-        }
-        if (e.key === 'F5') {
-            e.preventDefault();
-            manualRefresh();
-        }
-    });
-
     document.addEventListener('DOMContentLoaded', function() {
         console.log('%c📋 Current filter: ' + filter, 'font-size:13px; color:#2563EB;');
-        console.log('%c✅ Auto-complete ONLY for WAITING status', 'font-size:13px; color:#059669;');
-        console.log('%c✅ Auto-complete runs automatically when all bills are paid', 'font-size:13px; color:#059669;');
+        console.log('%c✅ Live search: ' + (search || 'empty'), 'font-size:13px; color:#059669;');
+        console.log('%c✅ V3: hl() function ipo nje ya loop - no redeclare error', 'font-size:13px; color:#059669;');
+        
+        var searchStatus = document.getElementById('searchStatus');
+        if (searchStatus && search.trim() !== '') {
+            searchStatus.className = 'sb-status has-results';
+            searchStatus.innerHTML = '<i class="fas fa-filter"></i> Filtered';
+        }
         
         setTimeout(function() {
             startAutoUpdate();
         }, 2000);
     });
 
-    console.log('%c👨‍⚕️ Braick - Consultations (Auto-Complete for WAITING only)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Order: Pending | Lab Test | Prescribed | Waiting | Completed | Cancelled', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Auto-complete: status=waiting + diagnosis exists + all bills paid = auto-complete', 'font-size:13px; color:#059669;');
-    console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#34D399;');
+    console.log('%c👨‍⚕️ Braick - Consultations V3 (FIXED redeclare error)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ hl() function ipo nje ya loop', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ function_exists() guard imeongezwa', 'font-size:13px; color:#7C3AED; font-weight:bold;');
 </script>
 
 </body>

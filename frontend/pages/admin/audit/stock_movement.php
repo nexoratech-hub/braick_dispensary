@@ -1,13 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/stock_movement.php
-// ADMIN - STOCK MOVEMENT REPORT V6.3 - BRANCH FIXED
+// ADMIN - STOCK MOVEMENT REPORT V8.4 (FULLY FIXED)
 // ================================================================
-// ✅ V6.3: Branch filter INAFANYA KAZI kwenye queries zote
-// ✅ V6.3: Top 5 filtered by branch
-// ✅ V6.2: Period Overview + Last Added Stock + Expiry + Stockout
-// ✅ V5: Remaining Stock Card + Stock Health Bar
-// ✅ Admin: Branch selector
+// ✅ V8.4: Inasoma moja kwa moja kutoka stock_movements table
+// ✅ V8.4: Top 5 Medicines inafanya kazi (notes patterns zote)
+// ✅ V8.4: Top 5 Equipment inajumuisha Doctor + Lab + OTC usage
+// ✅ V8.4: Before/After inatoka previous_stock/new_stock
+// ✅ V8.4: Equipment used by Doctor sasa inaonekana
+// ✅ V8.4: Summary inahesabu Doctor, Lab, OTC, Procedure
+// ✅ V8.4: Branch filter - All Branches au specific branch
 // ================================================================
 
 date_default_timezone_set('Africa/Dar_es_Salaam');
@@ -50,7 +52,9 @@ try {
     if ($row && !empty($row['setting_value'])) $currency = $row['setting_value'];
 } catch (Exception $e) {}
 
-// Branches
+// ================================================================
+// BRANCHES
+// ================================================================
 $selected_branch_id = $_GET['branch'] ?? 'all';
 $branch_name_display = 'All Branches';
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
@@ -66,135 +70,225 @@ try {
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-// Filters
+// FILTERS
 $active_tab = $_GET['tab'] ?? 'medicine';
-$quick_filter = $_GET['quick'] ?? 'all';
+$quick_filter = $_GET['quick'] ?? 'today';
 $search = trim($_GET['search'] ?? '');
 $selected_item_id = (int)($_GET['item_id'] ?? 0);
 $date_from = $_GET['date_from'] ?? date('Y-m-d');
 $date_to = $_GET['date_to'] ?? date('Y-m-d');
 
-// Date conditions
-$date_cond_purchases = ""; $date_cond_otc = ""; 
-$date_cond_prescriptions = ""; $date_cond_lab = "";
-$date_params = []; $date_label = "";
+// DATE RANGE
+$filter_date_from = date('Y-m-d');
+$filter_date_to = date('Y-m-d');
+$date_label = "Today • " . date('d M Y');
 
 switch ($quick_filter) {
     case 'today':
-        $date_cond_purchases = " AND DATE(p.created_at) = CURDATE()";
-        $date_cond_otc = " AND DATE(os.created_at) = CURDATE()";
-        $date_cond_prescriptions = " AND DATE(pr.created_at) = CURDATE()";
-        $date_cond_lab = " AND DATE(lt.created_at) = CURDATE()";
+        $filter_date_from = date('Y-m-d');
+        $filter_date_to = date('Y-m-d');
         $date_label = "Today • " . date('d M Y');
         break;
+    case 'yesterday':
+        $filter_date_from = date('Y-m-d', strtotime('-1 day'));
+        $filter_date_to = date('Y-m-d', strtotime('-1 day'));
+        $date_label = "Yesterday • " . date('d M Y', strtotime('-1 day'));
+        break;
     case '1w':
-        $date_cond_purchases = " AND p.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
-        $date_cond_otc = " AND os.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
-        $date_cond_prescriptions = " AND pr.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
-        $date_cond_lab = " AND lt.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+        $filter_date_from = date('Y-m-d', strtotime('-7 days'));
+        $filter_date_to = date('Y-m-d');
         $date_label = "Last 7 Days";
         break;
     case '1m':
-        $date_cond_purchases = " AND p.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
-        $date_cond_otc = " AND os.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
-        $date_cond_prescriptions = " AND pr.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
-        $date_cond_lab = " AND lt.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $filter_date_from = date('Y-m-d', strtotime('-1 month'));
+        $filter_date_to = date('Y-m-d');
         $date_label = "Last 1 Month";
         break;
     case '3m':
-        $date_cond_purchases = " AND p.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
-        $date_cond_otc = " AND os.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
-        $date_cond_prescriptions = " AND pr.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
-        $date_cond_lab = " AND lt.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
+        $filter_date_from = date('Y-m-d', strtotime('-3 months'));
+        $filter_date_to = date('Y-m-d');
         $date_label = "Last 3 Months";
         break;
-    case '6m':
-        $date_cond_purchases = " AND p.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
-        $date_cond_otc = " AND os.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
-        $date_cond_prescriptions = " AND pr.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
-        $date_cond_lab = " AND lt.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
-        $date_label = "Last 6 Months";
-        break;
     case '1y':
-        $date_cond_purchases = " AND p.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
-        $date_cond_otc = " AND os.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
-        $date_cond_prescriptions = " AND pr.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
-        $date_cond_lab = " AND lt.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
+        $filter_date_from = date('Y-m-d', strtotime('-1 year'));
+        $filter_date_to = date('Y-m-d');
         $date_label = "Last 1 Year";
         break;
     case 'custom':
-        $date_cond_purchases = " AND DATE(p.created_at) BETWEEN ? AND ?";
-        $date_cond_otc = " AND DATE(os.created_at) BETWEEN ? AND ?";
-        $date_cond_prescriptions = " AND DATE(pr.created_at) BETWEEN ? AND ?";
-        $date_cond_lab = " AND DATE(lt.created_at) BETWEEN ? AND ?";
-        $date_params = [$date_from, $date_to];
+        $filter_date_from = $date_from;
+        $filter_date_to = $date_to;
         $date_label = date('d M Y', strtotime($date_from)) . ' → ' . date('d M Y', strtotime($date_to));
         break;
     case 'all':
     default:
+        try {
+            if ($selected_branch_id !== 'all') {
+                $stmt = $db->prepare("SELECT MIN(DATE(created_at)) as min_date FROM stock_movements WHERE branch_id = ?");
+                $stmt->execute([(int)$selected_branch_id]);
+            } else {
+                $stmt = $db->query("SELECT MIN(DATE(created_at)) as min_date FROM stock_movements");
+            }
+            $min_row = $stmt->fetch(PDO::FETCH_ASSOC);
+            $filter_date_from = $min_row['min_date'] ?? date('Y-m-d', strtotime('-1 year'));
+        } catch (Exception $e) {
+            $filter_date_from = date('Y-m-d', strtotime('-1 year'));
+        }
+        $filter_date_to = date('Y-m-d');
         $date_label = "All Time";
         break;
 }
 
-// ✅ V6.3: Branch conditions - TUTA apply kwenye QUERIES ZOTE
-$branch_cond_p = ""; $branch_cond_o = ""; $branch_cond_pr = ""; $branch_cond_lt = "";
-$branch_cond_bi = ""; $branch_cond_mi = ""; $branch_cond_ei = "";
-$branch_params_p = []; $branch_params_o = []; $branch_params_pr = []; 
-$branch_params_lt = []; $branch_params_bi = [];
+$date_from_sql = $filter_date_from . ' 00:00:00';
+$date_to_sql = $filter_date_to . ' 23:59:59';
 
+// Branch condition
+$branch_cond_sm = "";
+$branch_params_sm = [];
 if ($selected_branch_id !== 'all') {
-    $bid = (int)$selected_branch_id;
-    $branch_cond_p = " AND p.branch_id = ?";
-    $branch_cond_o = " AND os.branch_id = ?";
-    $branch_cond_pr = " AND pr.branch_id = ?";
-    $branch_cond_lt = " AND lt.branch_id = ?";
-    $branch_cond_bi = " AND bi.branch_id = ?";
-    $branch_cond_mi = " AND mi.branch_id = ?";  // For medications_inventory
-    $branch_cond_ei = " AND ei.branch_id = ?";  // For medical_equipment
-    $branch_params_p = [$bid];
-    $branch_params_o = [$bid];
-    $branch_params_pr = [$bid];
-    $branch_params_lt = [$bid];
-    $branch_params_bi = [$bid];
+    $branch_cond_sm = " AND sm.branch_id = ?";
+    $branch_params_sm = [(int)$selected_branch_id];
 }
 
 // ================================================================
-// HELPER FUNCTIONS
+// HELPERS
 // ================================================================
-function getPeriodStartDate($quick_filter, $date_from = null) {
+function formatDate($datetime) {
+    if (empty($datetime)) return 'N/A';
+    return date('d M Y, H:i', strtotime($datetime));
+}
+
+// ✅ V8.4: Category detection imeboreshwa
+function getMovementCategory($notes, $movement_type, $reference_type = '') {
+    if (empty($notes)) {
+        if ($reference_type === 'prescription') return 'prescription';
+        if ($reference_type === 'otc') return 'otc';
+        if ($reference_type === 'lab_test') return 'lab_test';
+        if ($reference_type === 'procedure') return 'doctor_use';
+        return $movement_type;
+    }
+
+    // Return / Cancel
+    if (stripos($notes, 'Stock returned') === 0) return 'cancel';
+    
+    // Prescription / Doctor use (medication)
+    if (stripos($notes, 'Prescribed by Dr.') === 0) return 'prescription';
+    if (stripos($notes, 'Prescription:') === 0) return 'prescription';
+    if (stripos($notes, 'Auto-dispensed') === 0) return 'prescription';
+    
+    // Doctor equipment use
+    if (stripos($notes, 'Doctor used') === 0) return 'doctor_use';
+    if (stripos($notes, 'Stock returned - Removed by Dr.') === 0) return 'cancel';
+    
+    // Lab test
+    if (stripos($notes, 'Lab test') === 0) return 'lab_test';
+    
+    // OTC
+    if (stripos($notes, 'OTC Sale') === 0) return 'otc';
+    if (stripos($notes, 'OTC Equipment Sale') === 0) return 'otc';
+    
+    // Procedure / Equipment
+    if (stripos($notes, 'Procedure:') === 0) return 'procedure';
+    if (stripos($notes, 'Equipment:') === 0) return 'equipment';
+    
+    // Fallback to reference_type
+    if ($reference_type === 'prescription') return 'prescription';
+    if ($reference_type === 'otc') return 'otc';
+    if ($reference_type === 'lab_test') return 'lab_test';
+    if ($reference_type === 'procedure') return 'doctor_use';
+
+    return $movement_type;
+}
+
+function getTopLabel($quick_filter) {
     switch ($quick_filter) {
-        case 'today': return date('Y-m-d 00:00:00');
-        case '1w': return date('Y-m-d H:i:s', strtotime('-7 days'));
-        case '1m': return date('Y-m-d H:i:s', strtotime('-1 month'));
-        case '3m': return date('Y-m-d H:i:s', strtotime('-3 months'));
-        case '6m': return date('Y-m-d H:i:s', strtotime('-6 months'));
-        case '1y': return date('Y-m-d H:i:s', strtotime('-1 year'));
-        case 'custom': return $date_from . ' 00:00:00';
-        case 'all':
-        default: return null;
+        case 'today': return 'Today • ' . date('d M Y');
+        case 'yesterday': return 'Yesterday • ' . date('d M Y', strtotime('-1 day'));
+        case '1w': return 'Last 7 Days';
+        case '1m': return 'Last 30 Days';
+        case '3m': return 'Last 3 Months';
+        case '1y': return 'Last 1 Year';
+        case 'all': return 'All Time';
+        case 'custom': return 'Custom Period';
+        default: return 'Today';
     }
 }
 
-function isInPeriod($date_str, $period_start, $period_end = null) {
-    if ($period_start === null) return true;
-    $ts = strtotime($date_str);
-    if ($ts < strtotime($period_start)) return false;
-    if ($period_end !== null && $ts > strtotime($period_end)) return false;
-    return true;
+// ✅ V8.4: Pata stock before kwa ujumla
+function getStockBefore($db, $item_type, $item_ids, $date_from_sql, $branch_cond_sm, $branch_params_sm) {
+    if (empty($item_ids)) return 0;
+    
+    $id_field = $item_type === 'medicine' ? 'inventory_id' : 'equipment_id';
+    $placeholders = implode(',', array_fill(0, count($item_ids), '?'));
+    
+    try {
+        // 1. Jaribu kupata new_stock ya movement ya mwisho KABLA ya period
+        $sql = "SELECT sm.new_stock
+                FROM stock_movements sm
+                WHERE sm.$id_field IN ($placeholders)
+                  AND sm.created_at < ?
+                  $branch_cond_sm
+                ORDER BY sm.created_at DESC, sm.id DESC
+                LIMIT 1";
+        $params = array_merge($item_ids, [$date_from_sql], $branch_params_sm);
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($row && $row['new_stock'] !== null) {
+            return (int)$row['new_stock'];
+        }
+        
+        // 2. Kama hakuna, chukua previous_stock ya movement ya kwanza NDANI ya period
+        $date_to_temp = date('Y-m-d 23:59:59', strtotime($date_from_sql));
+        $sql = "SELECT sm.previous_stock
+                FROM stock_movements sm
+                WHERE sm.$id_field IN ($placeholders)
+                  AND sm.created_at BETWEEN ? AND ?
+                  $branch_cond_sm
+                ORDER BY sm.created_at ASC, sm.id ASC
+                LIMIT 1";
+        $params = array_merge($item_ids, [$date_from_sql, $date_to_temp], $branch_params_sm);
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($row && $row['previous_stock'] !== null) {
+            return (int)$row['previous_stock'];
+        }
+        
+        // 3. Fallback
+        if ($item_type === 'medicine') {
+            $sql = "SELECT COALESCE(SUM(quantity), 0) as total 
+                    FROM medications_inventory 
+                    WHERE id IN ($placeholders) AND status = 'active'";
+        } else {
+            $sql = "SELECT COALESCE(SUM(quantity), 0) as total 
+                    FROM medical_equipment 
+                    WHERE id IN ($placeholders) AND status = 'active'";
+        }
+        $stmt = $db->prepare($sql);
+        $stmt->execute($item_ids);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return (int)($row['total'] ?? 0);
+        
+    } catch (Exception $e) {
+        error_log("getStockBefore: " . $e->getMessage());
+        return 0;
+    }
 }
 
 // ================================================================
-// AUTOCOMPLETE API - ✅ V6.3: Branch filtered
+// AUTOCOMPLETE API
 // ================================================================
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'search') {
     header('Content-Type: application/json');
     $q = trim($_GET['q'] ?? '');
     $type = $_GET['type'] ?? 'medicine';
-    
+
     $results = [];
-    
+
     if ($type === 'medicine') {
-        $sql = "SELECT medication_name as name, 
+        $sql = "SELECT medication_name as name,
                     SUM(quantity) as total_stock,
                     COUNT(DISTINCT batch_number) as batches,
                     MAX(id) as id_sample
@@ -211,7 +305,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'search') {
         foreach ($results as &$r) { $r['id'] = $r['id_sample']; }
         unset($r);
     } else {
-        $sql = "SELECT equipment_name as name, 
+        $sql = "SELECT equipment_name as name,
                     SUM(quantity) as total_stock,
                     MAX(id) as id_sample
                 FROM medical_equipment
@@ -227,113 +321,108 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'search') {
         foreach ($results as &$r) { $r['id'] = $r['id_sample']; }
         unset($r);
     }
-    
+
     echo json_encode(['results' => $results]);
     exit;
 }
 
 // ================================================================
-// ✅ V6.3: TOP 5 MOST USED - BRANCH FILTERED
+// TOP 5 - Inabadilika kulingana na kipindi
 // ================================================================
 $top5_medicines = [];
 $top5_equipment = [];
+$top5_label = getTopLabel($quick_filter);
 
-// Top 5 Medicines
+// ✅ V8.4: TOP 5 MEDICINES - Inajumuisha prescriptions + OTC
 try {
     $sql = "SELECT 
-                combined.med_name as name,
-                SUM(combined.total_qty) as total_qty,
-                (SELECT id FROM medications_inventory 
-                    WHERE medication_name = combined.med_name AND status='active'
-                    " . ($selected_branch_id !== 'all' ? " AND branch_id = " . (int)$selected_branch_id : "") . "
-                    LIMIT 1) as item_id
-            FROM (
-                SELECT pi.medication_name as med_name, SUM(pi.quantity) as total_qty
-                FROM prescription_items pi
-                INNER JOIN prescriptions pr ON pi.prescription_id = pr.id
-                WHERE 1=1
-                $date_cond_prescriptions
-                $branch_cond_pr
-                GROUP BY pi.medication_name
-                
-                UNION ALL
-                
-                SELECT osi.item_name as med_name, SUM(osi.quantity) as total_qty
-                FROM otc_sale_items osi
-                INNER JOIN otc_sales os ON osi.sale_id = os.id
-                WHERE 1=1
-                $date_cond_otc
-                $branch_cond_o
-                GROUP BY osi.item_name
-            ) as combined
-            GROUP BY combined.med_name
-            HAVING item_id IS NOT NULL
+                sm.inventory_id as item_id,
+                SUM(sm.quantity) as total_qty
+            FROM stock_movements sm
+            WHERE sm.movement_type = 'out'
+              AND sm.inventory_id IS NOT NULL
+              AND sm.created_at BETWEEN ? AND ?
+              $branch_cond_sm
+              AND (sm.reference_type = 'prescription' 
+                   OR sm.reference_type = 'otc'
+                   OR sm.notes LIKE 'Prescribed by Dr.%'
+                   OR sm.notes LIKE 'Auto-dispensed%'
+                   OR sm.notes LIKE 'Prescription:%'
+                   OR sm.notes LIKE 'OTC Sale%')
+            GROUP BY sm.inventory_id
             ORDER BY total_qty DESC
             LIMIT 5";
-    
-    $params = array_merge($date_params, $branch_params_pr, $date_params, $branch_params_o);
+
+    $params = [$date_from_sql, $date_to_sql];
+    $params = array_merge($params, $branch_params_sm);
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
-    $top5_medicines = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $raw = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($raw as $r) {
+        $stmt2 = $db->prepare("SELECT medication_name FROM medications_inventory WHERE id = ? LIMIT 1");
+        $stmt2->execute([$r['item_id']]);
+        $inv_row = $stmt2->fetch(PDO::FETCH_ASSOC);
+
+        if ($inv_row) {
+            $top5_medicines[] = [
+                'name' => $inv_row['medication_name'],
+                'total_qty' => $r['total_qty'],
+                'item_id' => $r['item_id']
+            ];
+        }
+    }
 } catch (Exception $e) { error_log("Top 5 med: " . $e->getMessage()); }
 
-// Top 5 Equipment
+// ✅ V8.4: TOP 5 EQUIPMENT - Inajumuisha Doctor + Lab + OTC
 try {
     $sql = "SELECT 
-                combined.eq_name as name,
-                SUM(combined.total_qty) as total_qty,
-                (SELECT id FROM medical_equipment 
-                    WHERE equipment_name = combined.eq_name AND status='active'
-                    " . ($selected_branch_id !== 'all' ? " AND branch_id = " . (int)$selected_branch_id : "") . "
-                    LIMIT 1) as item_id
-            FROM (
-                SELECT me.equipment_name as eq_name, COUNT(lt.id) as total_qty
-                FROM lab_tests lt
-                INNER JOIN lab_test_equipment lte ON lt.test_id = lte.lab_test_id
-                INNER JOIN medical_equipment me ON lte.equipment_id = me.id
-                WHERE 1=1
-                $date_cond_lab
-                $branch_cond_lt
-                GROUP BY me.equipment_name
-                
-                UNION ALL
-                
-                SELECT bi.item_name as eq_name, SUM(bi.quantity) as total_qty
-                FROM bill_items bi
-                INNER JOIN bills b ON bi.bill_id = b.id
-                WHERE bi.item_type = 'equipment'
-                $date_cond_prescriptions
-                $branch_cond_bi
-                GROUP BY bi.item_name
-            ) as combined
-            GROUP BY combined.eq_name
-            HAVING item_id IS NOT NULL
+                sm.equipment_id,
+                SUM(sm.quantity) as total_qty,
+                me.equipment_name
+            FROM stock_movements sm
+            INNER JOIN medical_equipment me ON sm.equipment_id = me.id
+            WHERE sm.movement_type = 'out'
+              AND sm.equipment_id IS NOT NULL
+              AND sm.created_at BETWEEN ? AND ?
+              $branch_cond_sm
+            GROUP BY sm.equipment_id
             ORDER BY total_qty DESC
             LIMIT 5";
-    
-    $params = array_merge($date_params, $branch_params_lt, $date_params, $branch_params_bi);
+
+    $params = [$date_from_sql, $date_to_sql];
+    $params = array_merge($params, $branch_params_sm);
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
-    $top5_equipment = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $raw = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($raw as $r) {
+        $top5_equipment[] = [
+            'name' => $r['equipment_name'],
+            'total_qty' => $r['total_qty'],
+            'item_id' => $r['equipment_id']
+        ];
+    }
 } catch (Exception $e) { error_log("Top 5 eq: " . $e->getMessage()); }
 
 // ================================================================
-// LOAD DETAILS
+// MEDICINE DETAILS V8.4
 // ================================================================
 $medicine_details = null;
-$equipment_details = null;
 
-// ================ MEDICINE DETAILS ================
 if ($active_tab === 'medicine' && $selected_item_id > 0) {
-    // ✅ Lookup medication name - BRANCH AWARE
-    $stmt = $db->prepare("SELECT medication_name, branch_id FROM medications_inventory WHERE id = ?");
+    $stmt = $db->prepare("
+        SELECT id, medication_name, category, unit, selling_price, quantity as current_qty
+        FROM medications_inventory 
+        WHERE id = ?
+        LIMIT 1
+    ");
     $stmt->execute([$selected_item_id]);
-    $med_row = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if ($med_row) {
-        $med_name = $med_row['medication_name'];
-        
-        // ✅ V6.3: Get inventory IDs - FILTERED BY BRANCH
+    $med_info = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($med_info) {
+        $med_name = $med_info['medication_name'];
+
         $inventory_ids = [];
         try {
             $sql_inv = "SELECT id FROM medications_inventory WHERE medication_name = ?";
@@ -346,401 +435,152 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
             $stmt->execute($params_inv);
             $inventory_ids = array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'id');
         } catch (Exception $e) {}
-        
-        // CURRENT STOCK - ✅ BRANCH FILTERED
-        $current_stock = [];
-        try {
-            $sql = "SELECT id, medication_name, category, unit, quantity, reorder_level, 
-                        unit_cost, selling_price, supplier, expiry_date, batch_number, 
-                        branch_id, created_at, updated_at, added_by_name
-                    FROM medications_inventory
-                    WHERE medication_name = ? AND status = 'active'
-                    " . ($selected_branch_id !== 'all' ? " AND branch_id = ?" : "") . "
-                    ORDER BY expiry_date ASC, id ASC";
-            $params = [$med_name];
-            if ($selected_branch_id !== 'all') $params[] = (int)$selected_branch_id;
-            $stmt = $db->prepare($sql);
-            $stmt->execute($params);
-            $current_stock = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (Exception $e) {}
-        
+
         $total_current_stock = 0;
-        foreach ($current_stock as $cs) { $total_current_stock += (int)$cs['quantity']; }
-        
-        $medicine_info = !empty($current_stock) ? $current_stock[0] : [
-            'medication_name' => $med_name, 'category' => 'N/A', 'unit' => 'N/A', 'selling_price' => 0
-        ];
-        
-        // ✅ V6.3: PURCHASE HISTORY - BRANCH FILTERED
-        $purchase_history_all = [];
+        if (!empty($inventory_ids)) {
+            $placeholders = implode(',', array_fill(0, count($inventory_ids), '?'));
+            $stmt = $db->prepare("
+                SELECT COALESCE(SUM(quantity), 0) as total 
+                FROM medications_inventory 
+                WHERE id IN ($placeholders) AND status = 'active'
+            ");
+            $stmt->execute($inventory_ids);
+            $total_current_stock = (int)$stmt->fetch(PDO::FETCH_ASSOC)['total'];
+        }
+
+        $movements = [];
         if (!empty($inventory_ids)) {
             try {
                 $placeholders = implode(',', array_fill(0, count($inventory_ids), '?'));
-                $sql = "SELECT pi.id, pi.quantity, pi.buying_price, pi.selling_price,
-                            pi.total_buying_cost, pi.added_by, pi.added_by_name, pi.added_at,
-                            p.invoice_number, p.created_at as purchase_created_at,
-                            br.name as branch_name
-                        FROM purchase_items pi
-                        INNER JOIN purchases p ON pi.purchase_id = p.id
-                        LEFT JOIN branches br ON p.branch_id = br.id
-                        WHERE pi.item_type = 'medicine' 
-                        AND pi.item_id IN ($placeholders)
-                        AND p.status = 'COMPLETED'
-                        $branch_cond_p
-                        ORDER BY p.created_at DESC";
+                $sql = "
+                    SELECT 
+                        sm.*,
+                        u.full_name as performed_by_name,
+                        u.username as performed_by_username
+                    FROM stock_movements sm
+                    LEFT JOIN users u ON sm.performed_by = u.id
+                    WHERE sm.inventory_id IN ($placeholders)
+                      AND sm.created_at BETWEEN ? AND ?
+                      $branch_cond_sm
+                    ORDER BY sm.created_at DESC, sm.id DESC
+                ";
+
+                $params = $inventory_ids;
+                $params[] = $date_from_sql;
+                $params[] = $date_to_sql;
+                $params = array_merge($params, $branch_params_sm);
+
                 $stmt = $db->prepare($sql);
-                // ✅ Ongeza branch params
-                $stmt->execute(array_merge($inventory_ids, $branch_params_p));
-                $purchase_history_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            } catch (Exception $e) { error_log("Purchase error: " . $e->getMessage()); }
+                $stmt->execute($params);
+                $movements = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            } catch (Exception $e) { error_log("Movements: " . $e->getMessage()); }
         }
-        
-        // Purchases filtered by period
-        $period_start = getPeriodStartDate($quick_filter, $date_from);
-        $period_end = ($quick_filter === 'custom') ? $date_to . ' 23:59:59' : null;
-        
-        $purchase_history = [];
-        foreach ($purchase_history_all as $ph) {
-            if (isInPeriod($ph['added_at'], $period_start, $period_end)) {
-                $purchase_history[] = $ph;
-            }
+
+        $stock_before = getStockBefore($db, 'medicine', $inventory_ids, $date_from_sql, $branch_cond_sm, $branch_params_sm);
+        $stock_after = $total_current_stock;
+
+        if (!empty($movements)) {
+            $last_movement = $movements[0];
+            $stock_after = (int)$last_movement['new_stock'];
         }
-        
-        // ✅ PRESCRIPTIONS - BRANCH FILTERED
-        $prescriptions_all = [];
-        try {
-            $sql = "SELECT pi.id as item_id, pi.quantity, pi.dosage, pi.frequency, pi.route,
-                        pi.unit_price, pi.total_price, pi.dispensed_at, pi.dispensed_by,
-                        pr.id as prescription_id, pr.prescription_number, pr.status as prescription_status,
-                        pr.created_at as prescribed_at,
-                        v.id as visit_id, v.visit_number, v.visit_date, v.diagnosis, v.disease_code,
-                        pat.full_name as patient_name, pat.patient_id as patient_code, pat.phone as patient_phone,
-                        u_doctor.full_name as doctor_name,
-                        u_pharmacy.full_name as dispensed_by_name,
-                        br.name as branch_name
-                    FROM prescription_items pi
-                    INNER JOIN prescriptions pr ON pi.prescription_id = pr.id
-                    LEFT JOIN visits v ON pr.visit_id = v.id
-                    LEFT JOIN patients pat ON pr.patient_id = pat.id
-                    LEFT JOIN users u_doctor ON pr.doctor_id = u_doctor.id
-                    LEFT JOIN users u_pharmacy ON pi.dispensed_by = u_pharmacy.id
-                    LEFT JOIN branches br ON pr.branch_id = br.id
-                    WHERE pi.medication_name = ?
-                    $branch_cond_pr
-                    ORDER BY pr.created_at DESC";
-            $stmt = $db->prepare($sql);
-            $stmt->execute(array_merge([$med_name], $branch_params_pr));
-            $prescriptions_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (Exception $e) {}
-        
-        $prescriptions = [];
-        foreach ($prescriptions_all as $p) {
-            if (isInPeriod($p['prescribed_at'], $period_start, $period_end)) {
-                $prescriptions[] = $p;
-            }
-        }
-        
-        // ✅ OTC SALES - BRANCH FILTERED
-        $otc_sales_all = [];
-        try {
-            $sql = "SELECT osi.id as item_id, osi.quantity, osi.unit_price, osi.total_price,
-                        osi.item_name, os.id as sale_id, os.sale_number, os.customer_name, os.customer_phone,
-                        os.payment_status, os.payment_method, os.created_at as sold_at,
-                        u_seller.full_name as sold_by_name,
-                        br.name as branch_name
-                    FROM otc_sale_items osi
-                    INNER JOIN otc_sales os ON osi.sale_id = os.id
-                    LEFT JOIN users u_seller ON os.sold_by = u_seller.id
-                    LEFT JOIN branches br ON os.branch_id = br.id
-                    WHERE osi.item_name LIKE ?
-                    $branch_cond_o
-                    ORDER BY os.created_at DESC";
-            $stmt = $db->prepare($sql);
-            $stmt->execute(array_merge(["%$med_name%"], $branch_params_o));
-            $otc_sales_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (Exception $e) {}
-        
-        $otc_sales = [];
-        foreach ($otc_sales_all as $os) {
-            if (isInPeriod($os['sold_at'], $period_start, $period_end)) {
-                $otc_sales[] = $os;
-            }
-        }
-        
-        // ✅ BILL ITEMS - BRANCH FILTERED
-        $bill_items = [];
-        try {
-            $sql = "SELECT bi.id, bi.bill_id, bi.item_name, bi.quantity, bi.unit_price, 
-                        bi.total_price, bi.status as item_status, bi.created_at as item_created_at,
-                        b.bill_number, b.visit_id,
-                        v.visit_number, v.diagnosis,
-                        pat.full_name as patient_name, pat.patient_id as patient_code,
-                        u_doctor.full_name as doctor_name,
-                        br.name as branch_name
-                    FROM bill_items bi
-                    INNER JOIN bills b ON bi.bill_id = b.id
-                    LEFT JOIN visits v ON b.visit_id = v.id
-                    LEFT JOIN patients pat ON b.patient_id = pat.id
-                    LEFT JOIN users u_doctor ON v.doctor_id = u_doctor.id
-                    LEFT JOIN branches br ON b.branch_id = br.id
-                    WHERE bi.item_type = 'medication'
-                    AND bi.item_name LIKE ?
-                    $date_cond_prescriptions
-                    $branch_cond_bi
-                    ORDER BY b.created_at DESC
-                    LIMIT 300";
-            $stmt = $db->prepare($sql);
-            $stmt->execute(array_merge(["%$med_name%"], $date_params, $branch_params_bi));
-            $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (Exception $e) {}
-        
-        // SUMMARIES
+
         $summary = [
-            'purchase_qty' => 0, 'purchase_count' => 0,
-            'pending_qty' => 0, 'pending_count' => 0,
-            'confirmed_qty' => 0, 'confirmed_count' => 0,
-            'dispensed_qty' => 0, 'dispensed_count' => 0,
+            'added_qty' => 0, 'added_count' => 0,
+            'out_qty' => 0, 'out_count' => 0,
+            'prescription_qty' => 0, 'prescription_count' => 0,
             'otc_qty' => 0, 'otc_count' => 0,
+            'cancelled_returned_qty' => 0, 'cancelled_returned_count' => 0,
             'total_movement' => 0,
-            'unique_visits' => 0, 'unique_patients' => 0
+            'unique_patients' => 0
         ];
-        
-        foreach ($purchase_history as $ph) { 
-            $summary['purchase_qty'] += (int)$ph['quantity']; 
-            $summary['purchase_count']++;
-        }
-        
-        $visit_keys = []; $patient_keys = [];
-        foreach ($prescriptions as $p) {
-            $qty = (int)$p['quantity'];
-            $status = strtolower($p['prescription_status'] ?? 'pending');
-            
-            if ($status === 'pending') { $summary['pending_qty'] += $qty; $summary['pending_count']++; }
-            elseif ($status === 'confirmed') { $summary['confirmed_qty'] += $qty; $summary['confirmed_count']++; }
-            elseif ($status === 'dispensed') { $summary['dispensed_qty'] += $qty; $summary['dispensed_count']++; }
-            
-            if (!empty($p['visit_id'])) $visit_keys[$p['visit_id']] = true;
-            if (!empty($p['patient_code'])) $patient_keys[$p['patient_code']] = true;
-        }
-        
-        foreach ($otc_sales as $os) { 
-            $summary['otc_qty'] += (int)$os['quantity']; 
-            $summary['otc_count']++;
-        }
-        
-        foreach ($bill_items as $bi) {
-            if (!empty($bi['visit_id'])) $visit_keys[$bi['visit_id']] = true;
-            if (!empty($bi['patient_code'])) $patient_keys[$bi['patient_code']] = true;
-        }
-        
-        $summary['total_movement'] = $summary['pending_qty'] + $summary['confirmed_qty'] + $summary['dispensed_qty'] + $summary['otc_qty'];
-        $summary['unique_visits'] = count($visit_keys);
-        $summary['unique_patients'] = count($patient_keys);
-        
-        // REMAINING STOCK
-        $stock_value = 0; $average_selling_price = 0; $price_count = 0;
-        foreach ($current_stock as $cs) {
-            $stock_value += (int)$cs['quantity'] * (float)($cs['selling_price'] ?? 0);
-            if ((float)($cs['selling_price'] ?? 0) > 0) {
-                $average_selling_price += (float)$cs['selling_price'];
-                $price_count++;
+
+        $patient_ids = [];
+
+        foreach ($movements as $m) {
+            $qty = (int)$m['quantity'];
+            $mt = strtolower($m['movement_type'] ?? '');
+            $notes = $m['notes'] ?? '';
+            $ref_type = $m['reference_type'] ?? '';
+
+            if ($mt === 'in') {
+                $summary['added_qty'] += $qty;
+                $summary['added_count']++;
+            } else {
+                $summary['out_qty'] += $qty;
+                $summary['out_count']++;
+            }
+
+            $category = getMovementCategory($notes, $mt, $ref_type);
+
+            if ($category === 'prescription') {
+                $summary['prescription_qty'] += $qty;
+                $summary['prescription_count']++;
+            } elseif ($category === 'otc') {
+                $summary['otc_qty'] += $qty;
+                $summary['otc_count']++;
+            } elseif ($category === 'cancel') {
+                $summary['cancelled_returned_qty'] += $qty;
+                $summary['cancelled_returned_count']++;
+            }
+
+            if (!empty($m['patient_id'])) {
+                $patient_ids[$m['patient_id']] = true;
             }
         }
-        if ($price_count > 0) $average_selling_price = $average_selling_price / $price_count;
-        
-        $reorder_level = !empty($current_stock) ? (int)$current_stock[0]['reorder_level'] : 0;
-        
-        $remaining_stock = [
-            'current_stock' => $total_current_stock,
-            'total_used' => $summary['total_movement'],
-            'stock_value' => $stock_value,
-            'average_selling_price' => $average_selling_price,
-            'reorder_level' => $reorder_level,
-            'status' => 'sufficient',
-            'status_label' => 'Sufficient',
-            'status_color' => 'success',
-            'status_icon' => 'fa-check-circle'
-        ];
-        
-        if ($total_current_stock == 0) {
-            $remaining_stock['status'] = 'out_of_stock';
-            $remaining_stock['status_label'] = 'Out of Stock';
-            $remaining_stock['status_color'] = 'danger';
-            $remaining_stock['status_icon'] = 'fa-times-circle';
-        } elseif ($total_current_stock <= $reorder_level) {
-            $remaining_stock['status'] = 'critical';
-            $remaining_stock['status_label'] = 'Critical - Reorder';
-            $remaining_stock['status_color'] = 'danger';
-            $remaining_stock['status_icon'] = 'fa-exclamation-triangle';
-        } elseif ($total_current_stock <= ($reorder_level * 2)) {
-            $remaining_stock['status'] = 'low';
-            $remaining_stock['status_label'] = 'Low Stock';
-            $remaining_stock['status_color'] = 'warning';
-            $remaining_stock['status_icon'] = 'fa-exclamation-circle';
-        }
-        
-        // PERIOD OVERVIEW
-        $total_purchased_before = 0;
-        foreach ($purchase_history_all as $ph) {
-            if ($period_start === null || strtotime($ph['added_at']) < strtotime($period_start)) {
-                $total_purchased_before += (int)$ph['quantity'];
-            }
-        }
-        
-        $total_movements_before = 0;
-        foreach ($prescriptions_all as $p) {
-            if ($period_start === null || strtotime($p['prescribed_at']) < strtotime($period_start)) {
-                $total_movements_before += (int)$p['quantity'];
-            }
-        }
-        foreach ($otc_sales_all as $os) {
-            if ($period_start === null || strtotime($os['sold_at']) < strtotime($period_start)) {
-                $total_movements_before += (int)$os['quantity'];
-            }
-        }
-        
-        $stock_at_period_start = max(0, $total_purchased_before - $total_movements_before);
-        
-        $period_purchases_total = 0;
-        $period_purchases_users = [];
-        foreach ($purchase_history as $ph) {
-            $period_purchases_total += (int)$ph['quantity'];
-            if (!empty($ph['added_by_name'])) $period_purchases_users[$ph['added_by_name']] = true;
-        }
-        
-        $period_prescriptions_qty = 0;
-        $period_otc_qty = 0;
-        foreach ($prescriptions as $p) $period_prescriptions_qty += (int)$p['quantity'];
-        foreach ($otc_sales as $os) $period_otc_qty += (int)$os['quantity'];
-        
-        $period_info = [
-            'filter_label' => $date_label,
-            'period_start' => $period_start,
-            'stock_at_period_start' => $stock_at_period_start,
-            'purchases_count' => count($purchase_history),
-            'purchases_total_qty' => $period_purchases_total,
-            'purchases_unique_users' => array_keys($period_purchases_users),
-            'movements_prescriptions' => $period_prescriptions_qty,
-            'movements_otc' => $period_otc_qty,
-            'movements_total' => $period_prescriptions_qty + $period_otc_qty,
-            'total_purchased_before_period' => $total_purchased_before,
-            'total_movements_before_period' => $total_movements_before
-        ];
-        
-        // LAST ADDED STOCK
-        if (count($purchase_history_all) > 0) {
-            $last_purchase = $purchase_history_all[0];
-            $last_added_qty = (int)$last_purchase['quantity'];
-            $last_added_date = $last_purchase['added_at'];
-            $last_date_ts = strtotime($last_added_date);
-            
-            $purchased_before_last = 0;
-            for ($i = 1; $i < count($purchase_history_all); $i++) {
-                $purchased_before_last += (int)$purchase_history_all[$i]['quantity'];
-            }
-            
-            $movements_before_last = 0;
-            foreach ($prescriptions_all as $p) {
-                if (strtotime($p['prescribed_at']) < $last_date_ts) {
-                    $movements_before_last += (int)$p['quantity'];
-                }
-            }
-            foreach ($otc_sales_all as $os) {
-                if (strtotime($os['sold_at']) < $last_date_ts) {
-                    $movements_before_last += (int)$os['quantity'];
-                }
-            }
-            
-            $previous_stock_before_last = max(0, $purchased_before_last - $movements_before_last);
-            $available_after_last_add = $previous_stock_before_last + $last_added_qty;
-            
-            $movements_after_last = 0;
-            foreach ($prescriptions_all as $p) {
-                if (strtotime($p['prescribed_at']) >= $last_date_ts) {
-                    $movements_after_last += (int)$p['quantity'];
-                }
-            }
-            foreach ($otc_sales_all as $os) {
-                if (strtotime($os['sold_at']) >= $last_date_ts) {
-                    $movements_after_last += (int)$os['quantity'];
-                }
-            }
-            
-            $expected_remaining = $available_after_last_add - $movements_after_last;
-            $actual_remaining = $total_current_stock;
-            $variance = $actual_remaining - $expected_remaining;
-            
-            $last_stock_info = [
-                'has_last_purchase' => true,
-                'last_added_qty' => $last_added_qty,
-                'last_added_date' => $last_added_date,
-                'last_added_by' => $last_purchase['added_by_name'],
-                'last_added_invoice' => $last_purchase['invoice_number'],
-                'total_purchased_before_last' => $purchased_before_last,
-                'movements_before_last' => $movements_before_last,
-                'previous_stock' => $previous_stock_before_last,
-                'available_after_last_add' => $available_after_last_add,
-                'movements_after_last' => $movements_after_last,
-                'expected_remaining' => $expected_remaining,
-                'actual_remaining' => $actual_remaining,
-                'variance' => $variance,
-                'is_accurate' => ($variance == 0)
-            ];
-        } else {
-            $last_stock_info = [
-                'has_last_purchase' => false,
-                'last_added_qty' => 0, 'last_added_date' => null,
-                'last_added_by' => 'N/A', 'last_added_invoice' => 'N/A',
-                'total_purchased_before_last' => 0, 'movements_before_last' => 0,
-                'previous_stock' => 0, 'available_after_last_add' => 0,
-                'movements_after_last' => 0, 'expected_remaining' => 0,
-                'actual_remaining' => $total_current_stock,
-                'variance' => $total_current_stock, 'is_accurate' => false
+
+        $summary['total_movement'] = $summary['out_qty'];
+        $summary['unique_patients'] = count($patient_ids);
+
+        $additions = [];
+        foreach ($movements as $m) {
+            if (strtolower($m['movement_type']) !== 'in') continue;
+            if (stripos($m['notes'] ?? '', 'Stock returned') === 0) continue;
+
+            $additions[] = [
+                'added_at' => $m['created_at'],
+                'quantity' => (int)$m['quantity'],
+                'added_by_name' => $m['performed_by_name'] ?? 'System',
+                'previous_stock' => (int)$m['previous_stock'],
+                'new_stock' => (int)$m['new_stock'],
+                'notes' => $m['notes'] ?? '',
             ];
         }
-        
-        // DAYS UNTIL STOCKOUT
-        $days_in_period = 30;
-        if ($quick_filter === 'custom') $days_in_period = max(1, (strtotime($date_to) - strtotime($date_from)) / 86400);
-        elseif ($quick_filter === '1w') $days_in_period = 7;
-        elseif ($quick_filter === '1m') $days_in_period = 30;
-        elseif ($quick_filter === '3m') $days_in_period = 90;
-        elseif ($quick_filter === '6m') $days_in_period = 180;
-        elseif ($quick_filter === '1y') $days_in_period = 365;
-        elseif ($quick_filter === 'today') $days_in_period = 1;
-        
-        $avg_daily_usage = $days_in_period > 0 ? $summary['total_movement'] / $days_in_period : 0;
-        $days_until_stockout = $avg_daily_usage > 0 ? round($total_current_stock / $avg_daily_usage) : 999;
-        
+
         $medicine_details = [
             'name' => $med_name,
-            'info' => $medicine_info,
-            'purchase_history' => $purchase_history,
-            'current_stock' => $current_stock,
+            'info' => $med_info,
+            'inventory_ids' => $inventory_ids,
             'total_current_stock' => $total_current_stock,
-            'prescriptions' => $prescriptions,
-            'otc_sales' => $otc_sales,
-            'bill_items' => $bill_items,
+            'movements' => $movements,
             'summary' => $summary,
-            'remaining_stock' => $remaining_stock,
-            'last_stock_info' => $last_stock_info,
-            'period_info' => $period_info,
-            'days_until_stockout' => $days_until_stockout,
-            'avg_daily_usage' => $avg_daily_usage
+            'period_info' => [
+                'filter_label' => $date_label,
+                'stock_before' => $stock_before,
+                'stock_after' => $stock_after,
+            ],
+            'additions' => $additions,
         ];
     }
 }
 
-// ================ EQUIPMENT DETAILS ================
+// ================================================================
+// EQUIPMENT DETAILS V8.4
+// ================================================================
+$equipment_details = null;
+
 if ($active_tab === 'equipment' && $selected_item_id > 0) {
-    $stmt = $db->prepare("SELECT equipment_name FROM medical_equipment WHERE id = ?");
+    $stmt = $db->prepare("
+        SELECT id, equipment_name, category, unit, selling_price, quantity as current_qty
+        FROM medical_equipment 
+        WHERE id = ?
+        LIMIT 1
+    ");
     $stmt->execute([$selected_item_id]);
-    $eq_row = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if ($eq_row) {
-        $eq_name = $eq_row['equipment_name'];
-        
-        // ✅ V6.3: Get equipment IDs - FILTERED BY BRANCH
+    $eq_info = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($eq_info) {
+        $eq_name = $eq_info['equipment_name'];
+
         $equipment_ids = [];
         try {
             $sql_eq = "SELECT id FROM medical_equipment WHERE equipment_name = ?";
@@ -753,358 +593,139 @@ if ($active_tab === 'equipment' && $selected_item_id > 0) {
             $stmt->execute($params_eq);
             $equipment_ids = array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'id');
         } catch (Exception $e) {}
-        
-        // CURRENT STOCK - BRANCH FILTERED
-        $current_stock = [];
-        try {
-            $sql = "SELECT id, equipment_name, category, unit, quantity, reorder_level,
-                        unit_cost, selling_price, supplier, created_at, added_by_name
-                    FROM medical_equipment
-                    WHERE equipment_name = ? AND status = 'active'
-                    " . ($selected_branch_id !== 'all' ? " AND branch_id = ?" : "") . "
-                    ORDER BY id ASC";
-            $params = [$eq_name];
-            if ($selected_branch_id !== 'all') $params[] = (int)$selected_branch_id;
-            $stmt = $db->prepare($sql);
-            $stmt->execute($params);
-            $current_stock = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (Exception $e) {}
-        
+
         $total_current_stock = 0;
-        foreach ($current_stock as $cs) { $total_current_stock += (int)$cs['quantity']; }
-        
-        $equipment_info = !empty($current_stock) ? $current_stock[0] : [
-            'equipment_name' => $eq_name, 'category' => 'N/A', 'unit' => 'N/A', 'selling_price' => 0
-        ];
-        
-        $period_start = getPeriodStartDate($quick_filter, $date_from);
-        $period_end = ($quick_filter === 'custom') ? $date_to . ' 23:59:59' : null;
-        
-        // ✅ PURCHASE HISTORY - BRANCH FILTERED
-        $purchase_history_all = [];
+        if (!empty($equipment_ids)) {
+            $placeholders = implode(',', array_fill(0, count($equipment_ids), '?'));
+            $stmt = $db->prepare("
+                SELECT COALESCE(SUM(quantity), 0) as total 
+                FROM medical_equipment 
+                WHERE id IN ($placeholders) AND status = 'active'
+            ");
+            $stmt->execute($equipment_ids);
+            $total_current_stock = (int)$stmt->fetch(PDO::FETCH_ASSOC)['total'];
+        }
+
+        $movements = [];
         if (!empty($equipment_ids)) {
             try {
                 $placeholders = implode(',', array_fill(0, count($equipment_ids), '?'));
-                $sql = "SELECT pi.id, pi.quantity, pi.buying_price, pi.selling_price,
-                            pi.total_buying_cost, pi.added_by_name, pi.added_at,
-                            p.invoice_number, br.name as branch_name
-                        FROM purchase_items pi
-                        INNER JOIN purchases p ON pi.purchase_id = p.id
-                        LEFT JOIN branches br ON p.branch_id = br.id
-                        WHERE pi.item_type = 'equipment'
-                        AND pi.item_id IN ($placeholders)
-                        AND p.status = 'COMPLETED'
-                        $branch_cond_p
-                        ORDER BY p.created_at DESC";
+                $sql = "
+                    SELECT 
+                        sm.*,
+                        u.full_name as performed_by_name,
+                        u.username as performed_by_username
+                    FROM stock_movements sm
+                    LEFT JOIN users u ON sm.performed_by = u.id
+                    WHERE sm.equipment_id IN ($placeholders)
+                      AND sm.created_at BETWEEN ? AND ?
+                      $branch_cond_sm
+                    ORDER BY sm.created_at DESC, sm.id DESC
+                ";
+
+                $params = $equipment_ids;
+                $params[] = $date_from_sql;
+                $params[] = $date_to_sql;
+                $params = array_merge($params, $branch_params_sm);
+
                 $stmt = $db->prepare($sql);
-                $stmt->execute(array_merge($equipment_ids, $branch_params_p));
-                $purchase_history_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            } catch (Exception $e) {}
+                $stmt->execute($params);
+                $movements = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            } catch (Exception $e) { error_log("Eq movements: " . $e->getMessage()); }
         }
-        
-        $purchase_history = [];
-        foreach ($purchase_history_all as $ph) {
-            if (isInPeriod($ph['added_at'], $period_start, $period_end)) {
-                $purchase_history[] = $ph;
-            }
+
+        $stock_before = getStockBefore($db, 'equipment', $equipment_ids, $date_from_sql, $branch_cond_sm, $branch_params_sm);
+        $stock_after = $total_current_stock;
+
+        if (!empty($movements)) {
+            $last_movement = $movements[0];
+            $stock_after = (int)$last_movement['new_stock'];
         }
-        
-        // ✅ BILL ITEMS - BRANCH FILTERED
-        $bill_items_all = [];
-        if (!empty($equipment_ids)) {
-            try {
-                $sql = "SELECT bi.id, bi.bill_id, bi.item_name, bi.item_id, bi.quantity, 
-                            bi.unit_price, bi.total_price, bi.status as item_status, 
-                            bi.created_at as item_created_at,
-                            b.bill_number, b.visit_id,
-                            v.visit_number, v.diagnosis,
-                            pat.full_name as patient_name, pat.patient_id as patient_code,
-                            u_doctor.full_name as doctor_name,
-                            br.name as branch_name
-                        FROM bill_items bi
-                        INNER JOIN bills b ON bi.bill_id = b.id
-                        LEFT JOIN visits v ON b.visit_id = v.id
-                        LEFT JOIN patients pat ON b.patient_id = pat.id
-                        LEFT JOIN users u_doctor ON v.doctor_id = u_doctor.id
-                        LEFT JOIN branches br ON b.branch_id = br.id
-                        WHERE bi.item_type = 'equipment'
-                        AND bi.item_id IN (" . implode(',', array_fill(0, count($equipment_ids), '?')) . ")
-                        $branch_cond_bi
-                        ORDER BY b.created_at DESC";
-                $stmt = $db->prepare($sql);
-                $stmt->execute(array_merge($equipment_ids, $branch_params_bi));
-                $bill_items_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            } catch (Exception $e) {}
-        }
-        
-        $bill_items = [];
-        foreach ($bill_items_all as $bi) {
-            if (isInPeriod($bi['item_created_at'], $period_start, $period_end)) {
-                $bill_items[] = $bi;
-            }
-        }
-        
-        // ✅ LAB TESTS - BRANCH FILTERED
-        $lab_tests_all = [];
-        if (!empty($equipment_ids)) {
-            try {
-                $sql = "SELECT lt.id as lab_test_id, lt.test_name, lt.status as test_status,
-                            lt.created_at as test_created_at, lt.visit_id,
-                            v.visit_number, v.diagnosis,
-                            pat.full_name as patient_name, pat.patient_id as patient_code,
-                            u_doctor.full_name as doctor_name,
-                            u_lab.full_name as lab_tech_name,
-                            br.name as branch_name
-                        FROM lab_tests lt
-                        INNER JOIN lab_test_equipment lte ON lt.test_id = lte.lab_test_id
-                        LEFT JOIN visits v ON lt.visit_id = v.id
-                        LEFT JOIN patients pat ON lt.patient_id = pat.id
-                        LEFT JOIN users u_doctor ON lt.doctor_id = u_doctor.id
-                        LEFT JOIN users u_lab ON lt.lab_technician_id = u_lab.id
-                        LEFT JOIN branches br ON lt.branch_id = br.id
-                        WHERE lte.equipment_id IN (" . implode(',', array_fill(0, count($equipment_ids), '?')) . ")
-                        $branch_cond_lt
-                        ORDER BY lt.created_at DESC";
-                $stmt = $db->prepare($sql);
-                $stmt->execute(array_merge($equipment_ids, $branch_params_lt));
-                $lab_tests_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            } catch (Exception $e) {}
-        }
-        
-        $lab_tests = [];
-        foreach ($lab_tests_all as $lt) {
-            if (isInPeriod($lt['test_created_at'], $period_start, $period_end)) {
-                $lab_tests[] = $lt;
-            }
-        }
-        
-        // SUMMARIES
+
         $summary = [
-            'purchase_qty' => 0, 'purchase_count' => 0,
-            'pending_qty' => 0, 'pending_count' => 0,
-            'in_progress_qty' => 0, 'in_progress_count' => 0,
-            'completed_qty' => 0, 'completed_count' => 0,
-            'bill_qty' => 0, 'bill_count' => 0,
-            'lab_qty' => 0, 'lab_count' => 0,
+            'added_qty' => 0, 'added_count' => 0,
+            'out_qty' => 0, 'out_count' => 0,
+            'lab_test_qty' => 0, 'lab_test_count' => 0,
+            'otc_qty' => 0, 'otc_count' => 0,
+            'doctor_qty' => 0, 'doctor_count' => 0,
+            'procedure_qty' => 0, 'procedure_count' => 0,
+            'returned_qty' => 0, 'returned_count' => 0,
             'total_movement' => 0,
-            'unique_visits' => 0, 'unique_patients' => 0
+            'unique_patients' => 0
         ];
-        
-        foreach ($purchase_history as $ph) {
-            $summary['purchase_qty'] += (int)$ph['quantity'];
-            $summary['purchase_count']++;
-        }
-        
-        foreach ($bill_items as $bi) {
-            $summary['bill_qty'] += (int)$bi['quantity'];
-            $summary['bill_count']++;
-        }
-        
-        foreach ($lab_tests as $lt) {
-            $status = strtolower($lt['test_status'] ?? 'pending');
-            $summary['lab_qty']++;
-            $summary['lab_count']++;
-            
-            if ($status === 'pending') { $summary['pending_qty']++; $summary['pending_count']++; }
-            elseif ($status === 'in_progress') { $summary['in_progress_qty']++; $summary['in_progress_count']++; }
-            elseif ($status === 'completed') { $summary['completed_qty']++; $summary['completed_count']++; }
-        }
-        
-        $visit_keys = []; $patient_keys = [];
-        foreach ($bill_items as $bi) {
-            if (!empty($bi['visit_id'])) $visit_keys[$bi['visit_id']] = true;
-            if (!empty($bi['patient_code'])) $patient_keys[$bi['patient_code']] = true;
-        }
-        foreach ($lab_tests as $lt) {
-            if (!empty($lt['visit_id'])) $visit_keys[$lt['visit_id']] = true;
-            if (!empty($lt['patient_code'])) $patient_keys[$lt['patient_code']] = true;
-        }
-        
-        $summary['total_movement'] = $summary['bill_qty'] + $summary['lab_qty'];
-        $summary['unique_visits'] = count($visit_keys);
-        $summary['unique_patients'] = count($patient_keys);
-        
-        // REMAINING STOCK
-        $stock_value = 0; $average_selling_price = 0; $price_count = 0;
-        foreach ($current_stock as $cs) {
-            $stock_value += (int)$cs['quantity'] * (float)($cs['selling_price'] ?? 0);
-            if ((float)($cs['selling_price'] ?? 0) > 0) {
-                $average_selling_price += (float)$cs['selling_price'];
-                $price_count++;
+
+        $patient_ids = [];
+
+        foreach ($movements as $m) {
+            $qty = (int)$m['quantity'];
+            $mt = strtolower($m['movement_type'] ?? '');
+            $notes = $m['notes'] ?? '';
+            $ref_type = $m['reference_type'] ?? '';
+
+            if ($mt === 'in') {
+                $summary['added_qty'] += $qty;
+                $summary['added_count']++;
+                if (stripos($notes, 'Stock returned') === 0) {
+                    $summary['returned_qty'] += $qty;
+                    $summary['returned_count']++;
+                }
+            } else {
+                $summary['out_qty'] += $qty;
+                $summary['out_count']++;
+            }
+
+            $category = getMovementCategory($notes, $mt, $ref_type);
+
+            if ($category === 'lab_test') {
+                $summary['lab_test_qty'] += $qty;
+                $summary['lab_test_count']++;
+            } elseif ($category === 'otc') {
+                $summary['otc_qty'] += $qty;
+                $summary['otc_count']++;
+            } elseif ($category === 'doctor_use') {
+                $summary['doctor_qty'] += $qty;
+                $summary['doctor_count']++;
+            } elseif ($category === 'procedure' || $category === 'equipment') {
+                $summary['procedure_qty'] += $qty;
+                $summary['procedure_count']++;
+            }
+
+            if (!empty($m['patient_id'])) {
+                $patient_ids[$m['patient_id']] = true;
             }
         }
-        if ($price_count > 0) $average_selling_price = $average_selling_price / $price_count;
-        
-        $reorder_level = !empty($current_stock) ? (int)$current_stock[0]['reorder_level'] : 0;
-        
-        $remaining_stock = [
-            'current_stock' => $total_current_stock,
-            'total_used' => $summary['total_movement'],
-            'stock_value' => $stock_value,
-            'average_selling_price' => $average_selling_price,
-            'reorder_level' => $reorder_level,
-            'status' => 'sufficient',
-            'status_label' => 'Sufficient',
-            'status_color' => 'success',
-            'status_icon' => 'fa-check-circle'
-        ];
-        
-        if ($total_current_stock == 0) {
-            $remaining_stock['status'] = 'out_of_stock';
-            $remaining_stock['status_label'] = 'Out of Stock';
-            $remaining_stock['status_color'] = 'danger';
-            $remaining_stock['status_icon'] = 'fa-times-circle';
-        } elseif ($total_current_stock <= $reorder_level) {
-            $remaining_stock['status'] = 'critical';
-            $remaining_stock['status_label'] = 'Critical - Reorder';
-            $remaining_stock['status_color'] = 'danger';
-            $remaining_stock['status_icon'] = 'fa-exclamation-triangle';
-        } elseif ($total_current_stock <= ($reorder_level * 2)) {
-            $remaining_stock['status'] = 'low';
-            $remaining_stock['status_label'] = 'Low Stock';
-            $remaining_stock['status_color'] = 'warning';
-            $remaining_stock['status_icon'] = 'fa-exclamation-circle';
-        }
-        
-        // PERIOD OVERVIEW
-        $total_purchased_before = 0;
-        foreach ($purchase_history_all as $ph) {
-            if ($period_start === null || strtotime($ph['added_at']) < strtotime($period_start)) {
-                $total_purchased_before += (int)$ph['quantity'];
-            }
-        }
-        
-        $total_movements_before = 0;
-        foreach ($bill_items_all as $bi) {
-            if ($period_start === null || strtotime($bi['item_created_at']) < strtotime($period_start)) {
-                $total_movements_before += (int)$bi['quantity'];
-            }
-        }
-        foreach ($lab_tests_all as $lt) {
-            if ($period_start === null || strtotime($lt['test_created_at']) < strtotime($period_start)) {
-                $total_movements_before += 1;
-            }
-        }
-        
-        $stock_at_period_start = max(0, $total_purchased_before - $total_movements_before);
-        
-        $period_purchases_total = 0;
-        $period_purchases_users = [];
-        foreach ($purchase_history as $ph) {
-            $period_purchases_total += (int)$ph['quantity'];
-            if (!empty($ph['added_by_name'])) $period_purchases_users[$ph['added_by_name']] = true;
-        }
-        
-        $period_bill_qty = 0;
-        $period_lab_qty = 0;
-        foreach ($bill_items as $bi) $period_bill_qty += (int)$bi['quantity'];
-        foreach ($lab_tests as $lt) $period_lab_qty += 1;
-        
-        $period_info = [
-            'filter_label' => $date_label,
-            'period_start' => $period_start,
-            'stock_at_period_start' => $stock_at_period_start,
-            'purchases_count' => count($purchase_history),
-            'purchases_total_qty' => $period_purchases_total,
-            'purchases_unique_users' => array_keys($period_purchases_users),
-            'movements_bill' => $period_bill_qty,
-            'movements_lab' => $period_lab_qty,
-            'movements_total' => $period_bill_qty + $period_lab_qty,
-            'total_purchased_before_period' => $total_purchased_before,
-            'total_movements_before_period' => $total_movements_before
-        ];
-        
-        // LAST ADDED STOCK
-        if (count($purchase_history_all) > 0) {
-            $last_purchase = $purchase_history_all[0];
-            $last_added_qty = (int)$last_purchase['quantity'];
-            $last_added_date = $last_purchase['added_at'];
-            $last_date_ts = strtotime($last_added_date);
-            
-            $purchased_before_last = 0;
-            for ($i = 1; $i < count($purchase_history_all); $i++) {
-                $purchased_before_last += (int)$purchase_history_all[$i]['quantity'];
-            }
-            
-            $movements_before_last = 0;
-            foreach ($bill_items_all as $bi) {
-                if (strtotime($bi['item_created_at']) < $last_date_ts) $movements_before_last += (int)$bi['quantity'];
-            }
-            foreach ($lab_tests_all as $lt) {
-                if (strtotime($lt['test_created_at']) < $last_date_ts) $movements_before_last += 1;
-            }
-            
-            $previous_stock_before_last = max(0, $purchased_before_last - $movements_before_last);
-            $available_after_last_add = $previous_stock_before_last + $last_added_qty;
-            
-            $movements_after_last = 0;
-            foreach ($bill_items_all as $bi) {
-                if (strtotime($bi['item_created_at']) >= $last_date_ts) $movements_after_last += (int)$bi['quantity'];
-            }
-            foreach ($lab_tests_all as $lt) {
-                if (strtotime($lt['test_created_at']) >= $last_date_ts) $movements_after_last += 1;
-            }
-            
-            $expected_remaining = $available_after_last_add - $movements_after_last;
-            $actual_remaining = $total_current_stock;
-            $variance = $actual_remaining - $expected_remaining;
-            
-            $last_stock_info = [
-                'has_last_purchase' => true,
-                'last_added_qty' => $last_added_qty,
-                'last_added_date' => $last_added_date,
-                'last_added_by' => $last_purchase['added_by_name'],
-                'last_added_invoice' => $last_purchase['invoice_number'],
-                'total_purchased_before_last' => $purchased_before_last,
-                'movements_before_last' => $movements_before_last,
-                'previous_stock' => $previous_stock_before_last,
-                'available_after_last_add' => $available_after_last_add,
-                'movements_after_last' => $movements_after_last,
-                'expected_remaining' => $expected_remaining,
-                'actual_remaining' => $actual_remaining,
-                'variance' => $variance,
-                'is_accurate' => ($variance == 0)
-            ];
-        } else {
-            $last_stock_info = [
-                'has_last_purchase' => false,
-                'last_added_qty' => 0, 'last_added_date' => null,
-                'last_added_by' => 'N/A', 'last_added_invoice' => 'N/A',
-                'total_purchased_before_last' => 0, 'movements_before_last' => 0,
-                'previous_stock' => 0, 'available_after_last_add' => 0,
-                'movements_after_last' => 0, 'expected_remaining' => 0,
-                'actual_remaining' => $total_current_stock,
-                'variance' => $total_current_stock, 'is_accurate' => false
+
+        $summary['total_movement'] = $summary['out_qty'];
+        $summary['unique_patients'] = count($patient_ids);
+
+        $additions = [];
+        foreach ($movements as $m) {
+            if (strtolower($m['movement_type']) !== 'in') continue;
+            if (stripos($m['notes'] ?? '', 'Stock returned') === 0) continue;
+
+            $additions[] = [
+                'added_at' => $m['created_at'],
+                'quantity' => (int)$m['quantity'],
+                'added_by_name' => $m['performed_by_name'] ?? 'System',
+                'previous_stock' => (int)$m['previous_stock'],
+                'new_stock' => (int)$m['new_stock'],
+                'notes' => $m['notes'] ?? '',
             ];
         }
-        
-        // DAYS UNTIL STOCKOUT
-        $days_in_period = 30;
-        if ($quick_filter === 'custom') $days_in_period = max(1, (strtotime($date_to) - strtotime($date_from)) / 86400);
-        elseif ($quick_filter === '1w') $days_in_period = 7;
-        elseif ($quick_filter === '1m') $days_in_period = 30;
-        elseif ($quick_filter === '3m') $days_in_period = 90;
-        elseif ($quick_filter === '6m') $days_in_period = 180;
-        elseif ($quick_filter === '1y') $days_in_period = 365;
-        elseif ($quick_filter === 'today') $days_in_period = 1;
-        
-        $avg_daily_usage = $days_in_period > 0 ? $summary['total_movement'] / $days_in_period : 0;
-        $days_until_stockout = $avg_daily_usage > 0 ? round($total_current_stock / $avg_daily_usage) : 999;
-        
+
         $equipment_details = [
             'name' => $eq_name,
-            'info' => $equipment_info,
-            'purchase_history' => $purchase_history,
-            'current_stock' => $current_stock,
+            'info' => $eq_info,
+            'equipment_ids' => $equipment_ids,
             'total_current_stock' => $total_current_stock,
-            'bill_items' => $bill_items,
-            'lab_tests' => $lab_tests,
+            'movements' => $movements,
             'summary' => $summary,
-            'remaining_stock' => $remaining_stock,
-            'last_stock_info' => $last_stock_info,
-            'period_info' => $period_info,
-            'days_until_stockout' => $days_until_stockout,
-            'avg_daily_usage' => $avg_daily_usage
+            'period_info' => [
+                'filter_label' => $date_label,
+                'stock_before' => $stock_before,
+                'stock_after' => $stock_after,
+            ],
+            'additions' => $additions,
         ];
     }
 }
@@ -1114,61 +735,49 @@ if ($active_tab === 'equipment' && $selected_item_id > 0) {
 // ================================================================
 if (isset($_GET['export']) && $_GET['export'] === 'csv' && $selected_item_id > 0) {
     $details = $active_tab === 'medicine' ? $medicine_details : $equipment_details;
-    
+
     if ($details) {
-        $filename = 'stock_movement_' . preg_replace('/[^a-zA-Z0-9]/', '_', $details['name']) . '_' . date('Y-m-d') . '.csv';
-        
+        $filename = 'stock_movement_' . preg_replace('/[^a-zA-Z0-9]/', '_', $details['name']) . '_' . $filter_date_from . '_to_' . $filter_date_to . '.csv';
+
         header('Content-Type: text/csv; charset=utf-8');
         header('Content-Disposition: attachment; filename="' . $filename . '"');
-        
+
         $output = fopen('php://output', 'w');
         fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
-        
-        fputcsv($output, ['STOCK MOVEMENT REPORT']);
+
+        fputcsv($output, ['STOCK MOVEMENT REPORT V8.4 - ADMIN']);
         fputcsv($output, ['Item', $details['name']]);
         fputcsv($output, ['Type', strtoupper($active_tab)]);
         fputcsv($output, ['Branch', $branch_name_display]);
         fputcsv($output, ['Period', $date_label]);
         fputcsv($output, ['Generated', date('Y-m-d H:i:s')]);
         fputcsv($output, []);
-        
+
         $pi = $details['period_info'];
-        fputcsv($output, ['PERIOD OVERVIEW']);
-        fputcsv($output, ['Stock at Period Start', $pi['stock_at_period_start']]);
-        fputcsv($output, ['Added in Period', $pi['purchases_total_qty']]);
-        fputcsv($output, ['Movements in Period', $pi['movements_total']]);
-        fputcsv($output, ['Current Stock', $details['total_current_stock']]);
+        fputcsv($output, ['STOCK FLOW']);
+        fputcsv($output, ['Stock Before', $pi['stock_before']]);
+        fputcsv($output, ['Added (in)', $details['summary']['added_qty']]);
+        fputcsv($output, ['Out', $details['summary']['out_qty']]);
+        fputcsv($output, ['Stock After', $pi['stock_after']]);
         fputcsv($output, []);
-        
-        $lsi = $details['last_stock_info'];
-        fputcsv($output, ['LAST ADDED STOCK']);
-        fputcsv($output, ['Last Added Qty', $lsi['last_added_qty']]);
-        fputcsv($output, ['Last Added Date', $lsi['last_added_date']]);
-        fputcsv($output, ['Last Added By', $lsi['last_added_by']]);
-        fputcsv($output, ['Previous Stock', $lsi['previous_stock']]);
-        fputcsv($output, ['Available After Last Add', $lsi['available_after_last_add']]);
-        fputcsv($output, ['Movements After Last', $lsi['movements_after_last']]);
-        fputcsv($output, ['Expected Remaining', $lsi['expected_remaining']]);
-        fputcsv($output, ['Actual Inventory', $lsi['actual_remaining']]);
-        fputcsv($output, ['Variance', $lsi['variance']]);
-        fputcsv($output, ['Status', $lsi['is_accurate'] ? 'ACCURATE' : 'VARIANCE']);
-        fputcsv($output, []);
-        
-        fputcsv($output, ['PURCHASE HISTORY']);
-        fputcsv($output, ['#', 'Invoice', 'Qty', 'Buying', 'Selling', 'Total Cost', 'Added By', 'Date']);
+
+        fputcsv($output, ['MOVEMENTS DETAIL']);
+        fputcsv($output, ['#', 'Date', 'Type', 'Qty', 'Prev', 'New', 'By', 'Category', 'Notes']);
         $i = 1;
-        foreach ($details['purchase_history'] as $ph) {
-            fputcsv($output, [$i++, $ph['invoice_number'], $ph['quantity'], $ph['buying_price'], $ph['selling_price'], $ph['total_buying_cost'] ?? 0, $ph['added_by_name'], $ph['added_at']]);
+        foreach ($details['movements'] as $m) {
+            fputcsv($output, [
+                $i++,
+                $m['created_at'],
+                $m['movement_type'],
+                $m['quantity'],
+                $m['previous_stock'],
+                $m['new_stock'],
+                $m['performed_by_name'] ?? 'N/A',
+                getMovementCategory($m['notes'] ?? '', $m['movement_type'] ?? '', $m['reference_type'] ?? ''),
+                $m['notes'] ?? ''
+            ]);
         }
-        fputcsv($output, []);
-        
-        fputcsv($output, ['CURRENT STOCK']);
-        fputcsv($output, ['#', 'Batch', 'Qty', 'Reorder', 'Selling', 'Expiry', 'Supplier']);
-        $i = 1;
-        foreach ($details['current_stock'] as $cs) {
-            fputcsv($output, [$i++, $cs['batch_number'] ?? '', $cs['quantity'], $cs['reorder_level'], $cs['selling_price'], $cs['expiry_date'] ?? 'N/A', $cs['supplier'] ?? '']);
-        }
-        
+
         fclose($output);
         exit;
     }
@@ -1184,7 +793,7 @@ include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stock Movement Report • Braick Admin Audit</title>
+<title>Stock Movement Report V8.4 • Braick Admin Audit</title>
 <link rel="icon" href="<?= $logo_path ?>" type="image/png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1201,7 +810,7 @@ include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
     --warning: #D97706; --warning-bg: #FEF3C7;
     --purple: #7C3AED; --purple-bg: #EDE9FE;
     --cyan: #0891B2; --cyan-bg: #CFFAFE;
-    --slate: #94A3B8; --slate-bg: #F1F5F9;
+    --slate: #64748B; --slate-bg: #F1F5F9;
     --bg-body: #F1F5F9; --bg-card: #FFFFFF;
     --text-primary: #1E293B; --text-secondary: #64748B; --text-muted: #94A3B8;
     --border-color: #E2E8F0;
@@ -1236,7 +845,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .tab-btn { flex: 1; padding: 14px 24px; border-radius: var(--radius-md); border: none; background: transparent; color: var(--text-secondary); font-weight: 800; font-size: 0.85rem; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; gap: 10px; text-decoration: none; }
 .tab-btn:hover { background: var(--bg-body); color: var(--primary); }
 .tab-btn.active { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: white; box-shadow: 0 6px 16px rgba(11, 94, 215, 0.35); }
-.tab-btn.active i { color: #93C5FD; }
 
 .filter-card { background: var(--bg-card); border-radius: var(--radius-lg); padding: 18px 20px; border: 1px solid var(--border-color); margin-bottom: 20px; box-shadow: var(--shadow-sm); }
 .filter-section-title { font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary); margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
@@ -1256,239 +864,149 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .autocomplete-box { position: absolute; top: 100%; left: 0; right: 0; background: var(--bg-card); border: 2px solid var(--primary); border-radius: 14px; margin-top: 6px; max-height: 400px; overflow-y: auto; z-index: 999; box-shadow: 0 10px 30px rgba(0,0,0,0.15); display: none; }
 .autocomplete-box.active { display: block; }
 .autocomplete-item { padding: 12px 16px; border-bottom: 1px solid var(--border-color); cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.autocomplete-item:last-child { border-bottom: none; }
 .autocomplete-item:hover { background: var(--primary-bg); }
 .autocomplete-item .item-main { display: flex; align-items: center; gap: 10px; flex: 1; }
 .autocomplete-item .item-icon { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg, var(--primary), var(--primary-light)); color: white; display: flex; align-items: center; justify-content: center; font-size: 0.85rem; flex-shrink: 0; }
 .autocomplete-item .item-name { font-weight: 800; font-size: 0.88rem; }
 .autocomplete-item .item-meta { font-size: 0.68rem; color: var(--text-secondary); font-weight: 600; }
 .autocomplete-item .item-stock { background: var(--success-bg); color: var(--success); padding: 4px 10px; border-radius: 8px; font-family: var(--font-mono); font-weight: 800; font-size: 0.75rem; }
-.autocomplete-item .item-stock.low { background: var(--danger-bg); color: var(--danger); }
-.autocomplete-empty { padding: 20px; text-align: center; color: var(--text-secondary); font-size: 0.85rem; }
 
-.period-overview-card { background: linear-gradient(135deg, #EFF6FF, #DBEAFE); border: 2px solid #93C5FD; border-radius: var(--radius-lg); padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(11, 94, 215, 0.12); position: relative; overflow: hidden; }
-[data-theme="dark"] .period-overview-card { background: linear-gradient(135deg, #12294A, #1E3A5F); border-color: #1E40AF; }
-.period-overview-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, #0B5ED7, #3B82F6, #7C3AED, #3B82F6, #0B5ED7); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
-@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-.po-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; padding-bottom: 14px; border-bottom: 2px dashed rgba(11, 94, 215, 0.3); flex-wrap: wrap; gap: 10px; }
-.po-title { display: flex; align-items: center; gap: 10px; font-size: 1.05rem; font-weight: 900; color: #1E40AF; text-transform: uppercase; letter-spacing: 0.03em; }
-[data-theme="dark"] .po-title { color: #93C5FD; }
-.po-title i { font-size: 1.2rem; }
-.po-badge { display: inline-flex; align-items: center; gap: 6px; background: #0B5ED7; color: white; padding: 6px 14px; border-radius: var(--radius-full); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
-.po-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px; }
-.po-item { background: var(--bg-card); border-radius: var(--radius-md); padding: 14px 16px; border: 2px solid var(--border-color); display: flex; align-items: center; gap: 12px; transition: all 0.25s; position: relative; overflow: hidden; }
-.po-item::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
-.po-item:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
-.po-item.po-start::before { background: linear-gradient(180deg, #64748B, #94A3B8); }
-.po-item.po-start .po-icon { background: linear-gradient(135deg, #64748B, #94A3B8); }
-.po-item.po-start .po-value { color: #64748B; }
-.po-item.po-added::before { background: linear-gradient(180deg, #059669, #34D399); }
-.po-item.po-added .po-icon { background: linear-gradient(135deg, #059669, #34D399); }
-.po-item.po-added .po-value { color: #059669; }
-.po-item.po-movements::before { background: linear-gradient(180deg, #DC2626, #F87171); }
-.po-item.po-movements .po-icon { background: linear-gradient(135deg, #DC2626, #F87171); }
-.po-item.po-movements .po-value { color: #DC2626; }
-.po-item.po-current::before { background: linear-gradient(180deg, #0B5ED7, #3B82F6); }
-.po-item.po-current .po-icon { background: linear-gradient(135deg, #0B5ED7, #3B82F6); }
-.po-item.po-current .po-value { color: #0B5ED7; }
-.po-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; color: white; flex-shrink: 0; }
-.po-content { flex: 1; min-width: 0; }
-.po-label { font-size: 0.62rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); margin-bottom: 4px; }
-.po-value { font-family: var(--font-mono); font-size: 1.3rem; font-weight: 900; line-height: 1.1; display: flex; align-items: baseline; gap: 4px; }
-.po-value span { font-size: 0.7rem; font-weight: 700; color: var(--text-secondary); font-family: var(--font-primary); }
-.po-sub { font-size: 0.65rem; font-weight: 600; color: var(--text-muted); margin-top: 4px; }
-.po-users { background: var(--bg-card); border-radius: var(--radius-md); padding: 12px 16px; border: 1.5px dashed #93C5FD; }
-.po-users-label { font-size: 0.68rem; font-weight: 800; color: #1E40AF; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
-[data-theme="dark"] .po-users-label { color: #93C5FD; }
-.po-users-list { display: flex; flex-wrap: wrap; gap: 6px; }
-.po-user-tag { display: inline-flex; align-items: center; gap: 5px; background: linear-gradient(135deg, #0B5ED7, #3B82F6); color: white; padding: 5px 12px; border-radius: var(--radius-full); font-size: 0.7rem; font-weight: 700; }
-
-.last-stock-card { background: var(--bg-card); border-radius: var(--radius-lg); padding: 20px 24px; margin-bottom: 20px; border: 2px solid var(--border-color); box-shadow: 0 4px 20px rgba(0,0,0,0.08); position: relative; overflow: hidden; }
-.last-stock-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; }
-.last-stock-card.accurate { border-color: #34D399; background: linear-gradient(135deg, #ECFDF5, var(--bg-card) 60%); }
-.last-stock-card.accurate::before { background: linear-gradient(90deg, #059669, #34D399, #059669); }
-.last-stock-card.warning { border-color: #FBBF24; background: linear-gradient(135deg, #FFFBEB, var(--bg-card) 60%); }
-.last-stock-card.warning::before { background: linear-gradient(90deg, #D97706, #FBBF24, #D97706); }
-.last-stock-card.no-purchase { border-color: var(--border-color); }
-.ls-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; padding-bottom: 14px; border-bottom: 2px dashed var(--border-color); flex-wrap: wrap; gap: 10px; }
-.ls-title { display: flex; align-items: center; gap: 10px; font-size: 1.05rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.03em; }
-.ls-title i { color: var(--primary); font-size: 1.2rem; }
-.last-stock-card.accurate .ls-title i { color: #059669; }
-.last-stock-card.warning .ls-title i { color: #D97706; }
-.ls-status { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: var(--radius-full); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; border: 2px solid; }
-.ls-status.accurate { background: #D1FAE5; color: #059669; border-color: #34D399; }
-.ls-status.warning { background: #FEF3C7; color: #B45309; border-color: #FBBF24; animation: blinkStatus 1.5s infinite; }
-@keyframes blinkStatus { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
-.ls-timeline { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; padding: 16px; background: var(--bg-body); border-radius: var(--radius-md); overflow-x: auto; }
-.ls-tl-item { flex: 1; min-width: 140px; background: var(--bg-card); border: 2px solid var(--border-color); border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; gap: 10px; transition: all 0.25s; }
-.ls-tl-item:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
-.ls-tl-item.purchase { border-color: #34D399; background: linear-gradient(135deg, #ECFDF5, #D1FAE5); }
-.ls-tl-item.previous { border-color: #93C5FD; background: linear-gradient(135deg, #EFF6FF, #DBEAFE); }
-.ls-tl-item.total { border-color: #A78BFA; background: linear-gradient(135deg, #F5F3FF, #EDE9FE); }
-.ls-tl-item.used { border-color: #FCA5A5; background: linear-gradient(135deg, #FEF2F2, #FEE2E2); }
-.ls-tl-item.expected { border-color: #FBBF24; background: linear-gradient(135deg, #FFFBEB, #FEF3C7); }
-.ls-tl-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 0.95rem; color: white; flex-shrink: 0; }
-.ls-tl-item.purchase .ls-tl-icon { background: linear-gradient(135deg, #059669, #34D399); }
-.ls-tl-item.previous .ls-tl-icon { background: linear-gradient(135deg, #0B5ED7, #3B82F6); }
-.ls-tl-item.total .ls-tl-icon { background: linear-gradient(135deg, #7C3AED, #A78BFA); }
-.ls-tl-item.used .ls-tl-icon { background: linear-gradient(135deg, #DC2626, #F87171); }
-.ls-tl-item.expected .ls-tl-icon { background: linear-gradient(135deg, #D97706, #FBBF24); }
-.ls-tl-content { flex: 1; min-width: 0; }
-.ls-tl-label { font-size: 0.6rem; font-weight: 800; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 0.05em; margin-bottom: 3px; }
-.ls-tl-value { font-family: var(--font-mono); font-size: 1.1rem; font-weight: 900; line-height: 1.1; }
-.ls-tl-item.purchase .ls-tl-value { color: #059669; }
-.ls-tl-item.previous .ls-tl-value { color: #0B5ED7; }
-.ls-tl-item.total .ls-tl-value { color: #7C3AED; }
-.ls-tl-item.used .ls-tl-value { color: #DC2626; }
-.ls-tl-item.expected .ls-tl-value { color: #D97706; }
-.ls-tl-meta { font-size: 0.62rem; color: var(--text-secondary); font-weight: 600; margin-top: 3px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.ls-tl-arrow { display: flex; align-items: center; justify-content: center; font-size: 1.2rem; color: var(--text-secondary); flex-shrink: 0; min-width: 24px; }
-.ls-tl-arrow.minus i { color: #DC2626; }
-.ls-tl-arrow.equal i { color: #0B5ED7; }
-.ls-verification { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 12px; align-items: center; padding: 16px; background: var(--bg-body); border-radius: var(--radius-md); border: 2px dashed var(--border-color); }
-.ls-verification.accurate { background: linear-gradient(135deg, #ECFDF5, #D1FAE5); border-color: #34D399; }
-.ls-verification.warning { background: linear-gradient(135deg, #FFFBEB, #FEF3C7); border-color: #FBBF24; }
-.ls-v-item { background: var(--bg-card); border-radius: 10px; padding: 12px 14px; border: 2px solid var(--border-color); text-align: center; }
-.ls-v-item.success { border-color: #34D399; background: linear-gradient(135deg, #ECFDF5, #D1FAE5); }
-.ls-v-item.danger { border-color: #F87171; background: linear-gradient(135deg, #FEF2F2, #FEE2E2); }
-.ls-v-label { font-size: 0.6rem; font-weight: 800; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 0.05em; margin-bottom: 4px; display: flex; align-items: center; justify-content: center; gap: 4px; }
-.ls-v-value { font-family: var(--font-mono); font-size: 1.15rem; font-weight: 900; }
-.ls-v-vs { font-size: 1.3rem; color: var(--text-secondary); text-align: center; }
-.ls-note { margin-top: 14px; padding: 14px 18px; background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-left: 4px solid #D97706; border-radius: var(--radius-md); font-size: 0.78rem; color: #78350F; line-height: 1.6; }
-
-.remaining-stock-card { background: var(--bg-card); border-radius: var(--radius-lg); padding: 20px 24px; margin-bottom: 20px; border: 2px solid var(--border-color); box-shadow: 0 4px 20px rgba(0,0,0,0.08); position: relative; overflow: hidden; }
-.remaining-stock-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; }
-.remaining-stock-card.success { border-color: #34D399; background: linear-gradient(135deg, #ECFDF5, var(--bg-card) 70%); }
-.remaining-stock-card.success::before { background: linear-gradient(90deg, #059669, #34D399, #059669); }
-.remaining-stock-card.warning { border-color: #FBBF24; background: linear-gradient(135deg, #FFFBEB, var(--bg-card) 70%); }
-.remaining-stock-card.warning::before { background: linear-gradient(90deg, #D97706, #FBBF24, #D97706); }
-.remaining-stock-card.danger { border-color: #F87171; background: linear-gradient(135deg, #FEF2F2, var(--bg-card) 70%); animation: pulseDanger 2s infinite; }
-.remaining-stock-card.danger::before { background: linear-gradient(90deg, #DC2626, #F87171, #DC2626); }
-@keyframes pulseDanger { 0%, 100% { box-shadow: 0 4px 20px rgba(220, 38, 38, 0.15); } 50% { box-shadow: 0 4px 30px rgba(220, 38, 38, 0.35); } }
-.rs-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; padding-bottom: 14px; border-bottom: 2px dashed var(--border-color); flex-wrap: wrap; gap: 10px; }
-.rs-title { display: flex; align-items: center; gap: 10px; font-size: 1.05rem; font-weight: 900; text-transform: uppercase; }
-.rs-title i { color: var(--primary); font-size: 1.2rem; }
-.remaining-stock-card.success .rs-title i { color: #059669; }
-.remaining-stock-card.warning .rs-title i { color: #D97706; }
-.remaining-stock-card.danger .rs-title i { color: #DC2626; }
-.rs-status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: var(--radius-full); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; border: 2px solid; }
-.rs-status-badge.success { background: #D1FAE5; color: #059669; border-color: #34D399; }
-.rs-status-badge.warning { background: #FEF3C7; color: #B45309; border-color: #FBBF24; }
-.rs-status-badge.danger { background: #FEE2E2; color: #DC2626; border-color: #F87171; animation: blinkStatus 1.5s infinite; }
-.rs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
-.rs-item { background: var(--bg-card); border-radius: var(--radius-md); padding: 14px 16px; border: 2px solid var(--border-color); display: flex; align-items: center; gap: 12px; transition: all 0.25s; position: relative; overflow: hidden; }
-.rs-item::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
-.rs-item:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
-.rs-item.stock-balance::before { background: linear-gradient(180deg, #0B5ED7, #3B82F6); }
-.rs-item.stock-balance .rs-item-icon { background: linear-gradient(135deg, #0B5ED7, #3B82F6); }
-.rs-item.stock-balance .rs-item-value { color: #0B5ED7; }
-.rs-item.stock-usage::before { background: linear-gradient(180deg, #7C3AED, #A78BFA); }
-.rs-item.stock-usage .rs-item-icon { background: linear-gradient(135deg, #7C3AED, #A78BFA); }
-.rs-item.stock-usage .rs-item-value { color: #7C3AED; }
-.rs-item.stock-value::before { background: linear-gradient(180deg, #0D9488, #14B8A6); }
-.rs-item.stock-value .rs-item-icon { background: linear-gradient(135deg, #0D9488, #14B8A6); }
-.rs-item.stock-value .rs-item-value { color: #0D9488; }
-.rs-item.stock-reorder::before { background: linear-gradient(180deg, #D97706, #FBBF24); }
-.rs-item.stock-reorder .rs-item-icon { background: linear-gradient(135deg, #D97706, #FBBF24); }
-.rs-item.stock-reorder .rs-item-value { color: #D97706; }
-.rs-item.stock-stockout::before { background: linear-gradient(180deg, #DC2626, #F87171); }
-.rs-item.stock-stockout .rs-item-icon { background: linear-gradient(135deg, #DC2626, #F87171); }
-.rs-item.stock-stockout .rs-item-value { color: #DC2626; }
-.rs-item-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; color: white; flex-shrink: 0; }
-.rs-item-content { flex: 1; min-width: 0; }
-.rs-item-label { font-size: 0.62rem; font-weight: 800; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; }
-.rs-item-value { font-family: var(--font-mono); font-size: 1.3rem; font-weight: 900; line-height: 1.1; display: flex; align-items: baseline; gap: 4px; }
-.rs-item-value .rs-unit { font-size: 0.7rem; font-weight: 700; color: var(--text-secondary); font-family: var(--font-primary); }
-.rs-item-sub { font-size: 0.65rem; font-weight: 600; color: var(--text-muted); margin-top: 4px; }
-.rs-health-bar { background: var(--bg-body); border-radius: 12px; padding: 12px 16px; border: 1.5px solid var(--border-color); }
-.rs-health-label { display: flex; justify-content: space-between; align-items: center; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 8px; }
-.rs-health-percent { font-family: var(--font-mono); font-weight: 900; font-size: 0.75rem; padding: 2px 10px; border-radius: 8px; background: var(--bg-card); }
-.rs-bar-track { height: 10px; background: var(--border-color); border-radius: 10px; overflow: hidden; position: relative; }
-.rs-bar-fill { height: 100%; border-radius: 10px; transition: width 0.8s ease; position: relative; overflow: hidden; }
-.rs-bar-fill::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent); animation: shimmerBar 2s infinite; }
-@keyframes shimmerBar { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
-.rs-bar-fill.success { background: linear-gradient(90deg, #059669, #34D399); }
-.rs-bar-fill.warning { background: linear-gradient(90deg, #D97706, #FBBF24); }
-.rs-bar-fill.danger { background: linear-gradient(90deg, #DC2626, #F87171); }
-
-.top5-section { background: linear-gradient(135deg, #FFFBEB, #FEF3C7); border: 2px solid #FCD34D; border-radius: var(--radius-lg); padding: 16px 20px; margin-top: 16px; box-shadow: 0 4px 16px rgba(217, 119, 6, 0.15); }
-[data-theme="dark"] .top5-section { background: linear-gradient(135deg, #3A2A0F, #4A3A12); border-color: #78350F; }
-.top5-section.equipment { background: linear-gradient(135deg, #EFF6FF, #DBEAFE); border-color: #93C5FD; }
-[data-theme="dark"] .top5-section.equipment { background: linear-gradient(135deg, #12294A, #1E3A5F); border-color: #1E40AF; }
-.top5-header { display: flex; align-items: center; gap: 10px; font-size: 0.85rem; font-weight: 900; color: #92400E; margin-bottom: 14px; text-transform: uppercase; letter-spacing: 0.04em; }
-.top5-section.equipment .top5-header { color: #1E40AF; }
-.top5-header i { font-size: 1.1rem; color: #D97706; animation: fireFlicker 1.5s infinite alternate; }
-.top5-section.equipment .top5-header i { color: #0B5ED7; }
-@keyframes fireFlicker { from { transform: scale(1) rotate(-3deg); } to { transform: scale(1.15) rotate(3deg); } }
-.top5-badge { margin-left: auto; background: rgba(217, 119, 6, 0.15); color: #92400E; padding: 3px 10px; border-radius: 12px; font-size: 0.62rem; font-weight: 800; border: 1px solid rgba(217, 119, 6, 0.3); }
-.top5-section.equipment .top5-badge { background: rgba(11, 94, 215, 0.15); color: #1E40AF; border-color: rgba(11, 94, 215, 0.3); }
+.top5-card { background: var(--bg-card); border-radius: var(--radius-lg); padding: 18px 20px; margin-bottom: 20px; box-shadow: var(--shadow-md); position: relative; overflow: hidden; border: 2px solid; }
+.top5-card.medicine { border-color: #FCD34D; background: linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%); }
+.top5-card.equipment { border-color: #93C5FD; background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%); }
+[data-theme="dark"] .top5-card.medicine { background: linear-gradient(135deg, #3A2A0F 0%, #4A3A12 100%); }
+[data-theme="dark"] .top5-card.equipment { background: linear-gradient(135deg, #1A2A4A 0%, #12294A 100%); }
+.top5-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 2px dashed; flex-wrap: wrap; gap: 10px; }
+.top5-card.medicine .top5-header { border-bottom-color: rgba(217, 119, 6, 0.3); }
+.top5-card.equipment .top5-header { border-bottom-color: rgba(11, 94, 215, 0.3); }
+.top5-title { display: flex; align-items: center; gap: 10px; font-size: 0.9rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.03em; }
+.top5-card.medicine .top5-title { color: #92400E; }
+.top5-card.equipment .top5-title { color: #1E40AF; }
+.top5-card.medicine .top5-title i { color: #D97706; }
+.top5-card.equipment .top5-title i { color: #0B5ED7; }
+.top5-period-badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 14px; border-radius: 20px; font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; border: 1.5px solid; }
+.top5-card.medicine .top5-period-badge { background: rgba(217, 119, 6, 0.15); color: #92400E; border-color: rgba(217, 119, 6, 0.4); }
+.top5-card.equipment .top5-period-badge { background: rgba(11, 94, 215, 0.15); color: #1E40AF; border-color: rgba(11, 94, 215, 0.4); }
 .top5-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
-.top5-card { background: var(--bg-card); border: 2px solid #FCD34D; border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text-primary); transition: all 0.25s; position: relative; overflow: hidden; }
-.top5-card:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(217, 119, 6, 0.25); border-color: #D97706; }
-.top5-card.equipment:hover { box-shadow: 0 8px 20px rgba(11, 94, 215, 0.25); border-color: #0B5ED7; }
-.top5-card.equipment { border-color: #93C5FD; }
-.top5-rank { position: absolute; top: 4px; right: 8px; font-size: 0.6rem; font-weight: 900; color: #D97706; opacity: 0.5; font-family: var(--font-mono); }
-.top5-icon { width: 38px; height: 38px; border-radius: 10px; background: linear-gradient(135deg, #D97706, #F59E0B); color: white; display: flex; align-items: center; justify-content: center; font-size: 0.95rem; flex-shrink: 0; }
-.top5-card.equipment .top5-icon { background: linear-gradient(135deg, #0B5ED7, #3B82F6); }
+.top5-item { background: var(--bg-card); border: 2px solid; border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text-primary); transition: all 0.3s ease; position: relative; overflow: hidden; }
+.top5-item.medicine { border-color: #FCD34D; }
+.top5-item.equipment { border-color: #93C5FD; }
+.top5-item:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
+.top5-item.medicine:hover { border-color: #D97706; }
+.top5-item.equipment:hover { border-color: #0B5ED7; }
+.top5-rank { position: absolute; top: 4px; right: 8px; font-size: 0.65rem; font-weight: 900; opacity: 0.5; font-family: var(--font-mono); }
+.top5-item.medicine .top5-rank { color: #D97706; }
+.top5-item.equipment .top5-rank { color: #0B5ED7; }
+.top5-icon { width: 38px; height: 38px; border-radius: 10px; color: white; display: flex; align-items: center; justify-content: center; font-size: 0.9rem; flex-shrink: 0; box-shadow: 0 3px 10px rgba(0,0,0,0.15); }
+.top5-item.medicine .top5-icon { background: linear-gradient(135deg, #D97706, #F59E0B); }
+.top5-item.equipment .top5-icon { background: linear-gradient(135deg, #0B5ED7, #3B82F6); }
 .top5-info { flex: 1; min-width: 0; }
 .top5-name { font-weight: 800; font-size: 0.82rem; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.top5-meta { font-size: 0.65rem; color: var(--text-secondary); font-weight: 700; display: flex; align-items: center; gap: 4px; }
+.top5-meta { font-size: 0.65rem; font-weight: 700; color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
+.top5-meta strong { font-family: var(--font-mono); font-weight: 900; }
+.top5-item.medicine .top5-meta strong { color: #D97706; }
+.top5-item.equipment .top5-meta strong { color: #0B5ED7; }
+.top5-empty { padding: 30px 20px; text-align: center; color: var(--text-secondary); font-size: 0.8rem; font-weight: 600; }
+.top5-empty i { font-size: 2rem; opacity: 0.3; display: block; margin-bottom: 8px; }
 
-.details-container { animation: fadeInUp 0.5s ease; }
-@keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+.stock-flow-card { background: var(--bg-card); border-radius: var(--radius-lg); padding: 24px 28px; margin-bottom: 20px; border: 2px solid var(--border-color); box-shadow: 0 8px 30px rgba(0,0,0,0.08); position: relative; overflow: hidden; }
+.stock-flow-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 5px; background: linear-gradient(90deg, #64748B, #059669, #DC2626, #059669); }
+.sf-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; padding-bottom: 16px; border-bottom: 2px dashed var(--border-color); flex-wrap: wrap; gap: 12px; }
+.sf-title { display: flex; align-items: center; gap: 12px; font-size: 1.1rem; font-weight: 900; text-transform: uppercase; color: var(--primary); }
+.sf-badge { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: white; padding: 6px 16px; border-radius: var(--radius-full); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; }
+.sf-flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 12px; align-items: stretch; margin-bottom: 20px; }
+.sf-block { background: var(--bg-body); border-radius: var(--radius-md); padding: 18px 20px; border: 2px solid var(--border-color); display: flex; flex-direction: column; justify-content: center; position: relative; min-height: 120px; }
+.sf-block::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; border-radius: var(--radius-md) 0 0 var(--radius-md); }
+.sf-block.before::before { background: linear-gradient(180deg, #64748B, #94A3B8); }
+.sf-block.movement::before { background: linear-gradient(180deg, #DC2626, #F87171); }
+.sf-block.remaining::before { background: linear-gradient(180deg, #059669, #34D399); }
+.sf-block .sf-block-label { font-size: 0.65rem; font-weight: 800; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 0.06em; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+.sf-block .sf-block-value { font-family: var(--font-mono); font-size: 2.4rem; font-weight: 900; line-height: 1; display: flex; align-items: baseline; gap: 6px; }
+.sf-block.before .sf-block-value { color: #64748B; }
+.sf-block.movement .sf-block-value { color: #DC2626; }
+.sf-block.remaining .sf-block-value { color: #059669; }
+.sf-block .sf-block-value .unit { font-size: 0.85rem; font-weight: 700; color: var(--text-secondary); }
+.sf-block .sf-block-meta { font-size: 0.68rem; font-weight: 600; color: var(--text-muted); margin-top: 8px; display: flex; flex-direction: column; gap: 2px; }
+.sf-arrow { display: flex; align-items: center; justify-content: center; font-size: 1.8rem; color: var(--text-muted); min-width: 40px; }
+.sf-movements-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 6px; }
+.sf-mov-item { text-align: center; padding: 8px 4px; border-radius: 8px; background: var(--bg-card); border: 1.5px solid var(--border-color); }
+.sf-mov-item .sf-mov-label { font-size: 0.55rem; font-weight: 800; text-transform: uppercase; margin-bottom: 3px; }
+.sf-mov-item .sf-mov-qty { font-family: var(--font-mono); font-size: 1.1rem; font-weight: 900; }
+.sf-mov-item.added .sf-mov-label, .sf-mov-item.added .sf-mov-qty { color: #059669; }
+.sf-mov-item.out .sf-mov-label, .sf-mov-item.out .sf-mov-qty { color: #DC2626; }
+.sf-mov-item.returned { background: rgba(5,150,105,0.06); border-color: rgba(5,150,105,0.3); border-style: dashed; }
+.sf-mov-item.returned .sf-mov-label, .sf-mov-item.returned .sf-mov-qty { color: #059669; }
+.sf-mov-item.doctor .sf-mov-label, .sf-mov-item.doctor .sf-mov-qty { color: #8B5CF6; }
 
-.summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 20px; }
-.summary-card { background: var(--bg-card); border-radius: var(--radius-lg); padding: 18px 20px; border: 2px solid var(--border-color); position: relative; overflow: hidden; transition: all 0.3s; }
-.summary-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; }
-.summary-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
-.summary-card .sc-icon { width: 40px; height: 40px; border-radius: 11px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; color: white; margin-bottom: 10px; }
-.summary-card .sc-label { font-size: 0.68rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 4px; }
-.summary-card .sc-value { font-size: 1.5rem; font-weight: 900; font-family: var(--font-mono); line-height: 1.1; }
-.summary-card .sc-sub { font-size: 0.68rem; color: var(--text-secondary); font-weight: 600; margin-top: 4px; }
-.summary-card.purchase::before { background: linear-gradient(90deg, #0B5ED7, #3B82F6); }
-.summary-card.purchase .sc-icon { background: linear-gradient(135deg, #0B5ED7, #3B82F6); }
-.summary-card.purchase .sc-value { color: #0B5ED7; }
-.summary-card.pending::before { background: linear-gradient(90deg, #D97706, #FBBF24); }
-.summary-card.pending .sc-icon { background: linear-gradient(135deg, #D97706, #FBBF24); }
-.summary-card.pending .sc-value { color: #D97706; }
-.summary-card.confirmed::before { background: linear-gradient(90deg, #0891B2, #22D3EE); }
-.summary-card.confirmed .sc-icon { background: linear-gradient(135deg, #0891B2, #22D3EE); }
-.summary-card.confirmed .sc-value { color: #0891B2; }
-.summary-card.dispensed::before { background: linear-gradient(90deg, #059669, #34D399); }
-.summary-card.dispensed .sc-icon { background: linear-gradient(135deg, #059669, #34D399); }
-.summary-card.dispensed .sc-value { color: #059669; }
-.summary-card.otc::before { background: linear-gradient(90deg, #7C3AED, #A78BFA); }
-.summary-card.otc .sc-icon { background: linear-gradient(135deg, #7C3AED, #A78BFA); }
-.summary-card.otc .sc-value { color: #7C3AED; }
-.summary-card.movement::before { background: linear-gradient(90deg, #DC2626, #F87171); }
-.summary-card.movement .sc-icon { background: linear-gradient(135deg, #DC2626, #F87171); }
-.summary-card.movement .sc-value { color: #DC2626; }
+.summary-grid-v8 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 20px; }
+.sum-card-v8 { background: var(--bg-card); border-radius: var(--radius-lg); padding: 18px 20px; border: 2px solid var(--border-color); position: relative; overflow: hidden; transition: all 0.3s; display: flex; align-items: center; gap: 14px; }
+.sum-card-v8::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; }
+.sum-card-v8:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
+.sum-card-v8 .sc-icon-v8 { width: 52px; height: 52px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: white; flex-shrink: 0; }
+.sum-card-v8 .sc-content { flex: 1; }
+.sum-card-v8 .sc-label-v8 { font-size: 0.65rem; font-weight: 800; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; }
+.sum-card-v8 .sc-value-v8 { font-family: var(--font-mono); font-size: 1.9rem; font-weight: 900; line-height: 1; display: flex; align-items: baseline; gap: 5px; }
+.sum-card-v8 .sc-value-v8 .unit-v8 { font-size: 0.72rem; font-weight: 700; color: var(--text-secondary); }
+.sum-card-v8 .sc-sub-v8 { font-size: 0.65rem; color: var(--text-muted); margin-top: 4px; font-weight: 600; }
+.sum-card-v8.added::before { background: linear-gradient(180deg, #059669, #34D399); }
+.sum-card-v8.added .sc-icon-v8 { background: linear-gradient(135deg, #059669, #34D399); }
+.sum-card-v8.added .sc-value-v8 { color: #059669; }
+.sum-card-v8.out::before { background: linear-gradient(180deg, #DC2626, #F87171); }
+.sum-card-v8.out .sc-icon-v8 { background: linear-gradient(135deg, #DC2626, #F87171); }
+.sum-card-v8.out .sc-value-v8 { color: #DC2626; }
+.sum-card-v8.returned::before { background: linear-gradient(180deg, #0891B2, #22D3EE); }
+.sum-card-v8.returned .sc-icon-v8 { background: linear-gradient(135deg, #0891B2, #22D3EE); }
+.sum-card-v8.returned .sc-value-v8 { color: #0891B2; }
+.sum-card-v8.prescription::before { background: linear-gradient(180deg, #7C3AED, #A78BFA); }
+.sum-card-v8.prescription .sc-icon-v8 { background: linear-gradient(135deg, #7C3AED, #A78BFA); }
+.sum-card-v8.prescription .sc-value-v8 { color: #7C3AED; }
+.sum-card-v8.otc::before { background: linear-gradient(180deg, #0EA5E9, #38BDF8); }
+.sum-card-v8.otc .sc-icon-v8 { background: linear-gradient(135deg, #0EA5E9, #38BDF8); }
+.sum-card-v8.otc .sc-value-v8 { color: #0EA5E9; }
+.sum-card-v8.lab::before { background: linear-gradient(180deg, #D97706, #FBBF24); }
+.sum-card-v8.lab .sc-icon-v8 { background: linear-gradient(135deg, #D97706, #FBBF24); }
+.sum-card-v8.lab .sc-value-v8 { color: #D97706; }
+.sum-card-v8.doctor::before { background: linear-gradient(180deg, #8B5CF6, #A78BFA); }
+.sum-card-v8.doctor .sc-icon-v8 { background: linear-gradient(135deg, #8B5CF6, #A78BFA); }
+.sum-card-v8.doctor .sc-value-v8 { color: #8B5CF6; }
+.sum-card-v8.procedure::before { background: linear-gradient(180deg, #8B5CF6, #A78BFA); }
+.sum-card-v8.procedure .sc-icon-v8 { background: linear-gradient(135deg, #8B5CF6, #A78BFA); }
+.sum-card-v8.procedure .sc-value-v8 { color: #8B5CF6; }
 
 .table-card { background: var(--bg-card); border-radius: var(--radius-lg); border: 1px solid var(--border-color); overflow: hidden; box-shadow: var(--shadow-sm); margin-bottom: 20px; }
 .table-card .table-header { padding: 14px 20px; background: linear-gradient(135deg, #0B5ED7, #0A4CA8); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
 .table-card .table-header.green { background: linear-gradient(135deg, #059669, #047857); }
-.table-card .table-header.cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
+.table-card .table-header.red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
 .table-card .table-header.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+.table-card .table-header.cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
+.table-card .table-header.blue { background: linear-gradient(135deg, #0891B2, #0E7490, #155E75); }
 .table-card .table-header .title { color: white; font-size: 0.88rem; font-weight: 800; display: flex; align-items: center; gap: 10px; }
 .table-card .table-header .count { color: rgba(255,255,255,0.95); font-size: 0.7rem; font-weight: 700; background: rgba(255,255,255,0.18); padding: 5px 12px; border-radius: var(--radius-full); }
 .table-scroll-wrapper { overflow-x: auto; }
 .data-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
 .data-table thead th { text-align: left; padding: 11px 14px; font-weight: 800; font-size: 0.62rem; text-transform: uppercase; color: white; background: linear-gradient(135deg, #0B5ED7, #0A4CA8); white-space: nowrap; }
 .data-table thead.green th { background: linear-gradient(135deg, #059669, #047857); }
-.data-table thead.cyan th { background: linear-gradient(135deg, #0891B2, #0E7490); }
+.data-table thead.red th { background: linear-gradient(135deg, #DC2626, #B91C1C); }
 .data-table thead.purple th { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
 .data-table tbody td { padding: 11px 14px; border-bottom: 1px solid var(--border-color); vertical-align: middle; }
 .data-table tbody tr:hover td { background: var(--primary-bg); }
-.money-cell { font-family: var(--font-mono); font-weight: 800; color: var(--success); text-align: right; white-space: nowrap; }
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table tbody tr.in-row { background: rgba(5,150,105,0.04); }
+.data-table tbody tr.out-row { background: rgba(220,38,38,0.03); }
+.data-table tbody tr.return-row { background: rgba(8,145,178,0.04); }
+.data-table tbody tr.doctor-row { background: rgba(139,92,246,0.05); }
+
 .status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: var(--radius-full); font-size: 0.62rem; font-weight: 800; text-transform: uppercase; }
-.status-badge.pending { background: var(--warning-bg); color: var(--warning); }
-.status-badge.confirmed { background: var(--cyan-bg); color: var(--cyan); }
-.status-badge.dispensed, .status-badge.paid, .status-badge.completed { background: var(--success-bg); color: var(--success); }
-.status-badge.in_progress { background: var(--cyan-bg); color: var(--cyan); }
-.status-badge.partial { background: var(--warning-bg); color: var(--warning); }
-.status-badge.expired { background: var(--danger-bg); color: var(--danger); }
-.status-badge.expiring { background: var(--warning-bg); color: var(--warning); }
-.status-badge.ok { background: var(--success-bg); color: var(--success); }
+.status-badge.in { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
+.status-badge.out { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
+.status-badge.prescription { background: var(--purple-bg); color: var(--purple); border: 1px solid var(--purple); }
+.status-badge.otc { background: var(--cyan-bg); color: var(--cyan); border: 1px solid var(--cyan); }
+.status-badge.lab_test { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
+.status-badge.cancel { background: var(--cyan-bg); color: var(--cyan); border: 1px solid var(--cyan); }
+.status-badge.auto_dispense { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); }
+.status-badge.equipment { background: var(--slate-bg); color: var(--slate); border: 1px solid var(--slate); }
+.status-badge.doctor_use { background: #EDE9FE; color: #8B5CF6; border: 1px solid #8B5CF6; }
+.status-badge.procedure { background: #EDE9FE; color: #8B5CF6; border: 1px solid #8B5CF6; }
 
 .empty-state { padding: 60px 20px; text-align: center; color: var(--text-secondary); }
 .empty-state i { font-size: 3rem; opacity: 0.3; display: block; margin-bottom: 14px; color: var(--primary); }
@@ -1500,41 +1018,23 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .info-banner .ib-meta { font-size: 0.78rem; color: var(--text-secondary); display: flex; gap: 16px; flex-wrap: wrap; }
 .info-banner .ib-meta span { display: inline-flex; align-items: center; gap: 5px; }
 
-@media (max-width: 1024px) {
-    .ls-timeline { flex-direction: column; }
-    .ls-tl-arrow { transform: rotate(90deg); }
-    .ls-verification { grid-template-columns: 1fr; }
-    .ls-v-vs { transform: rotate(90deg); }
-}
-@media (max-width: 768px) {
-    .summary-grid, .po-grid, .rs-grid { grid-template-columns: 1fr 1fr; }
-    .page-header .page-title { font-size: 1.2rem; }
-    .tabs-container { flex-direction: column; }
-    .top5-grid { grid-template-columns: 1fr; }
-}
-@media (max-width: 480px) {
-    .summary-grid, .po-grid, .rs-grid { grid-template-columns: 1fr; }
-    .rs-header, .ls-header, .po-header { flex-direction: column; align-items: stretch; }
-}
-@media print {
-    .btn-header, .quick-btn, .tabs-container, .filter-card { display: none !important; }
-    .page-header { background: white !important; color: black !important; }
-}
+@media (max-width: 1024px) { .sf-flow { grid-template-columns: 1fr; } .sf-arrow { transform: rotate(90deg); } }
+@media (max-width: 768px) { .summary-grid-v8 { grid-template-columns: 1fr; } .tabs-container { flex-direction: column; } .top5-grid { grid-template-columns: 1fr; } }
+@media print { .btn-header, .quick-btn, .tabs-container, .filter-card { display: none !important; } }
 </style>
 </head>
 <body>
 
 <main class="main-content">
 
-    <!-- PAGE HEADER -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-boxes-stacked"></i>
                 Stock Movement Report
-                <span class="branch-tag"><i class="fas fa-shield-alt"></i> ADMIN</span>
+                <span class="branch-tag"><i class="fas fa-shield-alt"></i> ADMIN V8.4</span>
                 <span class="branch-tag <?= $selected_branch_id !== 'all' ? 'filter-active' : '' ?>">
-                    <i class="fas <?= $selected_branch_id !== 'all' ? 'fa-lock' : 'fa-globe' ?>"></i> 
+                    <i class="fas <?= $selected_branch_id !== 'all' ? 'fa-lock' : 'fa-globe' ?>"></i>
                     <?= htmlspecialchars($branch_name_display) ?>
                 </span>
                 <span class="branch-tag"><i class="fas fa-calendar"></i> <?= htmlspecialchars($date_label) ?></span>
@@ -1542,7 +1042,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <?php if ($selected_item_id > 0): ?>
-            <a href="?branch=<?= $selected_branch_id ?>&tab=<?= $active_tab ?>&quick=<?= $quick_filter ?>&item_id=<?= $selected_item_id ?>&export=csv" class="btn-header export">
+            <a href="?branch=<?= $selected_branch_id ?>&tab=<?= $active_tab ?>&quick=<?= $quick_filter ?>&item_id=<?= $selected_item_id ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>&export=csv" class="btn-header export">
                 <i class="fas fa-file-csv"></i> Export CSV
             </a>
             <?php endif; ?>
@@ -1553,40 +1053,37 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
         </div>
     </div>
 
-    <!-- TABS -->
     <div class="tabs-container">
-        <a href="?branch=<?= $selected_branch_id ?>&tab=medicine&quick=<?= $quick_filter ?>" class="tab-btn <?= $active_tab === 'medicine' ? 'active' : '' ?>">
+        <a href="?branch=<?= $selected_branch_id ?>&tab=medicine&quick=<?= $quick_filter ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="tab-btn <?= $active_tab === 'medicine' ? 'active' : '' ?>">
             <i class="fas fa-pills"></i> MEDICINE TRACKING
         </a>
-        <a href="?branch=<?= $selected_branch_id ?>&tab=equipment&quick=<?= $quick_filter ?>" class="tab-btn <?= $active_tab === 'equipment' ? 'active' : '' ?>">
+        <a href="?branch=<?= $selected_branch_id ?>&tab=equipment&quick=<?= $quick_filter ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="tab-btn <?= $active_tab === 'equipment' ? 'active' : '' ?>">
             <i class="fas fa-tools"></i> EQUIPMENT TRACKING
         </a>
     </div>
 
-    <!-- FILTER CARD -->
     <div class="filter-card">
-        <!-- BRANCH FILTER -->
         <div class="filter-section-title"><i class="fas fa-store-alt"></i> Branch Filter</div>
         <div class="quick-filters" style="margin-bottom: 16px;">
-            <a href="?branch=all&tab=<?= $active_tab ?>&quick=<?= $quick_filter ?><?= $selected_item_id ? '&item_id=' . $selected_item_id : '' ?>" 
+            <a href="?branch=all&tab=<?= $active_tab ?>&quick=<?= $quick_filter ?><?= $selected_item_id ? '&item_id=' . $selected_item_id : '' ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>"
                class="quick-btn <?= $selected_branch_id === 'all' ? 'active' : '' ?>">
                 <i class="fas fa-globe"></i> All Branches
             </a>
             <?php foreach ($branches as $br): ?>
-                <a href="?branch=<?= $br['id'] ?>&tab=<?= $active_tab ?>&quick=<?= $quick_filter ?><?= $selected_item_id ? '&item_id=' . $selected_item_id : '' ?>" 
+                <a href="?branch=<?= $br['id'] ?>&tab=<?= $active_tab ?>&quick=<?= $quick_filter ?><?= $selected_item_id ? '&item_id=' . $selected_item_id : '' ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>"
                    class="quick-btn <?= (string)$selected_branch_id === (string)$br['id'] ? 'branch-active' : '' ?>">
                     <i class="fas fa-store"></i> <?= htmlspecialchars($br['name']) ?>
                 </a>
             <?php endforeach; ?>
         </div>
-        
-        <div class="filter-section-title"><i class="fas fa-bolt"></i> Quick Filters</div>
+
+        <div class="filter-section-title"><i class="fas fa-bolt"></i> Date Filters</div>
         <div class="quick-filters">
             <a href="?branch=<?= $selected_branch_id ?>&tab=<?= $active_tab ?>&quick=today<?= $selected_item_id ? '&item_id=' . $selected_item_id : '' ?>" class="quick-btn <?= $quick_filter === 'today' ? 'active' : '' ?>"><i class="fas fa-calendar-day"></i> Today</a>
+            <a href="?branch=<?= $selected_branch_id ?>&tab=<?= $active_tab ?>&quick=yesterday<?= $selected_item_id ? '&item_id=' . $selected_item_id : '' ?>" class="quick-btn <?= $quick_filter === 'yesterday' ? 'active' : '' ?>"><i class="fas fa-calendar-minus"></i> Yesterday</a>
             <a href="?branch=<?= $selected_branch_id ?>&tab=<?= $active_tab ?>&quick=1w<?= $selected_item_id ? '&item_id=' . $selected_item_id : '' ?>" class="quick-btn <?= $quick_filter === '1w' ? 'active' : '' ?>"><i class="fas fa-calendar-week"></i> 1W</a>
             <a href="?branch=<?= $selected_branch_id ?>&tab=<?= $active_tab ?>&quick=1m<?= $selected_item_id ? '&item_id=' . $selected_item_id : '' ?>" class="quick-btn <?= $quick_filter === '1m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 1M</a>
             <a href="?branch=<?= $selected_branch_id ?>&tab=<?= $active_tab ?>&quick=3m<?= $selected_item_id ? '&item_id=' . $selected_item_id : '' ?>" class="quick-btn <?= $quick_filter === '3m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 3M</a>
-            <a href="?branch=<?= $selected_branch_id ?>&tab=<?= $active_tab ?>&quick=6m<?= $selected_item_id ? '&item_id=' . $selected_item_id : '' ?>" class="quick-btn <?= $quick_filter === '6m' ? 'active' : '' ?>"><i class="fas fa-calendar-alt"></i> 6M</a>
             <a href="?branch=<?= $selected_branch_id ?>&tab=<?= $active_tab ?>&quick=1y<?= $selected_item_id ? '&item_id=' . $selected_item_id : '' ?>" class="quick-btn <?= $quick_filter === '1y' ? 'active' : '' ?>"><i class="fas fa-calendar"></i> 1Y</a>
             <a href="?branch=<?= $selected_branch_id ?>&tab=<?= $active_tab ?>&quick=all<?= $selected_item_id ? '&item_id=' . $selected_item_id : '' ?>" class="quick-btn <?= $quick_filter === 'all' ? 'active' : '' ?>"><i class="fas fa-infinity"></i> All</a>
             <a href="#" onclick="toggleCustomDate(); return false;" class="quick-btn <?= $quick_filter === 'custom' ? 'active' : '' ?>"><i class="fas fa-calendar-check"></i> Custom</a>
@@ -1610,7 +1107,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             </form>
         </div>
 
-        <!-- SEARCH BOX -->
         <div class="filter-section-title" style="margin-top: 10px;">
             <i class="fas fa-search"></i> Search <?= $active_tab === 'medicine' ? 'Medicine' : 'Equipment' ?>
         </div>
@@ -1619,21 +1115,23 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                 <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
                 <input type="hidden" name="tab" value="<?= htmlspecialchars($active_tab) ?>">
                 <input type="hidden" name="quick" value="<?= htmlspecialchars($quick_filter) ?>">
+                <input type="hidden" name="date_from" value="<?= htmlspecialchars($date_from) ?>">
+                <input type="hidden" name="date_to" value="<?= htmlspecialchars($date_to) ?>">
                 <input type="hidden" name="item_id" id="itemIdInput" value="<?= $selected_item_id ?>">
                 <div class="search-input-group">
                     <i class="fas fa-search search-icon"></i>
-                    <input type="text" id="searchInput" name="search" 
-                           value="<?= htmlspecialchars($search) ?>" 
-                           placeholder="<?= $active_tab === 'medicine' ? 'Search medicine... (e.g. ALBENDAZOLE, Paracetamol)' : 'Search equipment... (e.g. ECG Machine, Blood Pressure Monitor)' ?>"
+                    <input type="text" id="searchInput" name="search"
+                           value="<?= htmlspecialchars($search) ?>"
+                           placeholder="<?= $active_tab === 'medicine' ? 'Search medicine...' : 'Search equipment...' ?>"
                            autocomplete="off">
                     <button type="submit" class="search-btn"><i class="fas fa-arrow-right"></i> Search</button>
                 </div>
                 <div class="autocomplete-box" id="autocompleteBox"></div>
             </form>
         </div>
-        
+
         <?php if ($selected_item_id > 0): ?>
-            <div style="margin-top: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <div style="margin-top: 12px;">
                 <a href="?branch=<?= $selected_branch_id ?>&tab=<?= $active_tab ?>&quick=<?= $quick_filter ?>" class="quick-btn" style="background: var(--danger-bg); color: var(--danger); border-color: var(--danger);">
                     <i class="fas fa-times"></i> Clear Selection
                 </a>
@@ -1641,1041 +1139,341 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
         <?php endif; ?>
     </div>
 
-    <!-- TOP 5 -->
-    <?php if ($active_tab === 'medicine' && count($top5_medicines) > 0 && $selected_item_id === 0): ?>
-    <div class="top5-section">
+    <!-- TOP 5 MEDICINES -->
+    <?php if ($active_tab === 'medicine' && $selected_item_id === 0): ?>
+    <div class="top5-card medicine">
         <div class="top5-header">
-            <i class="fas fa-fire"></i> Top 5 Most Used Medicines
-            <span class="top5-badge">
-                <?= htmlspecialchars($date_label) ?>
-                <?php if ($selected_branch_id !== 'all'): ?>
-                    • <?= htmlspecialchars($branch_name_display) ?>
-                <?php endif; ?>
-            </span>
+            <div class="top5-title"><i class="fas fa-fire"></i> Top 5 Most Used Medicines</div>
+            <span class="top5-period-badge"><i class="fas fa-calendar"></i> <?= htmlspecialchars($top5_label) ?></span>
         </div>
+        <?php if (count($top5_medicines) > 0): ?>
         <div class="top5-grid">
             <?php foreach ($top5_medicines as $idx => $tm): ?>
-                <a href="?branch=<?= $selected_branch_id ?>&tab=medicine&quick=<?= $quick_filter ?>&item_id=<?= (int)$tm['item_id'] ?>" class="top5-card">
+                <a href="?branch=<?= $selected_branch_id ?>&tab=medicine&quick=<?= $quick_filter ?>&item_id=<?= (int)$tm['item_id'] ?>" class="top5-item medicine">
                     <div class="top5-rank">#<?= $idx + 1 ?></div>
                     <div class="top5-icon"><i class="fas fa-pills"></i></div>
                     <div class="top5-info">
                         <div class="top5-name"><?= htmlspecialchars($tm['name']) ?></div>
-                        <div class="top5-meta"><i class="fas fa-chart-line"></i> <?= number_format($tm['total_qty']) ?> units used</div>
+                        <div class="top5-meta"><i class="fas fa-chart-line"></i> <strong><?= number_format($tm['total_qty']) ?></strong> units</div>
                     </div>
                 </a>
             <?php endforeach; ?>
         </div>
+        <?php else: ?>
+        <div class="top5-empty"><i class="fas fa-inbox"></i><p>No medicine movements in this period</p></div>
+        <?php endif; ?>
     </div>
     <?php endif; ?>
 
-    <?php if ($active_tab === 'equipment' && count($top5_equipment) > 0 && $selected_item_id === 0): ?>
-    <div class="top5-section equipment">
+    <!-- TOP 5 EQUIPMENT -->
+    <?php if ($active_tab === 'equipment' && $selected_item_id === 0): ?>
+    <div class="top5-card equipment">
         <div class="top5-header">
-            <i class="fas fa-fire"></i> Top 5 Most Used Equipment
-            <span class="top5-badge">
-                <?= htmlspecialchars($date_label) ?>
-                <?php if ($selected_branch_id !== 'all'): ?>
-                    • <?= htmlspecialchars($branch_name_display) ?>
-                <?php endif; ?>
-            </span>
+            <div class="top5-title"><i class="fas fa-fire"></i> Top 5 Most Used Equipment</div>
+            <span class="top5-period-badge"><i class="fas fa-calendar"></i> <?= htmlspecialchars($top5_label) ?></span>
         </div>
+        <?php if (count($top5_equipment) > 0): ?>
         <div class="top5-grid">
             <?php foreach ($top5_equipment as $idx => $te): ?>
-                <a href="?branch=<?= $selected_branch_id ?>&tab=equipment&quick=<?= $quick_filter ?>&item_id=<?= (int)$te['item_id'] ?>" class="top5-card equipment">
+                <a href="?branch=<?= $selected_branch_id ?>&tab=equipment&quick=<?= $quick_filter ?>&item_id=<?= (int)$te['item_id'] ?>" class="top5-item equipment">
                     <div class="top5-rank">#<?= $idx + 1 ?></div>
                     <div class="top5-icon"><i class="fas fa-tools"></i></div>
                     <div class="top5-info">
                         <div class="top5-name"><?= htmlspecialchars($te['name']) ?></div>
-                        <div class="top5-meta"><i class="fas fa-chart-line"></i> <?= number_format($te['total_qty']) ?> uses</div>
+                        <div class="top5-meta"><i class="fas fa-chart-line"></i> <strong><?= number_format($te['total_qty']) ?></strong> units</div>
                     </div>
                 </a>
             <?php endforeach; ?>
         </div>
+        <?php else: ?>
+        <div class="top5-empty"><i class="fas fa-inbox"></i><p>No equipment movements in this period</p></div>
+        <?php endif; ?>
     </div>
     <?php endif; ?>
 
     <!-- MEDICINE TAB -->
     <?php if ($active_tab === 'medicine'): ?>
-        
         <?php if ($medicine_details): ?>
-            <?php 
-            $med = $medicine_details['info'];
-            $sm = $medicine_details['summary'];
-            $rs = $medicine_details['remaining_stock'];
-            $lsi = $medicine_details['last_stock_info'];
-            $pi = $medicine_details['period_info'];
-            $dus = $medicine_details['days_until_stockout'];
-            ?>
-            
-            <div class="details-container">
-                
-                <div class="info-banner">
-                    <div class="ib-icon"><i class="fas fa-pills"></i></div>
-                    <div class="ib-content">
-                        <div class="ib-title"><?= htmlspecialchars($medicine_details['name']) ?></div>
-                        <div class="ib-meta">
-                            <span><i class="fas fa-tag"></i> <?= htmlspecialchars($med['category'] ?? 'N/A') ?></span>
-                            <span><i class="fas fa-flask"></i> Unit: <?= htmlspecialchars($med['unit'] ?? 'N/A') ?></span>
-                            <span><i class="fas fa-money-bill"></i> Selling: <?= $currency ?> <?= number_format($med['selling_price'] ?? 0, 0) ?></span>
-                            <?php if ($selected_branch_id !== 'all'): ?>
-                                <span style="color:var(--warning);font-weight:800;"><i class="fas fa-lock"></i> <?= htmlspecialchars($branch_name_display) ?></span>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                </div>
+            <?php $med = $medicine_details['info']; $sm = $medicine_details['summary']; $pi = $medicine_details['period_info']; $movs = $medicine_details['movements']; $additions = $medicine_details['additions']; ?>
 
-                <!-- PERIOD OVERVIEW -->
-                <div class="period-overview-card">
-                    <div class="po-header">
-                        <div class="po-title"><i class="fas fa-calendar-check"></i> Period Overview</div>
-                        <div class="po-badge">
-                            <i class="fas fa-filter"></i> <?= htmlspecialchars($pi['filter_label']) ?>
-                            <?php if ($selected_branch_id !== 'all'): ?>
-                                • <?= htmlspecialchars($branch_name_display) ?>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                    
-                    <div class="po-grid">
-                        <div class="po-item po-start">
-                            <div class="po-icon"><i class="fas fa-warehouse"></i></div>
-                            <div class="po-content">
-                                <div class="po-label">Stock at Start</div>
-                                <div class="po-value"><?= number_format($pi['stock_at_period_start']) ?> <span>units</span></div>
-                                <div class="po-sub">When period began</div>
-                            </div>
-                        </div>
-                        <div class="po-item po-added">
-                            <div class="po-icon"><i class="fas fa-cart-plus"></i></div>
-                            <div class="po-content">
-                                <div class="po-label">Added in Period</div>
-                                <div class="po-value">+<?= number_format($pi['purchases_total_qty']) ?> <span>units</span></div>
-                                <div class="po-sub">
-                                    <?= $pi['purchases_count'] ?> purchase<?= $pi['purchases_count'] != 1 ? 's' : '' ?>
-                                    <?php if (count($pi['purchases_unique_users']) > 0): ?>
-                                        • <?= count($pi['purchases_unique_users']) ?> user<?= count($pi['purchases_unique_users']) != 1 ? 's' : '' ?>
-                                    <?php endif; ?>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="po-item po-movements">
-                            <div class="po-icon"><i class="fas fa-arrow-right-arrow-left"></i></div>
-                            <div class="po-content">
-                                <div class="po-label">Movements</div>
-                                <div class="po-value">-<?= number_format($pi['movements_total']) ?> <span>units</span></div>
-                                <div class="po-sub">Rx: <?= number_format($pi['movements_prescriptions']) ?> • OTC: <?= number_format($pi['movements_otc']) ?></div>
-                            </div>
-                        </div>
-                        <div class="po-item po-current">
-                            <div class="po-icon"><i class="fas fa-boxes-packing"></i></div>
-                            <div class="po-content">
-                                <div class="po-label">Current Stock</div>
-                                <div class="po-value"><?= number_format($medicine_details['total_current_stock']) ?> <span>units</span></div>
-                                <div class="po-sub">Now in inventory</div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <?php if (count($pi['purchases_unique_users']) > 0): ?>
-                    <div class="po-users">
-                        <div class="po-users-label"><i class="fas fa-users"></i> Users who added stock:</div>
-                        <div class="po-users-list">
-                            <?php foreach ($pi['purchases_unique_users'] as $user): ?>
-                                <span class="po-user-tag"><i class="fas fa-user-circle"></i> <?= htmlspecialchars($user) ?></span>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                    <?php endif; ?>
-                </div>
-
-                <!-- LAST ADDED STOCK -->
-                <?php if ($lsi['has_last_purchase']): ?>
-                <div class="last-stock-card <?= $lsi['is_accurate'] ? 'accurate' : 'warning' ?>">
-                    <div class="ls-header">
-                        <div class="ls-title"><i class="fas fa-box-open"></i> Last Added Stock</div>
-                        <div class="ls-status <?= $lsi['is_accurate'] ? 'accurate' : 'warning' ?>">
-                            <?php if ($lsi['is_accurate']): ?>
-                                <i class="fas fa-check-circle"></i> STOCK ACCURATE
-                            <?php else: ?>
-                                <i class="fas fa-exclamation-triangle"></i> VARIANCE: <?= $lsi['variance'] > 0 ? '+' : '' ?><?= number_format($lsi['variance']) ?>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                    
-                    <div class="ls-timeline">
-                        <div class="ls-tl-item purchase">
-                            <div class="ls-tl-icon"><i class="fas fa-truck-loading"></i></div>
-                            <div class="ls-tl-content">
-                                <div class="ls-tl-label">Last Added</div>
-                                <div class="ls-tl-value">+<?= number_format($lsi['last_added_qty']) ?></div>
-                                <div class="ls-tl-meta"><i class="fas fa-user"></i> <?= htmlspecialchars($lsi['last_added_by']) ?></div>
-                                <div class="ls-tl-meta"><i class="fas fa-calendar"></i> <?= date('d M Y', strtotime($lsi['last_added_date'])) ?></div>
-                                <div class="ls-tl-meta" style="font-family:var(--font-mono);font-size:0.6rem;"><?= htmlspecialchars($lsi['last_added_invoice']) ?></div>
-                            </div>
-                        </div>
-                        <div class="ls-tl-arrow"><i class="fas fa-plus"></i></div>
-                        <div class="ls-tl-item previous">
-                            <div class="ls-tl-icon"><i class="fas fa-history"></i></div>
-                            <div class="ls-tl-content">
-                                <div class="ls-tl-label">Previous Stock</div>
-                                <div class="ls-tl-value"><?= number_format($lsi['previous_stock']) ?></div>
-                                <div class="ls-tl-meta">Available before</div>
-                                <div class="ls-tl-meta" style="font-size:0.6rem;color:var(--text-muted);">(<?= number_format($lsi['total_purchased_before_last']) ?> - <?= number_format($lsi['movements_before_last']) ?>)</div>
-                            </div>
-                        </div>
-                        <div class="ls-tl-arrow equal"><i class="fas fa-equals"></i></div>
-                        <div class="ls-tl-item total">
-                            <div class="ls-tl-icon"><i class="fas fa-calculator"></i></div>
-                            <div class="ls-tl-content">
-                                <div class="ls-tl-label">Available Now</div>
-                                <div class="ls-tl-value"><?= number_format($lsi['available_after_last_add']) ?></div>
-                                <div class="ls-tl-meta">Prev + Last Added</div>
-                            </div>
-                        </div>
-                        <div class="ls-tl-arrow minus"><i class="fas fa-minus"></i></div>
-                        <div class="ls-tl-item used">
-                            <div class="ls-tl-icon"><i class="fas fa-arrow-right-from-bracket"></i></div>
-                            <div class="ls-tl-content">
-                                <div class="ls-tl-label">Movements</div>
-                                <div class="ls-tl-value">-<?= number_format($lsi['movements_after_last']) ?></div>
-                                <div class="ls-tl-meta">Since last purchase</div>
-                            </div>
-                        </div>
-                        <div class="ls-tl-arrow equal"><i class="fas fa-equals"></i></div>
-                        <div class="ls-tl-item expected">
-                            <div class="ls-tl-icon"><i class="fas fa-calculator"></i></div>
-                            <div class="ls-tl-content">
-                                <div class="ls-tl-label">Expected</div>
-                                <div class="ls-tl-value"><?= number_format($lsi['expected_remaining']) ?></div>
-                                <div class="ls-tl-meta">After movements</div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="ls-verification <?= $lsi['is_accurate'] ? 'accurate' : 'warning' ?>">
-                        <div class="ls-v-item">
-                            <div class="ls-v-label"><i class="fas fa-calculator"></i> Expected</div>
-                            <div class="ls-v-value"><?= number_format($lsi['expected_remaining']) ?></div>
-                        </div>
-                        <div class="ls-v-vs"><?= $lsi['is_accurate'] ? '<i class="fas fa-equals"></i>' : '<i class="fas fa-not-equal"></i>' ?></div>
-                        <div class="ls-v-item">
-                            <div class="ls-v-label"><i class="fas fa-warehouse"></i> Actual</div>
-                            <div class="ls-v-value"><?= number_format($lsi['actual_remaining']) ?></div>
-                        </div>
-                        <div class="ls-v-vs"><i class="fas fa-equals"></i></div>
-                        <div class="ls-v-item <?= $lsi['is_accurate'] ? 'success' : 'danger' ?>">
-                            <div class="ls-v-label"><?= $lsi['is_accurate'] ? '<i class="fas fa-check-circle"></i> Match' : '<i class="fas fa-exclamation-triangle"></i> Variance' ?></div>
-                            <div class="ls-v-value" style="color: <?= $lsi['variance'] >= 0 ? 'var(--success)' : 'var(--danger)' ?>;">
-                                <?= $lsi['variance'] > 0 ? '+' : '' ?><?= number_format($lsi['variance']) ?>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <?php if (!$lsi['is_accurate']): ?>
-                    <div class="ls-note">
-                        <i class="fas fa-info-circle"></i>
-                        <strong>Kumbuka:</strong> Tofauti ya <strong><?= number_format(abs($lsi['variance'])) ?> units</strong> inaweza kuwa:
-                        <ul style="margin: 8px 0 0 20px; font-size: 0.72rem;">
-                            <li>Stock iliyoexpire au disposed</li>
-                            <li>Stock returns kwa supplier</li>
-                            <li>Data entry errors</li>
-                            <li>Stock transfers between branches</li>
-                        </ul>
-                    </div>
-                    <?php endif; ?>
-                </div>
-                <?php else: ?>
-                <div class="last-stock-card no-purchase">
-                    <div class="ls-header">
-                        <div class="ls-title"><i class="fas fa-box-open"></i> Last Added Stock</div>
-                        <div class="ls-status warning"><i class="fas fa-info-circle"></i> NO PURCHASE RECORD</div>
-                    </div>
-                    <div style="padding: 20px; text-align: center; color: var(--text-secondary);">
-                        <i class="fas fa-truck" style="font-size: 2rem; opacity: 0.3; margin-bottom: 10px; display: block;"></i>
-                        <p style="font-weight: 700;">Hakuna purchase records kwa kipindi hiki</p>
+            <div class="info-banner">
+                <div class="ib-icon"><i class="fas fa-pills"></i></div>
+                <div class="ib-content">
+                    <div class="ib-title"><?= htmlspecialchars($medicine_details['name']) ?></div>
+                    <div class="ib-meta">
+                        <span><i class="fas fa-tag"></i> <?= htmlspecialchars($med['category'] ?? 'N/A') ?></span>
+                        <span><i class="fas fa-flask"></i> Unit: <?= htmlspecialchars($med['unit'] ?? 'N/A') ?></span>
+                        <span><i class="fas fa-money-bill"></i> Selling: <?= $currency ?> <?= number_format($med['selling_price'] ?? 0, 0) ?></span>
+                        <span style="color:var(--success);font-weight:800;"><i class="fas fa-warehouse"></i> Current Stock: <?= number_format($medicine_details['total_current_stock']) ?></span>
+                        <span style="color:var(--primary);font-weight:800;"><i class="fas fa-store"></i> <?= htmlspecialchars($branch_name_display) ?></span>
                     </div>
                 </div>
-                <?php endif; ?>
-
-                <!-- REMAINING STOCK -->
-                <div class="remaining-stock-card <?= $rs['status_color'] ?>">
-                    <div class="rs-header">
-                        <div class="rs-title"><i class="fas fa-boxes-packing"></i> Remaining Stock</div>
-                        <div class="rs-status-badge <?= $rs['status_color'] ?>">
-                            <i class="fas <?= $rs['status_icon'] ?>"></i> <?= $rs['status_label'] ?>
-                        </div>
-                    </div>
-                    <div class="rs-grid">
-                        <div class="rs-item stock-balance">
-                            <div class="rs-item-icon"><i class="fas fa-warehouse"></i></div>
-                            <div class="rs-item-content">
-                                <div class="rs-item-label">Stock Balance</div>
-                                <div class="rs-item-value"><?= number_format($rs['current_stock']) ?> <span class="rs-unit">units</span></div>
-                                <div class="rs-item-sub">Available now</div>
-                            </div>
-                        </div>
-                        <div class="rs-item stock-usage">
-                            <div class="rs-item-icon"><i class="fas fa-arrow-right-from-bracket"></i></div>
-                            <div class="rs-item-content">
-                                <div class="rs-item-label">Total Used</div>
-                                <div class="rs-item-value"><?= number_format($rs['total_used']) ?> <span class="rs-unit">units</span></div>
-                                <div class="rs-item-sub">Rx + OTC in period</div>
-                            </div>
-                        </div>
-                        <div class="rs-item stock-value">
-                            <div class="rs-item-icon"><i class="fas fa-money-bill-trend-up"></i></div>
-                            <div class="rs-item-content">
-                                <div class="rs-item-label">Stock Value</div>
-                                <div class="rs-item-value"><?= $currency ?> <?= number_format($rs['stock_value'], 0) ?></div>
-                                <div class="rs-item-sub">@ <?= $currency ?> <?= number_format($rs['average_selling_price'], 0) ?> avg</div>
-                            </div>
-                        </div>
-                        <div class="rs-item stock-reorder">
-                            <div class="rs-item-icon"><i class="fas fa-triangle-exclamation"></i></div>
-                            <div class="rs-item-content">
-                                <div class="rs-item-label">Reorder Level</div>
-                                <div class="rs-item-value"><?= number_format($rs['reorder_level']) ?> <span class="rs-unit">units</span></div>
-                                <div class="rs-item-sub"><?= $rs['current_stock'] > $rs['reorder_level'] ? '✅ Above' : '⚠️ Below' ?></div>
-                            </div>
-                        </div>
-                        <div class="rs-item stock-stockout">
-                            <div class="rs-item-icon"><i class="fas fa-hourglass-end"></i></div>
-                            <div class="rs-item-content">
-                                <div class="rs-item-label">Days to Stockout</div>
-                                <div class="rs-item-value"><?= $dus >= 999 ? '∞' : $dus ?> <span class="rs-unit">days</span></div>
-                                <div class="rs-item-sub">
-                                    <?php if ($dus <= 7 && $dus < 999): ?>
-                                        🔴 Urgent!
-                                    <?php elseif ($dus <= 14 && $dus < 999): ?>
-                                        🟡 Soon
-                                    <?php else: ?>
-                                        ✅ Sufficient
-                                    <?php endif; ?>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="rs-health-bar">
-                        <div class="rs-health-label">
-                            <span><i class="fas fa-heartbeat"></i> Stock Health</span>
-                            <span class="rs-health-percent"><?= $rs['current_stock'] > 0 ? 'OK' : 'EMPTY' ?></span>
-                        </div>
-                        <div class="rs-bar-track">
-                            <?php 
-                            $bar_width = 0;
-                            if ($rs['reorder_level'] > 0) {
-                                $bar_width = min(100, ($rs['current_stock'] / ($rs['reorder_level'] * 3)) * 100);
-                            }
-                            ?>
-                            <div class="rs-bar-fill <?= $rs['status_color'] ?>" style="width: <?= $bar_width ?>%;"></div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- SUMMARY STATS -->
-                <div class="summary-grid">
-                    <div class="summary-card purchase">
-                        <div class="sc-icon"><i class="fas fa-cart-plus"></i></div>
-                        <div class="sc-label">Purchased (Period)</div>
-                        <div class="sc-value"><?= number_format($sm['purchase_qty']) ?></div>
-                        <div class="sc-sub"><?= $sm['purchase_count'] ?> records</div>
-                    </div>
-                    <div class="summary-card pending">
-                        <div class="sc-icon"><i class="fas fa-clock"></i></div>
-                        <div class="sc-label">Pending Rx</div>
-                        <div class="sc-value"><?= number_format($sm['pending_qty']) ?></div>
-                        <div class="sc-sub"><?= $sm['pending_count'] ?> prescriptions</div>
-                    </div>
-                    <div class="summary-card confirmed">
-                        <div class="sc-icon"><i class="fas fa-check"></i></div>
-                        <div class="sc-label">Confirmed Rx</div>
-                        <div class="sc-value"><?= number_format($sm['confirmed_qty']) ?></div>
-                        <div class="sc-sub"><?= $sm['confirmed_count'] ?> prescriptions</div>
-                    </div>
-                    <div class="summary-card dispensed">
-                        <div class="sc-icon"><i class="fas fa-hand-holding-medical"></i></div>
-                        <div class="sc-label">Dispensed Rx</div>
-                        <div class="sc-value"><?= number_format($sm['dispensed_qty']) ?></div>
-                        <div class="sc-sub"><?= $sm['dispensed_count'] ?> prescriptions</div>
-                    </div>
-                    <div class="summary-card otc">
-                        <div class="sc-icon"><i class="fas fa-cash-register"></i></div>
-                        <div class="sc-label">OTC Sold</div>
-                        <div class="sc-value"><?= number_format($sm['otc_qty']) ?></div>
-                        <div class="sc-sub"><?= $sm['otc_count'] ?> OTC sales</div>
-                    </div>
-                    <div class="summary-card movement">
-                        <div class="sc-icon"><i class="fas fa-arrow-right-arrow-left"></i></div>
-                        <div class="sc-label">Total Movement</div>
-                        <div class="sc-value"><?= number_format($sm['total_movement']) ?></div>
-                        <div class="sc-sub"><?= $sm['unique_visits'] ?> visits • <?= $sm['unique_patients'] ?> patients</div>
-                    </div>
-                </div>
-
-                <!-- PURCHASE HISTORY -->
-                <div class="table-card">
-                    <div class="table-header">
-                        <span class="title">
-                            <i class="fas fa-cart-plus"></i> Purchase History (Stock In)
-                            <?php if ($selected_branch_id !== 'all'): ?>
-                                <span style="font-size:0.65rem;background:rgba(255,255,255,0.2);padding:2px 8px;border-radius:6px;">
-                                    <i class="fas fa-lock"></i> <?= htmlspecialchars($branch_name_display) ?>
-                                </span>
-                            <?php endif; ?>
-                        </span>
-                        <span class="count"><?= count($medicine_details['purchase_history']) ?> records • <?= number_format($sm['purchase_qty']) ?> units</span>
-                    </div>
-                    <?php if (count($medicine_details['purchase_history']) > 0): ?>
-                    <div class="table-scroll-wrapper">
-                        <table class="data-table">
-                            <thead>
-                                <tr><th>#</th><th>Invoice #</th><th>Qty Added</th><th style="text-align:right;">Buying</th><th style="text-align:right;">Selling</th><th style="text-align:right;">Total Cost</th><th>Added By</th><th>Branch</th><th>Date</th></tr>
-                            </thead>
-                            <tbody>
-                                <?php $i=1; foreach ($medicine_details['purchase_history'] as $ph): ?>
-                                <tr>
-                                    <td><?= $i++ ?></td>
-                                    <td><span class="font-mono" style="font-weight:800;color:var(--primary);"><?= htmlspecialchars($ph['invoice_number']) ?></span></td>
-                                    <td><span style="background:var(--success-bg);color:var(--success);padding:3px 10px;border-radius:6px;font-weight:800;font-family:var(--font-mono);">+<?= number_format($ph['quantity']) ?></span></td>
-                                    <td class="money-cell"><?= $currency ?> <?= number_format($ph['buying_price'] ?? 0, 0) ?></td>
-                                    <td class="money-cell"><?= $currency ?> <?= number_format($ph['selling_price'] ?? 0, 0) ?></td>
-                                    <td class="money-cell"><?= $currency ?> <?= number_format($ph['total_buying_cost'] ?? 0, 0) ?></td>
-                                    <td><?= htmlspecialchars($ph['added_by_name'] ?? 'N/A') ?></td>
-                                    <td><?= htmlspecialchars($ph['branch_name'] ?? 'N/A') ?></td>
-                                    <td><?= date('d M Y, H:i', strtotime($ph['added_at'])) ?></td>
-                                </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                    <?php else: ?>
-                    <div class="empty-state"><i class="fas fa-cart-plus"></i><p>No purchase records for this period <?= $selected_branch_id !== 'all' ? 'in ' . htmlspecialchars($branch_name_display) : '' ?></p></div>
-                    <?php endif; ?>
-                </div>
-
-                <!-- CURRENT STOCK WITH EXPIRY ALERTS -->
-                <div class="table-card">
-                    <div class="table-header cyan">
-                        <span class="title">
-                            <i class="fas fa-warehouse"></i> Current Stock (Batches with Expiry)
-                        </span>
-                        <span class="count"><?= number_format($medicine_details['total_current_stock']) ?> units in <?= count($medicine_details['current_stock']) ?> batches</span>
-                    </div>
-                    <?php if (count($medicine_details['current_stock']) > 0): ?>
-                    <div class="table-scroll-wrapper">
-                        <table class="data-table">
-                            <thead class="cyan">
-                                <tr><th>#</th><th>Batch #</th><th>Qty</th><th>Reorder</th><th style="text-align:right;">Selling</th><th>Expiry</th><th>Supplier</th><th>Added</th></tr>
-                            </thead>
-                            <tbody>
-                                <?php 
-                                $today = time();
-                                $i=1; 
-                                foreach ($medicine_details['current_stock'] as $cs): 
-                                    $is_low = (int)$cs['quantity'] <= (int)$cs['reorder_level'];
-                                    $expiry_badge = '';
-                                    if (!empty($cs['expiry_date']) && $cs['expiry_date'] !== '0000-00-00') {
-                                        $days_to_expiry = (strtotime($cs['expiry_date']) - $today) / 86400;
-                                        if ($days_to_expiry < 0) {
-                                            $expiry_badge = '<span class="status-badge expired" style="font-size:0.55rem;margin-top:3px;"><i class="fas fa-times-circle"></i> EXPIRED</span>';
-                                        } elseif ($days_to_expiry <= 30) {
-                                            $expiry_badge = '<span class="status-badge expired" style="font-size:0.55rem;margin-top:3px;"><i class="fas fa-exclamation-triangle"></i> ' . round($days_to_expiry) . 'd</span>';
-                                        } elseif ($days_to_expiry <= 90) {
-                                            $expiry_badge = '<span class="status-badge expiring" style="font-size:0.55rem;margin-top:3px;"><i class="fas fa-clock"></i> ' . round($days_to_expiry) . 'd</span>';
-                                        } else {
-                                            $expiry_badge = '<span class="status-badge ok" style="font-size:0.55rem;margin-top:3px;"><i class="fas fa-check"></i> ' . round($days_to_expiry) . 'd</span>';
-                                        }
-                                    }
-                                ?>
-                                <tr>
-                                    <td><?= $i++ ?></td>
-                                    <td><span class="font-mono" style="font-weight:700;font-size:0.72rem;"><?= htmlspecialchars($cs['batch_number'] ?? 'N/A') ?></span></td>
-                                    <td><span style="background:<?= $is_low ? 'var(--danger-bg)' : 'var(--success-bg)' ?>;color:<?= $is_low ? 'var(--danger)' : 'var(--success)' ?>;padding:3px 10px;border-radius:6px;font-weight:800;font-family:var(--font-mono);"><?= number_format($cs['quantity']) ?></span></td>
-                                    <td style="font-family:var(--font-mono);font-weight:700;"><?= number_format($cs['reorder_level']) ?></td>
-                                    <td class="money-cell"><?= $currency ?> <?= number_format($cs['selling_price'] ?? 0, 0) ?></td>
-                                    <td>
-                                        <div style="font-weight:700;font-size:0.72rem;"><?= !empty($cs['expiry_date']) && $cs['expiry_date'] !== '0000-00-00' ? date('d M Y', strtotime($cs['expiry_date'])) : 'N/A' ?></div>
-                                        <?= $expiry_badge ?>
-                                    </td>
-                                    <td><?= htmlspecialchars($cs['supplier'] ?? 'N/A') ?></td>
-                                    <td><?= date('d M Y', strtotime($cs['created_at'])) ?></td>
-                                </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                    <?php else: ?>
-                    <div class="empty-state"><i class="fas fa-warehouse"></i><p>No stock available</p></div>
-                    <?php endif; ?>
-                </div>
-
-                <!-- PRESCRIPTIONS -->
-                <div class="table-card">
-                    <div class="table-header purple">
-                        <span class="title"><i class="fas fa-prescription"></i> Prescriptions</span>
-                        <span class="count"><?= count($medicine_details['prescriptions']) ?> prescriptions • <?= number_format($sm['pending_qty'] + $sm['confirmed_qty'] + $sm['dispensed_qty']) ?> units</span>
-                    </div>
-                    <?php if (count($medicine_details['prescriptions']) > 0): ?>
-                    <div class="table-scroll-wrapper">
-                        <table class="data-table">
-                            <thead class="purple">
-                                <tr><th>#</th><th>Visit #</th><th>Patient</th><th>Doctor</th><th>Qty</th><th>Diagnosis</th><th>Branch</th><th>Status</th><th>Date</th></tr>
-                            </thead>
-                            <tbody>
-                                <?php $i=1; foreach ($medicine_details['prescriptions'] as $pr): 
-                                    $pr_status = strtolower($pr['prescription_status'] ?? 'pending');
-                                ?>
-                                <tr>
-                                    <td><?= $i++ ?></td>
-                                    <td><span class="font-mono" style="font-weight:700;color:var(--primary);"><?= htmlspecialchars($pr['visit_number'] ?? 'N/A') ?></span></td>
-                                    <td>
-                                        <div style="font-weight:700;"><?= htmlspecialchars($pr['patient_name'] ?? 'N/A') ?></div>
-                                        <div style="font-size:0.68rem;color:var(--text-secondary);"><?= htmlspecialchars($pr['patient_code'] ?? '') ?> • <?= htmlspecialchars($pr['patient_phone'] ?? '') ?></div>
-                                    </td>
-                                    <td><?= htmlspecialchars($pr['doctor_name'] ?? 'N/A') ?></td>
-                                    <td><span style="background:var(--purple-bg);color:var(--purple);padding:3px 10px;border-radius:6px;font-weight:800;font-family:var(--font-mono);"><?= number_format($pr['quantity']) ?></span></td>
-                                    <td style="font-size:0.72rem;"><?= htmlspecialchars($pr['diagnosis'] ?? 'N/A') ?></td>
-                                    <td><?= htmlspecialchars($pr['branch_name'] ?? 'N/A') ?></td>
-                                    <td>
-                                        <?php if ($pr_status === 'dispensed'): ?>
-                                            <span class="status-badge dispensed"><i class="fas fa-check-circle"></i> DISPENSED</span>
-                                        <?php elseif ($pr_status === 'confirmed'): ?>
-                                            <span class="status-badge confirmed"><i class="fas fa-check"></i> CONFIRMED</span>
-                                        <?php else: ?>
-                                            <span class="status-badge pending"><i class="fas fa-clock"></i> PENDING</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td><?= date('d M Y', strtotime($pr['prescribed_at'])) ?></td>
-                                </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                    <?php else: ?>
-                    <div class="empty-state"><i class="fas fa-prescription"></i><p>No prescriptions for this period</p></div>
-                    <?php endif; ?>
-                </div>
-
-                <!-- OTC SALES -->
-                <div class="table-card">
-                    <div class="table-header green">
-                        <span class="title"><i class="fas fa-cash-register"></i> OTC Sales</span>
-                        <span class="count"><?= count($medicine_details['otc_sales']) ?> sales • <?= number_format($sm['otc_qty']) ?> units</span>
-                    </div>
-                    <?php if (count($medicine_details['otc_sales']) > 0): ?>
-                    <div class="table-scroll-wrapper">
-                        <table class="data-table">
-                            <thead class="green">
-                                <tr><th>#</th><th>Sale #</th><th>Customer</th><th>Qty</th><th style="text-align:right;">Total</th><th>Sold By</th><th>Branch</th><th>Status</th><th>Date</th></tr>
-                            </thead>
-                            <tbody>
-                                <?php $i=1; foreach ($medicine_details['otc_sales'] as $os): 
-                                    $os_status = strtolower($os['payment_status'] ?? 'pending');
-                                ?>
-                                <tr>
-                                    <td><?= $i++ ?></td>
-                                    <td><span class="font-mono" style="font-weight:800;color:var(--cyan);"><?= htmlspecialchars($os['sale_number'] ?? 'N/A') ?></span></td>
-                                    <td>
-                                        <div style="font-weight:700;"><?= htmlspecialchars($os['customer_name'] ?? 'Walk-in Customer') ?></div>
-                                        <div style="font-size:0.68rem;color:var(--text-secondary);"><?= htmlspecialchars($os['customer_phone'] ?? '') ?></div>
-                                    </td>
-                                    <td><span style="background:var(--cyan-bg);color:var(--cyan);padding:3px 10px;border-radius:6px;font-weight:800;font-family:var(--font-mono);"><?= number_format($os['quantity']) ?></span></td>
-                                    <td class="money-cell"><?= $currency ?> <?= number_format($os['total_price'] ?? 0, 0) ?></td>
-                                    <td><?= htmlspecialchars($os['sold_by_name'] ?? 'N/A') ?></td>
-                                    <td><?= htmlspecialchars($os['branch_name'] ?? 'N/A') ?></td>
-                                    <td>
-                                        <?php if ($os_status === 'paid'): ?>
-                                            <span class="status-badge paid"><i class="fas fa-check-circle"></i> PAID</span>
-                                        <?php elseif ($os_status === 'partial'): ?>
-                                            <span class="status-badge partial"><i class="fas fa-hourglass-half"></i> PARTIAL</span>
-                                        <?php else: ?>
-                                            <span class="status-badge pending"><i class="fas fa-clock"></i> PENDING</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td><?= date('d M Y, H:i', strtotime($os['sold_at'])) ?></td>
-                                </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                    <?php else: ?>
-                    <div class="empty-state"><i class="fas fa-cash-register"></i><p>No OTC sales for this period</p></div>
-                    <?php endif; ?>
-                </div>
-                
             </div>
-            
-        <?php else: ?>
+
+            <div class="stock-flow-card">
+                <div class="sf-header">
+                    <div class="sf-title"><i class="fas fa-water"></i> Stock Flow — From Movements</div>
+                    <div class="sf-badge"><i class="fas fa-calendar"></i> <?= htmlspecialchars($pi['filter_label']) ?></div>
+                </div>
+                <div class="sf-flow">
+                    <div class="sf-block before">
+                        <div class="sf-block-label"><i class="fas fa-warehouse"></i> Stock Before Period</div>
+                        <div class="sf-block-value"><?= number_format($pi['stock_before']) ?> <span class="unit">units</span></div>
+                        <div class="sf-block-meta"><span><i class="fas fa-calendar"></i> As of <?= date('d/m/Y', strtotime($filter_date_from)) ?> 00:00</span></div>
+                    </div>
+                    <div class="sf-arrow"><i class="fas fa-arrows-left-right"></i></div>
+                    <div class="sf-block movement">
+                        <div class="sf-block-label"><i class="fas fa-exchange-alt"></i> Movements in Period</div>
+                        <div class="sf-block-value"><?= number_format($sm['added_qty'] + $sm['out_qty']) ?> <span class="unit">records</span></div>
+                        <div class="sf-movements-grid">
+                            <div class="sf-mov-item added"><div class="sf-mov-label">Added</div><div class="sf-mov-qty">+<?= number_format($sm['added_qty']) ?></div></div>
+                            <div class="sf-mov-item out"><div class="sf-mov-label">Out</div><div class="sf-mov-qty">−<?= number_format($sm['out_qty']) ?></div></div>
+                            <div class="sf-mov-item returned"><div class="sf-mov-label">Returned</div><div class="sf-mov-qty">+<?= number_format($sm['cancelled_returned_qty']) ?></div></div>
+                        </div>
+                    </div>
+                    <div class="sf-arrow"><i class="fas fa-equals"></i></div>
+                    <div class="sf-block remaining">
+                        <div class="sf-block-label"><i class="fas fa-boxes-packing"></i> Stock After Period</div>
+                        <div class="sf-block-value"><?= number_format($pi['stock_after']) ?> <span class="unit">units</span></div>
+                        <div class="sf-block-meta"><span><i class="fas fa-database"></i> Current live: <?= number_format($medicine_details['total_current_stock']) ?></span></div>
+                    </div>
+                </div>
+                <div style="text-align: center; padding: 12px; background: var(--bg-body); border-radius: var(--radius-md); font-family: var(--font-mono); font-weight: 800; border: 2px dashed var(--border-color); font-size: 0.95rem;">
+                    <span style="color:#64748B;font-size:1.15rem;"><?= number_format($pi['stock_before']) ?></span>
+                    <span style="color:var(--text-secondary);margin:0 8px;">+</span>
+                    <span style="color:#059669;font-size:1.15rem;"><?= number_format($sm['added_qty'] + $sm['cancelled_returned_qty']) ?></span>
+                    <span style="color:var(--text-secondary);margin:0 8px;">−</span>
+                    <span style="color:#DC2626;font-size:1.15rem;"><?= number_format($sm['out_qty']) ?></span>
+                    <span style="color:var(--text-secondary);margin:0 8px;">=</span>
+                    <span style="color:#059669;font-size:1.3rem;"><?= number_format($pi['stock_after']) ?></span>
+                </div>
+            </div>
+
+            <div class="summary-grid-v8">
+                <div class="sum-card-v8 added"><div class="sc-icon-v8"><i class="fas fa-plus-circle"></i></div><div class="sc-content"><div class="sc-label-v8">Stock Added</div><div class="sc-value-v8">+<?= number_format($sm['added_qty']) ?> <span class="unit-v8">units</span></div><div class="sc-sub-v8"><?= $sm['added_count'] ?> addition(s)</div></div></div>
+                <div class="sum-card-v8 out"><div class="sc-icon-v8"><i class="fas fa-minus-circle"></i></div><div class="sc-content"><div class="sc-label-v8">Stock Out</div><div class="sc-value-v8">−<?= number_format($sm['out_qty']) ?> <span class="unit-v8">units</span></div><div class="sc-sub-v8"><?= $sm['out_count'] ?> movement(s)</div></div></div>
+                <div class="sum-card-v8 returned"><div class="sc-icon-v8"><i class="fas fa-undo"></i></div><div class="sc-content"><div class="sc-label-v8">Cancelled Returned</div><div class="sc-value-v8">+<?= number_format($sm['cancelled_returned_qty']) ?> <span class="unit-v8">units</span></div><div class="sc-sub-v8"><?= $sm['cancelled_returned_count'] ?> return(s)</div></div></div>
+                <div class="sum-card-v8 prescription"><div class="sc-icon-v8"><i class="fas fa-prescription"></i></div><div class="sc-content"><div class="sc-label-v8">Prescription Out</div><div class="sc-value-v8"><?= number_format($sm['prescription_qty']) ?> <span class="unit-v8">units</span></div><div class="sc-sub-v8"><?= $sm['prescription_count'] ?> Rx movement(s)</div></div></div>
+                <div class="sum-card-v8 otc"><div class="sc-icon-v8"><i class="fas fa-cash-register"></i></div><div class="sc-content"><div class="sc-label-v8">OTC Sold</div><div class="sc-value-v8"><?= number_format($sm['otc_qty']) ?> <span class="unit-v8">units</span></div><div class="sc-sub-v8"><?= $sm['otc_count'] ?> OTC sale(s)</div></div></div>
+            </div>
+
+            <?php if (count($additions) > 0): ?>
+            <div class="table-card">
+                <div class="table-header green">
+                    <span class="title"><i class="fas fa-plus-circle"></i> Stock Added (IN Movements)</span>
+                    <span class="count"><?= count($additions) ?> addition(s) • +<?= number_format($sm['added_qty']) ?> units</span>
+                </div>
+                <div class="table-scroll-wrapper">
+                    <table class="data-table">
+                        <thead class="green">
+                            <tr><th>#</th><th>Date</th><th>Qty Added</th><th>Before</th><th>After</th><th>Added By</th><th>Notes</th></tr>
+                        </thead>
+                        <tbody>
+                            <?php $i=1; foreach ($additions as $a): ?>
+                            <tr class="in-row">
+                                <td style="font-family:var(--font-mono);font-weight:700;color:var(--text-secondary);"><?= $i++ ?></td>
+                                <td style="font-size:0.72rem;"><?= date('d M Y, H:i', strtotime($a['added_at'])) ?></td>
+                                <td><span style="background:var(--success-bg);color:var(--success);padding:3px 10px;border-radius:6px;font-weight:800;font-family:var(--font-mono);">+<?= number_format($a['quantity']) ?></span></td>
+                                <td style="font-family:var(--font-mono);color:var(--text-secondary);"><?= number_format($a['previous_stock']) ?></td>
+                                <td style="font-family:var(--font-mono);font-weight:700;"><?= number_format($a['new_stock']) ?></td>
+                                <td><div style="font-weight:700;font-size:0.78rem;"><i class="fas fa-user-plus" style="color:var(--success);"></i> <?= htmlspecialchars($a['added_by_name']) ?></div></td>
+                                <td style="font-size:0.68rem;color:var(--text-secondary);max-width:300px;"><?= htmlspecialchars(substr($a['notes'], 0, 120)) ?><?= strlen($a['notes']) > 120 ? '...' : '' ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <?php endif; ?>
+
             <div class="table-card">
                 <div class="table-header">
-                    <span class="title"><i class="fas fa-pills"></i> Medicine Tracking</span>
-                    <span class="count">Search to view details</span>
+                    <span class="title"><i class="fas fa-list"></i> All Movements — <?= htmlspecialchars($medicine_details['name']) ?></span>
+                    <span class="count"><?= count($movs) ?> movement(s)</span>
                 </div>
-                <div class="empty-state">
-                    <i class="fas fa-search"></i>
-                    <p>Search medicine above or click on Top 5 cards</p>
-                    <p style="font-size:0.78rem;margin-top:8px;color:var(--text-muted);">Period Overview • Last Added Stock • Remaining Stock • Purchase History • Prescriptions • OTC Sales</p>
+                <?php if (count($movs) > 0): ?>
+                <div class="table-scroll-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>#</th><th>Date</th><th>Type</th><th>Category</th><th style="text-align:center;">Qty</th><th style="text-align:right;">Before</th><th style="text-align:right;">After</th><th>Performed By</th><th>Notes</th></tr>
+                        </thead>
+                        <tbody>
+                            <?php $i = 1; foreach ($movs as $m):
+                                $mt = strtolower($m['movement_type']);
+                                $category = getMovementCategory($m['notes'] ?? '', $mt, $m['reference_type'] ?? '');
+                                $row_class = $mt === 'in' ? 'in-row' : 'out-row';
+                                if ($category === 'cancel') $row_class = 'return-row';
+                            ?>
+                            <tr class="<?= $row_class ?>">
+                                <td style="font-family:var(--font-mono);font-weight:700;color:var(--text-secondary);"><?= $i++ ?></td>
+                                <td style="font-size:0.72rem;"><?= date('d M Y, H:i', strtotime($m['created_at'])) ?></td>
+                                <td><span class="status-badge <?= $mt ?>"><i class="fas fa-<?= $mt === 'in' ? 'arrow-down' : 'arrow-up' ?>"></i> <?= strtoupper($mt) ?></span></td>
+                                <td>
+                                    <?php $cat_icons = ['prescription' => 'fa-prescription','auto_dispense' => 'fa-robot','otc' => 'fa-cash-register','cancel' => 'fa-undo','lab_test' => 'fa-flask','equipment' => 'fa-tools','doctor_use' => 'fa-user-md'];
+                                    $icon = $cat_icons[$category] ?? 'fa-circle';
+                                    $badge_class = in_array($category, array_keys($cat_icons)) ? $category : 'out'; ?>
+                                    <span class="status-badge <?= $badge_class ?>"><i class="fas <?= $icon ?>"></i> <?= strtoupper(str_replace('_', ' ', $category)) ?></span>
+                                </td>
+                                <td style="text-align:center;"><span style="font-family:var(--font-mono);font-weight:800;font-size:0.85rem;color:<?= $mt === 'in' ? 'var(--success)' : 'var(--danger)' ?>;"><?= $mt === 'in' ? '+' : '−' ?><?= number_format($m['quantity']) ?></span></td>
+                                <td style="text-align:right;font-family:var(--font-mono);color:var(--text-secondary);"><?= number_format($m['previous_stock']) ?></td>
+                                <td style="text-align:right;font-family:var(--font-mono);font-weight:700;"><?= number_format($m['new_stock']) ?></td>
+                                <td><div style="font-weight:700;font-size:0.75rem;"><?= htmlspecialchars($m['performed_by_name'] ?? 'System') ?></div><?php if (!empty($m['performed_by_username'])): ?><div style="font-size:0.62rem;color:var(--text-secondary);">@<?= htmlspecialchars($m['performed_by_username']) ?></div><?php endif; ?></td>
+                                <td style="font-size:0.68rem;color:var(--text-secondary);max-width:400px;"><?= htmlspecialchars(substr($m['notes'] ?? '', 0, 150)) ?><?= strlen($m['notes'] ?? '') > 150 ? '...' : '' ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
                 </div>
+                <?php else: ?>
+                <div class="empty-state"><i class="fas fa-inbox"></i><p>No movements found for this period</p></div>
+                <?php endif; ?>
+            </div>
+
+        <?php else: ?>
+            <div class="table-card">
+                <div class="table-header"><span class="title"><i class="fas fa-pills"></i> Medicine Tracking</span><span class="count">Search to view details</span></div>
+                <div class="empty-state"><i class="fas fa-search"></i><p>Search medicine above or click on Top 5 cards</p></div>
             </div>
         <?php endif; ?>
 
-    <!-- EQUIPMENT TAB -->
     <?php else: ?>
-        
+
+        <!-- EQUIPMENT TAB -->
         <?php if ($equipment_details): ?>
-            <?php 
-            $eq = $equipment_details['info'];
-            $sm = $equipment_details['summary'];
-            $rs = $equipment_details['remaining_stock'];
-            $lsi = $equipment_details['last_stock_info'];
-            $pi = $equipment_details['period_info'];
-            $dus = $equipment_details['days_until_stockout'];
-            ?>
-            
-            <div class="details-container">
-                
-                <div class="info-banner">
-                    <div class="ib-icon"><i class="fas fa-tools"></i></div>
-                    <div class="ib-content">
-                        <div class="ib-title"><?= htmlspecialchars($equipment_details['name']) ?></div>
-                        <div class="ib-meta">
-                            <span><i class="fas fa-tag"></i> <?= htmlspecialchars($eq['category'] ?? 'N/A') ?></span>
-                            <span><i class="fas fa-box"></i> Unit: <?= htmlspecialchars($eq['unit'] ?? 'N/A') ?></span>
-                            <span><i class="fas fa-money-bill"></i> Selling: <?= $currency ?> <?= number_format($eq['selling_price'] ?? 0, 0) ?></span>
-                            <?php if ($selected_branch_id !== 'all'): ?>
-                                <span style="color:var(--warning);font-weight:800;"><i class="fas fa-lock"></i> <?= htmlspecialchars($branch_name_display) ?></span>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                </div>
+            <?php $eq = $equipment_details['info']; $sm = $equipment_details['summary']; $pi = $equipment_details['period_info']; $movs = $equipment_details['movements']; $additions = $equipment_details['additions']; ?>
 
-                <!-- PERIOD OVERVIEW -->
-                <div class="period-overview-card">
-                    <div class="po-header">
-                        <div class="po-title"><i class="fas fa-calendar-check"></i> Period Overview</div>
-                        <div class="po-badge">
-                            <i class="fas fa-filter"></i> <?= htmlspecialchars($pi['filter_label']) ?>
-                            <?php if ($selected_branch_id !== 'all'): ?>
-                                • <?= htmlspecialchars($branch_name_display) ?>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                    <div class="po-grid">
-                        <div class="po-item po-start">
-                            <div class="po-icon"><i class="fas fa-warehouse"></i></div>
-                            <div class="po-content">
-                                <div class="po-label">Stock at Start</div>
-                                <div class="po-value"><?= number_format($pi['stock_at_period_start']) ?> <span>units</span></div>
-                                <div class="po-sub">When period began</div>
-                            </div>
-                        </div>
-                        <div class="po-item po-added">
-                            <div class="po-icon"><i class="fas fa-cart-plus"></i></div>
-                            <div class="po-content">
-                                <div class="po-label">Added in Period</div>
-                                <div class="po-value">+<?= number_format($pi['purchases_total_qty']) ?> <span>units</span></div>
-                                <div class="po-sub"><?= $pi['purchases_count'] ?> purchases</div>
-                            </div>
-                        </div>
-                        <div class="po-item po-movements">
-                            <div class="po-icon"><i class="fas fa-arrow-right-arrow-left"></i></div>
-                            <div class="po-content">
-                                <div class="po-label">Movements</div>
-                                <div class="po-value">-<?= number_format($pi['movements_total']) ?> <span>uses</span></div>
-                                <div class="po-sub">Bills: <?= number_format($pi['movements_bill']) ?> • Lab: <?= number_format($pi['movements_lab']) ?></div>
-                            </div>
-                        </div>
-                        <div class="po-item po-current">
-                            <div class="po-icon"><i class="fas fa-boxes-packing"></i></div>
-                            <div class="po-content">
-                                <div class="po-label">Current Stock</div>
-                                <div class="po-value"><?= number_format($equipment_details['total_current_stock']) ?> <span>units</span></div>
-                                <div class="po-sub">Now in inventory</div>
-                            </div>
-                        </div>
-                    </div>
-                    <?php if (count($pi['purchases_unique_users']) > 0): ?>
-                    <div class="po-users">
-                        <div class="po-users-label"><i class="fas fa-users"></i> Users who added stock:</div>
-                        <div class="po-users-list">
-                            <?php foreach ($pi['purchases_unique_users'] as $user): ?>
-                                <span class="po-user-tag"><i class="fas fa-user-circle"></i> <?= htmlspecialchars($user) ?></span>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                    <?php endif; ?>
-                </div>
-
-                <!-- LAST ADDED STOCK -->
-                <?php if ($lsi['has_last_purchase']): ?>
-                <div class="last-stock-card <?= $lsi['is_accurate'] ? 'accurate' : 'warning' ?>">
-                    <div class="ls-header">
-                        <div class="ls-title"><i class="fas fa-box-open"></i> Last Added Stock</div>
-                        <div class="ls-status <?= $lsi['is_accurate'] ? 'accurate' : 'warning' ?>">
-                            <?php if ($lsi['is_accurate']): ?>
-                                <i class="fas fa-check-circle"></i> STOCK ACCURATE
-                            <?php else: ?>
-                                <i class="fas fa-exclamation-triangle"></i> VARIANCE: <?= $lsi['variance'] > 0 ? '+' : '' ?><?= number_format($lsi['variance']) ?>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                    <div class="ls-timeline">
-                        <div class="ls-tl-item purchase">
-                            <div class="ls-tl-icon"><i class="fas fa-truck-loading"></i></div>
-                            <div class="ls-tl-content">
-                                <div class="ls-tl-label">Last Added</div>
-                                <div class="ls-tl-value">+<?= number_format($lsi['last_added_qty']) ?></div>
-                                <div class="ls-tl-meta"><i class="fas fa-user"></i> <?= htmlspecialchars($lsi['last_added_by']) ?></div>
-                                <div class="ls-tl-meta"><i class="fas fa-calendar"></i> <?= date('d M Y', strtotime($lsi['last_added_date'])) ?></div>
-                            </div>
-                        </div>
-                        <div class="ls-tl-arrow"><i class="fas fa-plus"></i></div>
-                        <div class="ls-tl-item previous">
-                            <div class="ls-tl-icon"><i class="fas fa-history"></i></div>
-                            <div class="ls-tl-content">
-                                <div class="ls-tl-label">Previous Stock</div>
-                                <div class="ls-tl-value"><?= number_format($lsi['previous_stock']) ?></div>
-                                <div class="ls-tl-meta">Before last add</div>
-                            </div>
-                        </div>
-                        <div class="ls-tl-arrow equal"><i class="fas fa-equals"></i></div>
-                        <div class="ls-tl-item total">
-                            <div class="ls-tl-icon"><i class="fas fa-calculator"></i></div>
-                            <div class="ls-tl-content">
-                                <div class="ls-tl-label">Available Now</div>
-                                <div class="ls-tl-value"><?= number_format($lsi['available_after_last_add']) ?></div>
-                                <div class="ls-tl-meta">Prev + Last Added</div>
-                            </div>
-                        </div>
-                        <div class="ls-tl-arrow minus"><i class="fas fa-minus"></i></div>
-                        <div class="ls-tl-item used">
-                            <div class="ls-tl-icon"><i class="fas fa-arrow-right-from-bracket"></i></div>
-                            <div class="ls-tl-content">
-                                <div class="ls-tl-label">Movements</div>
-                                <div class="ls-tl-value">-<?= number_format($lsi['movements_after_last']) ?></div>
-                                <div class="ls-tl-meta">Since last add</div>
-                            </div>
-                        </div>
-                        <div class="ls-tl-arrow equal"><i class="fas fa-equals"></i></div>
-                        <div class="ls-tl-item expected">
-                            <div class="ls-tl-icon"><i class="fas fa-calculator"></i></div>
-                            <div class="ls-tl-content">
-                                <div class="ls-tl-label">Expected</div>
-                                <div class="ls-tl-value"><?= number_format($lsi['expected_remaining']) ?></div>
-                                <div class="ls-tl-meta">After movements</div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="ls-verification <?= $lsi['is_accurate'] ? 'accurate' : 'warning' ?>">
-                        <div class="ls-v-item">
-                            <div class="ls-v-label"><i class="fas fa-calculator"></i> Expected</div>
-                            <div class="ls-v-value"><?= number_format($lsi['expected_remaining']) ?></div>
-                        </div>
-                        <div class="ls-v-vs"><?= $lsi['is_accurate'] ? '<i class="fas fa-equals"></i>' : '<i class="fas fa-not-equal"></i>' ?></div>
-                        <div class="ls-v-item">
-                            <div class="ls-v-label"><i class="fas fa-warehouse"></i> Actual</div>
-                            <div class="ls-v-value"><?= number_format($lsi['actual_remaining']) ?></div>
-                        </div>
-                        <div class="ls-v-vs"><i class="fas fa-equals"></i></div>
-                        <div class="ls-v-item <?= $lsi['is_accurate'] ? 'success' : 'danger' ?>">
-                            <div class="ls-v-label"><?= $lsi['is_accurate'] ? '<i class="fas fa-check-circle"></i> Match' : '<i class="fas fa-exclamation-triangle"></i> Variance' ?></div>
-                            <div class="ls-v-value" style="color: <?= $lsi['variance'] >= 0 ? 'var(--success)' : 'var(--danger)' ?>;">
-                                <?= $lsi['variance'] > 0 ? '+' : '' ?><?= number_format($lsi['variance']) ?>
-                            </div>
-                        </div>
+            <div class="info-banner" style="border-left-color: var(--cyan);">
+                <div class="ib-icon" style="background: linear-gradient(135deg, #0891B2, #0E7490);"><i class="fas fa-tools"></i></div>
+                <div class="ib-content">
+                    <div class="ib-title"><?= htmlspecialchars($equipment_details['name']) ?></div>
+                    <div class="ib-meta">
+                        <span><i class="fas fa-tag"></i> <?= htmlspecialchars($eq['category'] ?? 'N/A') ?></span>
+                        <span><i class="fas fa-box"></i> Unit: <?= htmlspecialchars($eq['unit'] ?? 'N/A') ?></span>
+                        <span style="color:var(--success);font-weight:800;"><i class="fas fa-warehouse"></i> Current Stock: <?= number_format($equipment_details['total_current_stock']) ?></span>
+                        <span style="color:var(--primary);font-weight:800;"><i class="fas fa-store"></i> <?= htmlspecialchars($branch_name_display) ?></span>
                     </div>
                 </div>
-                <?php endif; ?>
-
-                <!-- REMAINING STOCK -->
-                <div class="remaining-stock-card <?= $rs['status_color'] ?>">
-                    <div class="rs-header">
-                        <div class="rs-title"><i class="fas fa-boxes-packing"></i> Remaining Stock</div>
-                        <div class="rs-status-badge <?= $rs['status_color'] ?>">
-                            <i class="fas <?= $rs['status_icon'] ?>"></i> <?= $rs['status_label'] ?>
-                        </div>
-                    </div>
-                    <div class="rs-grid">
-                        <div class="rs-item stock-balance">
-                            <div class="rs-item-icon"><i class="fas fa-warehouse"></i></div>
-                            <div class="rs-item-content">
-                                <div class="rs-item-label">Stock Balance</div>
-                                <div class="rs-item-value"><?= number_format($rs['current_stock']) ?> <span class="rs-unit">units</span></div>
-                                <div class="rs-item-sub">Available now</div>
-                            </div>
-                        </div>
-                        <div class="rs-item stock-usage">
-                            <div class="rs-item-icon"><i class="fas fa-arrow-right-from-bracket"></i></div>
-                            <div class="rs-item-content">
-                                <div class="rs-item-label">Total Used</div>
-                                <div class="rs-item-value"><?= number_format($rs['total_used']) ?> <span class="rs-unit">uses</span></div>
-                                <div class="rs-item-sub">Lab + Bills in period</div>
-                            </div>
-                        </div>
-                        <div class="rs-item stock-value">
-                            <div class="rs-item-icon"><i class="fas fa-money-bill-trend-up"></i></div>
-                            <div class="rs-item-content">
-                                <div class="rs-item-label">Stock Value</div>
-                                <div class="rs-item-value"><?= $currency ?> <?= number_format($rs['stock_value'], 0) ?></div>
-                                <div class="rs-item-sub">@ <?= $currency ?> <?= number_format($rs['average_selling_price'], 0) ?></div>
-                            </div>
-                        </div>
-                        <div class="rs-item stock-reorder">
-                            <div class="rs-item-icon"><i class="fas fa-triangle-exclamation"></i></div>
-                            <div class="rs-item-content">
-                                <div class="rs-item-label">Reorder Level</div>
-                                <div class="rs-item-value"><?= number_format($rs['reorder_level']) ?> <span class="rs-unit">units</span></div>
-                                <div class="rs-item-sub"><?= $rs['current_stock'] > $rs['reorder_level'] ? '✅ Above' : '⚠️ Below' ?></div>
-                            </div>
-                        </div>
-                        <div class="rs-item stock-stockout">
-                            <div class="rs-item-icon"><i class="fas fa-hourglass-end"></i></div>
-                            <div class="rs-item-content">
-                                <div class="rs-item-label">Days to Stockout</div>
-                                <div class="rs-item-value"><?= $dus >= 999 ? '∞' : $dus ?> <span class="rs-unit">days</span></div>
-                                <div class="rs-item-sub">
-                                    <?php if ($dus <= 7 && $dus < 999): ?>
-                                        🔴 Urgent!
-                                    <?php elseif ($dus <= 14 && $dus < 999): ?>
-                                        🟡 Soon
-                                    <?php else: ?>
-                                        ✅ Sufficient
-                                    <?php endif; ?>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="rs-health-bar">
-                        <div class="rs-health-label">
-                            <span><i class="fas fa-heartbeat"></i> Stock Health</span>
-                            <span class="rs-health-percent"><?= $rs['current_stock'] > 0 ? 'OK' : 'EMPTY' ?></span>
-                        </div>
-                        <div class="rs-bar-track">
-                            <?php 
-                            $bar_width = 0;
-                            if ($rs['reorder_level'] > 0) {
-                                $bar_width = min(100, ($rs['current_stock'] / ($rs['reorder_level'] * 3)) * 100);
-                            }
-                            ?>
-                            <div class="rs-bar-fill <?= $rs['status_color'] ?>" style="width: <?= $bar_width ?>%;"></div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- SUMMARY STATS -->
-                <div class="summary-grid">
-                    <div class="summary-card purchase">
-                        <div class="sc-icon"><i class="fas fa-cart-plus"></i></div>
-                        <div class="sc-label">Purchased (Period)</div>
-                        <div class="sc-value"><?= number_format($sm['purchase_qty']) ?></div>
-                        <div class="sc-sub"><?= $sm['purchase_count'] ?> records</div>
-                    </div>
-                    <div class="summary-card pending">
-                        <div class="sc-icon"><i class="fas fa-clock"></i></div>
-                        <div class="sc-label">Pending Tests</div>
-                        <div class="sc-value"><?= number_format($sm['pending_qty']) ?></div>
-                        <div class="sc-sub"><?= $sm['pending_count'] ?> tests</div>
-                    </div>
-                    <div class="summary-card confirmed">
-                        <div class="sc-icon"><i class="fas fa-spinner"></i></div>
-                        <div class="sc-label">In Progress</div>
-                        <div class="sc-value"><?= number_format($sm['in_progress_qty']) ?></div>
-                        <div class="sc-sub"><?= $sm['in_progress_count'] ?> tests</div>
-                    </div>
-                    <div class="summary-card dispensed">
-                        <div class="sc-icon"><i class="fas fa-check-circle"></i></div>
-                        <div class="sc-label">Completed</div>
-                        <div class="sc-value"><?= number_format($sm['completed_qty']) ?></div>
-                        <div class="sc-sub"><?= $sm['completed_count'] ?> tests</div>
-                    </div>
-                    <div class="summary-card otc">
-                        <div class="sc-icon"><i class="fas fa-prescription-bottle"></i></div>
-                        <div class="sc-label">Used in Visits</div>
-                        <div class="sc-value"><?= number_format($sm['bill_qty']) ?></div>
-                        <div class="sc-sub"><?= $sm['bill_count'] ?> bill items</div>
-                    </div>
-                    <div class="summary-card movement">
-                        <div class="sc-icon"><i class="fas fa-arrow-right-arrow-left"></i></div>
-                        <div class="sc-label">Total Movement</div>
-                        <div class="sc-value"><?= number_format($sm['total_movement']) ?></div>
-                        <div class="sc-sub"><?= $sm['unique_visits'] ?> visits • <?= $sm['unique_patients'] ?> patients</div>
-                    </div>
-                </div>
-
-                <!-- PURCHASE HISTORY -->
-                <div class="table-card">
-                    <div class="table-header">
-                        <span class="title">
-                            <i class="fas fa-cart-plus"></i> Purchase History
-                            <?php if ($selected_branch_id !== 'all'): ?>
-                                <span style="font-size:0.65rem;background:rgba(255,255,255,0.2);padding:2px 8px;border-radius:6px;">
-                                    <i class="fas fa-lock"></i> <?= htmlspecialchars($branch_name_display) ?>
-                                </span>
-                            <?php endif; ?>
-                        </span>
-                        <span class="count"><?= count($equipment_details['purchase_history']) ?> records • <?= number_format($sm['purchase_qty']) ?> units</span>
-                    </div>
-                    <?php if (count($equipment_details['purchase_history']) > 0): ?>
-                    <div class="table-scroll-wrapper">
-                        <table class="data-table">
-                            <thead>
-                                <tr><th>#</th><th>Invoice #</th><th>Qty Added</th><th style="text-align:right;">Buying</th><th style="text-align:right;">Selling</th><th style="text-align:right;">Total Cost</th><th>Added By</th><th>Branch</th><th>Date</th></tr>
-                            </thead>
-                            <tbody>
-                                <?php $i=1; foreach ($equipment_details['purchase_history'] as $ph): ?>
-                                <tr>
-                                    <td><?= $i++ ?></td>
-                                    <td><span class="font-mono" style="font-weight:800;color:var(--primary);"><?= htmlspecialchars($ph['invoice_number']) ?></span></td>
-                                    <td><span style="background:var(--success-bg);color:var(--success);padding:3px 10px;border-radius:6px;font-weight:800;font-family:var(--font-mono);">+<?= number_format($ph['quantity']) ?></span></td>
-                                    <td class="money-cell"><?= $currency ?> <?= number_format($ph['buying_price'] ?? 0, 0) ?></td>
-                                    <td class="money-cell"><?= $currency ?> <?= number_format($ph['selling_price'] ?? 0, 0) ?></td>
-                                    <td class="money-cell"><?= $currency ?> <?= number_format($ph['total_buying_cost'] ?? 0, 0) ?></td>
-                                    <td><?= htmlspecialchars($ph['added_by_name'] ?? 'N/A') ?></td>
-                                    <td><?= htmlspecialchars($ph['branch_name'] ?? 'N/A') ?></td>
-                                    <td><?= date('d M Y, H:i', strtotime($ph['added_at'])) ?></td>
-                                </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                    <?php else: ?>
-                    <div class="empty-state"><i class="fas fa-cart-plus"></i><p>No purchase records for this period</p></div>
-                    <?php endif; ?>
-                </div>
-
-                <!-- CURRENT STOCK -->
-                <div class="table-card">
-                    <div class="table-header cyan">
-                        <span class="title"><i class="fas fa-warehouse"></i> Current Stock</span>
-                        <span class="count"><?= number_format($equipment_details['total_current_stock']) ?> units</span>
-                    </div>
-                    <?php if (count($equipment_details['current_stock']) > 0): ?>
-                    <div class="table-scroll-wrapper">
-                        <table class="data-table">
-                            <thead class="cyan">
-                                <tr><th>#</th><th>Equipment</th><th>Qty</th><th>Reorder</th><th style="text-align:right;">Selling</th><th>Supplier</th><th>Added</th></tr>
-                            </thead>
-                            <tbody>
-                                <?php $i=1; foreach ($equipment_details['current_stock'] as $cs): 
-                                    $is_low = (int)$cs['quantity'] <= (int)$cs['reorder_level'];
-                                ?>
-                                <tr>
-                                    <td><?= $i++ ?></td>
-                                    <td><?= htmlspecialchars($cs['equipment_name']) ?></td>
-                                    <td><span style="background:<?= $is_low ? 'var(--danger-bg)' : 'var(--success-bg)' ?>;color:<?= $is_low ? 'var(--danger)' : 'var(--success)' ?>;padding:3px 10px;border-radius:6px;font-weight:800;font-family:var(--font-mono);"><?= number_format($cs['quantity']) ?></span></td>
-                                    <td style="font-family:var(--font-mono);font-weight:700;"><?= number_format($cs['reorder_level']) ?></td>
-                                    <td class="money-cell"><?= $currency ?> <?= number_format($cs['selling_price'] ?? 0, 0) ?></td>
-                                    <td><?= htmlspecialchars($cs['supplier'] ?? 'N/A') ?></td>
-                                    <td><?= date('d M Y', strtotime($cs['created_at'])) ?></td>
-                                </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                    <?php else: ?>
-                    <div class="empty-state"><i class="fas fa-warehouse"></i><p>No stock available</p></div>
-                    <?php endif; ?>
-                </div>
-
-                <!-- BILL ITEMS -->
-                <div class="table-card">
-                    <div class="table-header green">
-                        <span class="title"><i class="fas fa-prescription-bottle"></i> Used in Visits</span>
-                        <span class="count"><?= count($equipment_details['bill_items']) ?> items • <?= number_format($sm['bill_qty']) ?> units</span>
-                    </div>
-                    <?php if (count($equipment_details['bill_items']) > 0): ?>
-                    <div class="table-scroll-wrapper">
-                        <table class="data-table">
-                            <thead class="green">
-                                <tr><th>#</th><th>Bill #</th><th>Visit #</th><th>Patient</th><th>Doctor</th><th>Qty</th><th>Branch</th><th>Status</th><th>Date</th></tr>
-                            </thead>
-                            <tbody>
-                                <?php $i=1; foreach ($equipment_details['bill_items'] as $bi): 
-                                    $bi_status = strtolower($bi['item_status'] ?? 'pending');
-                                ?>
-                                <tr>
-                                    <td><?= $i++ ?></td>
-                                    <td><span class="font-mono" style="font-weight:700;font-size:0.7rem;color:var(--cyan);"><?= htmlspecialchars($bi['bill_number'] ?? 'N/A') ?></span></td>
-                                    <td><span class="font-mono" style="font-weight:700;color:var(--primary);"><?= htmlspecialchars($bi['visit_number'] ?? 'N/A') ?></span></td>
-                                    <td><?= htmlspecialchars($bi['patient_name'] ?? 'N/A') ?></td>
-                                    <td><?= htmlspecialchars($bi['doctor_name'] ?? 'N/A') ?></td>
-                                    <td><span style="background:var(--cyan-bg);color:var(--cyan);padding:3px 10px;border-radius:6px;font-weight:800;font-family:var(--font-mono);"><?= number_format($bi['quantity']) ?></span></td>
-                                    <td><?= htmlspecialchars($bi['branch_name'] ?? 'N/A') ?></td>
-                                    <td>
-                                        <?php if ($bi_status === 'paid'): ?>
-                                            <span class="status-badge paid"><i class="fas fa-check-circle"></i> PAID</span>
-                                        <?php else: ?>
-                                            <span class="status-badge pending"><i class="fas fa-clock"></i> PENDING</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td><?= date('d M Y', strtotime($bi['item_created_at'])) ?></td>
-                                </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                    <?php else: ?>
-                    <div class="empty-state"><i class="fas fa-prescription-bottle"></i><p>No bill items for this period</p></div>
-                    <?php endif; ?>
-                </div>
-
-                <!-- LAB TESTS -->
-                <div class="table-card">
-                    <div class="table-header purple">
-                        <span class="title"><i class="fas fa-flask"></i> Lab Tests using this Equipment</span>
-                        <span class="count"><?= count($equipment_details['lab_tests']) ?> tests</span>
-                    </div>
-                    <?php if (count($equipment_details['lab_tests']) > 0): ?>
-                    <div class="table-scroll-wrapper">
-                        <table class="data-table">
-                            <thead class="purple">
-                                <tr><th>#</th><th>Visit #</th><th>Patient</th><th>Test Name</th><th>Doctor</th><th>Lab Tech</th><th>Branch</th><th>Status</th><th>Date</th></tr>
-                            </thead>
-                            <tbody>
-                                <?php $i=1; foreach ($equipment_details['lab_tests'] as $lt): 
-                                    $lt_status = strtolower($lt['test_status'] ?? 'pending');
-                                ?>
-                                <tr>
-                                    <td><?= $i++ ?></td>
-                                    <td><span class="font-mono" style="font-weight:700;color:var(--primary);"><?= htmlspecialchars($lt['visit_number'] ?? 'N/A') ?></span></td>
-                                    <td><?= htmlspecialchars($lt['patient_name'] ?? 'N/A') ?></td>
-                                    <td><?= htmlspecialchars($lt['test_name'] ?? 'N/A') ?></td>
-                                    <td><?= htmlspecialchars($lt['doctor_name'] ?? 'N/A') ?></td>
-                                    <td><?= htmlspecialchars($lt['lab_tech_name'] ?? 'N/A') ?></td>
-                                    <td><?= htmlspecialchars($lt['branch_name'] ?? 'N/A') ?></td>
-                                    <td>
-                                        <?php if ($lt_status === 'completed'): ?>
-                                            <span class="status-badge completed"><i class="fas fa-check-circle"></i> COMPLETED</span>
-                                        <?php elseif ($lt_status === 'in_progress'): ?>
-                                            <span class="status-badge in_progress"><i class="fas fa-spinner"></i> IN PROGRESS</span>
-                                        <?php else: ?>
-                                            <span class="status-badge pending"><i class="fas fa-clock"></i> PENDING</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td><?= date('d M Y', strtotime($lt['test_created_at'] ?? 'now')) ?></td>
-                                </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                    <?php else: ?>
-                    <div class="empty-state"><i class="fas fa-flask"></i><p>No lab tests for this period</p></div>
-                    <?php endif; ?>
-                </div>
-                
             </div>
-            
+
+            <div class="stock-flow-card">
+                <div class="sf-header">
+                    <div class="sf-title"><i class="fas fa-water"></i> Equipment Flow — From Movements</div>
+                    <div class="sf-badge"><i class="fas fa-calendar"></i> <?= htmlspecialchars($pi['filter_label']) ?></div>
+                </div>
+                <div class="sf-flow">
+                    <div class="sf-block before">
+                        <div class="sf-block-label"><i class="fas fa-warehouse"></i> Before Period</div>
+                        <div class="sf-block-value"><?= number_format($pi['stock_before']) ?> <span class="unit">units</span></div>
+                    </div>
+                    <div class="sf-arrow"><i class="fas fa-arrows-left-right"></i></div>
+                    <div class="sf-block movement">
+                        <div class="sf-block-label"><i class="fas fa-exchange-alt"></i> Movements</div>
+                        <div class="sf-block-value"><?= number_format($sm['added_qty'] + $sm['out_qty']) ?> <span class="unit">records</span></div>
+                        <div class="sf-movements-grid">
+                            <div class="sf-mov-item added"><div class="sf-mov-label">Added</div><div class="sf-mov-qty">+<?= number_format($sm['added_qty']) ?></div></div>
+                            <div class="sf-mov-item out"><div class="sf-mov-label">Used</div><div class="sf-mov-qty">−<?= number_format($sm['out_qty']) ?></div></div>
+                            <div class="sf-mov-item doctor"><div class="sf-mov-label">Doctor</div><div class="sf-mov-qty"><?= number_format($sm['doctor_qty']) ?></div></div>
+                        </div>
+                    </div>
+                    <div class="sf-arrow"><i class="fas fa-equals"></i></div>
+                    <div class="sf-block remaining">
+                        <div class="sf-block-label"><i class="fas fa-boxes-packing"></i> After Period</div>
+                        <div class="sf-block-value"><?= number_format($pi['stock_after']) ?> <span class="unit">units</span></div>
+                        <div class="sf-block-meta"><span><i class="fas fa-database"></i> Current live: <?= number_format($equipment_details['total_current_stock']) ?></span></div>
+                    </div>
+                </div>
+                <div style="text-align: center; padding: 12px; background: var(--bg-body); border-radius: var(--radius-md); font-family: var(--font-mono); font-weight: 800; border: 2px dashed var(--border-color);">
+                    <span style="color:#64748B;font-size:1.15rem;"><?= number_format($pi['stock_before']) ?></span>
+                    <span style="color:var(--text-secondary);margin:0 8px;">+</span>
+                    <span style="color:#059669;font-size:1.15rem;"><?= number_format($sm['added_qty']) ?></span>
+                    <span style="color:var(--text-secondary);margin:0 8px;">−</span>
+                    <span style="color:#DC2626;font-size:1.15rem;"><?= number_format($sm['out_qty']) ?></span>
+                    <span style="color:var(--text-secondary);margin:0 8px;">=</span>
+                    <span style="color:#059669;font-size:1.3rem;"><?= number_format($pi['stock_after']) ?></span>
+                </div>
+            </div>
+
+            <div class="summary-grid-v8">
+                <div class="sum-card-v8 added"><div class="sc-icon-v8"><i class="fas fa-plus-circle"></i></div><div class="sc-content"><div class="sc-label-v8">Stock Added</div><div class="sc-value-v8">+<?= number_format($sm['added_qty']) ?></div><div class="sc-sub-v8"><?= $sm['added_count'] ?> record(s)</div></div></div>
+                <div class="sum-card-v8 out"><div class="sc-icon-v8"><i class="fas fa-minus-circle"></i></div><div class="sc-content"><div class="sc-label-v8">Total Used</div><div class="sc-value-v8">−<?= number_format($sm['out_qty']) ?></div><div class="sc-sub-v8"><?= $sm['out_count'] ?> use(s)</div></div></div>
+                <div class="sum-card-v8 doctor"><div class="sc-icon-v8"><i class="fas fa-user-md"></i></div><div class="sc-content"><div class="sc-label-v8">Doctor Used</div><div class="sc-value-v8"><?= number_format($sm['doctor_qty']) ?></div><div class="sc-sub-v8"><?= $sm['doctor_count'] ?> use(s)</div></div></div>
+                <div class="sum-card-v8 lab"><div class="sc-icon-v8"><i class="fas fa-flask"></i></div><div class="sc-content"><div class="sc-label-v8">Lab Tests</div><div class="sc-value-v8"><?= number_format($sm['lab_test_qty']) ?></div><div class="sc-sub-v8"><?= $sm['lab_test_count'] ?> test(s)</div></div></div>
+                <div class="sum-card-v8 otc"><div class="sc-icon-v8"><i class="fas fa-cash-register"></i></div><div class="sc-content"><div class="sc-label-v8">OTC Sales</div><div class="sc-value-v8"><?= number_format($sm['otc_qty']) ?></div><div class="sc-sub-v8"><?= $sm['otc_count'] ?> sale(s)</div></div></div>
+                <?php if ($sm['procedure_qty'] > 0): ?>
+                <div class="sum-card-v8 procedure"><div class="sc-icon-v8"><i class="fas fa-procedures"></i></div><div class="sc-content"><div class="sc-label-v8">Procedures</div><div class="sc-value-v8"><?= number_format($sm['procedure_qty']) ?></div><div class="sc-sub-v8"><?= $sm['procedure_count'] ?> procedure(s)</div></div></div>
+                <?php endif; ?>
+            </div>
+
+            <div class="table-card">
+                <div class="table-header blue">
+                    <span class="title"><i class="fas fa-list"></i> All Movements — <?= htmlspecialchars($equipment_details['name']) ?></span>
+                    <span class="count"><?= count($movs) ?> movement(s)</span>
+                </div>
+                <?php if (count($movs) > 0): ?>
+                <div class="table-scroll-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>#</th><th>Date</th><th>Type</th><th>Category</th><th style="text-align:center;">Qty</th><th style="text-align:right;">Before</th><th style="text-align:right;">After</th><th>Performed By</th><th>Patient</th><th>Notes</th></tr>
+                        </thead>
+                        <tbody>
+                            <?php $i=1; foreach ($movs as $m):
+                                $mt = strtolower($m['movement_type']);
+                                $category = getMovementCategory($m['notes'] ?? '', $mt, $m['reference_type'] ?? '');
+                                $row_class = $mt === 'in' ? 'in-row' : 'out-row';
+                                if ($category === 'cancel') $row_class = 'return-row';
+                                elseif ($category === 'doctor_use') $row_class = 'doctor-row';
+                            ?>
+                            <tr class="<?= $row_class ?>">
+                                <td style="font-family:var(--font-mono);font-weight:700;color:var(--text-secondary);"><?= $i++ ?></td>
+                                <td style="font-size:0.72rem;"><?= date('d M Y, H:i', strtotime($m['created_at'])) ?></td>
+                                <td><span class="status-badge <?= $mt ?>"><i class="fas fa-<?= $mt === 'in' ? 'arrow-down' : 'arrow-up' ?>"></i> <?= strtoupper($mt) ?></span></td>
+                                <td>
+                                    <?php $cat_icons = ['lab_test' => 'fa-flask','equipment' => 'fa-tools','otc' => 'fa-cash-register','procedure' => 'fa-procedures','prescription' => 'fa-prescription','doctor_use' => 'fa-user-md','cancel' => 'fa-undo'];
+                                    $icon = $cat_icons[$category] ?? 'fa-circle';
+                                    $badge_class = in_array($category, array_keys($cat_icons)) ? $category : 'out'; ?>
+                                    <span class="status-badge <?= $badge_class ?>"><i class="fas <?= $icon ?>"></i> <?= strtoupper(str_replace('_',' ',$category)) ?></span>
+                                </td>
+                                <td style="text-align:center;font-family:var(--font-mono);font-weight:800;color:<?= $mt === 'in' ? 'var(--success)' : 'var(--danger)' ?>;">
+                                    <?= $mt === 'in' ? '+' : '−' ?><?= number_format($m['quantity']) ?>
+                                </td>
+                                <td style="text-align:right;font-family:var(--font-mono);color:var(--text-secondary);"><?= number_format($m['previous_stock']) ?></td>
+                                <td style="text-align:right;font-family:var(--font-mono);font-weight:700;"><?= number_format($m['new_stock']) ?></td>
+                                <td style="font-weight:700;font-size:0.75rem;">
+                                    <?= htmlspecialchars($m['performed_by_name'] ?? 'System') ?>
+                                    <?php if (!empty($m['performed_by_username'])): ?>
+                                        <div style="font-size:0.6rem;color:var(--text-secondary);font-weight:500;">@<?= htmlspecialchars($m['performed_by_username']) ?></div>
+                                    <?php endif; ?>
+                                </td>
+                                <td style="font-size:0.72rem;">
+                                    <?php if (!empty($m['patient_id'])):
+                                        $stmt_p = $db->prepare("SELECT full_name, patient_id FROM patients WHERE id = ? LIMIT 1");
+                                        $stmt_p->execute([$m['patient_id']]);
+                                        $p_info = $stmt_p->fetch(PDO::FETCH_ASSOC);
+                                        if ($p_info):
+                                    ?>
+                                        <div style="font-weight:700;"><?= htmlspecialchars($p_info['full_name']) ?></div>
+                                        <div style="font-size:0.62rem;color:var(--text-secondary);"><?= htmlspecialchars($p_info['patient_id']) ?></div>
+                                    <?php else: ?>
+                                        <span style="color:var(--text-muted);">—</span>
+                                    <?php endif; else: ?>
+                                        <span style="color:var(--text-muted);">—</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td style="font-size:0.68rem;color:var(--text-secondary);max-width:400px;"><?= htmlspecialchars(substr($m['notes'] ?? '', 0, 150)) ?><?= strlen($m['notes'] ?? '') > 150 ? '...' : '' ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <?php else: ?>
+                <div class="empty-state"><i class="fas fa-inbox"></i><p>No movements found for this period</p></div>
+                <?php endif; ?>
+            </div>
+
         <?php else: ?>
             <div class="table-card">
-                <div class="table-header">
-                    <span class="title"><i class="fas fa-tools"></i> Equipment Tracking</span>
-                    <span class="count">Search to view details</span>
-                </div>
-                <div class="empty-state">
-                    <i class="fas fa-search"></i>
-                    <p>Search equipment above or click on Top 5 cards</p>
-                    <p style="font-size:0.78rem;margin-top:8px;color:var(--text-muted);">Period Overview • Last Added Stock • Remaining Stock • Purchase History • Bill Items • Lab Tests</p>
-                </div>
+                <div class="table-header"><span class="title"><i class="fas fa-tools"></i> Equipment Tracking</span><span class="count">Search to view details</span></div>
+                <div class="empty-state"><i class="fas fa-search"></i><p>Search equipment above or click on Top 5 cards</p></div>
             </div>
         <?php endif; ?>
 
@@ -2692,23 +1490,22 @@ function toggleCustomDate() {
 (function() {
     var searchInput = document.getElementById('searchInput');
     var autocompleteBox = document.getElementById('autocompleteBox');
-    var searchForm = document.getElementById('searchForm');
     var activeTab = '<?= $active_tab ?>';
     var branchId = '<?= $selected_branch_id ?>';
-    
+
     if (!searchInput) return;
-    
+
     var debounceTimer;
-    
+
     searchInput.addEventListener('input', function() {
         clearTimeout(debounceTimer);
         var q = this.value.trim();
-        
+
         if (q.length < 2) {
             autocompleteBox.classList.remove('active');
             return;
         }
-        
+
         debounceTimer = setTimeout(function() {
             fetch('?ajax=search&type=' + activeTab + '&q=' + encodeURIComponent(q) + '&branch=' + branchId)
                 .then(function(r) { return r.json(); })
@@ -2717,30 +1514,27 @@ function toggleCustomDate() {
                         var html = '';
                         data.results.slice(0, 5).forEach(function(item) {
                             var stock = parseInt(item.total_stock) || 0;
-                            var lowClass = stock <= 10 ? ' low' : '';
                             var safeName = (item.name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
                             html += '<div class="autocomplete-item" onclick="selectItem(' + item.id + ', \'' + safeName + '\')">';
                             html += '<div class="item-main">';
                             html += '<div class="item-icon"><i class="fas ' + (activeTab === 'medicine' ? 'fa-pills' : 'fa-tools') + '"></i></div>';
                             html += '<div>';
                             html += '<div class="item-name">' + (item.name || '') + '</div>';
-                            html += '<div class="item-meta">' + (item.batches ? item.batches + ' batches' : 'ID: #' + item.id) + '</div>';
-                            html += '</div>';
-                            html += '</div>';
-                            html += '<div class="item-stock' + lowClass + '">' + stock + ' in stock</div>';
-                            html += '</div>';
+                            html += '<div class="item-meta">ID: #' + item.id + '</div>';
+                            html += '</div></div>';
+                            html += '<div class="item-stock">' + stock + '</div></div>';
                         });
                         autocompleteBox.innerHTML = html;
                         autocompleteBox.classList.add('active');
                     } else {
-                        autocompleteBox.innerHTML = '<div class="autocomplete-empty"><i class="fas fa-search-minus"></i><br>No results for "' + q + '"</div>';
+                        autocompleteBox.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-secondary);">No results for "' + q + '"</div>';
                         autocompleteBox.classList.add('active');
                     }
                 })
                 .catch(function(err) { console.error('Search error:', err); });
         }, 250);
     });
-    
+
     document.addEventListener('click', function(e) {
         if (!e.target.closest('.search-wrapper')) {
             autocompleteBox.classList.remove('active');

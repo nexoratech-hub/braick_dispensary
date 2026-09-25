@@ -1,7 +1,16 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/consultation.php
-// COMPLETE CONSULTATION - FULLY FIXED WITH ALL SECTIONS
+// COMPLETE CONSULTATION V4 - FIXED EQUIPMENT STOCK MOVEMENTS
+// ================================================================
+// ✅ V4 FIXED: add_equipment_batch inaingiza stock_movements
+// ✅ V4 FIXED: remove_added_item (equipment) inarudisha + stock_movement
+// ✅ V4 FIXED: remove_medication inaingiza stock_movement ya returned
+// ✅ V4 FIXED: Notes zina include jina la doctor
+// ✅ V3 FIXED: INNER JOIN badala ya LEFT JOIN (haionyeshi "Unknown")
+// ✅ V3 FIXED: cleanupEmptyPrescriptions() function
+// ✅ V3 FIXED: Filter empty rows kwenye loop na HTML
+// ✅ V3 FIXED: Skip prescriptions zisizo na items
 // WITH 7 VITAL SIGNS (INCLUDING OXYGEN SATURATION - SpO2)
 // ✅ FIXED: Manual disease code inatumika kama user ameijaza
 // ✅ FIXED: Auto-generate code kama user hajajaza
@@ -65,6 +74,39 @@ try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     die('Database connection error: ' . $e->getMessage());
+}
+
+// ================================================================
+// ✅ V3 NEW: CLEANUP EMPTY PRESCRIPTIONS FUNCTION
+// ================================================================
+function cleanupEmptyPrescriptions($db, $visit_id, $branch_id) {
+    try {
+        $stmt = $db->prepare("
+            SELECT p.id, p.prescription_number, p.status
+            FROM prescriptions p
+            LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
+            WHERE p.visit_id = ?
+              AND p.branch_id = ?
+              AND pi.id IS NULL
+        ");
+        $stmt->execute([$visit_id, $branch_id]);
+        $empty_rx = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        if (empty($empty_rx)) return 0;
+        
+        $empty_ids = array_column($empty_rx, 'id');
+        $placeholders = implode(',', array_fill(0, count($empty_ids), '?'));
+        
+        $stmt_del = $db->prepare("DELETE FROM prescriptions WHERE id IN ($placeholders)");
+        $stmt_del->execute($empty_ids);
+        
+        error_log("✅ Cleanup: Deleted " . count($empty_ids) . " empty prescriptions for visit #$visit_id");
+        return count($empty_ids);
+        
+    } catch (Exception $e) {
+        error_log("❌ Cleanup error: " . $e->getMessage());
+        return 0;
+    }
 }
 
 // ================================================================
@@ -200,6 +242,9 @@ if ($visit_id > 0) {
     }
     $visit_id = $visit['id'];
 }
+
+// ✅ V3: Cleanup empty prescriptions
+cleanupEmptyPrescriptions($db, $visit_id, $doctor_branch_id);
 
 // Get current visit status
 $is_completed = ($visit['status'] === 'completed');
@@ -479,12 +524,11 @@ function checkLabResultsAndUpdateStatus($db, $visit_id) {
 }
 
 // ================================================================
-// ✅ FIXED: SAVE DIAGNOSIS - MANUAL DISEASE CODE INATUMIKA
+// SAVE DIAGNOSIS
 // ================================================================
 function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, $data) {
     $selected_diseases = isset($data['diagnosis_ids']) ? $data['diagnosis_ids'] : [];
     $manual_diseases = isset($data['manual_diseases']) ? $data['manual_diseases'] : [];
-    // ✅ MPYA: Chukua manual disease codes
     $manual_disease_codes = isset($data['manual_disease_codes']) ? $data['manual_disease_codes'] : [];
     
     $treatment = trim($data['treatment'] ?? '');
@@ -505,7 +549,6 @@ function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, 
         else $manual_diseases = array_map('trim', explode(',', $manual_diseases));
     }
     
-    // ✅ MPYA: Decode manual_disease_codes
     if (is_string($manual_disease_codes)) {
         $decoded = json_decode($manual_disease_codes, true);
         if (is_array($decoded)) $manual_disease_codes = $decoded;
@@ -534,7 +577,6 @@ function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, 
         }
     }
     
-    // ✅ MPYA: Clean manual codes (sambamba na manual diseases)
     $clean_manual_codes = [];
     foreach ($manual_disease_codes as $code) {
         $code = trim($code);
@@ -547,7 +589,6 @@ function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, 
     $disease_names = [];
     $disease_codes = [];
     
-    // Existing diseases (kutoka checkbox)
     foreach ($clean_selected as $disease_id) {
         if ($disease_id > 0) {
             $stmt = $db->prepare("SELECT id, disease_name, disease_code FROM diseases WHERE id = ? AND is_active = 1");
@@ -567,34 +608,28 @@ function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, 
         }
     }
     
-    // ✅ Manual diseases - HAPA NDIPO TATIZO LILIPOKUWA
     foreach ($clean_manual as $index => $manual) {
         $manual = trim($manual);
         if (empty($manual)) continue;
         if (in_array($manual, $disease_names)) continue;
         
-        // ✅ Chukua code ya user kwa index hii (kama ipo)
         $user_code = '';
         if (isset($clean_manual_codes[$index])) {
             $user_code = $clean_manual_codes[$index];
         }
         
-        // Angalia kama disease ipo tayari kwa jina
         $stmt = $db->prepare("SELECT id, disease_name, disease_code FROM diseases WHERE disease_name = ? AND branch_id = ?");
         $stmt->execute([$manual, $doctor_branch_id]);
         $existing = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($existing) {
-            // Disease ipo tayari
             if (!in_array($existing['disease_name'], $disease_names)) {
                 $saved_diseases[] = $existing['id'];
                 $disease_names[] = $existing['disease_name'];
                 
-                // ✅ Kama user amejaza code, TUMIA. Kama haipo, tumia ya existing
                 $final_code = !empty($user_code) ? $user_code : ($existing['disease_code'] ?? '');
                 $disease_codes[] = $final_code;
                 
-                // ✅ Update code kama user amejaza tofauti
                 if (!empty($user_code) && $user_code !== $existing['disease_code']) {
                     $stmt_update = $db->prepare("UPDATE diseases SET disease_code = ?, updated_at = NOW() WHERE id = ?");
                     $stmt_update->execute([$user_code, $existing['id']]);
@@ -606,20 +641,15 @@ function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, 
                 $stmt->execute([$treatment, $existing['id']]);
             }
         } else {
-            // ✅ Disease ni MPYA - TUMIA CODE YA USER KAMA IPO, LA SIVYO GENERATE
             if (!empty($user_code)) {
-                // User amejaza code - tumia yake
                 $disease_code = $user_code;
                 
-                // Hakikisha code haipo tayari
                 $stmt_check = $db->prepare("SELECT COUNT(*) FROM diseases WHERE disease_code = ? AND branch_id = ?");
                 $stmt_check->execute([$disease_code, $doctor_branch_id]);
                 if ($stmt_check->fetchColumn() > 0) {
-                    // Code imechukuliwa - ongeza suffix
                     $disease_code = $user_code . '-' . rand(10, 99);
                 }
             } else {
-                // User hakujaza code - GENERATE
                 $clean_code_name = preg_replace('/[^a-zA-Z0-9]/', '', $manual);
                 $clean_code_prefix = strtoupper(substr($clean_code_name, 0, 6));
                 if (empty($clean_code_prefix)) $clean_code_prefix = 'DISEASE';
@@ -634,7 +664,6 @@ function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, 
                 } while ($exists > 0 && $attempts < 10);
             }
             
-            // Insert disease mpya
             $stmt = $db->prepare("
                 INSERT INTO diseases (disease_name, disease_code, branch_id, treatment, is_active, created_at)
                 VALUES (?, ?, ?, ?, 1, NOW())
@@ -685,6 +714,37 @@ function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, 
         'treatment' => $treatment,
         'diagnosis_string' => $diagnosis_string
     ];
+}
+
+// ================================================================
+// ✅ V4 NEW: HELPER FUNCTION - Log stock movement
+// ================================================================
+function logStockMovement($db, $item_type, $item_id, $patient_id, $movement_type, $quantity, $previous_stock, $new_stock, $reference_type, $reference_id, $performed_by, $branch_id, $notes) {
+    try {
+        if ($item_type === 'medicine') {
+            $sql = "INSERT INTO stock_movements 
+                    (inventory_id, patient_id, movement_type, quantity, previous_stock, new_stock, 
+                     reference_type, reference_id, performed_by, branch_id, notes, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())";
+        } else {
+            $sql = "INSERT INTO stock_movements 
+                    (equipment_id, patient_id, movement_type, quantity, previous_stock, new_stock, 
+                     reference_type, reference_id, performed_by, branch_id, notes, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())";
+        }
+        
+        $stmt = $db->prepare($sql);
+        $stmt->execute([
+            $item_id, $patient_id, $movement_type, $quantity, 
+            $previous_stock, $new_stock, 
+            $reference_type, $reference_id, $performed_by, $branch_id, $notes
+        ]);
+        
+        return $db->lastInsertId();
+    } catch (Exception $e) {
+        error_log("logStockMovement error: " . $e->getMessage());
+        return false;
+    }
 }
 
 // ================================================================
@@ -862,6 +922,9 @@ try {
 
 $sections_frozen = ($has_active_lab && !$lab_results_available && !$is_completed && !$is_waiting);
 
+// ================================================================
+// ✅ V3 FIXED: GET PRESCRIPTIONS - INNER JOIN
+// ================================================================
 $prescriptions = [];
 $medications_total = 0;
 
@@ -874,17 +937,26 @@ try {
                pi.dispensed_at, pi.dispensed_by,
                pi.inventory_id
         FROM prescriptions p
-        LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
+        INNER JOIN prescription_items pi ON p.id = pi.prescription_id
         WHERE p.visit_id = ?
-        ORDER BY p.created_at DESC
+          AND pi.id IS NOT NULL
+          AND pi.medication_name IS NOT NULL
+          AND pi.medication_name != ''
+        ORDER BY p.created_at DESC, pi.id ASC
     ");
     $stmt->execute([$visit_id]);
     $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($prescriptions as $presc) {
+        if (empty($presc['medication_name']) || empty($presc['item_id'])) {
+            continue;
+        }
         $medications_total += $presc['total_price'] ?? 0;
     }
-} catch (Exception $e) { $prescriptions = []; }
+} catch (Exception $e) { 
+    $prescriptions = []; 
+    error_log("Prescriptions fetch error: " . $e->getMessage());
+}
 
 $procedures = [];
 $procedure_total = 0;
@@ -965,7 +1037,7 @@ $amount_after_discount = $bill_data['amount_after_discount'];
 $equipment_items_display = [];
 try {
     $stmt = $db->prepare("
-        SELECT id, item_name, quantity, unit_price, total_price, status 
+        SELECT id, item_name, item_id, quantity, unit_price, total_price, status 
         FROM bill_items 
         WHERE bill_id = ? AND item_type = 'equipment' AND status != 'cancelled'
     ");
@@ -1027,7 +1099,6 @@ $manual_diseases_saved = [];
 if (!empty($visit['diagnosis'])) {
     $manual_diseases_saved = array_map('trim', explode(',', $visit['diagnosis']));
 }
-// ✅ MPYA: Pata codes zilizohifadhiwa
 $saved_codes_array = [];
 if (!empty($visit['disease_code'])) {
     $saved_codes_array = array_map('trim', explode(',', $visit['disease_code']));
@@ -1226,13 +1297,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                    pi.quantity, pi.duration, pi.route, pi.instructions,
                    pi.unit_price, pi.total_price, pi.dispensed_at, pi.dispensed_by, pi.inventory_id
             FROM prescriptions p
-            LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
+            INNER JOIN prescription_items pi ON p.id = pi.prescription_id
             WHERE p.visit_id = ?
+              AND pi.id IS NOT NULL
+              AND pi.medication_name IS NOT NULL
+              AND pi.medication_name != ''
             ORDER BY p.created_at DESC
         ");
         $stmt->execute([$visit_id]);
         $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        foreach ($prescriptions as $presc) $medications_total += $presc['total_price'] ?? 0;
+        foreach ($prescriptions as $presc) {
+            if (empty($presc['medication_name']) || empty($presc['item_id'])) continue;
+            $medications_total += $presc['total_price'] ?? 0;
+        }
         
         $procedures = [];
         $procedure_total = 0;
@@ -1517,7 +1594,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         
         if ($test_id > 0) {
             $stmt = $db->prepare("
-                SELECT lt.id, lt.test_id, lt.test_price
+                SELECT lt.id, lt.test_id, lt.test_price, lt.equipment_id
                 FROM lab_tests lt
                 WHERE lt.id = ? AND lt.visit_id = ? AND lt.status IN ('pending', 'in_progress')
             ");
@@ -1525,17 +1602,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $test = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if ($test) {
-                $stmt = $db->prepare("DELETE FROM bill_items WHERE bill_id = ? AND item_type = 'lab_test' AND reference_id = ?");
-                $stmt->execute([$bill_id, $test_id]);
-                
-                $stmt = $db->prepare("DELETE FROM lab_tests WHERE id = ? AND visit_id = ?");
-                $stmt->execute([$test_id, $visit_id]);
-                
-                $bill_data = updateBillTotal($db, $bill_id);
-                
-                $response['success'] = true;
-                $response['message'] = '✅ Lab test removed!';
-                $response['bill_data'] = $bill_data;
+                try {
+                    $db->beginTransaction();
+                    
+                    // ✅ V4: Return equipment stock + log movement
+                    if (!empty($test['equipment_id'])) {
+                        $stmt_eq = $db->prepare("
+                            SELECT id, equipment_name, quantity as stock
+                            FROM medical_equipment 
+                            WHERE id = ? AND branch_id = ?
+                        ");
+                        $stmt_eq->execute([$test['equipment_id'], $doctor_branch_id]);
+                        $equip = $stmt_eq->fetch(PDO::FETCH_ASSOC);
+                        
+                        if ($equip) {
+                            $qty_used = (int)($test['equipment_quantity_used'] ?? 1);
+                            $previous_stock = (int)$equip['stock'];
+                            $new_stock = $previous_stock + $qty_used;
+                            
+                            $stmt_upd = $db->prepare("UPDATE medical_equipment SET quantity = ? WHERE id = ?");
+                            $stmt_upd->execute([$new_stock, $equip['id']]);
+                            
+                            // ✅ V4 FIX: Log stock movement (returned)
+                            logStockMovement(
+                                $db, 'equipment', $equip['id'], $patient_id, 'in', $qty_used,
+                                $previous_stock, $new_stock, 'lab_test', $test_id,
+                                $doctor_id, $doctor_branch_id,
+                                "Stock returned - Removed lab test by Dr. {$doctor_name}: {$equip['equipment_name']}"
+                            );
+                        }
+                    }
+                    
+                    $stmt = $db->prepare("DELETE FROM bill_items WHERE bill_id = ? AND item_type = 'lab_test' AND reference_id = ?");
+                    $stmt->execute([$bill_id, $test_id]);
+                    
+                    $stmt = $db->prepare("DELETE FROM lab_tests WHERE id = ? AND visit_id = ?");
+                    $stmt->execute([$test_id, $visit_id]);
+                    
+                    $db->commit();
+                    $bill_data = updateBillTotal($db, $bill_id);
+                    
+                    $response['success'] = true;
+                    $response['message'] = '✅ Lab test removed! Equipment stock returned.';
+                    $response['bill_data'] = $bill_data;
+                } catch (Exception $e) {
+                    if ($db->inTransaction()) $db->rollBack();
+                    $response['message'] = '❌ Error: ' . $e->getMessage();
+                }
             } else {
                 $response['message'] = '❌ Test not found or already processed';
             }
@@ -1555,10 +1668,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             exit;
         }
         
-        // ✅ Chukua data zote ikiwa na manual_disease_codes
         $raw_diagnosis_ids = isset($_POST['diagnosis_ids']) ? $_POST['diagnosis_ids'] : [];
         $raw_manual_diseases = isset($_POST['manual_diseases']) ? $_POST['manual_diseases'] : [];
-        $raw_manual_disease_codes = isset($_POST['manual_disease_codes']) ? $_POST['manual_disease_codes'] : []; // ✅ MPYA
+        $raw_manual_disease_codes = isset($_POST['manual_disease_codes']) ? $_POST['manual_disease_codes'] : [];
         
         $treatment = trim($_POST['treatment'] ?? '');
         $symptoms = trim($_POST['symptoms'] ?? '');
@@ -1584,7 +1696,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $manual_diseases = $raw_manual_diseases;
         }
         
-        // ✅ MPYA: Decode manual disease codes
         $manual_disease_codes = [];
         if (is_string($raw_manual_disease_codes)) {
             $decoded = json_decode($raw_manual_disease_codes, true);
@@ -1616,7 +1727,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $result = saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, [
                     'diagnosis_ids' => $clean_diagnosis_ids,
                     'manual_diseases' => $clean_manual_diseases,
-                    'manual_disease_codes' => $manual_disease_codes, // ✅ MPYA
+                    'manual_disease_codes' => $manual_disease_codes,
                     'treatment' => $treatment,
                     'symptoms' => $symptoms,
                     'hpi' => $hpi,
@@ -1680,7 +1791,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                     
                     $unit_price = $med['selling_price'];
                     $total_price = $unit_price * $quantity;
-                    $new_stock = $med['stock'] - $quantity;
+                    $previous_stock = (int)$med['stock'];
+                    $new_stock = $previous_stock - $quantity;
                     
                     $stmt = $db->prepare("UPDATE medications_inventory SET quantity = ? WHERE id = ?");
                     $stmt->execute([$new_stock, $inventory_id]);
@@ -1700,6 +1812,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                     $stmt->execute([$bill_id, $patient_id, $doctor_branch_id,
                         $med['medication_name'] . ' (Batch: ' . ($med['batch_number'] ?? 'N/A') . ')',
                         $quantity, $unit_price, $total_price, $prescription_id]);
+                    
+                    // ✅ V4 FIX: Log stock movement for medication
+                    logStockMovement(
+                        $db, 'medicine', $inventory_id, $patient_id, 'out', $quantity,
+                        $previous_stock, $new_stock, 'prescription', $prescription_id,
+                        $doctor_id, $doctor_branch_id,
+                        "Prescribed by Dr. {$doctor_name}: {$med['medication_name']} (Rx #$prescription_number) - Qty: $quantity"
+                    );
                     
                     $db->commit();
                     $bill_data = updateBillTotal($db, $bill_id);
@@ -1769,8 +1889,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 
                 foreach ($med_items as $med) {
                     if ($med && $med['inventory_id']) {
-                        $stmt = $db->prepare("UPDATE medications_inventory SET quantity = quantity + ? WHERE id = ? AND branch_id = ?");
-                        $stmt->execute([$med['quantity'], $med['inventory_id'], $doctor_branch_id]);
+                        // Get current stock for logging
+                        $stmt_stk = $db->prepare("SELECT quantity FROM medications_inventory WHERE id = ? AND branch_id = ?");
+                        $stmt_stk->execute([$med['inventory_id'], $doctor_branch_id]);
+                        $stock_row = $stmt_stk->fetch(PDO::FETCH_ASSOC);
+                        $previous_stock = (int)($stock_row['quantity'] ?? 0);
+                        $new_stock = $previous_stock + $med['quantity'];
+                        
+                        $stmt = $db->prepare("UPDATE medications_inventory SET quantity = ? WHERE id = ? AND branch_id = ?");
+                        $stmt->execute([$new_stock, $med['inventory_id'], $doctor_branch_id]);
+                        
+                        // ✅ V4 FIX: Log stock movement (returned)
+                        logStockMovement(
+                            $db, 'medicine', $med['inventory_id'], $patient_id, 'in', $med['quantity'],
+                            $previous_stock, $new_stock, 'prescription', $prescription_id,
+                            $doctor_id, $doctor_branch_id,
+                            "Stock returned - Removed by Dr. {$doctor_name}: {$med['medication_name']} (Qty: {$med['quantity']})"
+                        );
                     }
                 }
                 
@@ -1809,10 +1944,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             exit;
         }
         
-        // ✅ Chukua data zote
         $raw_diagnosis_ids = isset($_POST['diagnosis_ids']) ? $_POST['diagnosis_ids'] : [];
         $raw_manual_diseases = isset($_POST['manual_diseases']) ? $_POST['manual_diseases'] : [];
-        $raw_manual_disease_codes = isset($_POST['manual_disease_codes']) ? $_POST['manual_disease_codes'] : []; // ✅ MPYA
+        $raw_manual_disease_codes = isset($_POST['manual_disease_codes']) ? $_POST['manual_disease_codes'] : [];
         
         $treatment = trim($_POST['treatment'] ?? '');
         $symptoms = trim($_POST['symptoms'] ?? '');
@@ -1838,7 +1972,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $manual_diseases = $raw_manual_diseases;
         }
         
-        // ✅ MPYA: Decode codes
         $manual_disease_codes = [];
         if (is_string($raw_manual_disease_codes)) {
             $decoded = json_decode($raw_manual_disease_codes, true);
@@ -1870,7 +2003,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $result = saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, [
                     'diagnosis_ids' => $clean_diagnosis_ids,
                     'manual_diseases' => $clean_manual_diseases,
-                    'manual_disease_codes' => $manual_disease_codes, // ✅ MPYA
+                    'manual_disease_codes' => $manual_disease_codes,
                     'treatment' => $treatment,
                     'symptoms' => $symptoms,
                     'hpi' => $hpi,
@@ -1970,6 +2103,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
+    // ================================================================
+    // ✅✅✅ V4 FIX: add_equipment_batch - SASA INAINGIZA STOCK_MOVEMENTS ✅✅✅
+    // ================================================================
     if ($action === 'add_equipment_batch') {
         header('Content-Type: application/json');
         
@@ -1978,10 +2114,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             exit;
         }
         
-        // ✅ Chukua data zote
         $raw_diagnosis_ids = isset($_POST['diagnosis_ids']) ? $_POST['diagnosis_ids'] : [];
         $raw_manual_diseases = isset($_POST['manual_diseases']) ? $_POST['manual_diseases'] : [];
-        $raw_manual_disease_codes = isset($_POST['manual_disease_codes']) ? $_POST['manual_disease_codes'] : []; // ✅ MPYA
+        $raw_manual_disease_codes = isset($_POST['manual_disease_codes']) ? $_POST['manual_disease_codes'] : [];
         
         $treatment = trim($_POST['treatment'] ?? '');
         $symptoms = trim($_POST['symptoms'] ?? '');
@@ -2007,7 +2142,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $manual_diseases = $raw_manual_diseases;
         }
         
-        // ✅ MPYA: Decode codes
         $manual_disease_codes = [];
         if (is_string($raw_manual_disease_codes)) {
             $decoded = json_decode($raw_manual_disease_codes, true);
@@ -2039,7 +2173,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $result = saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, [
                     'diagnosis_ids' => $clean_diagnosis_ids,
                     'manual_diseases' => $clean_manual_diseases,
-                    'manual_disease_codes' => $manual_disease_codes, // ✅ MPYA
+                    'manual_disease_codes' => $manual_disease_codes,
                     'treatment' => $treatment,
                     'symptoms' => $symptoms,
                     'hpi' => $hpi,
@@ -2093,13 +2227,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 
                 $unit_price = $equipment['selling_price'] ?? 0;
                 $total_price = $unit_price * $quantity;
-                $new_stock = $equipment['stock'] - $quantity;
+                $previous_stock = (int)$equipment['stock'];
+                $new_stock = $previous_stock - $quantity;
                 
+                // ✅ UPDATE stock
                 $stmt = $db->prepare("UPDATE medical_equipment SET quantity = ? WHERE id = ?");
                 $stmt->execute([$new_stock, $equipment_id]);
                 
                 $item_name = $equipment['equipment_name'];
                 
+                // ✅ INSERT bill_item
                 $stmt = $db->prepare("
                     INSERT INTO bill_items (
                         bill_id, patient_id, branch_id, item_type, item_id,
@@ -2112,6 +2249,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                     $item_name . ($total_price == 0 ? ' (FREE)' : ''),
                     $quantity, $unit_price, $total_price, $equipment_id
                 ]);
+                $bill_item_id = $db->lastInsertId();
+                
+                // ✅✅✅ V4 FIX: INSERT stock_movement HAPA! ✅✅✅
+                logStockMovement(
+                    $db, 'equipment', $equipment_id, $patient_id, 'out', $quantity,
+                    $previous_stock, $new_stock, 'procedure', $bill_item_id,
+                    $doctor_id, $doctor_branch_id,
+                    "Doctor used (Dr. {$doctor_name}): {$item_name} - Bill #{$bill_id} - Qty: {$quantity}"
+                );
                 
                 $added++;
             }
@@ -2135,6 +2281,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
+    // ================================================================
+    // ✅✅✅ V4 FIX: remove_added_item - INAINGIZA STOCK_MOVEMENT YA RETURN ✅✅✅
+    // ================================================================
     if ($action === 'remove_added_item') {
         header('Content-Type: application/json');
         
@@ -2185,18 +2334,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                     exit;
                 }
                 
-                $stmt_eq = $db->prepare("
-                    SELECT id, equipment_name FROM medical_equipment 
-                    WHERE equipment_name = ? AND branch_id = ?
-                    LIMIT 1
-                ");
-                $stmt_eq->execute([$equip_item['item_name'], $doctor_branch_id]);
+                // Use item_id (equipment_id) directly if available
+                $equipment_id = (int)($equip_item['item_id'] ?? 0);
+                
+                if ($equipment_id > 0) {
+                    $stmt_eq = $db->prepare("
+                        SELECT id, equipment_name, quantity as stock 
+                        FROM medical_equipment 
+                        WHERE id = ? AND branch_id = ?
+                        FOR UPDATE
+                    ");
+                    $stmt_eq->execute([$equipment_id, $doctor_branch_id]);
+                } else {
+                    // Fallback: find by name
+                    $clean_name = preg_replace('/\s*\(FREE\)\s*$/i', '', $equip_item['item_name']);
+                    $stmt_eq = $db->prepare("
+                        SELECT id, equipment_name, quantity as stock 
+                        FROM medical_equipment 
+                        WHERE equipment_name = ? AND branch_id = ?
+                        LIMIT 1
+                        FOR UPDATE
+                    ");
+                    $stmt_eq->execute([$clean_name, $doctor_branch_id]);
+                }
                 $equipment = $stmt_eq->fetch(PDO::FETCH_ASSOC);
                 
                 if ($equipment) {
-                    $quantity = $equip_item['quantity'] ?? 1;
-                    $stmt = $db->prepare("UPDATE medical_equipment SET quantity = quantity + ? WHERE id = ? AND branch_id = ?");
-                    $stmt->execute([$quantity, $equipment['id'], $doctor_branch_id]);
+                    $quantity = (int)($equip_item['quantity'] ?? 1);
+                    $previous_stock = (int)$equipment['stock'];
+                    $new_stock = $previous_stock + $quantity;
+                    
+                    // ✅ UPDATE stock
+                    $stmt = $db->prepare("UPDATE medical_equipment SET quantity = ? WHERE id = ? AND branch_id = ?");
+                    $stmt->execute([$new_stock, $equipment['id'], $doctor_branch_id]);
+                    
+                    // ✅✅✅ V4 FIX: Log stock movement (returned) ✅✅✅
+                    logStockMovement(
+                        $db, 'equipment', $equipment['id'], $patient_id, 'in', $quantity,
+                        $previous_stock, $new_stock, 'procedure', $item_id,
+                        $doctor_id, $doctor_branch_id,
+                        "Stock returned - Removed by Dr. {$doctor_name}: {$equipment['equipment_name']} from bill"
+                    );
                 }
                 
                 $stmt = $db->prepare("DELETE FROM bill_items WHERE id = ? AND bill_id = ?");
@@ -2240,7 +2418,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         
         $diagnosis_ids = isset($_POST['diagnosis_ids']) ? (array)$_POST['diagnosis_ids'] : [];
         $manual_diseases = isset($_POST['manual_diseases']) ? (array)$_POST['manual_diseases'] : [];
-        $manual_disease_codes = isset($_POST['manual_disease_codes']) ? (array)$_POST['manual_disease_codes'] : []; // ✅ MPYA
+        $manual_disease_codes = isset($_POST['manual_disease_codes']) ? (array)$_POST['manual_disease_codes'] : [];
         $treatment = trim($_POST['treatment'] ?? '');
         
         $stmt = $db->prepare("
@@ -2255,7 +2433,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, [
                     'diagnosis_ids' => $diagnosis_ids,
                     'manual_diseases' => $manual_diseases,
-                    'manual_disease_codes' => $manual_disease_codes, // ✅ MPYA
+                    'manual_disease_codes' => $manual_disease_codes,
                     'treatment' => $treatment,
                     'symptoms' => $symptoms,
                     'hpi' => $hpi,
@@ -2317,19 +2495,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                         continue;
                     }
                     
-                    $new_equipment_stock = $equip['stock'] - $equipment_quantity_used;
+                    $previous_stock = (int)$equip['stock'];
+                    $new_equipment_stock = $previous_stock - $equipment_quantity_used;
+                    
                     $stmt_update = $db->prepare("UPDATE medical_equipment SET quantity = ? WHERE id = ?");
                     $stmt_update->execute([$new_equipment_stock, $required_equipment_id]);
                     
+                    // ✅ Lab test already logs stock movement correctly
                     $stmt_log = $db->prepare("
                         INSERT INTO stock_movements 
-                        (equipment_id, patient_id, movement_type, quantity, previous_stock, new_stock, reference_type, reference_id, performed_by, branch_id, notes)
-                        VALUES (?, ?, 'out', ?, ?, ?, 'lab_test', ?, ?, ?, ?)
+                        (equipment_id, patient_id, movement_type, quantity, previous_stock, new_stock, reference_type, reference_id, performed_by, branch_id, notes, created_at)
+                        VALUES (?, ?, 'out', ?, ?, ?, 'lab_test', ?, ?, ?, ?, NOW())
                     ");
                     $stmt_log->execute([
                         $required_equipment_id, $patient_id, $equipment_quantity_used,
-                        $equip['stock'], $new_equipment_stock, $test_id,
-                        $doctor_id, $doctor_branch_id, "Lab test: $test_name"
+                        $previous_stock, $new_equipment_stock, $test_id,
+                        $doctor_id, $doctor_branch_id, 
+                        "Lab test (Dr. {$doctor_name}): $test_name"
                     ]);
                 }
                 
@@ -2397,7 +2579,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     if (isset($_POST['save_consultation'])) {
         $diagnosis_ids = isset($_POST['diagnosis_ids']) ? (array)$_POST['diagnosis_ids'] : [];
         $manual_diseases = isset($_POST['manual_diseases']) ? (array)$_POST['manual_diseases'] : [];
-        $manual_disease_codes = isset($_POST['manual_disease_codes']) ? (array)$_POST['manual_disease_codes'] : []; // ✅ MPYA
+        $manual_disease_codes = isset($_POST['manual_disease_codes']) ? (array)$_POST['manual_disease_codes'] : [];
         $treatment = trim($_POST['treatment'] ?? '');
         $symptoms = trim($_POST['symptoms'] ?? '');
         $hpi = trim($_POST['hpi'] ?? '');
@@ -2415,7 +2597,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, [
                 'diagnosis_ids' => $diagnosis_ids,
                 'manual_diseases' => $manual_diseases,
-                'manual_disease_codes' => $manual_disease_codes, // ✅ MPYA
+                'manual_disease_codes' => $manual_disease_codes,
                 'treatment' => $treatment,
                 'symptoms' => $symptoms,
                 'hpi' => $hpi,
@@ -2465,6 +2647,11 @@ if (!isset($_SESSION['lab_cart'])) $_SESSION['lab_cart'] = [];
 $lab_cart = $_SESSION['lab_cart'];
 $lab_cart_total = array_sum(array_column($lab_cart, 'price'));
 $lab_cart_count = count($lab_cart);
+
+// ✅ V3: Filter valid prescriptions kwa HTML (skip empty)
+$valid_prescriptions = array_filter($prescriptions, function($med) {
+    return !empty($med['medication_name']) && !empty($med['item_id']);
+});
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
@@ -4115,7 +4302,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <?php foreach ($manual_diseases_saved as $idx => $manual_disease): ?>
                         <?php $manual_disease = trim($manual_disease); ?>
                         <?php if (!empty($manual_disease)): 
-                            // ✅ Chukua code kwa index hii (kama ipo)
                             $saved_code = $saved_codes_array[$idx] ?? '';
                         ?>
                             <span class="manual-disease-tag" data-disease="<?= htmlspecialchars($manual_disease) ?>" <?= $saved_code ? 'data-disease-code="' . htmlspecialchars($saved_code) . '"' : '' ?>>
@@ -4292,13 +4478,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
                     <h4 style="font-size:0.875rem;font-weight:600;color:var(--text-secondary);margin:0;">
                         <i class="fas fa-list"></i> Prescribed Medications
-                        <span style="font-size:0.75rem;" id="medCount">(<?= count($prescriptions) ?> items)</span>
+                        <span style="font-size:0.75rem;" id="medCount">(<?= count($valid_prescriptions) ?> items)</span>
                     </h4>
                     <span style="font-size:0.875rem;font-weight:700;color:var(--success);">Total: TSh <span id="medListTotal"><?= number_format($medications_total, 0) ?></span></span>
                 </div>
                 <div id="medicationsList">
-                    <?php if (count($prescriptions) > 0): ?>
-                        <?php foreach ($prescriptions as $med): ?>
+                    <?php if (count($valid_prescriptions) > 0): ?>
+                        <?php foreach ($valid_prescriptions as $med): ?>
                             <div class="medication-item" id="med-item-<?= $med['id'] ?>">
                                 <div class="medication-item-info">
                                     <span class="med-name"><?= htmlspecialchars($med['medication_name'] ?? 'Unknown') ?></span>
@@ -4626,7 +4812,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <span class="amount">TSh <?= number_format($medications_total, 0) ?></span>
             </span>
         </h3>
-        <?php if (count($prescriptions) > 0): ?>
+        <?php if (count($valid_prescriptions) > 0): ?>
             <div style="overflow-x:auto;">
                 <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
                     <thead>
@@ -4641,7 +4827,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($prescriptions as $med): ?>
+                        <?php foreach ($valid_prescriptions as $med): ?>
                             <tr>
                                 <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);font-weight:500;"><?= htmlspecialchars($med['medication_name'] ?? 'Unknown') ?></td>
                                 <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);"><?= htmlspecialchars($med['dosage'] ?? '-') ?></td>
@@ -4830,8 +5016,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
 <script>
 // ================================================================
-// CONSULTATION JAVASCRIPT - WITH PREMIUM SUPPORT & SpO2
-// ✅ FIXED: Manual disease code inatumika kama user ameijaza
+// CONSULTATION JAVASCRIPT - V4 (EQUIPMENT STOCK MOVEMENTS FIXED)
 // ================================================================
 
 var AUTO_UPDATE_INTERVAL = 3000;
@@ -5118,7 +5303,7 @@ function clearLabCart() {
 }
 
 function removeLabTest(testId) {
-    if (!confirm('Remove this lab test?')) return;
+    if (!confirm('Remove this lab test? Equipment stock will be returned.')) return;
     var formData = new FormData();
     formData.append('action', 'remove_lab_test');
     formData.append('test_id', testId);
@@ -5322,7 +5507,6 @@ function updateMedicationTotals() {
     }
 }
 
-// ✅ FIXED: saveDiseasesToVisit inatuma manual_disease_codes pia
 function saveDiseasesToVisit() {
     if (isCompleted || isWaiting) return;
     
@@ -5333,9 +5517,8 @@ function saveDiseasesToVisit() {
     });
     
     var manual_diseases = [];
-    var manual_disease_codes = []; // ✅ MPYA
+    var manual_disease_codes = [];
     
-    // ✅ Chukua jina NA code kwa kila manual disease tag
     document.querySelectorAll('.manual-disease-tag').forEach(function(tag) {
         var nameInput = tag.querySelector('input[name="manual_diseases[]"]');
         if (!nameInput) return;
@@ -5366,7 +5549,7 @@ function saveDiseasesToVisit() {
     var currentHash = JSON.stringify({
         d: diagnosis_ids.sort(), 
         m: manual_diseases.sort(),
-        mc: manual_disease_codes, // ✅ MPYA
+        mc: manual_disease_codes,
         t: treatment, s: symptoms, h: hpi, p: physical_exam, n: notes
     });
     
@@ -5386,7 +5569,7 @@ function saveDiseasesToVisit() {
             visit_id: visitId,
             diagnosis_ids: diagnosis_ids,
             manual_diseases: manual_diseases,
-            manual_disease_codes: manual_disease_codes, // ✅ MPYA
+            manual_disease_codes: manual_disease_codes,
             treatment: treatment,
             symptoms: symptoms,
             hpi: hpi,
@@ -5414,7 +5597,6 @@ function saveDiseasesToVisit() {
     .catch(function(error) { if (saveIndicator) saveIndicator.style.display = 'none'; });
 }
 
-// ✅ FIXED: addManualDisease inachukua code kutoka input
 function addManualDisease() {
     var input = document.getElementById('manualDiseaseInput');
     var codeInput = document.getElementById('manualDiseaseCodeInput');
@@ -5425,7 +5607,6 @@ function addManualDisease() {
     name = name.replace(/[\[\]"]/g, '').trim();
     if (!name) { showToast('⚠️ Warning', 'Please enter a valid disease name', 'warning'); return; }
     
-    // ✅ CHUKUA CODE KUTOKA INPUT (optional)
     var customCode = codeInput ? codeInput.value.trim() : '';
     customCode = customCode.replace(/[\[\]"]/g, '').trim();
     
@@ -5465,7 +5646,6 @@ function removeManualDisease(btn) {
     saveDiseasesToVisit();
 }
 
-// ✅ FIXED: getDiagnosisData inarudisha manual_disease_codes pia
 function getDiagnosisData() {
     var diagnosis_ids = [];
     document.querySelectorAll('input[name="diagnosis_ids[]"]:checked').forEach(function(cb) {
@@ -5474,7 +5654,7 @@ function getDiagnosisData() {
     });
     
     var manual_diseases = [];
-    var manual_disease_codes = []; // ✅ MPYA
+    var manual_disease_codes = [];
     
     document.querySelectorAll('.manual-disease-tag').forEach(function(tag) {
         var nameInput = tag.querySelector('input[name="manual_diseases[]"]');
@@ -5498,7 +5678,7 @@ function getDiagnosisData() {
     return {
         diagnosis_ids: diagnosis_ids,
         manual_diseases: manual_diseases,
-        manual_disease_codes: manual_disease_codes, // ✅ MPYA
+        manual_disease_codes: manual_disease_codes,
         treatment: document.getElementById('treatmentTextarea')?.value || '',
         symptoms: document.getElementById('symptomsTextarea')?.value || '',
         hpi: document.getElementById('hpiTextarea')?.value || '',
@@ -5670,7 +5850,10 @@ function updateFullUI(data) {
     if (lastUpdate) lastUpdate.textContent = '⏱ ' + timeStr;
     
     if (data.lab && data.lab.results && data.lab.results.length > 0) updateLabResultsUI(data.lab.results);
-    if (data.prescriptions && data.prescriptions.length > 0) updateMedicationsUI(data.prescriptions);
+    if (data.prescriptions && data.prescriptions.length > 0) {
+        var hasValid = data.prescriptions.some(function(p) { return p.medication_name && p.item_id; });
+        if (hasValid) updateMedicationsUI(data.prescriptions);
+    }
     
     var medTotalEl = document.getElementById('medTotalDisplay');
     if (medTotalEl) medTotalEl.textContent = (data.medications_total || 0).toLocaleString();
@@ -5699,12 +5882,18 @@ function updateLabResultsUI(results) {
 function updateMedicationsUI(prescriptions) {
     var list = document.getElementById('medicationsList');
     if (!list) return;
-    if (!prescriptions || prescriptions.length === 0) {
+    
+    var valid = (prescriptions || []).filter(function(med) {
+        return med && med.medication_name && med.item_id;
+    });
+    
+    if (valid.length === 0) {
         list.innerHTML = '<div class="empty-state" id="emptyMedications"><i class="fas fa-prescription"></i><p>No medications prescribed yet</p></div>';
         return;
     }
+    
     var html = '';
-    prescriptions.forEach(function(med) {
+    valid.forEach(function(med) {
         var isDispensed = (med.status || '') === 'dispensed';
         html += '<div class="medication-item" id="med-item-' + med.id + '"><div class="medication-item-info"><span class="med-name">' + escapeHtml(med.medication_name || 'Unknown') + '</span><span class="med-details">' + escapeHtml(med.dosage || '') + ' • ' + escapeHtml(med.frequency || '') + ' • ' + escapeHtml(med.duration || '') + ' days</span><span class="med-qty">x' + (med.quantity || 0) + '</span><span class="med-price">TSh ' + Number(med.total_price || 0).toLocaleString() + '</span>' + (med.instructions ? '<span class="med-instruction-tag">' + escapeHtml(med.instructions) + '</span>' : '') + (isDispensed ? '<span class="med-status-dispensed">✅ Dispensed</span>' : '<span class="med-status-pending">⏳ Pending</span>') + '</div>' + (!isDispensed ? '<button type="button" class="btn-remove" onclick="removeMedication(' + med.id + ')"><i class="fas fa-times"></i></button>' : '') + '</div>';
     });
@@ -5874,7 +6063,7 @@ function clearEquipmentSelections() {
 }
 
 function removeAddedItem(type, id) {
-    if (!confirm('Remove this ' + type + '?')) return;
+    if (!confirm('Remove this ' + type + '? Stock will be returned.')) return;
     
     var formData = new FormData();
     formData.append('action', 'remove_added_item');
@@ -6003,8 +6192,8 @@ function startAutoUpdate() {
     }
     
     console.log('🔄 Auto-update started');
+    console.log('✅ V4: Equipment stock movements FIXED');
     console.log('✅ 7 Vital Signs (SpO2 included)');
-    console.log('✅ Manual disease code inatumika kama user ameijaza');
 }
 
 function stopAutoUpdate() {
@@ -6043,11 +6232,12 @@ document.addEventListener('visibilitychange', function() {
     else startAutoUpdate();
 });
 
-console.log('%c🩺 Braick Consultation (7 Vital Signs with SpO2)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c🩺 Braick Consultation V4 (Equipment Stock Movements Fixed)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ V4: add_equipment_batch inaingiza stock_movements', 'font-size:12px; color:#DC2626;');
+console.log('%c✅ V4: remove_added_item inarudisha stock + stock_movement', 'font-size:12px; color:#DC2626;');
+console.log('%c✅ V4: remove_medication inaingiza stock_movement ya returned', 'font-size:12px; color:#DC2626;');
+console.log('%c✅ V4: logStockMovement() helper function', 'font-size:12px; color:#059669;');
 console.log('%c❤️ 7 Vital Signs: Temp, BP, Pulse, SpO2, Weight, Height, BMI', 'font-size:12px; color:#DC2626;');
-console.log('%c🫁 SpO2 (Oxygen Saturation): Normal 95-100%', 'font-size:12px; color:#0EA5E9;');
-console.log('%c✅ FIXED: Manual disease code inatumika kama user ameijaza', 'font-size:12px; color:#059669;');
-console.log('%c✅ FIXED: Auto-generate code kama user hajajaza', 'font-size:12px; color:#059669;');
 </script>
 
 </body>
