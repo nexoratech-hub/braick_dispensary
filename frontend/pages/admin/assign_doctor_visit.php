@@ -1,31 +1,36 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/doctor/assign_doctor.php
-// DOCTOR - ASSIGN / CHANGE / REASSIGN DOCTOR & LAB TESTS (V16)
+// FILE: frontend/pages/admin/assign_doctor.php
+// ADMIN - ASSIGN / CHANGE / REASSIGN DOCTOR & LAB TESTS (V18)
 // ================================================================
-// ✅ V16: Design sawa na Reception V15 (identical UI/UX)
-// ✅ V16: KILA ASSIGN INAUNDA VISIT MPYA - hata kama ana visit pending
-// ✅ V16: HAKUNA kufunga visits za zamani - multiple active visits
-// ✅ V16: Doctor mwenyewe ndiye default kwenye doctor select
-// ✅ V16: Search + Live update + Highlight zote zinafanya kazi
-// ✅ V16: Vital signs + Lab tests + Bill to Cashier zote zinafanya kazi
-// ✅ V16: Branch LOCKED kwa branch ya doctor
+// ✅ V18: ALL PATIENTS WANAONEKANA KWENYE DROPDOWN (hata wasio na visit)
+// ✅ V18: Wagonjwa WALIO ASSIGN wana ORANGE HIGHLIGHT kwenye dropdown
+// ✅ V18: No Visit filter button
+// ✅ V17: KILA ASSIGN INAUNDA VISIT MPYA (hata kama ana visit pending)
+// ✅ V17: Assigned By column inajazwa
+// ✅ V17: Bill + bill_items zinatumwa kwa Cashier
+// ✅ V17: Notifications kwa Cashiers
+// ✅ FIXED: ob_start() to prevent "headers already sent" error
 // ================================================================
+
+ob_start();
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    ob_end_clean();
     header('Location: ../login.php');
     exit;
 }
 
-$allowed_roles = ['doctor', 'admin'];
+$allowed_roles = ['admin', 'reception'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
+    ob_end_clean();
     $role = $_SESSION['role'];
     switch ($role) {
-        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
@@ -35,30 +40,47 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
 }
 
 $user_id = (int)($_SESSION['user_id'] ?? 1);
-$full_name = $_SESSION['full_name'] ?? 'Doctor';
-$branch_id = (int)($_SESSION['branch_id'] ?? 1);
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$username = $_SESSION['username'] ?? 'doctor';
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = (int)($_SESSION['branch_id'] ?? 1);
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
-$user_role = $_SESSION['role'] ?? 'doctor';
-$user_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 
-// ✅ Doctor HAONI Assigned By, Admin ANAONA
 $show_assigned_by = ($user_role === 'admin');
 
-// ✅ Branch LOCKED kwa branch ya doctor
-$user_branch_id = $branch_id;
-$selected_branch_id = $branch_id;
+// ================================================================
+// BRANCH SELECTION
+// ================================================================
+$selected_branch_id = $user_branch_id;
+$branch_name = $user_branch_name;
+$show_all_branches = false;
+
+if (isset($_GET['branch']) && $_GET['branch'] !== '' && $_GET['branch'] !== 'all') {
+    $selected_branch_id = (int)$_GET['branch'];
+}
+
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    ob_end_clean();
+    die("Database connection error: " . $e->getMessage());
+}
+
 $message = '';
 $message_type = '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 $all_patients = [];
+$unique_patients_for_dropdown = [];
 $pending_patients = [];
 $assigned_patients = [];
 $lab_only_patients = [];
 $waiting_patients = [];
 $prescribed_patients = [];
+$no_visit_patients = [];
 $doctors = [];
 $online_doctors = [];
 $offline_doctors = [];
@@ -71,6 +93,7 @@ $assigned_count = 0;
 $lab_only_count = 0;
 $waiting_count = 0;
 $prescribed_count = 0;
+$no_visit_count = 0;
 $branch_patients_total = 0;
 $selected_patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
 $latest_vital_signs = null;
@@ -78,20 +101,30 @@ $selected_patient_data = null;
 $change_mode = isset($_GET['change']) && $_GET['change'] == 1;
 $lab_tests_catalog = [];
 $unread_notifications = 0;
-
-require_once __DIR__ . '/../../../backend/config/database.php';
+$branches = [];
 
 try {
-    $db = Database::getInstance()->getConnection();
-    
+    // Branch name
+    try {
+        $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
+        $stmt->execute([$selected_branch_id]);
+        $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($branch_data) $branch_name = $branch_data['name'];
+    } catch (Exception $e) {}
+
+    // Branches list
+    try {
+        $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+        $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+
+    // Notifications
     try {
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
         $stmt->execute([$user_id]);
         $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    } catch (Exception $e) {
-        $unread_notifications = 0;
-    }
-    
+    } catch (Exception $e) {}
+
     // ============================================================
     // GET CONSULTATION SERVICES
     // ============================================================
@@ -167,7 +200,7 @@ try {
     $lab_tests_catalog = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ============================================================
-    // ✅ V16: GET ALL PATIENTS - KILA VISIT INAONYESHWA TOFAUTI
+    // ✅ V18: GET ALL PATIENTS - LEFT JOIN ili WOTE WAONEKANE
     // ============================================================
     $query = "
         SELECT 
@@ -201,7 +234,7 @@ try {
              AND lt.status NOT IN ('completed', 'cancelled') 
              AND lt.visit_id = v.id) as pending_lab_tests_count
         FROM patients p
-        INNER JOIN visits v ON p.id = v.patient_id 
+        LEFT JOIN visits v ON p.id = v.patient_id 
             AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test', 'waiting', 'prescribed')
             AND v.branch_id = ?
         LEFT JOIN users u ON v.doctor_id = u.id
@@ -228,10 +261,32 @@ try {
         $all_patients[] = $patient;
     }
     
-    $branch_patients_total = count($all_patients);
+    // ============================================================
+    // ✅ V18: DEDUPLICATE KWA DROPDOWN - Patient mmoja row moja
+    // ============================================================
+    $unique_patients_for_dropdown = [];
+    $seen_patients = [];
+    
+    // Kwanza chukua wale WALIO ASSIGN
+    foreach ($all_patients as $patient) {
+        if (!empty($patient['assigned_doctor_name']) && !in_array($patient['id'], $seen_patients)) {
+            $seen_patients[] = $patient['id'];
+            $unique_patients_for_dropdown[] = $patient;
+        }
+    }
+    
+    // Kisha ongeza wale wengine
+    foreach ($all_patients as $patient) {
+        if (!in_array($patient['id'], $seen_patients)) {
+            $seen_patients[] = $patient['id'];
+            $unique_patients_for_dropdown[] = $patient;
+        }
+    }
+    
+    $branch_patients_total = count($unique_patients_for_dropdown);
     
     // ============================================================
-    // ✅ CATEGORIZE - KILA VISIT NI ROW YAKE
+    // ✅ V18: CATEGORIZE - KILA VISIT NI ROW YAKE
     // ============================================================
     foreach ($all_patients as $patient) {
         $patient['has_active_visit'] = !empty($patient['visit_id']);
@@ -256,6 +311,8 @@ try {
             elseif (in_array($status, ['assigned', 'with_doctor'])) {
                 $assigned_patients[] = $patient;
             }
+        } else {
+            $no_visit_patients[] = $patient;
         }
     }
     
@@ -264,6 +321,7 @@ try {
     $lab_only_count = count($lab_only_patients);
     $waiting_count = count($waiting_patients);
     $prescribed_count = count($prescribed_patients);
+    $no_visit_count = count($no_visit_patients);
     
     if ($selected_patient_id > 0) {
         foreach ($all_patients as $p) {
@@ -281,10 +339,10 @@ try {
     }
     
     // ============================================================
-    // GET DOCTORS - Doctor mwenyewe ndiye wa kwanza
+    // GET DOCTORS
     // ============================================================
-    $stmt = $db->prepare("SELECT id, full_name, specialty, is_online FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ? ORDER BY (id = ?) DESC, is_online DESC, full_name");
-    $stmt->execute([$selected_branch_id, $user_id]);
+    $stmt = $db->prepare("SELECT id, full_name, specialty, is_online FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ? ORDER BY is_online DESC, full_name");
+    $stmt->execute([$selected_branch_id]);
     $doctors = $stmt->fetchAll();
     
     foreach ($doctors as $doc) {
@@ -319,6 +377,23 @@ try {
         
         if ($total_lab_fee <= 0) return ['status' => 'error', 'message' => 'No lab tests with price > 0'];
         
+        $stmt = $db->prepare("SELECT id, bill_number FROM bills WHERE visit_id = ? AND status IN ('pending', 'partial') LIMIT 1");
+        $stmt->execute([$visit_id]);
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($existing) {
+            $stmt = $db->prepare("UPDATE bills SET subtotal = subtotal + ?, total_amount = total_amount + ?, balance = balance + ?, updated_at = NOW() WHERE id = ?");
+            $stmt->execute([$total_lab_fee, $total_lab_fee, $total_lab_fee, $existing['id']]);
+            $bill_id = $existing['id'];
+            $bill_number = $existing['bill_number'];
+            
+            foreach ($tests as $test) {
+                $stmt = $db->prepare("INSERT INTO bill_items (bill_id, patient_id, branch_id, item_type, item_name, quantity, unit_price, total_price, status, created_at) VALUES (?, ?, ?, 'lab_test', ?, 1, ?, ?, 'pending', NOW())");
+                $stmt->execute([$bill_id, $patient_id, $branch_id, $test['test_name'], $test['price'], $test['price']]);
+            }
+            return ['status' => 'updated', 'message' => 'Lab tests added to existing bill', 'bill_id' => $bill_id, 'bill_number' => $bill_number, 'total_lab_fee' => $total_lab_fee];
+        }
+        
         $bill_number = 'BILL-LAB-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
         
         $stmt = $db->prepare("INSERT INTO bills (bill_number, patient_id, visit_id, branch_id, created_by, subtotal, total_amount, balance, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())");
@@ -352,6 +427,21 @@ try {
     function createVisitBill($db, $patient_id, $visit_id, $service_name, $consultation_fee, $user_id, $branch_id) {
         if ($consultation_fee <= 0) return ['status' => 'error', 'message' => 'Consultation fee is 0'];
         
+        $stmt = $db->prepare("SELECT id, bill_number FROM bills WHERE visit_id = ? AND status IN ('pending', 'partial') LIMIT 1");
+        $stmt->execute([$visit_id]);
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($existing) {
+            $stmt = $db->prepare("UPDATE bills SET subtotal = subtotal + ?, total_amount = total_amount + ?, balance = balance + ?, updated_at = NOW() WHERE id = ?");
+            $stmt->execute([$consultation_fee, $consultation_fee, $consultation_fee, $existing['id']]);
+            $bill_id = $existing['id'];
+            $bill_number = $existing['bill_number'];
+            
+            $stmt = $db->prepare("INSERT INTO bill_items (bill_id, patient_id, branch_id, item_type, item_name, quantity, unit_price, total_price, status, created_at) VALUES (?, ?, ?, 'consultation', ?, 1, ?, ?, 'pending', NOW())");
+            $stmt->execute([$bill_id, $patient_id, $branch_id, $service_name, $consultation_fee, $consultation_fee]);
+            return ['status' => 'updated', 'message' => 'Consultation fee added', 'bill_id' => $bill_id, 'bill_number' => $bill_number, 'total_consultation_fee' => $consultation_fee];
+        }
+        
         $bill_number = 'BILL-CONS-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
         
         $stmt = $db->prepare("INSERT INTO bills (bill_number, patient_id, visit_id, branch_id, created_by, subtotal, total_amount, balance, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())");
@@ -381,6 +471,7 @@ try {
         $action = $_POST['action'] ?? '';
         
         if ($action === 'get_live_data') {
+            ob_end_clean();
             header('Content-Type: application/json');
             echo json_encode([
                 'success' => true,
@@ -389,6 +480,7 @@ try {
                 'lab_only_count' => $lab_only_count,
                 'waiting_count' => $waiting_count,
                 'prescribed_count' => $prescribed_count,
+                'no_visit_count' => $no_visit_count,
                 'branch_patients_total' => $branch_patients_total,
                 'online_count' => $online_doctors_count,
                 'offline_count' => $offline_doctors_count,
@@ -402,6 +494,7 @@ try {
         // GET FILTERED LIST
         // ============================================================
         if ($action === 'get_filtered_list') {
+            ob_end_clean();
             header('Content-Type: application/json');
             $status = $_POST['status'] ?? 'assigned';
             $filtered = [];
@@ -411,6 +504,7 @@ try {
             elseif ($status === 'prescribed') $filtered = $prescribed_patients;
             elseif ($status === 'waiting') $filtered = $waiting_patients;
             elseif ($status === 'pending') $filtered = $pending_patients;
+            elseif ($status === 'no_visit') $filtered = $no_visit_patients;
             
             if (empty($filtered)) {
                 $icons = [
@@ -418,14 +512,16 @@ try {
                     'lab_test' => 'fa-flask',
                     'prescribed' => 'fa-prescription',
                     'waiting' => 'fa-clock',
-                    'pending' => 'fa-hourglass-half'
+                    'pending' => 'fa-hourglass-half',
+                    'no_visit' => 'fa-user-slash'
                 ];
                 $msgs = [
                     'assigned' => 'No patients currently assigned to a doctor',
                     'lab_test' => 'No lab test requests pending',
                     'prescribed' => 'No prescribed patients',
                     'waiting' => 'No waiting patients',
-                    'pending' => 'No pending patients'
+                    'pending' => 'No pending patients',
+                    'no_visit' => 'No patients without visit'
                 ];
                 echo json_encode([
                     'success' => true, 
@@ -513,6 +609,7 @@ try {
                 elseif ($status === 'prescribed') $status_badge = '<span class="status-pill prescribed"><i class="fas fa-prescription"></i> Prescribed</span>';
                 elseif ($status === 'waiting') $status_badge = '<span class="status-pill waiting"><i class="fas fa-clock"></i> Waiting</span>';
                 elseif ($status === 'pending') $status_badge = '<span class="status-pill pending"><i class="fas fa-hourglass-half"></i> Pending</span>';
+                elseif ($status === 'no_visit') $status_badge = '<span class="status-pill no_visit"><i class="fas fa-user-slash"></i> No Visit</span>';
                 
                 $row_id = 'visit-row-' . ($patient['visit_id'] ?? 'p' . $patient['id']);
                 
@@ -554,9 +651,10 @@ try {
         }
         
         // ============================================================
-        // ✅ V16: REASSIGN - Funga VISIT HII PEKEE, unda mpya
+        // REASSIGN - Funga VISIT HII PEKEE, unda mpya
         // ============================================================
         if ($action === 'reassign_doctor') {
+            ob_end_clean();
             header('Content-Type: application/json');
             $patient_id = (int)($_POST['patient_id'] ?? 0);
             $visit_id = (int)($_POST['visit_id'] ?? 0);
@@ -580,11 +678,9 @@ try {
                 
                 if (!$visit) throw new Exception('No active visit found');
                 
-                // Funga visit HII PEKEE
                 $stmt = $db->prepare("UPDATE visits SET status = 'completed', doctor_id = NULL, assigned_by_id = NULL, assigned_at = NULL, updated_at = NOW(), notes = CONCAT(COALESCE(notes, ''), ' [Reassigned on " . date('Y-m-d H:i:s') . "]') WHERE id = ?");
                 $stmt->execute([$visit['id']]);
                 
-                // Unda visit mpya (pending, bila doctor)
                 $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                 $stmt = $db->prepare("
                     INSERT INTO visits 
@@ -594,7 +690,6 @@ try {
                 ");
                 $stmt->execute([$visit_number, $patient_id, $selected_branch_id, $user_id, $user_id]);
                 
-                // Update patient - ondoa doctor TU kama hana visits nyingine active
                 $stmt = $db->prepare("
                     SELECT COUNT(*) FROM visits 
                     WHERE patient_id = ? 
@@ -621,6 +716,7 @@ try {
         }
         
         if ($action === 'get_patient_details') {
+            ob_end_clean();
             header('Content-Type: application/json');
             $patient_id = (int)($_POST['patient_id'] ?? 0);
             
@@ -665,10 +761,10 @@ try {
         }
         
         // ============================================================
-        // ✅ V16: CHANGE DOCTOR - KILA ASSIGN INAUNDA VISIT MPYA
-        // HAKUNA kufunga visits za zamani
+        // ✅ CHANGE DOCTOR - KILA ASSIGN INAUNDA VISIT MPYA
         // ============================================================
         if ($action === 'change_doctor') {
+            ob_end_clean();
             header('Content-Type: application/json');
             
             $patient_id = (int)($_POST['patient_id'] ?? 0);
@@ -727,17 +823,11 @@ try {
                     }
                 }
                 
-                // ============================================================
-                // ✅ V16: KILA ASSIGN INAUNDA VISIT MPYA
-                // HATUFUNGI visits za zamani - zinaendelea kuwa active
-                // ============================================================
-                
                 $visit_type_to_store = $is_lab_only ? 'Lab Tests Only' : $service_name;
                 $service_id_to_store = $is_lab_only ? null : ($service_id > 0 ? $service_id : null);
                 $doctor_id_to_store = ($is_lab_only) ? null : ($doctor_id > 0 ? $doctor_id : null);
                 $visit_status = ($is_lab_only && !empty($lab_test_ids)) ? 'lab_test' : ($is_lab_only ? 'pending' : 'assigned');
                 
-                // ✅ UNDA VISIT MPYA KILA WAKATI - hata kama patient ana visit pending
                 $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                 
                 $stmt = $db->prepare("
@@ -764,7 +854,6 @@ try {
                 ]);
                 $visit_id = $db->lastInsertId();
                 
-                // Update patient
                 if ($doctor_id > 0 && !$is_lab_only) {
                     $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = ? WHERE id = ?");
                     $stmt->execute([$doctor_id, $patient_id]);
@@ -890,13 +979,25 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+include_once __DIR__ . '/../../components/admin_header.php';
+
+if ($user_role === 'admin') {
+    include_once __DIR__ . '/../../components/admin_sidebar.php';
+} else {
+    if (file_exists(__DIR__ . '/../../components/reception_sidebar.php')) {
+        include_once __DIR__ . '/../../components/reception_sidebar.php';
+    } else {
+        include_once __DIR__ . '/../../components/admin_sidebar.php';
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Assign Doctor V16 - Braick Dispensary</title>
+    <title>Assign Doctor V18 - Braick Admin</title>
     
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
@@ -918,6 +1019,10 @@ $profile_pic_url = !empty($profile_pic)
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
+            --orange: #EA580C;
+            --orange-dark: #C2410C;
+            --orange-bg: #FFEDD5;
+            --orange-border: #FB923C;
             --purple: #7C3AED;
             --purple-dark: #5B21B6;
             --purple-bg: #EDE9FE;
@@ -959,6 +1064,8 @@ $profile_pic_url = !empty($profile_pic)
             --success-bg: #1A3A2A;
             --danger-bg: #3A1A1A;
             --warning-bg: #3D2E0A;
+            --orange-bg: #3D1F0A;
+            --orange-border: #F97316;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1319,6 +1426,12 @@ $profile_pic_url = !empty($profile_pic)
             box-shadow: 0 6px 20px rgba(245, 158, 11, 0.35);
         }
         
+        .status-toggle-btn.active[data-status="no_visit"] {
+            background: linear-gradient(135deg, #64748B, #475569);
+            border-color: #64748B;
+            box-shadow: 0 6px 20px rgba(100, 116, 139, 0.35);
+        }
+        
         .toggle-count {
             background: rgba(255,255,255,0.25);
             padding: 2px 10px;
@@ -1543,6 +1656,17 @@ $profile_pic_url = !empty($profile_pic)
             background: #FEF3C7;
             color: #D97706;
             border: 1px solid rgba(217, 119, 6, 0.3);
+        }
+        
+        .status-pill.no_visit {
+            background: var(--gray-200);
+            color: var(--gray-600);
+            border: 1px solid var(--border-color);
+        }
+        
+        [data-theme="dark"] .status-pill.no_visit {
+            background: #334155;
+            color: #94A3B8;
         }
         
         .days-badge {
@@ -1981,7 +2105,7 @@ $profile_pic_url = !empty($profile_pic)
         }
         
         .patient-toggle-content.open {
-            max-height: 600px;
+            max-height: 700px;
             margin-top: 12px;
         }
         
@@ -2019,7 +2143,7 @@ $profile_pic_url = !empty($profile_pic)
         }
         
         .patient-list-container {
-            max-height: 320px;
+            max-height: 360px;
             overflow-y: auto;
             border: 2px solid var(--border-color);
             border-radius: 12px;
@@ -2072,6 +2196,76 @@ $profile_pic_url = !empty($profile_pic)
         }
         
         .patient-list-item:last-child { border-bottom: none; }
+        
+        /* ============================================================ */
+        /* ✅ V18: ORANGE HIGHLIGHT KWA WAGONJWA WALIO ASSIGN */
+        /* ============================================================ */
+        .patient-list-item.assigned-highlight {
+            background: linear-gradient(90deg, #FFF7ED 0%, #FFEDD5 100%);
+            border-left: 4px solid #EA580C;
+            position: relative;
+        }
+        
+        [data-theme="dark"] .patient-list-item.assigned-highlight {
+            background: linear-gradient(90deg, #3D1F0A 0%, #4A2410 100%);
+            border-left: 4px solid #F97316;
+        }
+        
+        .patient-list-item.assigned-highlight::before {
+            background: #EA580C !important;
+            width: 4px !important;
+        }
+        
+        .patient-list-item.assigned-highlight:hover {
+            background: linear-gradient(90deg, #FFEDD5 0%, #FED7AA 100%);
+        }
+        
+        [data-theme="dark"] .patient-list-item.assigned-highlight:hover {
+            background: linear-gradient(90deg, #4A2410 0%, #5A2E14 100%);
+        }
+        
+        .patient-list-item.assigned-highlight .patient-name {
+            color: #9A3412;
+        }
+        
+        [data-theme="dark"] .patient-list-item.assigned-highlight .patient-name {
+            color: #FDBA74;
+        }
+        
+        .patient-list-item.assigned-highlight .patient-icon {
+            filter: drop-shadow(0 0 4px rgba(234, 88, 12, 0.5));
+        }
+        
+        /* Badge ya ASSIGNED */
+        .assigned-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: linear-gradient(135deg, #EA580C, #C2410C);
+            color: white;
+            padding: 3px 10px;
+            border-radius: 10px;
+            font-size: 0.6rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            box-shadow: 0 2px 6px rgba(234, 88, 12, 0.4);
+            animation: pulse-orange 2s infinite;
+        }
+        
+        @keyframes pulse-orange {
+            0%, 100% { box-shadow: 0 2px 6px rgba(234, 88, 12, 0.4); }
+            50% { box-shadow: 0 2px 14px rgba(234, 88, 12, 0.7); }
+        }
+        
+        .patient-list-item.assigned-highlight .doctor-info-inline {
+            color: #C2410C;
+            font-weight: 700;
+        }
+        
+        [data-theme="dark"] .patient-list-item.assigned-highlight .doctor-info-inline {
+            color: #FDBA74;
+        }
         
         .patient-list-item .patient-icon {
             font-size: 1.2rem;
@@ -2577,14 +2771,10 @@ $profile_pic_url = !empty($profile_pic)
         
         <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
-
-<?php if (file_exists(__DIR__ . '/../../components/doctor_sidebar.php')): ?>
-    <?php include_once __DIR__ . '/../../components/doctor_sidebar.php'; ?>
-<?php endif; ?>
 
 <main class="main-content">
 
@@ -2592,7 +2782,7 @@ $profile_pic_url = !empty($profile_pic)
         <div>
             <h1 class="page-title">
                 <i class="fas fa-user-md"></i>
-                Assign / Change Doctor (V16)
+                Assign / Change Doctor (V18)
                 <span class="role-badge-display"><?= strtoupper($user_role) ?></span>
                 <span style="background:rgba(255,255,255,0.12);color:white;padding:4px 14px;border-radius:20px;font-size:0.68rem;">
                     <span class="live-indicator-modern"></span> Live
@@ -2600,7 +2790,7 @@ $profile_pic_url = !empty($profile_pic)
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-hospital"></i>
-                Kila assign inaunda <strong>VISIT MPYA</strong> - hata kama patient ana visit pending
+                Wagonjwa wote wa branch wanaonekana kwenye dropdown
                 
                 <span class="header-badge">
                     <i class="fas fa-user-md"></i>
@@ -2625,6 +2815,10 @@ $profile_pic_url = !empty($profile_pic)
                 <span class="header-badge" style="background:rgba(217,119,6,0.2);border-color:rgba(217,119,6,0.3);color:#FCD34D;">
                     <i class="fas fa-clock"></i>
                     <span id="waitingCount"><?= $waiting_count ?></span> Waiting
+                </span>
+                <span class="header-badge" style="background:rgba(100,116,139,0.2);border-color:rgba(100,116,139,0.3);color:#CBD5E1;">
+                    <i class="fas fa-user-slash"></i>
+                    <span id="noVisitCount"><?= $no_visit_count ?></span> No Visit
                 </span>
             </p>
         </div>
@@ -2681,9 +2875,15 @@ $profile_pic_url = !empty($profile_pic)
             <span class="toggle-count" id="toggleWaitingCount"><?= $waiting_count ?></span>
         </button>
         
+        <button type="button" class="status-toggle-btn" data-status="no_visit" onclick="filterByStatus('no_visit')">
+            <i class="fas fa-user-slash"></i> 
+            No Visit 
+            <span class="toggle-count" id="toggleNoVisitCount"><?= $no_visit_count ?></span>
+        </button>
+        
         <span style="margin-left:auto;font-size:0.78rem;color:var(--text-secondary);font-weight:600;">
             <i class="fas fa-users"></i> 
-            Total Visits: <strong id="totalBranchPatients"><?= $branch_patients_total ?></strong>
+            Total Patients: <strong id="totalBranchPatients"><?= $branch_patients_total ?></strong>
         </span>
     </div>
 
@@ -2756,6 +2956,9 @@ $profile_pic_url = !empty($profile_pic)
                     <span style="color:var(--success);font-weight:700;margin-left:8px;">
                         <i class="fas fa-plus-circle"></i> Kila assign inaunda visit mpya
                     </span>
+                    <span style="color:var(--orange);font-weight:700;margin-left:8px;">
+                        <i class="fas fa-circle"></i> Orange = Assigned
+                    </span>
                 </p>
             </div>
         </div>
@@ -2801,22 +3004,19 @@ $profile_pic_url = !empty($profile_pic)
                                 </div>
                                 
                                 <div class="patient-list-container" id="patientListContainer">
-                                    <?php if (!empty($all_patients) && count($all_patients) > 0): ?>
-                                        <?php 
-                                        $unique_patients = [];
-                                        $seen = [];
-                                        foreach ($all_patients as $patient) {
-                                            if (!in_array($patient['id'], $seen)) {
-                                                $seen[] = $patient['id'];
-                                                $unique_patients[] = $patient;
-                                            }
-                                        }
-                                        foreach ($unique_patients as $patient): 
+                                    <?php if (!empty($unique_patients_for_dropdown) && count($unique_patients_for_dropdown) > 0): ?>
+                                        <?php foreach ($unique_patients_for_dropdown as $patient): 
                                             $status_label = 'No Visit';
                                             $status_class = 'no_visit';
                                             $status_icon = '📋';
+                                            $is_assigned = false;
                                             
-                                            if (!empty($patient['visit_id'])) {
+                                            if (!empty($patient['assigned_doctor_name'])) {
+                                                $is_assigned = true;
+                                                $status_label = 'Assigned';
+                                                $status_class = 'assigned';
+                                                $status_icon = '✅';
+                                            } elseif (!empty($patient['visit_id'])) {
                                                 if ($patient['visit_status'] === 'lab_test') {
                                                     $status_label = 'Lab Test'; $status_class = 'lab_only'; $status_icon = '🧪';
                                                 } elseif ($patient['visit_status'] === 'waiting') {
@@ -2825,8 +3025,6 @@ $profile_pic_url = !empty($profile_pic)
                                                     $status_label = 'Prescribed'; $status_class = 'prescribed'; $status_icon = '💊';
                                                 } elseif (in_array($patient['visit_status'], ['new', 'pending'])) {
                                                     $status_label = 'Pending'; $status_class = 'pending'; $status_icon = '🟡';
-                                                } elseif (in_array($patient['visit_status'], ['assigned', 'with_doctor'])) {
-                                                    $status_label = 'Assigned'; $status_class = 'assigned'; $status_icon = '✅';
                                                 }
                                             }
                                             
@@ -2841,22 +3039,31 @@ $profile_pic_url = !empty($profile_pic)
                                             $days_text = $days > 0 ? '📅 ' . $days . 'd' : '📅 New';
                                             
                                             $search_data = strtolower($patient['full_name'] . ' ' . ($patient['patient_id'] ?? '') . ' ' . ($patient['phone'] ?? ''));
+                                            
+                                            // ✅ V18: ORANGE HIGHLIGHT KWA WALIO ASSIGN
+                                            $assigned_class = $is_assigned ? 'assigned-highlight' : '';
                                         ?>
-                                            <div class="patient-list-item <?= $is_selected ?>" 
+                                            <div class="patient-list-item <?= $is_selected ?> <?= $assigned_class ?>" 
                                                  data-patient-id="<?= $patient['id'] ?>"
                                                  data-search="<?= htmlspecialchars($search_data) ?>"
+                                                 data-assigned="<?= $is_assigned ? '1' : '0' ?>"
                                                  onclick="selectPatient(<?= $patient['id'] ?>, '<?= htmlspecialchars(addslashes($patient['full_name'])) ?>', '<?= htmlspecialchars($patient['patient_id'] ?? '') ?>')">
                                                 <span class="patient-icon"><?= $status_icon ?></span>
                                                 <div class="patient-info">
                                                     <div class="patient-name">
                                                         <?= htmlspecialchars($patient['full_name']) ?>
                                                         <span class="days-badge <?= $days > 0 ? '' : 'new' ?>"><?= $days_text ?></span>
+                                                        <?php if ($is_assigned): ?>
+                                                            <span class="assigned-badge">
+                                                                <i class="fas fa-user-md"></i> ASSIGNED
+                                                            </span>
+                                                        <?php endif; ?>
                                                     </div>
                                                     <div class="patient-meta">
                                                         <span><i class="fas fa-id-card"></i> <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span>
                                                         <span class="status-badge-dropdown <?= $status_class ?>"><?= $status_label ?></span>
                                                         <?php if ($doctor_info): ?>
-                                                            <span style="color:var(--primary);font-weight:600;">👨‍⚕️ <?= $doctor_info ?></span>
+                                                            <span class="doctor-info-inline">👨‍⚕️ <?= $doctor_info ?></span>
                                                         <?php endif; ?>
                                                     </div>
                                                 </div>
@@ -2871,15 +3078,17 @@ $profile_pic_url = !empty($profile_pic)
                                 </div>
                                 
                                 <div style="margin-top:10px;font-size:0.72rem;color:var(--text-secondary);font-weight:600;" id="patientStats">
-                                    <span style="color:var(--warning);">🟡 <span id="pendingStat"><?= $pending_count ?></span> Pending</span>
+                                    <span style="color:#EA580C;">🟠 <span id="assignedHighlightStat"><?= $assigned_count ?></span> Assigned (Orange)</span>
                                     <span style="margin:0 6px;">|</span>
-                                    <span style="color:var(--success);">✅ <span id="assignedStat"><?= $assigned_count ?></span> Assigned</span>
+                                    <span style="color:var(--warning);">🟡 <span id="pendingStat"><?= $pending_count ?></span> Pending</span>
                                     <span style="margin:0 6px;">|</span>
                                     <span style="color:var(--purple);">🧪 <span id="labOnlyStat"><?= $lab_only_count ?></span> Lab</span>
                                     <span style="margin:0 6px;">|</span>
                                     <span style="color:#D97706;">⏳ <span id="waitingStat"><?= $waiting_count ?></span> Waiting</span>
                                     <span style="margin:0 6px;">|</span>
                                     <span style="color:#059669;">💊 <span id="prescribedStat"><?= $prescribed_count ?></span> Prescribed</span>
+                                    <span style="margin:0 6px;">|</span>
+                                    <span style="color:#64748B;">📋 <span id="noVisitStat"><?= $no_visit_count ?></span> No Visit</span>
                                 </div>
                             </div>
                             
@@ -2922,14 +3131,14 @@ $profile_pic_url = !empty($profile_pic)
                                 <?php if (!empty($online_doctors)): ?>
                                     <optgroup label="🟢 Online Doctors (<?= $online_doctors_count ?>)">
                                         <?php foreach ($online_doctors as $doctor): ?>
-                                            <option value="<?= $doctor['id'] ?>" data-online="1" <?= $doctor['id'] == $user_id ? 'selected' : '' ?>>🟢 Dr. <?= htmlspecialchars($doctor['full_name']) ?><?= $doctor['id'] == $user_id ? ' (You)' : '' ?><?= !empty($doctor['specialty']) ? ' (' . htmlspecialchars($doctor['specialty']) . ')' : '' ?></option>
+                                            <option value="<?= $doctor['id'] ?>" data-online="1">🟢 Dr. <?= htmlspecialchars($doctor['full_name']) ?><?= !empty($doctor['specialty']) ? ' (' . htmlspecialchars($doctor['specialty']) . ')' : '' ?></option>
                                         <?php endforeach; ?>
                                     </optgroup>
                                 <?php endif; ?>
                                 <?php if (!empty($offline_doctors)): ?>
                                     <optgroup label="⚪ Offline Doctors (<?= $offline_doctors_count ?>)">
                                         <?php foreach ($offline_doctors as $doctor): ?>
-                                            <option value="<?= $doctor['id'] ?>" data-online="0" <?= $doctor['id'] == $user_id ? 'selected' : '' ?>>⚪ Dr. <?= htmlspecialchars($doctor['full_name']) ?><?= $doctor['id'] == $user_id ? ' (You)' : '' ?><?= !empty($doctor['specialty']) ? ' (' . htmlspecialchars($doctor['specialty']) . ')' : '' ?></option>
+                                            <option value="<?= $doctor['id'] ?>" data-online="0">⚪ Dr. <?= htmlspecialchars($doctor['full_name']) ?><?= !empty($doctor['specialty']) ? ' (' . htmlspecialchars($doctor['specialty']) . ')' : '' ?></option>
                                         <?php endforeach; ?>
                                     </optgroup>
                                 <?php endif; ?>
@@ -2983,7 +3192,7 @@ $profile_pic_url = !empty($profile_pic)
                     <div class="form-card-item">
                         <div class="card-item-title">
                             <i class="fas fa-notes-medical"></i> Symptoms
-                            <span class="badge-label">Doctor fills this</span>
+                            <span class="badge-label">Reception fills this</span>
                         </div>
                         <div style="flex:1;display:flex;flex-direction:column;gap:8px;">
                             <select name="symptoms_select" class="form-control-modern" id="symptomsSelect" style="min-height:40px;">
@@ -3166,7 +3375,7 @@ $profile_pic_url = !empty($profile_pic)
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span style="margin:0 8px;">|</span>
-            Assign Doctor V16 (Doctor)
+            Assign Doctor V18 (Admin)
             <span style="margin:0 8px;">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span style="margin:0 8px;">|</span>
@@ -3531,7 +3740,8 @@ $profile_pic_url = !empty($profile_pic)
             'pending': { title: 'Pending Patients', icon: 'fa-hourglass-half', color: 'var(--warning)', bg: 'var(--warning-bg)' },
             'lab_test': { title: 'Lab Test Patients', icon: 'fa-flask', color: 'var(--purple)', bg: 'var(--purple-bg)' },
             'prescribed': { title: 'Prescribed Patients', icon: 'fa-prescription', color: '#059669', bg: '#D1FAE5' },
-            'waiting': { title: 'Waiting Patients', icon: 'fa-clock', color: '#D97706', bg: '#FEF3C7' }
+            'waiting': { title: 'Waiting Patients', icon: 'fa-clock', color: '#D97706', bg: '#FEF3C7' },
+            'no_visit': { title: 'Patients Without Visit', icon: 'fa-user-slash', color: '#64748B', bg: '#F1F5F9' }
         };
         
         var t = titles[status] || titles['assigned'];
@@ -3547,7 +3757,8 @@ $profile_pic_url = !empty($profile_pic)
             'pending': document.getElementById('togglePendingCount')?.textContent || 0,
             'lab_test': document.getElementById('toggleLabCount')?.textContent || 0,
             'prescribed': document.getElementById('togglePrescribedCount')?.textContent || 0,
-            'waiting': document.getElementById('toggleWaitingCount')?.textContent || 0
+            'waiting': document.getElementById('toggleWaitingCount')?.textContent || 0,
+            'no_visit': document.getElementById('toggleNoVisitCount')?.textContent || 0
         };
         if (listCountBadge) {
             listCountBadge.textContent = counts[status] || 0;
@@ -3773,18 +3984,21 @@ $profile_pic_url = !empty($profile_pic)
         document.getElementById('labOnlyCount').textContent = data.lab_only_count;
         document.getElementById('prescribedCount').textContent = data.prescribed_count;
         document.getElementById('waitingCount').textContent = data.waiting_count;
+        document.getElementById('noVisitCount').textContent = data.no_visit_count;
         
         document.getElementById('pendingStat').textContent = data.pending_count;
-        document.getElementById('assignedStat').textContent = data.assigned_count;
+        document.getElementById('assignedHighlightStat').textContent = data.assigned_count;
         document.getElementById('labOnlyStat').textContent = data.lab_only_count;
         document.getElementById('waitingStat').textContent = data.waiting_count;
         document.getElementById('prescribedStat').textContent = data.prescribed_count;
+        document.getElementById('noVisitStat').textContent = data.no_visit_count;
         
         document.getElementById('toggleAssignedCount').textContent = data.assigned_count;
         document.getElementById('togglePendingCount').textContent = data.pending_count;
         document.getElementById('toggleLabCount').textContent = data.lab_only_count;
         document.getElementById('togglePrescribedCount').textContent = data.prescribed_count;
         document.getElementById('toggleWaitingCount').textContent = data.waiting_count;
+        document.getElementById('toggleNoVisitCount').textContent = data.no_visit_count;
         
         document.getElementById('onlineDoctorCount').textContent = data.online_count;
         document.getElementById('offlineDoctorCount').textContent = data.offline_count;
@@ -3903,12 +4117,14 @@ $profile_pic_url = !empty($profile_pic)
         });
     });
 
-    console.log('%c👨‍⚕️ Braick - Doctor Assign Doctor V16', 'font-size:18px; font-weight:bold; color:#2563EB;');
-    console.log('%c✅ Design sawa na Reception V15', 'font-size:13px; color:#059669; font-weight:bold;');
-    console.log('%c✅ KILA ASSIGN INAUNDA VISIT MPYA - hata kama ana visit pending', 'font-size:13px; color:#7C3AED; font-weight:bold;');
-    console.log('%c✅ HAKUNA kufunga visits za zamani - multiple active visits allowed', 'font-size:13px; color:#F59E0B; font-weight:bold;');
-    console.log('%c✅ Doctor anajichagua mwenyewe kama default', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
+    console.log('%c👨‍⚕️ Braick - Admin Assign Doctor V18', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c✅ V18: ALL PATIENTS WANAONEKANA KWENYE DROPDOWN (hata wasio na visit)', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ V18: Wagonjwa WALIO ASSIGN wana ORANGE HIGHLIGHT kwenye dropdown', 'font-size:13px; color:#EA580C; font-weight:bold;');
+    console.log('%c✅ V18: No Visit filter button imeongezwa', 'font-size:13px; color:#64748B; font-weight:bold;');
+    console.log('%c✅ ob_start() imehifadhiwa - Hakuna "headers already sent" error', 'font-size:13px; color:#7C3AED; font-weight:bold;');
+    console.log('%c💡 Shortcuts: Ctrl+K au / kufungua search, ESC kufunga', 'font-size:12px; color:#7C3AED; font-weight:bold;');
 </script>
 
 </body>
 </html>
+<?php ob_end_flush(); ?>
