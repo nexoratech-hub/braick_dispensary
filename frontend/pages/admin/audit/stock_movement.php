@@ -1,15 +1,14 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/stock_movement.php
-// ADMIN - STOCK MOVEMENT REPORT V8.4 (FULLY FIXED)
+// ADMIN - STOCK MOVEMENT REPORT V8.6 (FULLY CORRECTED)
 // ================================================================
-// ✅ V8.4: Inasoma moja kwa moja kutoka stock_movements table
-// ✅ V8.4: Top 5 Medicines inafanya kazi (notes patterns zote)
-// ✅ V8.4: Top 5 Equipment inajumuisha Doctor + Lab + OTC usage
-// ✅ V8.4: Before/After inatoka previous_stock/new_stock
-// ✅ V8.4: Equipment used by Doctor sasa inaonekana
-// ✅ V8.4: Summary inahesabu Doctor, Lab, OTC, Procedure
-// ✅ V8.4: Branch filter - All Branches au specific branch
+// ✅ V8.6 FIX #1: Formula inajumuisha cancelled_out kwenye OUT
+// ✅ V8.6 FIX #2: getStockBefore() inatumia item-level (all batches)
+// ✅ V8.6 FIX #3: stock_after = total_current_stock (consistent)
+// ✅ V8.6 FIX #4: Summary cards zinaonyesha cancelled_out
+// ✅ V8.6 FIX #5: Cancellation verification kwa DB
+// ✅ V8.6 FIX #6: No double-counting
 // ================================================================
 
 date_default_timezone_set('Africa/Dar_es_Salaam');
@@ -157,46 +156,117 @@ function formatDate($datetime) {
     return date('d M Y, H:i', strtotime($datetime));
 }
 
-// ✅ V8.4: Category detection imeboreshwa
-function getMovementCategory($notes, $movement_type, $reference_type = '') {
-    if (empty($notes)) {
-        if ($reference_type === 'prescription') return 'prescription';
-        if ($reference_type === 'otc') return 'otc';
-        if ($reference_type === 'lab_test') return 'lab_test';
-        if ($reference_type === 'procedure') return 'doctor_use';
-        return $movement_type;
+/**
+ * ✅ V8.6: Verify kama movement ni "cancelled return" ya kweli
+ */
+function verifyCancelledReturn($db, $reference_id, $patient_id, $medication_name = '') {
+    if (empty($reference_id) || empty($patient_id)) {
+        return false;
     }
-
-    // Return / Cancel
-    if (stripos($notes, 'Stock returned') === 0) return 'cancel';
     
-    // Prescription / Doctor use (medication)
+    try {
+        $sql = "SELECT COUNT(*) as cnt 
+                FROM prescription_items 
+                WHERE prescription_id = ? 
+                  AND patient_id = ? 
+                  AND cancelled_at IS NOT NULL";
+        $params = [$reference_id, $patient_id];
+        
+        if (!empty($medication_name)) {
+            $sql .= " AND medication_name = ?";
+            $params[] = $medication_name;
+        }
+        
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        return ((int)($row['cnt'] ?? 0) > 0);
+    } catch (Exception $e) {
+        error_log("verifyCancelledReturn: " . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * ✅ V8.6: Verify kama OUT movement ni prescription iliyocancelled
+ */
+function isOutCancelled($db, $reference_id, $patient_id, $medication_name = '') {
+    if (empty($reference_id) || empty($patient_id)) {
+        return false;
+    }
+    
+    try {
+        $sql = "SELECT COUNT(*) as cnt 
+                FROM prescription_items 
+                WHERE prescription_id = ? 
+                  AND patient_id = ? 
+                  AND cancelled_at IS NOT NULL";
+        $params = [$reference_id, $patient_id];
+        
+        if (!empty($medication_name)) {
+            $sql .= " AND medication_name = ?";
+            $params[] = $medication_name;
+        }
+        
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        return ((int)($row['cnt'] ?? 0) > 0);
+    } catch (Exception $e) {
+        error_log("isOutCancelled: " . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * ✅ V8.6: Category detection — inaverify kwa DB
+ */
+function getMovementCategory($notes, $movement_type, $reference_type = '', $is_verified_cancel = false, $is_out_cancelled = false) {
+    $mt = strtolower($movement_type);
+    
+    $ref_map = [
+        'prescription' => 'prescription',
+        'otc' => 'otc',
+        'lab_test' => 'lab_test',
+        'procedure' => 'procedure',
+        'doctor_use' => 'doctor_use',
+        'equipment' => 'equipment',
+        'cancelled_item' => 'cancel',
+        'prescription_cancel' => 'cancel',
+    ];
+    
+    if (!empty($reference_type) && isset($ref_map[$reference_type])) {
+        if ($mt === 'in' && $reference_type === 'cancelled_item') {
+            return $is_verified_cancel ? 'cancel' : 'unverified_return';
+        }
+        return $ref_map[$reference_type];
+    }
+    
+    if ($mt === 'out' && $is_out_cancelled) {
+        return 'cancelled_out';
+    }
+    
+    if (!empty($notes) && stripos($notes, 'Stock returned') === 0) {
+        if ($mt === 'in') {
+            return $is_verified_cancel ? 'cancel' : 'unverified_return';
+        }
+    }
+    
+    if (empty($notes)) return $mt;
+    
     if (stripos($notes, 'Prescribed by Dr.') === 0) return 'prescription';
     if (stripos($notes, 'Prescription:') === 0) return 'prescription';
     if (stripos($notes, 'Auto-dispensed') === 0) return 'prescription';
-    
-    // Doctor equipment use
     if (stripos($notes, 'Doctor used') === 0) return 'doctor_use';
-    if (stripos($notes, 'Stock returned - Removed by Dr.') === 0) return 'cancel';
-    
-    // Lab test
     if (stripos($notes, 'Lab test') === 0) return 'lab_test';
-    
-    // OTC
     if (stripos($notes, 'OTC Sale') === 0) return 'otc';
     if (stripos($notes, 'OTC Equipment Sale') === 0) return 'otc';
-    
-    // Procedure / Equipment
     if (stripos($notes, 'Procedure:') === 0) return 'procedure';
     if (stripos($notes, 'Equipment:') === 0) return 'equipment';
     
-    // Fallback to reference_type
-    if ($reference_type === 'prescription') return 'prescription';
-    if ($reference_type === 'otc') return 'otc';
-    if ($reference_type === 'lab_test') return 'lab_test';
-    if ($reference_type === 'procedure') return 'doctor_use';
-
-    return $movement_type;
+    return $mt;
 }
 
 function getTopLabel($quick_filter) {
@@ -213,7 +283,9 @@ function getTopLabel($quick_filter) {
     }
 }
 
-// ✅ V8.4: Pata stock before kwa ujumla
+/**
+ * ✅ V8.6: Stock Before = Current - IN + OUT (item-level, all batches combined)
+ */
 function getStockBefore($db, $item_type, $item_ids, $date_from_sql, $branch_cond_sm, $branch_params_sm) {
     if (empty($item_ids)) return 0;
     
@@ -221,55 +293,39 @@ function getStockBefore($db, $item_type, $item_ids, $date_from_sql, $branch_cond
     $placeholders = implode(',', array_fill(0, count($item_ids), '?'));
     
     try {
-        // 1. Jaribu kupata new_stock ya movement ya mwisho KABLA ya period
-        $sql = "SELECT sm.new_stock
-                FROM stock_movements sm
-                WHERE sm.$id_field IN ($placeholders)
-                  AND sm.created_at < ?
-                  $branch_cond_sm
-                ORDER BY sm.created_at DESC, sm.id DESC
-                LIMIT 1";
-        $params = array_merge($item_ids, [$date_from_sql], $branch_params_sm);
-        $stmt = $db->prepare($sql);
-        $stmt->execute($params);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if ($row && $row['new_stock'] !== null) {
-            return (int)$row['new_stock'];
-        }
-        
-        // 2. Kama hakuna, chukua previous_stock ya movement ya kwanza NDANI ya period
-        $date_to_temp = date('Y-m-d 23:59:59', strtotime($date_from_sql));
-        $sql = "SELECT sm.previous_stock
-                FROM stock_movements sm
-                WHERE sm.$id_field IN ($placeholders)
-                  AND sm.created_at BETWEEN ? AND ?
-                  $branch_cond_sm
-                ORDER BY sm.created_at ASC, sm.id ASC
-                LIMIT 1";
-        $params = array_merge($item_ids, [$date_from_sql, $date_to_temp], $branch_params_sm);
-        $stmt = $db->prepare($sql);
-        $stmt->execute($params);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if ($row && $row['previous_stock'] !== null) {
-            return (int)$row['previous_stock'];
-        }
-        
-        // 3. Fallback
+        // STEP #1: Current stock (SUM ya batches zote)
         if ($item_type === 'medicine') {
-            $sql = "SELECT COALESCE(SUM(quantity), 0) as total 
-                    FROM medications_inventory 
-                    WHERE id IN ($placeholders) AND status = 'active'";
+            $sql_current = "SELECT COALESCE(SUM(quantity), 0) as current_stock 
+                            FROM medications_inventory 
+                            WHERE id IN ($placeholders) AND status = 'active'";
         } else {
-            $sql = "SELECT COALESCE(SUM(quantity), 0) as total 
-                    FROM medical_equipment 
-                    WHERE id IN ($placeholders) AND status = 'active'";
+            $sql_current = "SELECT COALESCE(SUM(quantity), 0) as current_stock 
+                            FROM medical_equipment 
+                            WHERE id IN ($placeholders) AND status = 'active'";
         }
-        $stmt = $db->prepare($sql);
+        $stmt = $db->prepare($sql_current);
         $stmt->execute($item_ids);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        return (int)($row['total'] ?? 0);
+        $current_stock = (int)($stmt->fetch(PDO::FETCH_ASSOC)['current_stock'] ?? 0);
+        
+        // STEP #2: Total IN/OUT tangu period start
+        $sql_flow = "SELECT 
+                        COALESCE(SUM(CASE WHEN sm.movement_type = 'in' THEN sm.quantity ELSE 0 END), 0) as total_in,
+                        COALESCE(SUM(CASE WHEN sm.movement_type = 'out' THEN sm.quantity ELSE 0 END), 0) as total_out
+                    FROM stock_movements sm
+                    WHERE sm.$id_field IN ($placeholders)
+                      AND sm.created_at >= ?
+                      $branch_cond_sm";
+        $params = array_merge($item_ids, [$date_from_sql], $branch_params_sm);
+        $stmt = $db->prepare($sql_flow);
+        $stmt->execute($params);
+        $flow = $stmt->fetch(PDO::FETCH_ASSOC);
+        $total_in = (int)($flow['total_in'] ?? 0);
+        $total_out = (int)($flow['total_out'] ?? 0);
+        
+        // ✅ Stock Before = Current - IN + OUT
+        $stock_before = $current_stock - $total_in + $total_out;
+        
+        return max(0, $stock_before);
         
     } catch (Exception $e) {
         error_log("getStockBefore: " . $e->getMessage());
@@ -327,13 +383,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'search') {
 }
 
 // ================================================================
-// TOP 5 - Inabadilika kulingana na kipindi
+// TOP 5
 // ================================================================
 $top5_medicines = [];
 $top5_equipment = [];
 $top5_label = getTopLabel($quick_filter);
 
-// ✅ V8.4: TOP 5 MEDICINES - Inajumuisha prescriptions + OTC
+// TOP 5 MEDICINES
 try {
     $sql = "SELECT 
                 sm.inventory_id as item_id,
@@ -374,7 +430,7 @@ try {
     }
 } catch (Exception $e) { error_log("Top 5 med: " . $e->getMessage()); }
 
-// ✅ V8.4: TOP 5 EQUIPMENT - Inajumuisha Doctor + Lab + OTC
+// TOP 5 EQUIPMENT
 try {
     $sql = "SELECT 
                 sm.equipment_id,
@@ -386,6 +442,7 @@ try {
               AND sm.equipment_id IS NOT NULL
               AND sm.created_at BETWEEN ? AND ?
               $branch_cond_sm
+              AND (sm.notes NOT LIKE 'Transferred%' OR sm.notes IS NULL)
             GROUP BY sm.equipment_id
             ORDER BY total_qty DESC
             LIMIT 5";
@@ -406,7 +463,7 @@ try {
 } catch (Exception $e) { error_log("Top 5 eq: " . $e->getMessage()); }
 
 // ================================================================
-// MEDICINE DETAILS V8.4
+// MEDICINE DETAILS V8.6
 // ================================================================
 $medicine_details = null;
 
@@ -477,19 +534,21 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
         }
 
         $stock_before = getStockBefore($db, 'medicine', $inventory_ids, $date_from_sql, $branch_cond_sm, $branch_params_sm);
+        
+        // ✅ V8.6: stock_after = current stock (item-level)
         $stock_after = $total_current_stock;
 
-        if (!empty($movements)) {
-            $last_movement = $movements[0];
-            $stock_after = (int)$last_movement['new_stock'];
-        }
-
+        // ============================================================
+        // ✅ V8.6: SUMMARY CALCULATION
+        // ============================================================
         $summary = [
             'added_qty' => 0, 'added_count' => 0,
             'out_qty' => 0, 'out_count' => 0,
             'prescription_qty' => 0, 'prescription_count' => 0,
             'otc_qty' => 0, 'otc_count' => 0,
             'cancelled_returned_qty' => 0, 'cancelled_returned_count' => 0,
+            'unverified_return_qty' => 0, 'unverified_return_count' => 0,
+            'cancelled_out_qty' => 0, 'cancelled_out_count' => 0,
             'total_movement' => 0,
             'unique_patients' => 0
         ];
@@ -501,26 +560,50 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
             $mt = strtolower($m['movement_type'] ?? '');
             $notes = $m['notes'] ?? '';
             $ref_type = $m['reference_type'] ?? '';
+            $ref_id = $m['reference_id'] ?? null;
+            $patient_id = $m['patient_id'] ?? null;
 
-            if ($mt === 'in') {
-                $summary['added_qty'] += $qty;
-                $summary['added_count']++;
-            } else {
-                $summary['out_qty'] += $qty;
-                $summary['out_count']++;
+            $is_verified_cancel = false;
+            if ($mt === 'in' && (stripos($notes, 'Stock returned') === 0 || $ref_type === 'cancelled_item')) {
+                $is_verified_cancel = verifyCancelledReturn($db, $ref_id, $patient_id, $med_name);
             }
 
-            $category = getMovementCategory($notes, $mt, $ref_type);
+            $is_out_cancelled = false;
+            if ($mt === 'out' && $ref_type === 'prescription') {
+                $is_out_cancelled = isOutCancelled($db, $ref_id, $patient_id, $med_name);
+            }
 
-            if ($category === 'prescription') {
-                $summary['prescription_qty'] += $qty;
-                $summary['prescription_count']++;
-            } elseif ($category === 'otc') {
-                $summary['otc_qty'] += $qty;
-                $summary['otc_count']++;
-            } elseif ($category === 'cancel') {
-                $summary['cancelled_returned_qty'] += $qty;
-                $summary['cancelled_returned_count']++;
+            $category = getMovementCategory($notes, $mt, $ref_type, $is_verified_cancel, $is_out_cancelled);
+
+            if ($mt === 'in') {
+                if ($category === 'cancel') {
+                    $summary['cancelled_returned_qty'] += $qty;
+                    $summary['cancelled_returned_count']++;
+                } elseif ($category === 'unverified_return') {
+                    $summary['unverified_return_qty'] += $qty;
+                    $summary['unverified_return_count']++;
+                } else {
+                    $summary['added_qty'] += $qty;
+                    $summary['added_count']++;
+                }
+            } else {
+                if ($is_out_cancelled) {
+                    $summary['cancelled_out_qty'] += $qty;
+                    $summary['cancelled_out_count']++;
+                } elseif ($category === 'prescription') {
+                    $summary['prescription_qty'] += $qty;
+                    $summary['prescription_count']++;
+                    $summary['out_qty'] += $qty;
+                    $summary['out_count']++;
+                } elseif ($category === 'otc') {
+                    $summary['otc_qty'] += $qty;
+                    $summary['otc_count']++;
+                    $summary['out_qty'] += $qty;
+                    $summary['out_count']++;
+                } else {
+                    $summary['out_qty'] += $qty;
+                    $summary['out_count']++;
+                }
             }
 
             if (!empty($m['patient_id'])) {
@@ -531,6 +614,12 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
         $summary['total_movement'] = $summary['out_qty'];
         $summary['unique_patients'] = count($patient_ids);
 
+        // ✅ V8.6 FIX: Formula jumuisha cancelled_out
+        $total_in_calc = $summary['added_qty'] + $summary['cancelled_returned_qty'];
+        $total_out_calc = $summary['out_qty'] + $summary['cancelled_out_qty'];
+        $calculated_stock_after = $stock_before + $total_in_calc - $total_out_calc;
+
+        // ADDITIONS
         $additions = [];
         foreach ($movements as $m) {
             if (strtolower($m['movement_type']) !== 'in') continue;
@@ -557,6 +646,9 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
                 'filter_label' => $date_label,
                 'stock_before' => $stock_before,
                 'stock_after' => $stock_after,
+                'stock_after_calculated' => $calculated_stock_after,
+                'total_in_calc' => $total_in_calc,
+                'total_out_calc' => $total_out_calc,
             ],
             'additions' => $additions,
         ];
@@ -564,7 +656,7 @@ if ($active_tab === 'medicine' && $selected_item_id > 0) {
 }
 
 // ================================================================
-// EQUIPMENT DETAILS V8.4
+// EQUIPMENT DETAILS V8.6
 // ================================================================
 $equipment_details = null;
 
@@ -637,11 +729,6 @@ if ($active_tab === 'equipment' && $selected_item_id > 0) {
         $stock_before = getStockBefore($db, 'equipment', $equipment_ids, $date_from_sql, $branch_cond_sm, $branch_params_sm);
         $stock_after = $total_current_stock;
 
-        if (!empty($movements)) {
-            $last_movement = $movements[0];
-            $stock_after = (int)$last_movement['new_stock'];
-        }
-
         $summary = [
             'added_qty' => 0, 'added_count' => 0,
             'out_qty' => 0, 'out_count' => 0,
@@ -650,6 +737,8 @@ if ($active_tab === 'equipment' && $selected_item_id > 0) {
             'doctor_qty' => 0, 'doctor_count' => 0,
             'procedure_qty' => 0, 'procedure_count' => 0,
             'returned_qty' => 0, 'returned_count' => 0,
+            'unverified_return_qty' => 0, 'unverified_return_count' => 0,
+            'cancelled_out_qty' => 0, 'cancelled_out_count' => 0,
             'total_movement' => 0,
             'unique_patients' => 0
         ];
@@ -661,33 +750,60 @@ if ($active_tab === 'equipment' && $selected_item_id > 0) {
             $mt = strtolower($m['movement_type'] ?? '');
             $notes = $m['notes'] ?? '';
             $ref_type = $m['reference_type'] ?? '';
+            $ref_id = $m['reference_id'] ?? null;
+            $patient_id = $m['patient_id'] ?? null;
 
-            if ($mt === 'in') {
-                $summary['added_qty'] += $qty;
-                $summary['added_count']++;
-                if (stripos($notes, 'Stock returned') === 0) {
-                    $summary['returned_qty'] += $qty;
-                    $summary['returned_count']++;
-                }
-            } else {
-                $summary['out_qty'] += $qty;
-                $summary['out_count']++;
+            $is_verified_cancel = false;
+            if ($mt === 'in' && (stripos($notes, 'Stock returned') === 0 || $ref_type === 'cancelled_item')) {
+                $is_verified_cancel = verifyCancelledReturn($db, $ref_id, $patient_id, $eq_name);
             }
 
-            $category = getMovementCategory($notes, $mt, $ref_type);
+            $is_out_cancelled = false;
+            if ($mt === 'out' && $ref_type === 'prescription') {
+                $is_out_cancelled = isOutCancelled($db, $ref_id, $patient_id, $eq_name);
+            }
 
-            if ($category === 'lab_test') {
-                $summary['lab_test_qty'] += $qty;
-                $summary['lab_test_count']++;
-            } elseif ($category === 'otc') {
-                $summary['otc_qty'] += $qty;
-                $summary['otc_count']++;
-            } elseif ($category === 'doctor_use') {
-                $summary['doctor_qty'] += $qty;
-                $summary['doctor_count']++;
-            } elseif ($category === 'procedure' || $category === 'equipment') {
-                $summary['procedure_qty'] += $qty;
-                $summary['procedure_count']++;
+            $category = getMovementCategory($notes, $mt, $ref_type, $is_verified_cancel, $is_out_cancelled);
+
+            if ($mt === 'in') {
+                if ($category === 'cancel') {
+                    $summary['returned_qty'] += $qty;
+                    $summary['returned_count']++;
+                } elseif ($category === 'unverified_return') {
+                    $summary['unverified_return_qty'] += $qty;
+                    $summary['unverified_return_count']++;
+                } else {
+                    $summary['added_qty'] += $qty;
+                    $summary['added_count']++;
+                }
+            } else {
+                if ($is_out_cancelled) {
+                    $summary['cancelled_out_qty'] += $qty;
+                    $summary['cancelled_out_count']++;
+                } elseif ($category === 'lab_test') {
+                    $summary['lab_test_qty'] += $qty;
+                    $summary['lab_test_count']++;
+                    $summary['out_qty'] += $qty;
+                    $summary['out_count']++;
+                } elseif ($category === 'otc') {
+                    $summary['otc_qty'] += $qty;
+                    $summary['otc_count']++;
+                    $summary['out_qty'] += $qty;
+                    $summary['out_count']++;
+                } elseif ($category === 'doctor_use') {
+                    $summary['doctor_qty'] += $qty;
+                    $summary['doctor_count']++;
+                    $summary['out_qty'] += $qty;
+                    $summary['out_count']++;
+                } elseif ($category === 'procedure' || $category === 'equipment') {
+                    $summary['procedure_qty'] += $qty;
+                    $summary['procedure_count']++;
+                    $summary['out_qty'] += $qty;
+                    $summary['out_count']++;
+                } else {
+                    $summary['out_qty'] += $qty;
+                    $summary['out_count']++;
+                }
             }
 
             if (!empty($m['patient_id'])) {
@@ -697,6 +813,10 @@ if ($active_tab === 'equipment' && $selected_item_id > 0) {
 
         $summary['total_movement'] = $summary['out_qty'];
         $summary['unique_patients'] = count($patient_ids);
+
+        $total_in_calc = $summary['added_qty'] + $summary['returned_qty'];
+        $total_out_calc = $summary['out_qty'] + $summary['cancelled_out_qty'];
+        $calculated_stock_after = $stock_before + $total_in_calc - $total_out_calc;
 
         $additions = [];
         foreach ($movements as $m) {
@@ -713,6 +833,18 @@ if ($active_tab === 'equipment' && $selected_item_id > 0) {
             ];
         }
 
+        // Pre-fetch patients
+        $patient_ids_list = array_unique(array_filter(array_column($movements, 'patient_id')));
+        $patients_map = [];
+        if (!empty($patient_ids_list)) {
+            $placeholders_p = implode(',', array_fill(0, count($patient_ids_list), '?'));
+            $stmt_p = $db->prepare("SELECT id, full_name, patient_id FROM patients WHERE id IN ($placeholders_p)");
+            $stmt_p->execute(array_values($patient_ids_list));
+            while ($p_row = $stmt_p->fetch(PDO::FETCH_ASSOC)) {
+                $patients_map[$p_row['id']] = $p_row;
+            }
+        }
+
         $equipment_details = [
             'name' => $eq_name,
             'info' => $eq_info,
@@ -724,8 +856,12 @@ if ($active_tab === 'equipment' && $selected_item_id > 0) {
                 'filter_label' => $date_label,
                 'stock_before' => $stock_before,
                 'stock_after' => $stock_after,
+                'stock_after_calculated' => $calculated_stock_after,
+                'total_in_calc' => $total_in_calc,
+                'total_out_calc' => $total_out_calc,
             ],
             'additions' => $additions,
+            'patients_map' => $patients_map,
         ];
     }
 }
@@ -745,7 +881,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $selected_item_id > 0
         $output = fopen('php://output', 'w');
         fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
 
-        fputcsv($output, ['STOCK MOVEMENT REPORT V8.4 - ADMIN']);
+        fputcsv($output, ['STOCK MOVEMENT REPORT V8.6 - ADMIN']);
         fputcsv($output, ['Item', $details['name']]);
         fputcsv($output, ['Type', strtoupper($active_tab)]);
         fputcsv($output, ['Branch', $branch_name_display]);
@@ -754,17 +890,45 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $selected_item_id > 0
         fputcsv($output, []);
 
         $pi = $details['period_info'];
+        $sm = $details['summary'];
+        
         fputcsv($output, ['STOCK FLOW']);
         fputcsv($output, ['Stock Before', $pi['stock_before']]);
-        fputcsv($output, ['Added (in)', $details['summary']['added_qty']]);
-        fputcsv($output, ['Out', $details['summary']['out_qty']]);
-        fputcsv($output, ['Stock After', $pi['stock_after']]);
+        fputcsv($output, ['Added (verified)', $sm['added_qty']]);
+        fputcsv($output, ['Cancelled Returned (verified)', $sm['cancelled_returned_qty'] ?? $sm['returned_qty'] ?? 0]);
+        if (($sm['unverified_return_qty'] ?? 0) > 0) {
+            fputcsv($output, ['Unverified Returns', $sm['unverified_return_qty']]);
+        }
+        fputcsv($output, ['Out (verified)', $sm['out_qty']]);
+        fputcsv($output, ['Cancelled Out', $sm['cancelled_out_qty'] ?? 0]);
+        fputcsv($output, ['Total IN', $pi['total_in_calc']]);
+        fputcsv($output, ['Total OUT', $pi['total_out_calc']]);
+        fputcsv($output, ['Stock After (calculated)', $pi['stock_after_calculated']]);
+        fputcsv($output, ['Stock After (current live)', $pi['stock_after']]);
         fputcsv($output, []);
 
         fputcsv($output, ['MOVEMENTS DETAIL']);
         fputcsv($output, ['#', 'Date', 'Type', 'Qty', 'Prev', 'New', 'By', 'Category', 'Notes']);
         $i = 1;
         foreach ($details['movements'] as $m) {
+            $mt = strtolower($m['movement_type'] ?? '');
+            $ref_type = $m['reference_type'] ?? '';
+            $ref_id = $m['reference_id'] ?? null;
+            $patient_id = $m['patient_id'] ?? null;
+            $notes = $m['notes'] ?? '';
+            
+            $is_verified = false;
+            if ($mt === 'in' && (stripos($notes, 'Stock returned') === 0 || $ref_type === 'cancelled_item')) {
+                $is_verified = verifyCancelledReturn($db, $ref_id, $patient_id, $details['name']);
+            }
+            
+            $is_out_cancelled = false;
+            if ($mt === 'out' && $ref_type === 'prescription') {
+                $is_out_cancelled = isOutCancelled($db, $ref_id, $patient_id, $details['name']);
+            }
+            
+            $cat = getMovementCategory($notes, $mt, $ref_type, $is_verified, $is_out_cancelled);
+            
             fputcsv($output, [
                 $i++,
                 $m['created_at'],
@@ -773,8 +937,8 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $selected_item_id > 0
                 $m['previous_stock'],
                 $m['new_stock'],
                 $m['performed_by_name'] ?? 'N/A',
-                getMovementCategory($m['notes'] ?? '', $m['movement_type'] ?? '', $m['reference_type'] ?? ''),
-                $m['notes'] ?? ''
+                $cat,
+                $notes
             ]);
         }
 
@@ -793,7 +957,7 @@ include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stock Movement Report V8.4 • Braick Admin Audit</title>
+<title>Stock Movement Report V8.6 • Braick Admin Audit</title>
 <link rel="icon" href="<?= $logo_path ?>" type="image/png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -938,6 +1102,15 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .sf-mov-item.returned .sf-mov-label, .sf-mov-item.returned .sf-mov-qty { color: #059669; }
 .sf-mov-item.doctor .sf-mov-label, .sf-mov-item.doctor .sf-mov-qty { color: #8B5CF6; }
 
+.data-warning-banner { padding: 16px 20px; background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%); border: 2px dashed #F59E0B; border-radius: var(--radius-md); margin-bottom: 20px; display: flex; align-items: flex-start; gap: 14px; }
+[data-theme="dark"] .data-warning-banner { background: linear-gradient(135deg, #3A2A0F 0%, #4A3A12 100%); border-color: #D97706; }
+.data-warning-banner .dw-icon { width: 48px; height: 48px; border-radius: 12px; background: linear-gradient(135deg, #F59E0B, #D97706); color: white; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; flex-shrink: 0; }
+.data-warning-banner .dw-content { flex: 1; }
+.data-warning-banner .dw-title { font-weight: 900; color: #78350F; font-size: 0.95rem; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+[data-theme="dark"] .data-warning-banner .dw-title { color: #FCD34D; }
+.data-warning-banner .dw-text { font-size: 0.8rem; color: #92400E; line-height: 1.6; }
+[data-theme="dark"] .data-warning-banner .dw-text { color: #FDE68A; }
+
 .summary-grid-v8 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 20px; }
 .sum-card-v8 { background: var(--bg-card); border-radius: var(--radius-lg); padding: 18px 20px; border: 2px solid var(--border-color); position: relative; overflow: hidden; transition: all 0.3s; display: flex; align-items: center; gap: 14px; }
 .sum-card-v8::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; }
@@ -972,6 +1145,9 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .sum-card-v8.procedure::before { background: linear-gradient(180deg, #8B5CF6, #A78BFA); }
 .sum-card-v8.procedure .sc-icon-v8 { background: linear-gradient(135deg, #8B5CF6, #A78BFA); }
 .sum-card-v8.procedure .sc-value-v8 { color: #8B5CF6; }
+.sum-card-v8.unverified::before { background: linear-gradient(180deg, #D97706, #FBBF24); }
+.sum-card-v8.unverified .sc-icon-v8 { background: linear-gradient(135deg, #D97706, #FBBF24); }
+.sum-card-v8.unverified .sc-value-v8 { color: #D97706; }
 
 .table-card { background: var(--bg-card); border-radius: var(--radius-lg); border: 1px solid var(--border-color); overflow: hidden; box-shadow: var(--shadow-sm); margin-bottom: 20px; }
 .table-card .table-header { padding: 14px 20px; background: linear-gradient(135deg, #0B5ED7, #0A4CA8); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
@@ -994,6 +1170,8 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .data-table tbody tr.in-row { background: rgba(5,150,105,0.04); }
 .data-table tbody tr.out-row { background: rgba(220,38,38,0.03); }
 .data-table tbody tr.return-row { background: rgba(8,145,178,0.04); }
+.data-table tbody tr.unverified-row { background: rgba(217,119,6,0.06); }
+.data-table tbody tr.cancelled-row { background: rgba(220,38,38,0.05); opacity: 0.75; }
 .data-table tbody tr.doctor-row { background: rgba(139,92,246,0.05); }
 
 .status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: var(--radius-full); font-size: 0.62rem; font-weight: 800; text-transform: uppercase; }
@@ -1003,6 +1181,8 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .status-badge.otc { background: var(--cyan-bg); color: var(--cyan); border: 1px solid var(--cyan); }
 .status-badge.lab_test { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
 .status-badge.cancel { background: var(--cyan-bg); color: var(--cyan); border: 1px solid var(--cyan); }
+.status-badge.unverified_return { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); border-style: dashed; }
+.status-badge.cancelled_out { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); border-style: dashed; }
 .status-badge.auto_dispense { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); }
 .status-badge.equipment { background: var(--slate-bg); color: var(--slate); border: 1px solid var(--slate); }
 .status-badge.doctor_use { background: #EDE9FE; color: #8B5CF6; border: 1px solid #8B5CF6; }
@@ -1032,7 +1212,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             <h1 class="page-title">
                 <i class="fas fa-boxes-stacked"></i>
                 Stock Movement Report
-                <span class="branch-tag"><i class="fas fa-shield-alt"></i> ADMIN V8.4</span>
+                <span class="branch-tag"><i class="fas fa-shield-alt"></i> ADMIN V8.6</span>
                 <span class="branch-tag <?= $selected_branch_id !== 'all' ? 'filter-active' : '' ?>">
                     <i class="fas <?= $selected_branch_id !== 'all' ? 'fa-lock' : 'fa-globe' ?>"></i>
                     <?= htmlspecialchars($branch_name_display) ?>
@@ -1194,7 +1374,18 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
     <!-- MEDICINE TAB -->
     <?php if ($active_tab === 'medicine'): ?>
         <?php if ($medicine_details): ?>
-            <?php $med = $medicine_details['info']; $sm = $medicine_details['summary']; $pi = $medicine_details['period_info']; $movs = $medicine_details['movements']; $additions = $medicine_details['additions']; ?>
+            <?php 
+                $med = $medicine_details['info']; 
+                $sm = $medicine_details['summary']; 
+                $pi = $medicine_details['period_info']; 
+                $movs = $medicine_details['movements']; 
+                $additions = $medicine_details['additions'];
+                
+                // ✅ V8.6: Formula with cancelled_out included
+                $total_in_display = $pi['total_in_calc'];
+                $total_out_display = $pi['total_out_calc'];
+                $final_calculated = $pi['stock_after_calculated'];
+            ?>
 
             <div class="info-banner">
                 <div class="ib-icon"><i class="fas fa-pills"></i></div>
@@ -1210,24 +1401,47 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                 </div>
             </div>
 
+            <!-- Warning kama kuna unverified returns -->
+            <?php if ($sm['unverified_return_qty'] > 0): ?>
+            <div class="data-warning-banner">
+                <div class="dw-icon"><i class="fas fa-exclamation-triangle"></i></div>
+                <div class="dw-content">
+                    <div class="dw-title">
+                        <i class="fas fa-database"></i> Data Integrity Warning
+                    </div>
+                    <div class="dw-text">
+                        Kuna <strong><?= number_format($sm['unverified_return_qty']) ?> units</strong> za "Stock returned" kwenye 
+                        <code>stock_movements</code> lakini <strong>hakuna cancellation record</strong> kwenye 
+                        <code>prescription_items.cancelled_at</code>.
+                        <br>
+                        <strong>V8.6 Decision:</strong> Returns hizi <strong>HAZIJUMLISHWI</strong> kwenye "Cancelled Returned" kwa usalama.
+                        Zimehesabiwa kama <strong>"Unverified Returns"</strong>.
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
+
             <div class="stock-flow-card">
                 <div class="sf-header">
-                    <div class="sf-title"><i class="fas fa-water"></i> Stock Flow — From Movements</div>
+                    <div class="sf-title"><i class="fas fa-water"></i> Stock Flow — All Batches Combined</div>
                     <div class="sf-badge"><i class="fas fa-calendar"></i> <?= htmlspecialchars($pi['filter_label']) ?></div>
                 </div>
                 <div class="sf-flow">
                     <div class="sf-block before">
                         <div class="sf-block-label"><i class="fas fa-warehouse"></i> Stock Before Period</div>
                         <div class="sf-block-value"><?= number_format($pi['stock_before']) ?> <span class="unit">units</span></div>
-                        <div class="sf-block-meta"><span><i class="fas fa-calendar"></i> As of <?= date('d/m/Y', strtotime($filter_date_from)) ?> 00:00</span></div>
+                        <div class="sf-block-meta">
+                            <span><i class="fas fa-calendar"></i> As of <?= date('d/m/Y', strtotime($filter_date_from)) ?> 00:00</span>
+                            <span style="color:var(--primary);"><i class="fas fa-layer-group"></i> All batches combined</span>
+                        </div>
                     </div>
                     <div class="sf-arrow"><i class="fas fa-arrows-left-right"></i></div>
                     <div class="sf-block movement">
                         <div class="sf-block-label"><i class="fas fa-exchange-alt"></i> Movements in Period</div>
-                        <div class="sf-block-value"><?= number_format($sm['added_qty'] + $sm['out_qty']) ?> <span class="unit">records</span></div>
+                        <div class="sf-block-value"><?= number_format($total_in_display + $total_out_display) ?> <span class="unit">records</span></div>
                         <div class="sf-movements-grid">
                             <div class="sf-mov-item added"><div class="sf-mov-label">Added</div><div class="sf-mov-qty">+<?= number_format($sm['added_qty']) ?></div></div>
-                            <div class="sf-mov-item out"><div class="sf-mov-label">Out</div><div class="sf-mov-qty">−<?= number_format($sm['out_qty']) ?></div></div>
+                            <div class="sf-mov-item out"><div class="sf-mov-label">Out</div><div class="sf-mov-qty">−<?= number_format($sm['out_qty'] + $sm['cancelled_out_qty']) ?></div></div>
                             <div class="sf-mov-item returned"><div class="sf-mov-label">Returned</div><div class="sf-mov-qty">+<?= number_format($sm['cancelled_returned_qty']) ?></div></div>
                         </div>
                     </div>
@@ -1235,26 +1449,95 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                     <div class="sf-block remaining">
                         <div class="sf-block-label"><i class="fas fa-boxes-packing"></i> Stock After Period</div>
                         <div class="sf-block-value"><?= number_format($pi['stock_after']) ?> <span class="unit">units</span></div>
-                        <div class="sf-block-meta"><span><i class="fas fa-database"></i> Current live: <?= number_format($medicine_details['total_current_stock']) ?></span></div>
+                        <div class="sf-block-meta">
+                            <span><i class="fas fa-database"></i> Current live: <?= number_format($medicine_details['total_current_stock']) ?></span>
+                            <span style="color:var(--success);"><i class="fas fa-check-circle"></i> All batches combined</span>
+                        </div>
                     </div>
                 </div>
-                <div style="text-align: center; padding: 12px; background: var(--bg-body); border-radius: var(--radius-md); font-family: var(--font-mono); font-weight: 800; border: 2px dashed var(--border-color); font-size: 0.95rem;">
-                    <span style="color:#64748B;font-size:1.15rem;"><?= number_format($pi['stock_before']) ?></span>
+                
+                <!-- ✅ V8.6: Formula sahihi -->
+                <div style="text-align: center; padding: 14px; background: var(--bg-body); border-radius: var(--radius-md); font-family: var(--font-mono); font-weight: 800; border: 2px dashed var(--border-color); font-size: 0.95rem;">
+                    <span style="color:#64748B;font-size:1.15rem;" title="Stock before period"><?= number_format($pi['stock_before']) ?></span>
                     <span style="color:var(--text-secondary);margin:0 8px;">+</span>
-                    <span style="color:#059669;font-size:1.15rem;"><?= number_format($sm['added_qty'] + $sm['cancelled_returned_qty']) ?></span>
+                    <span style="color:#059669;font-size:1.15rem;" title="Total IN (added + returned)"><?= number_format($total_in_display) ?></span>
                     <span style="color:var(--text-secondary);margin:0 8px;">−</span>
-                    <span style="color:#DC2626;font-size:1.15rem;"><?= number_format($sm['out_qty']) ?></span>
+                    <span style="color:#DC2626;font-size:1.15rem;" title="Total OUT (out + cancelled out)"><?= number_format($total_out_display) ?></span>
                     <span style="color:var(--text-secondary);margin:0 8px;">=</span>
-                    <span style="color:#059669;font-size:1.3rem;"><?= number_format($pi['stock_after']) ?></span>
+                    <span style="color:#059669;font-size:1.3rem;" title="Stock after period"><?= number_format($final_calculated) ?></span>
+                    <div style="font-size:0.68rem;color:var(--text-muted);margin-top:6px;font-family:var(--font-primary);font-weight:600;">
+                        IN = Added (<?= number_format($sm['added_qty']) ?>) + Returned (<?= number_format($sm['cancelled_returned_qty']) ?>)
+                        &nbsp;•&nbsp;
+                        OUT = Out (<?= number_format($sm['out_qty']) ?>) + Cancelled Out (<?= number_format($sm['cancelled_out_qty']) ?>)
+                    </div>
                 </div>
             </div>
 
             <div class="summary-grid-v8">
-                <div class="sum-card-v8 added"><div class="sc-icon-v8"><i class="fas fa-plus-circle"></i></div><div class="sc-content"><div class="sc-label-v8">Stock Added</div><div class="sc-value-v8">+<?= number_format($sm['added_qty']) ?> <span class="unit-v8">units</span></div><div class="sc-sub-v8"><?= $sm['added_count'] ?> addition(s)</div></div></div>
-                <div class="sum-card-v8 out"><div class="sc-icon-v8"><i class="fas fa-minus-circle"></i></div><div class="sc-content"><div class="sc-label-v8">Stock Out</div><div class="sc-value-v8">−<?= number_format($sm['out_qty']) ?> <span class="unit-v8">units</span></div><div class="sc-sub-v8"><?= $sm['out_count'] ?> movement(s)</div></div></div>
-                <div class="sum-card-v8 returned"><div class="sc-icon-v8"><i class="fas fa-undo"></i></div><div class="sc-content"><div class="sc-label-v8">Cancelled Returned</div><div class="sc-value-v8">+<?= number_format($sm['cancelled_returned_qty']) ?> <span class="unit-v8">units</span></div><div class="sc-sub-v8"><?= $sm['cancelled_returned_count'] ?> return(s)</div></div></div>
-                <div class="sum-card-v8 prescription"><div class="sc-icon-v8"><i class="fas fa-prescription"></i></div><div class="sc-content"><div class="sc-label-v8">Prescription Out</div><div class="sc-value-v8"><?= number_format($sm['prescription_qty']) ?> <span class="unit-v8">units</span></div><div class="sc-sub-v8"><?= $sm['prescription_count'] ?> Rx movement(s)</div></div></div>
-                <div class="sum-card-v8 otc"><div class="sc-icon-v8"><i class="fas fa-cash-register"></i></div><div class="sc-content"><div class="sc-label-v8">OTC Sold</div><div class="sc-value-v8"><?= number_format($sm['otc_qty']) ?> <span class="unit-v8">units</span></div><div class="sc-sub-v8"><?= $sm['otc_count'] ?> OTC sale(s)</div></div></div>
+                <div class="sum-card-v8 added">
+                    <div class="sc-icon-v8"><i class="fas fa-plus-circle"></i></div>
+                    <div class="sc-content">
+                        <div class="sc-label-v8">Stock Added</div>
+                        <div class="sc-value-v8">+<?= number_format($sm['added_qty']) ?> <span class="unit-v8">units</span></div>
+                        <div class="sc-sub-v8"><?= $sm['added_count'] ?> verified addition(s)</div>
+                    </div>
+                </div>
+                
+                <div class="sum-card-v8 out">
+                    <div class="sc-icon-v8"><i class="fas fa-minus-circle"></i></div>
+                    <div class="sc-content">
+                        <div class="sc-label-v8">Stock Out</div>
+                        <div class="sc-value-v8">−<?= number_format($sm['out_qty'] + $sm['cancelled_out_qty']) ?> <span class="unit-v8">units</span></div>
+                        <div class="sc-sub-v8">
+                            <?= $sm['out_count'] + $sm['cancelled_out_count'] ?> movement(s)
+                            <?php if ($sm['cancelled_out_qty'] > 0): ?>
+                                <br><small style="color:var(--warning);font-weight:700;">
+                                    (incl. <?= number_format($sm['cancelled_out_qty']) ?> cancelled OUT)
+                                </small>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+                
+                <?php if ($sm['cancelled_returned_qty'] > 0): ?>
+                <div class="sum-card-v8 returned">
+                    <div class="sc-icon-v8"><i class="fas fa-undo"></i></div>
+                    <div class="sc-content">
+                        <div class="sc-label-v8">Cancelled Returned</div>
+                        <div class="sc-value-v8">+<?= number_format($sm['cancelled_returned_qty']) ?> <span class="unit-v8">units</span></div>
+                        <div class="sc-sub-v8"><?= $sm['cancelled_returned_count'] ?> verified return(s)</div>
+                    </div>
+                </div>
+                <?php endif; ?>
+                
+                <?php if ($sm['unverified_return_qty'] > 0): ?>
+                <div class="sum-card-v8 unverified">
+                    <div class="sc-icon-v8"><i class="fas fa-question-circle"></i></div>
+                    <div class="sc-content">
+                        <div class="sc-label-v8">Unverified Returns</div>
+                        <div class="sc-value-v8">+<?= number_format($sm['unverified_return_qty']) ?> <span class="unit-v8">units</span></div>
+                        <div class="sc-sub-v8"><?= $sm['unverified_return_count'] ?> unverified</div>
+                    </div>
+                </div>
+                <?php endif; ?>
+                
+                <div class="sum-card-v8 prescription">
+                    <div class="sc-icon-v8"><i class="fas fa-prescription"></i></div>
+                    <div class="sc-content">
+                        <div class="sc-label-v8">Prescription Out</div>
+                        <div class="sc-value-v8"><?= number_format($sm['prescription_qty']) ?> <span class="unit-v8">units</span></div>
+                        <div class="sc-sub-v8"><?= $sm['prescription_count'] ?> Rx movement(s)</div>
+                    </div>
+                </div>
+                
+                <div class="sum-card-v8 otc">
+                    <div class="sc-icon-v8"><i class="fas fa-cash-register"></i></div>
+                    <div class="sc-content">
+                        <div class="sc-label-v8">OTC Sold</div>
+                        <div class="sc-value-v8"><?= number_format($sm['otc_qty']) ?> <span class="unit-v8">units</span></div>
+                        <div class="sc-sub-v8"><?= $sm['otc_count'] ?> OTC sale(s)</div>
+                    </div>
+                </div>
             </div>
 
             <?php if (count($additions) > 0): ?>
@@ -1300,18 +1583,48 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                         <tbody>
                             <?php $i = 1; foreach ($movs as $m):
                                 $mt = strtolower($m['movement_type']);
-                                $category = getMovementCategory($m['notes'] ?? '', $mt, $m['reference_type'] ?? '');
+                                $ref_type = $m['reference_type'] ?? '';
+                                $ref_id = $m['reference_id'] ?? null;
+                                $patient_id = $m['patient_id'] ?? null;
+                                $notes_m = $m['notes'] ?? '';
+                                
+                                $is_verified = false;
+                                if ($mt === 'in' && (stripos($notes_m, 'Stock returned') === 0 || $ref_type === 'cancelled_item')) {
+                                    $is_verified = verifyCancelledReturn($db, $ref_id, $patient_id, $medicine_details['name']);
+                                }
+                                
+                                $is_out_cancelled = false;
+                                if ($mt === 'out' && $ref_type === 'prescription') {
+                                    $is_out_cancelled = isOutCancelled($db, $ref_id, $patient_id, $medicine_details['name']);
+                                }
+                                
+                                $category = getMovementCategory($notes_m, $mt, $ref_type, $is_verified, $is_out_cancelled);
+                                
                                 $row_class = $mt === 'in' ? 'in-row' : 'out-row';
                                 if ($category === 'cancel') $row_class = 'return-row';
+                                if ($category === 'unverified_return') $row_class = 'unverified-row';
+                                if ($category === 'cancelled_out') $row_class = 'cancelled-row';
                             ?>
                             <tr class="<?= $row_class ?>">
                                 <td style="font-family:var(--font-mono);font-weight:700;color:var(--text-secondary);"><?= $i++ ?></td>
                                 <td style="font-size:0.72rem;"><?= date('d M Y, H:i', strtotime($m['created_at'])) ?></td>
                                 <td><span class="status-badge <?= $mt ?>"><i class="fas fa-<?= $mt === 'in' ? 'arrow-down' : 'arrow-up' ?>"></i> <?= strtoupper($mt) ?></span></td>
                                 <td>
-                                    <?php $cat_icons = ['prescription' => 'fa-prescription','auto_dispense' => 'fa-robot','otc' => 'fa-cash-register','cancel' => 'fa-undo','lab_test' => 'fa-flask','equipment' => 'fa-tools','doctor_use' => 'fa-user-md'];
+                                    <?php 
+                                    $cat_icons = [
+                                        'prescription' => 'fa-prescription',
+                                        'auto_dispense' => 'fa-robot',
+                                        'otc' => 'fa-cash-register',
+                                        'cancel' => 'fa-undo',
+                                        'unverified_return' => 'fa-question-circle',
+                                        'cancelled_out' => 'fa-ban',
+                                        'lab_test' => 'fa-flask',
+                                        'equipment' => 'fa-tools',
+                                        'doctor_use' => 'fa-user-md'
+                                    ];
                                     $icon = $cat_icons[$category] ?? 'fa-circle';
-                                    $badge_class = in_array($category, array_keys($cat_icons)) ? $category : 'out'; ?>
+                                    $badge_class = in_array($category, array_keys($cat_icons)) ? $category : 'out'; 
+                                    ?>
                                     <span class="status-badge <?= $badge_class ?>"><i class="fas <?= $icon ?>"></i> <?= strtoupper(str_replace('_', ' ', $category)) ?></span>
                                 </td>
                                 <td style="text-align:center;"><span style="font-family:var(--font-mono);font-weight:800;font-size:0.85rem;color:<?= $mt === 'in' ? 'var(--success)' : 'var(--danger)' ?>;"><?= $mt === 'in' ? '+' : '−' ?><?= number_format($m['quantity']) ?></span></td>
@@ -1340,7 +1653,18 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 
         <!-- EQUIPMENT TAB -->
         <?php if ($equipment_details): ?>
-            <?php $eq = $equipment_details['info']; $sm = $equipment_details['summary']; $pi = $equipment_details['period_info']; $movs = $equipment_details['movements']; $additions = $equipment_details['additions']; ?>
+            <?php 
+                $eq = $equipment_details['info']; 
+                $sm = $equipment_details['summary']; 
+                $pi = $equipment_details['period_info']; 
+                $movs = $equipment_details['movements']; 
+                $additions = $equipment_details['additions']; 
+                $patients_map = $equipment_details['patients_map'];
+                
+                $total_in_display = $pi['total_in_calc'];
+                $total_out_display = $pi['total_out_calc'];
+                $final_calculated = $pi['stock_after_calculated'];
+            ?>
 
             <div class="info-banner" style="border-left-color: var(--cyan);">
                 <div class="ib-icon" style="background: linear-gradient(135deg, #0891B2, #0E7490);"><i class="fas fa-tools"></i></div>
@@ -1355,9 +1679,23 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                 </div>
             </div>
 
+            <?php if ($sm['unverified_return_qty'] > 0): ?>
+            <div class="data-warning-banner">
+                <div class="dw-icon"><i class="fas fa-exclamation-triangle"></i></div>
+                <div class="dw-content">
+                    <div class="dw-title"><i class="fas fa-database"></i> Data Integrity Warning</div>
+                    <div class="dw-text">
+                        Kuna <strong><?= number_format($sm['unverified_return_qty']) ?> units</strong> za "Stock returned" 
+                        lakini hakuna cancellation record.
+                        <strong>V8.6:</strong> Zimehesabiwa kama <strong>"Unverified Returns"</strong>.
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
+
             <div class="stock-flow-card">
                 <div class="sf-header">
-                    <div class="sf-title"><i class="fas fa-water"></i> Equipment Flow — From Movements</div>
+                    <div class="sf-title"><i class="fas fa-water"></i> Equipment Flow — All Items Combined</div>
                     <div class="sf-badge"><i class="fas fa-calendar"></i> <?= htmlspecialchars($pi['filter_label']) ?></div>
                 </div>
                 <div class="sf-flow">
@@ -1368,10 +1706,10 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                     <div class="sf-arrow"><i class="fas fa-arrows-left-right"></i></div>
                     <div class="sf-block movement">
                         <div class="sf-block-label"><i class="fas fa-exchange-alt"></i> Movements</div>
-                        <div class="sf-block-value"><?= number_format($sm['added_qty'] + $sm['out_qty']) ?> <span class="unit">records</span></div>
+                        <div class="sf-block-value"><?= number_format($total_in_display + $total_out_display) ?> <span class="unit">records</span></div>
                         <div class="sf-movements-grid">
                             <div class="sf-mov-item added"><div class="sf-mov-label">Added</div><div class="sf-mov-qty">+<?= number_format($sm['added_qty']) ?></div></div>
-                            <div class="sf-mov-item out"><div class="sf-mov-label">Used</div><div class="sf-mov-qty">−<?= number_format($sm['out_qty']) ?></div></div>
+                            <div class="sf-mov-item out"><div class="sf-mov-label">Used</div><div class="sf-mov-qty">−<?= number_format($sm['out_qty'] + $sm['cancelled_out_qty']) ?></div></div>
                             <div class="sf-mov-item doctor"><div class="sf-mov-label">Doctor</div><div class="sf-mov-qty"><?= number_format($sm['doctor_qty']) ?></div></div>
                         </div>
                     </div>
@@ -1382,25 +1720,83 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                         <div class="sf-block-meta"><span><i class="fas fa-database"></i> Current live: <?= number_format($equipment_details['total_current_stock']) ?></span></div>
                     </div>
                 </div>
-                <div style="text-align: center; padding: 12px; background: var(--bg-body); border-radius: var(--radius-md); font-family: var(--font-mono); font-weight: 800; border: 2px dashed var(--border-color);">
+                
+                <div style="text-align: center; padding: 14px; background: var(--bg-body); border-radius: var(--radius-md); font-family: var(--font-mono); font-weight: 800; border: 2px dashed var(--border-color); font-size: 0.95rem;">
                     <span style="color:#64748B;font-size:1.15rem;"><?= number_format($pi['stock_before']) ?></span>
                     <span style="color:var(--text-secondary);margin:0 8px;">+</span>
-                    <span style="color:#059669;font-size:1.15rem;"><?= number_format($sm['added_qty']) ?></span>
+                    <span style="color:#059669;font-size:1.15rem;"><?= number_format($total_in_display) ?></span>
                     <span style="color:var(--text-secondary);margin:0 8px;">−</span>
-                    <span style="color:#DC2626;font-size:1.15rem;"><?= number_format($sm['out_qty']) ?></span>
+                    <span style="color:#DC2626;font-size:1.15rem;"><?= number_format($total_out_display) ?></span>
                     <span style="color:var(--text-secondary);margin:0 8px;">=</span>
-                    <span style="color:#059669;font-size:1.3rem;"><?= number_format($pi['stock_after']) ?></span>
+                    <span style="color:#059669;font-size:1.3rem;"><?= number_format($final_calculated) ?></span>
+                    <div style="font-size:0.68rem;color:var(--text-muted);margin-top:6px;font-family:var(--font-primary);font-weight:600;">
+                        IN = Added (<?= number_format($sm['added_qty']) ?>) + Returned (<?= number_format($sm['returned_qty']) ?>)
+                        &nbsp;•&nbsp;
+                        OUT = Out (<?= number_format($sm['out_qty']) ?>) + Cancelled Out (<?= number_format($sm['cancelled_out_qty']) ?>)
+                    </div>
                 </div>
             </div>
 
             <div class="summary-grid-v8">
-                <div class="sum-card-v8 added"><div class="sc-icon-v8"><i class="fas fa-plus-circle"></i></div><div class="sc-content"><div class="sc-label-v8">Stock Added</div><div class="sc-value-v8">+<?= number_format($sm['added_qty']) ?></div><div class="sc-sub-v8"><?= $sm['added_count'] ?> record(s)</div></div></div>
-                <div class="sum-card-v8 out"><div class="sc-icon-v8"><i class="fas fa-minus-circle"></i></div><div class="sc-content"><div class="sc-label-v8">Total Used</div><div class="sc-value-v8">−<?= number_format($sm['out_qty']) ?></div><div class="sc-sub-v8"><?= $sm['out_count'] ?> use(s)</div></div></div>
-                <div class="sum-card-v8 doctor"><div class="sc-icon-v8"><i class="fas fa-user-md"></i></div><div class="sc-content"><div class="sc-label-v8">Doctor Used</div><div class="sc-value-v8"><?= number_format($sm['doctor_qty']) ?></div><div class="sc-sub-v8"><?= $sm['doctor_count'] ?> use(s)</div></div></div>
-                <div class="sum-card-v8 lab"><div class="sc-icon-v8"><i class="fas fa-flask"></i></div><div class="sc-content"><div class="sc-label-v8">Lab Tests</div><div class="sc-value-v8"><?= number_format($sm['lab_test_qty']) ?></div><div class="sc-sub-v8"><?= $sm['lab_test_count'] ?> test(s)</div></div></div>
-                <div class="sum-card-v8 otc"><div class="sc-icon-v8"><i class="fas fa-cash-register"></i></div><div class="sc-content"><div class="sc-label-v8">OTC Sales</div><div class="sc-value-v8"><?= number_format($sm['otc_qty']) ?></div><div class="sc-sub-v8"><?= $sm['otc_count'] ?> sale(s)</div></div></div>
+                <div class="sum-card-v8 added">
+                    <div class="sc-icon-v8"><i class="fas fa-plus-circle"></i></div>
+                    <div class="sc-content">
+                        <div class="sc-label-v8">Stock Added</div>
+                        <div class="sc-value-v8">+<?= number_format($sm['added_qty']) ?></div>
+                        <div class="sc-sub-v8"><?= $sm['added_count'] ?> record(s)</div>
+                    </div>
+                </div>
+                
+                <div class="sum-card-v8 out">
+                    <div class="sc-icon-v8"><i class="fas fa-minus-circle"></i></div>
+                    <div class="sc-content">
+                        <div class="sc-label-v8">Total Used</div>
+                        <div class="sc-value-v8">−<?= number_format($sm['out_qty'] + $sm['cancelled_out_qty']) ?></div>
+                        <div class="sc-sub-v8">
+                            <?= $sm['out_count'] + $sm['cancelled_out_count'] ?> use(s)
+                            <?php if ($sm['cancelled_out_qty'] > 0): ?>
+                                <br><small style="color:var(--warning);">(incl. <?= number_format($sm['cancelled_out_qty']) ?> cancelled)</small>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="sum-card-v8 doctor">
+                    <div class="sc-icon-v8"><i class="fas fa-user-md"></i></div>
+                    <div class="sc-content">
+                        <div class="sc-label-v8">Doctor Used</div>
+                        <div class="sc-value-v8"><?= number_format($sm['doctor_qty']) ?></div>
+                        <div class="sc-sub-v8"><?= $sm['doctor_count'] ?> use(s)</div>
+                    </div>
+                </div>
+                
+                <div class="sum-card-v8 lab">
+                    <div class="sc-icon-v8"><i class="fas fa-flask"></i></div>
+                    <div class="sc-content">
+                        <div class="sc-label-v8">Lab Tests</div>
+                        <div class="sc-value-v8"><?= number_format($sm['lab_test_qty']) ?></div>
+                        <div class="sc-sub-v8"><?= $sm['lab_test_count'] ?> test(s)</div>
+                    </div>
+                </div>
+                
+                <div class="sum-card-v8 otc">
+                    <div class="sc-icon-v8"><i class="fas fa-cash-register"></i></div>
+                    <div class="sc-content">
+                        <div class="sc-label-v8">OTC Sales</div>
+                        <div class="sc-value-v8"><?= number_format($sm['otc_qty']) ?></div>
+                        <div class="sc-sub-v8"><?= $sm['otc_count'] ?> sale(s)</div>
+                    </div>
+                </div>
+                
                 <?php if ($sm['procedure_qty'] > 0): ?>
-                <div class="sum-card-v8 procedure"><div class="sc-icon-v8"><i class="fas fa-procedures"></i></div><div class="sc-content"><div class="sc-label-v8">Procedures</div><div class="sc-value-v8"><?= number_format($sm['procedure_qty']) ?></div><div class="sc-sub-v8"><?= $sm['procedure_count'] ?> procedure(s)</div></div></div>
+                <div class="sum-card-v8 procedure">
+                    <div class="sc-icon-v8"><i class="fas fa-procedures"></i></div>
+                    <div class="sc-content">
+                        <div class="sc-label-v8">Procedures</div>
+                        <div class="sc-value-v8"><?= number_format($sm['procedure_qty']) ?></div>
+                        <div class="sc-sub-v8"><?= $sm['procedure_count'] ?> procedure(s)</div>
+                    </div>
+                </div>
                 <?php endif; ?>
             </div>
 
@@ -1418,9 +1814,27 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                         <tbody>
                             <?php $i=1; foreach ($movs as $m):
                                 $mt = strtolower($m['movement_type']);
-                                $category = getMovementCategory($m['notes'] ?? '', $mt, $m['reference_type'] ?? '');
+                                $ref_type = $m['reference_type'] ?? '';
+                                $ref_id = $m['reference_id'] ?? null;
+                                $patient_id_m = $m['patient_id'] ?? null;
+                                $notes_m = $m['notes'] ?? '';
+                                
+                                $is_verified = false;
+                                if ($mt === 'in' && (stripos($notes_m, 'Stock returned') === 0 || $ref_type === 'cancelled_item')) {
+                                    $is_verified = verifyCancelledReturn($db, $ref_id, $patient_id_m, $equipment_details['name']);
+                                }
+                                
+                                $is_out_cancelled = false;
+                                if ($mt === 'out' && $ref_type === 'prescription') {
+                                    $is_out_cancelled = isOutCancelled($db, $ref_id, $patient_id_m, $equipment_details['name']);
+                                }
+                                
+                                $category = getMovementCategory($notes_m, $mt, $ref_type, $is_verified, $is_out_cancelled);
+                                
                                 $row_class = $mt === 'in' ? 'in-row' : 'out-row';
                                 if ($category === 'cancel') $row_class = 'return-row';
+                                if ($category === 'unverified_return') $row_class = 'unverified-row';
+                                if ($category === 'cancelled_out') $row_class = 'cancelled-row';
                                 elseif ($category === 'doctor_use') $row_class = 'doctor-row';
                             ?>
                             <tr class="<?= $row_class ?>">
@@ -1428,7 +1842,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                                 <td style="font-size:0.72rem;"><?= date('d M Y, H:i', strtotime($m['created_at'])) ?></td>
                                 <td><span class="status-badge <?= $mt ?>"><i class="fas fa-<?= $mt === 'in' ? 'arrow-down' : 'arrow-up' ?>"></i> <?= strtoupper($mt) ?></span></td>
                                 <td>
-                                    <?php $cat_icons = ['lab_test' => 'fa-flask','equipment' => 'fa-tools','otc' => 'fa-cash-register','procedure' => 'fa-procedures','prescription' => 'fa-prescription','doctor_use' => 'fa-user-md','cancel' => 'fa-undo'];
+                                    <?php $cat_icons = ['lab_test' => 'fa-flask','equipment' => 'fa-tools','otc' => 'fa-cash-register','procedure' => 'fa-procedures','prescription' => 'fa-prescription','doctor_use' => 'fa-user-md','cancel' => 'fa-undo','unverified_return' => 'fa-question-circle','cancelled_out' => 'fa-ban'];
                                     $icon = $cat_icons[$category] ?? 'fa-circle';
                                     $badge_class = in_array($category, array_keys($cat_icons)) ? $category : 'out'; ?>
                                     <span class="status-badge <?= $badge_class ?>"><i class="fas <?= $icon ?>"></i> <?= strtoupper(str_replace('_',' ',$category)) ?></span>
@@ -1446,9 +1860,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                                 </td>
                                 <td style="font-size:0.72rem;">
                                     <?php if (!empty($m['patient_id'])):
-                                        $stmt_p = $db->prepare("SELECT full_name, patient_id FROM patients WHERE id = ? LIMIT 1");
-                                        $stmt_p->execute([$m['patient_id']]);
-                                        $p_info = $stmt_p->fetch(PDO::FETCH_ASSOC);
+                                        $p_info = $patients_map[$m['patient_id']] ?? null;
                                         if ($p_info):
                                     ?>
                                         <div style="font-weight:700;"><?= htmlspecialchars($p_info['full_name']) ?></div>
