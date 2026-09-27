@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/view_otc_sale.php
-// AUDIT - VIEW OTC SALE DETAILS (V1 - VIEW ONLY)
+// AUDIT - VIEW OTC SALE DETAILS (V2 - VIEW ONLY + TIMEZONE FIX)
 // ✅ Branch ya aliye login TU
 // ✅ NO Delete Item button
 // ✅ NO Delete Whole Sale button
@@ -10,7 +10,11 @@
 // ✅ Load ONLY items with quantity > 0
 // ✅ Scroll buttons <>
 // ✅ BLUE THEME (#0B5ED7)
+// ✅ V2: TIMEZONE FIX (Africa/Dar_es_Salaam)
 // ================================================================
+
+// ✅ FIX: TIMEZONE - LAZIMA IWE MWANZO KABISA
+date_default_timezone_set('Africa/Dar_es_Salaam');
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -57,6 +61,7 @@ require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
+    $db->exec("SET time_zone = '+03:00'");  // ✅ FIX: Weka timezone ya Tanzania
 } catch (Exception $e) {
     die("Database connection error: " . $e->getMessage());
 }
@@ -810,8 +815,9 @@ document.addEventListener('keydown', function(e) {
     if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); scrollItems('right'); }
 });
 
-console.log('%c🔍 Audit - View OTC Sale (VIEW ONLY)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c🔍 Audit - View OTC Sale V2 (VIEW ONLY + TIMEZONE FIX)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
 console.log('%c✅ Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#10B981; font-weight:bold;');
+console.log('%c✅ TIMEZONE: Africa/Dar_es_Salaam', 'font-size:13px; color:#10B981; font-weight:bold;');
 console.log('%c❌ NO Delete Item button', 'font-size:13px; color:#DC2626; font-weight:bold;');
 console.log('%c❌ NO Delete Whole Sale button', 'font-size:13px; color:#DC2626; font-weight:bold;');
 console.log('%c❌ NO Edit button', 'font-size:13px; color:#DC2626; font-weight:bold;');

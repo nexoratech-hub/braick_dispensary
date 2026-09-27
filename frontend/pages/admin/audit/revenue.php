@@ -1,18 +1,16 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/revenue.php
-// ADMIN AUDIT - REVENUE REPORT (V60 - OTC EQUIPMENT SEPARATION)
+// ADMIN AUDIT - REVENUE REPORT (V63 - TOGGLE PAYMENT HISTORY)
 // ================================================================
+// ✅ V63: Payment History - TOGGLE (kama cashier paid_bills)
+// ✅ V62: Received By + Amounts + Dates
+// ✅ V61: Received By (Grouped)
 // ✅ V60: OTC split into OTC Products + Equipment Sales
-// ✅ V60: OTC Card inaonyesha JUMLA ya OTC + Equipment
-// ✅ V60: Clinical Services inaonyesha Cons + Proc + Equip (za daktari pekee)
+// ✅ V60: Clinical Services = Cons + Proc + Equip (za daktari pekee)
 // ✅ V59: Pending bills zinaonekana bila kuhitaji payments
-// ✅ V59: Pending filter inafanya kazi (bills zenye status pending)
-// ✅ V59: All filter inaonyesha pending + paid + partial
-// ✅ V58: Quick Filters (Today...Custom) JUU kabla ya Cards
-// ✅ V58: Patients Filter (All, Partial, Pending, Paid) CHINI ya Cards
-// ✅ V57: Live Search + Highlight ya njano
-// ✅ V56: Toggle button kwa kila patient
+// ✅ V58: Quick Filters + Patients Filter
+// ✅ V57: Live Search + Highlight
 // ================================================================
 
 date_default_timezone_set('Africa/Dar_es_Salaam');
@@ -67,7 +65,6 @@ function roundTo50($value) {
     return round($value / 50) * 50;
 }
 
-// ✅ V57: Highlight function
 function highlightSearchTerm($text, $search) {
     if (empty($search) || $text === null || $text === '') {
         return htmlspecialchars($text ?? '');
@@ -309,15 +306,7 @@ if ($selected_branch_id !== 'all') {
     $branch_params_b = [(int)$selected_branch_id];
 }
 
-// ================================================================
-// ✅ V60: OTC SPLIT - OTC PRODUCTS vs EQUIPMENT SALES
-// ================================================================
-// OTC sale_number format:
-//   - OTC-YYYYMMDD-XXXX     → OTC Products (medicines)
-//   - OTC-EQP-YYYYMMDD-XXXX → Equipment Sales
-// ================================================================
-
-// OTC PRODUCTS REVENUE (excluding EQP)
+// OTC PRODUCTS REVENUE
 $otc_products_revenue = 0; $otc_products_count = 0;
 try {
     $sql = "SELECT COALESCE(SUM(o.total_amount), 0) as total, COUNT(*) as count 
@@ -332,7 +321,7 @@ try {
     $otc_products_count = (int)($data['count'] ?? 0);
 } catch (Exception $e) {}
 
-// EQUIPMENT SALES REVENUE (only EQP)
+// EQUIPMENT SALES REVENUE
 $otc_equipment_revenue = 0; $otc_equipment_count = 0;
 try {
     $sql = "SELECT COALESCE(SUM(o.total_amount), 0) as total, COUNT(*) as count 
@@ -347,7 +336,6 @@ try {
     $otc_equipment_count = (int)($data['count'] ?? 0);
 } catch (Exception $e) {}
 
-// TOTAL OTC (Products + Equipment)
 $otc_revenue = $otc_products_revenue + $otc_equipment_revenue;
 $otc_count = $otc_products_count + $otc_equipment_count;
 
@@ -424,7 +412,7 @@ try {
 
 $total_pending = $pending_bills_amount + $partial_remaining + $pending_otc_amount + $partial_otc_amount;
 
-// BREAKDOWN (from bill_items - these are doctor-linked services, NOT OTC)
+// BREAKDOWN
 $breakdown_types = ['consultation', 'lab_test', 'procedure', 'medication', 'registration', 'equipment'];
 $breakdown_data = [];
 foreach ($breakdown_types as $type) {
@@ -513,13 +501,7 @@ try {
 $total_discounts = $patient_discounts + $otc_discounts;
 $total_premiums = $patient_premiums + $otc_premiums;
 
-// ================================================================
-// ✅ V60: CATEGORIES - CLINICAL SERVICES (Doctor-linked only)
-// ================================================================
-// Hizi ni kutoka bill_items za visits (SIYO OTC)
-// Equipment hapa ni zile zilizotumika na daktari kwenye visit
-// ================================================================
-
+// CATEGORIES
 $consultation_revenue = $breakdown_data['consultation']['gross'];
 $consultation_count = $breakdown_data['consultation']['count'];
 $lab_revenue = $breakdown_data['lab_test']['gross'];
@@ -537,7 +519,6 @@ $prescription_gross = $medication_revenue;
 $prescription_revenue = $prescription_gross;
 $prescription_count = $medication_count;
 
-// Clinical Services = Consultation + Procedure + Equipment (zote za daktari)
 $clinical_services_revenue = $consultation_revenue + $procedure_revenue + $equipment_revenue;
 $clinical_services_count = $consultation_count + $procedure_count + $equipment_count;
 
@@ -856,6 +837,103 @@ try {
     error_log("Patient grouped bills error: " . $e->getMessage());
 }
 
+// ================================================================
+// ✅ V62: FETCH PAYMENTS WITH RECEIVED BY
+// ================================================================
+$payments_by_bill = [];
+
+try {
+    $all_patient_bill_ids = [];
+    foreach ($patient_groups as $patient) {
+        foreach ($patient['visits'] as $visit) {
+            foreach ($visit['bills'] as $bill) {
+                $all_patient_bill_ids[] = $bill['bill_id'];
+            }
+        }
+    }
+    
+    if (!empty($all_patient_bill_ids)) {
+        $placeholders = implode(',', array_fill(0, count($all_patient_bill_ids), '?'));
+        
+        $sql_payments = "SELECT 
+                            p.id as payment_id,
+                            p.bill_id,
+                            p.receipt_number,
+                            p.amount,
+                            p.payment_method,
+                            p.reference_number,
+                            p.notes,
+                            p.received_at,
+                            u.full_name as received_by_name,
+                            u.role as received_by_role
+                        FROM payments p
+                        LEFT JOIN users u ON p.received_by = u.id
+                        WHERE p.bill_id IN ($placeholders)
+                        ORDER BY p.received_at ASC";
+        
+        $stmt = $db->prepare($sql_payments);
+        $stmt->execute($all_patient_bill_ids);
+        $payments_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($payments_data as $pmt) {
+            $bill_id = $pmt['bill_id'];
+            if (!isset($payments_by_bill[$bill_id])) {
+                $payments_by_bill[$bill_id] = [];
+            }
+            $payments_by_bill[$bill_id][] = $pmt;
+        }
+    }
+} catch (Exception $e) {
+    error_log("Payments fetch error: " . $e->getMessage());
+}
+
+// ================================================================
+// ✅ V62: BUILD RECEIVED BY SUMMARY NA AMOUNTS + DATES
+// ================================================================
+function buildReceivedBySummary($payments) {
+    $summary = [];
+    
+    foreach ($payments as $pmt) {
+        $name = $pmt['received_by_name'] ?? 'Unknown';
+        $role = strtolower($pmt['received_by_role'] ?? 'user');
+        $amount = (float)($pmt['amount'] ?? 0);
+        $received_at = $pmt['received_at'] ?? null;
+        $receipt = $pmt['receipt_number'] ?? '';
+        
+        if (!isset($summary[$name])) {
+            $summary[$name] = [
+                'name' => $name,
+                'role' => $role,
+                'count' => 0,
+                'total_amount' => 0,
+                'payments' => [],
+                'first_date' => $received_at,
+                'last_date' => $received_at
+            ];
+        }
+        
+        $summary[$name]['count']++;
+        $summary[$name]['total_amount'] += $amount;
+        $summary[$name]['payments'][] = [
+            'receipt' => $receipt,
+            'amount' => $amount,
+            'received_at' => $received_at,
+            'payment_method' => $pmt['payment_method'] ?? 'cash'
+        ];
+        
+        if ($received_at) {
+            if (!$summary[$name]['first_date'] || strtotime($received_at) < strtotime($summary[$name]['first_date'])) {
+                $summary[$name]['first_date'] = $received_at;
+            }
+            if (!$summary[$name]['last_date'] || strtotime($received_at) > strtotime($summary[$name]['last_date'])) {
+                $summary[$name]['last_date'] = $received_at;
+            }
+        }
+    }
+    
+    return array_values($summary);
+}
+
 // EXPENSES LIST
 $expenses_list = [];
 try {
@@ -883,7 +961,7 @@ include_once __DIR__ . '/../../../components/admin_audit_sidebar.php';
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Revenue Report V60 • Braick Admin Audit</title>
+<title>Revenue Report V63 • Braick Admin Audit</title>
 <link rel="icon" href="<?= $logo_path ?>" type="image/png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -964,152 +1042,29 @@ mark.search-highlight {
 .branch-tag { background: rgba(255,255,255,0.15); color: white; padding: 4px 12px; border-radius: var(--radius-full); font-size: 0.68rem; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.15); }
 .branch-tag.filter-tag { background: linear-gradient(135deg, #10B981, #059669); border-color: rgba(255,255,255,0.25); font-weight: 800; }
 .branch-tag.live-tag { background: linear-gradient(135deg, #FDE047, #FACC15); color: #78350F; font-weight: 900; }
+.branch-tag.recv-tag { background: linear-gradient(135deg, #7C3AED, #A78BFA); border-color: rgba(255,255,255,0.25); font-weight: 800; }
 .btn-header { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.25); padding: 10px 16px; border-radius: var(--radius-sm); font-weight: 700; font-size: 0.75rem; transition: all 0.25s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; backdrop-filter: blur(10px); position: relative; z-index: 1; cursor: pointer; }
 .btn-header:hover { background: rgba(255,255,255,0.3); transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.2); }
 
-.quick-filters-card {
-    background: var(--bg-card);
-    border-radius: var(--radius-lg);
-    padding: 18px 22px;
-    border: 2px solid var(--primary);
-    margin-bottom: 20px;
-    box-shadow: 0 6px 24px rgba(11, 94, 215, 0.15);
-    position: relative;
-    overflow: hidden;
-}
-.quick-filters-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 4px;
-    background: linear-gradient(90deg, #0B5ED7, #3B82F6, #7C3AED, #3B82F6, #0B5ED7);
-    background-size: 200% 100%;
-    animation: shimmer 3s infinite linear;
-}
-.quick-filters-card .qfc-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-bottom: 14px;
-    padding-bottom: 12px;
-    border-bottom: 2px dashed var(--border-color);
-}
-.quick-filters-card .qfc-title {
-    font-size: 0.95rem;
-    font-weight: 900;
-    color: var(--text-primary);
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-.quick-filters-card .qfc-title .qfc-icon {
-    width: 38px; height: 38px;
-    border-radius: 10px;
-    background: linear-gradient(135deg, #0B5ED7, #3B82F6);
-    color: white;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1rem;
-    box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-}
-.quick-filters-card .qfc-count {
-    font-size: 0.7rem;
-    font-weight: 800;
-    background: var(--primary-bg);
-    color: var(--primary);
-    padding: 5px 12px;
-    border-radius: 20px;
-    border: 1.5px solid rgba(11, 94, 215, 0.25);
-}
-.quick-filters-card .filter-section-title {
-    font-size: 0.75rem;
-    font-weight: 900;
-    color: var(--text-primary);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 0;
-    margin-bottom: 8px;
-}
+.quick-filters-card { background: var(--bg-card); border-radius: var(--radius-lg); padding: 18px 22px; border: 2px solid var(--primary); margin-bottom: 20px; box-shadow: 0 6px 24px rgba(11, 94, 215, 0.15); position: relative; overflow: hidden; }
+.quick-filters-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, #0B5ED7, #3B82F6, #7C3AED, #3B82F6, #0B5ED7); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
+.quick-filters-card .qfc-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 2px dashed var(--border-color); }
+.quick-filters-card .qfc-title { font-size: 0.95rem; font-weight: 900; color: var(--text-primary); display: flex; align-items: center; gap: 10px; }
+.quick-filters-card .qfc-title .qfc-icon { width: 38px; height: 38px; border-radius: 10px; background: linear-gradient(135deg, #0B5ED7, #3B82F6); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 1rem; box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
+.quick-filters-card .qfc-count { font-size: 0.7rem; font-weight: 800; background: var(--primary-bg); color: var(--primary); padding: 5px 12px; border-radius: 20px; border: 1.5px solid rgba(11, 94, 215, 0.25); }
+.quick-filters-card .filter-section-title { font-size: 0.75rem; font-weight: 900; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.08em; display: flex; align-items: center; gap: 8px; padding: 8px 0; margin-bottom: 8px; }
 .quick-filters-card .filter-section-title i { color: var(--primary); font-size: 0.85rem; }
-.quick-filters { 
-    display: flex; 
-    gap: 10px; 
-    flex-wrap: wrap; 
-    padding: 14px 16px;
-    background: linear-gradient(135deg, rgba(11, 94, 215, 0.04), rgba(124, 58, 237, 0.02));
-    border-radius: 14px;
-    border: 1.5px dashed var(--border-color);
-}
-.quick-btn { 
-    padding: 10px 18px; 
-    border-radius: 25px; 
-    border: 2px solid var(--border-color); 
-    background: var(--bg-card); 
-    color: var(--text-secondary); 
-    font-weight: 800; 
-    font-size: 0.72rem; 
-    cursor: pointer; 
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
-    display: inline-flex; 
-    align-items: center; 
-    gap: 7px; 
-    text-decoration: none; 
-    white-space: nowrap;
-    position: relative;
-    overflow: hidden;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.04);
-}
-.quick-btn::before {
-    content: '';
-    position: absolute;
-    top: 0; left: -100%;
-    width: 100%; height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-    transition: left 0.5s ease;
-}
+.quick-filters { display: flex; gap: 10px; flex-wrap: wrap; padding: 14px 16px; background: linear-gradient(135deg, rgba(11, 94, 215, 0.04), rgba(124, 58, 237, 0.02)); border-radius: 14px; border: 1.5px dashed var(--border-color); }
+.quick-btn { padding: 10px 18px; border-radius: 25px; border: 2px solid var(--border-color); background: var(--bg-card); color: var(--text-secondary); font-weight: 800; font-size: 0.72rem; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); display: inline-flex; align-items: center; gap: 7px; text-decoration: none; white-space: nowrap; position: relative; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.04); }
+.quick-btn::before { content: ''; position: absolute; top: 0; left: -100%; width: 100%; height: 100%; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent); transition: left 0.5s ease; }
 .quick-btn:hover::before { left: 100%; }
-.quick-btn:hover { 
-    border-color: var(--primary); 
-    color: var(--primary); 
-    transform: translateY(-3px); 
-    box-shadow: 0 8px 20px rgba(11, 94, 215, 0.2);
-}
-.quick-btn.active { 
-    background: linear-gradient(135deg, var(--primary), var(--primary-dark), var(--purple)); 
-    color: white; 
-    border-color: transparent; 
-    box-shadow: 0 8px 24px rgba(11, 94, 215, 0.4), 0 0 0 3px rgba(11, 94, 215, 0.15);
-    transform: translateY(-2px);
-}
+.quick-btn:hover { border-color: var(--primary); color: var(--primary); transform: translateY(-3px); box-shadow: 0 8px 20px rgba(11, 94, 215, 0.2); }
+.quick-btn.active { background: linear-gradient(135deg, var(--primary), var(--primary-dark), var(--purple)); color: white; border-color: transparent; box-shadow: 0 8px 24px rgba(11, 94, 215, 0.4), 0 0 0 3px rgba(11, 94, 215, 0.15); transform: translateY(-2px); }
 .quick-btn.active i { animation: pulseIcon 1.5s infinite; }
 @keyframes pulseIcon { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.15); } }
 
-.custom-date-row {
-    padding: 12px 16px;
-    background: var(--bg-body);
-    border-radius: 10px;
-    border: 2px solid var(--primary);
-    margin-top: 14px;
-    display: grid;
-    grid-template-columns: 1fr 1fr auto auto;
-    gap: 10px;
-    align-items: end;
-}
-
-.auto-filter-badge {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 10px 18px; border-radius: 10px;
-    background: linear-gradient(135deg, #059669, #047857);
-    color: white; font-weight: 800; font-size: 0.78rem;
-    height: 44px; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
-    white-space: nowrap;
-}
+.custom-date-row { padding: 12px 16px; background: var(--bg-body); border-radius: 10px; border: 2px solid var(--primary); margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 10px; align-items: end; }
+.auto-filter-badge { display: inline-flex; align-items: center; gap: 6px; padding: 10px 18px; border-radius: 10px; background: linear-gradient(135deg, #059669, #047857); color: white; font-weight: 800; font-size: 0.78rem; height: 44px; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35); white-space: nowrap; }
 .auto-filter-badge i { animation: pulseIcon 1.5s infinite; }
 
 .stats-grid-8 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
@@ -1179,109 +1134,27 @@ mark.search-highlight {
 .pulse-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; margin-right: 3px; animation: pulseDot 1.5s infinite; }
 @keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-/* OTC CARD SPLIT STYLES */
-.otc-split-container {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    margin-top: 4px;
-    padding-top: 6px;
-    border-top: 1px dashed var(--border-color);
-}
-.otc-split-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.58rem;
-    font-weight: 700;
-}
-.otc-split-item .split-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    color: var(--text-secondary);
-}
-.otc-split-item .split-label i {
-    font-size: 0.55rem;
-    width: 14px;
-    text-align: center;
-}
+.otc-split-container { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; padding-top: 6px; border-top: 1px dashed var(--border-color); }
+.otc-split-item { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 0.58rem; font-weight: 700; }
+.otc-split-item .split-label { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); }
+.otc-split-item .split-label i { font-size: 0.55rem; width: 14px; text-align: center; }
 .otc-split-item.otc-products .split-label i { color: #0891B2; }
 .otc-split-item.otc-equipment .split-label i { color: #0D9488; }
-.otc-split-item .split-value {
-    font-family: var(--font-mono);
-    font-weight: 900;
-    font-size: 0.62rem;
-    padding: 1px 6px;
-    border-radius: 5px;
-    white-space: nowrap;
-}
-.otc-split-item.otc-products .split-value {
-    color: #0891B2;
-    background: rgba(8, 145, 178, 0.1);
-    border: 1px solid rgba(8, 145, 178, 0.2);
-}
-.otc-split-item.otc-equipment .split-value {
-    color: #0D9488;
-    background: rgba(13, 148, 136, 0.1);
-    border: 1px solid rgba(13, 148, 136, 0.2);
-}
+.otc-split-item .split-value { font-family: var(--font-mono); font-weight: 900; font-size: 0.62rem; padding: 1px 6px; border-radius: 5px; white-space: nowrap; }
+.otc-split-item.otc-products .split-value { color: #0891B2; background: rgba(8, 145, 178, 0.1); border: 1px solid rgba(8, 145, 178, 0.2); }
+.otc-split-item.otc-equipment .split-value { color: #0D9488; background: rgba(13, 148, 136, 0.1); border: 1px solid rgba(13, 148, 136, 0.2); }
 
-/* CLINICAL CARD BREAKDOWN STYLES */
-.clinical-breakdown-container {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    margin-top: 4px;
-    padding-top: 6px;
-    border-top: 1px dashed var(--border-color);
-}
-.clinical-breakdown-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.58rem;
-    font-weight: 700;
-}
-.clinical-breakdown-item .cb-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    color: var(--text-secondary);
-}
-.clinical-breakdown-item .cb-label i {
-    font-size: 0.55rem;
-    width: 14px;
-    text-align: center;
-}
+.clinical-breakdown-container { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; padding-top: 6px; border-top: 1px dashed var(--border-color); }
+.clinical-breakdown-item { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 0.58rem; font-weight: 700; }
+.clinical-breakdown-item .cb-label { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); }
+.clinical-breakdown-item .cb-label i { font-size: 0.55rem; width: 14px; text-align: center; }
 .clinical-breakdown-item.consultation .cb-label i { color: #059669; }
 .clinical-breakdown-item.procedure .cb-label i { color: #0D9488; }
 .clinical-breakdown-item.equipment .cb-label i { color: #7C3AED; }
-.clinical-breakdown-item .cb-value {
-    font-family: var(--font-mono);
-    font-weight: 900;
-    font-size: 0.62rem;
-    padding: 1px 6px;
-    border-radius: 5px;
-    white-space: nowrap;
-}
-.clinical-breakdown-item.consultation .cb-value {
-    color: #059669;
-    background: rgba(5, 150, 105, 0.1);
-    border: 1px solid rgba(5, 150, 105, 0.2);
-}
-.clinical-breakdown-item.procedure .cb-value {
-    color: #0D9488;
-    background: rgba(13, 148, 136, 0.1);
-    border: 1px solid rgba(13, 148, 136, 0.2);
-}
-.clinical-breakdown-item.equipment .cb-value {
-    color: #7C3AED;
-    background: rgba(124, 58, 237, 0.1);
-    border: 1px solid rgba(124, 58, 237, 0.2);
-}
+.clinical-breakdown-item .cb-value { font-family: var(--font-mono); font-weight: 900; font-size: 0.62rem; padding: 1px 6px; border-radius: 5px; white-space: nowrap; }
+.clinical-breakdown-item.consultation .cb-value { color: #059669; background: rgba(5, 150, 105, 0.1); border: 1px solid rgba(5, 150, 105, 0.2); }
+.clinical-breakdown-item.procedure .cb-value { color: #0D9488; background: rgba(13, 148, 136, 0.1); border: 1px solid rgba(13, 148, 136, 0.2); }
+.clinical-breakdown-item.equipment .cb-value { color: #7C3AED; background: rgba(124, 58, 237, 0.1); border: 1px solid rgba(124, 58, 237, 0.2); }
 
 .pending-partial-card { background: var(--bg-card); border-radius: 16px; padding: 20px 24px; border: 2px solid var(--warning); margin-bottom: 20px; box-shadow: 0 6px 24px rgba(217, 119, 6, 0.15); position: relative; overflow: hidden; transition: all 0.35s ease; }
 .pending-partial-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, #D97706, #F59E0B, #FBBF24, #F59E0B, #D97706); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
@@ -1349,110 +1222,18 @@ mark.search-highlight {
 .dp-item.total-prem::before { background: linear-gradient(90deg, #0B5ED7, #3B82F6); }
 .dp-item.total-prem .dp-value { color: #0B5ED7; }
 
-.patient-filter-card {
-    background: var(--bg-card);
-    border-radius: var(--radius-lg);
-    padding: 20px 22px;
-    border: 2px solid var(--primary);
-    margin-bottom: 20px;
-    box-shadow: 0 6px 24px rgba(11, 94, 215, 0.15);
-    position: relative;
-    overflow: hidden;
-}
-.patient-filter-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 4px;
-    background: linear-gradient(90deg, #0B5ED7, #3B82F6, #7C3AED, #3B82F6, #0B5ED7);
-    background-size: 200% 100%;
-    animation: shimmer 3s infinite linear;
-}
-.patient-filter-card .pfc-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-bottom: 16px;
-    padding-bottom: 12px;
-    border-bottom: 2px dashed var(--border-color);
-}
-.patient-filter-card .pfc-title {
-    font-size: 0.95rem;
-    font-weight: 900;
-    color: var(--text-primary);
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-.patient-filter-card .pfc-title .pfc-icon {
-    width: 38px; height: 38px;
-    border-radius: 10px;
-    background: linear-gradient(135deg, #0B5ED7, #3B82F6);
-    color: white;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1rem;
-    box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-}
-.patient-filter-card .pfc-count {
-    font-size: 0.7rem;
-    font-weight: 800;
-    background: var(--primary-bg);
-    color: var(--primary);
-    padding: 5px 12px;
-    border-radius: 20px;
-    border: 1.5px solid rgba(11, 94, 215, 0.25);
-}
+.patient-filter-card { background: var(--bg-card); border-radius: var(--radius-lg); padding: 20px 22px; border: 2px solid var(--primary); margin-bottom: 20px; box-shadow: 0 6px 24px rgba(11, 94, 215, 0.15); position: relative; overflow: hidden; }
+.patient-filter-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, #0B5ED7, #3B82F6, #7C3AED, #3B82F6, #0B5ED7); background-size: 200% 100%; animation: shimmer 3s infinite linear; }
+.patient-filter-card .pfc-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px dashed var(--border-color); }
+.patient-filter-card .pfc-title { font-size: 0.95rem; font-weight: 900; color: var(--text-primary); display: flex; align-items: center; gap: 10px; }
+.patient-filter-card .pfc-title .pfc-icon { width: 38px; height: 38px; border-radius: 10px; background: linear-gradient(135deg, #0B5ED7, #3B82F6); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 1rem; box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
+.patient-filter-card .pfc-count { font-size: 0.7rem; font-weight: 800; background: var(--primary-bg); color: var(--primary); padding: 5px 12px; border-radius: 20px; border: 1.5px solid rgba(11, 94, 215, 0.25); }
 
-.patient-filter-section {
-    background: linear-gradient(135deg, #F8FAFC, #F1F5F9);
-    border-radius: var(--radius-md);
-    padding: 14px 18px;
-    margin-bottom: 14px;
-    border: 2px dashed var(--border-color);
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 12px;
-}
-[data-theme="dark"] .patient-filter-section {
-    background: linear-gradient(135deg, #1E2A3D, #12294A);
-}
-.patient-filter-label {
-    font-size: 0.72rem;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-secondary);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-.patient-filter-buttons {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    flex: 1;
-}
-.patient-filter-btn {
-    padding: 8px 18px;
-    border-radius: 20px;
-    font-size: 0.72rem;
-    font-weight: 800;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border: 2px solid var(--border-color);
-    background: var(--bg-card);
-    color: var(--text-secondary);
-    transition: all 0.25s;
-    white-space: nowrap;
-    cursor: pointer;
-}
+.patient-filter-section { background: linear-gradient(135deg, #F8FAFC, #F1F5F9); border-radius: var(--radius-md); padding: 14px 18px; margin-bottom: 14px; border: 2px dashed var(--border-color); display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+[data-theme="dark"] .patient-filter-section { background: linear-gradient(135deg, #1E2A3D, #12294A); }
+.patient-filter-label { font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+.patient-filter-buttons { display: flex; gap: 8px; flex-wrap: wrap; flex: 1; }
+.patient-filter-btn { padding: 8px 18px; border-radius: 20px; font-size: 0.72rem; font-weight: 800; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; border: 2px solid var(--border-color); background: var(--bg-card); color: var(--text-secondary); transition: all 0.25s; white-space: nowrap; cursor: pointer; }
 .patient-filter-btn:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
 .patient-filter-btn.active { color: white; border-color: transparent; box-shadow: 0 6px 16px rgba(0,0,0,0.15); }
 .patient-filter-btn.all.active { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
@@ -1464,40 +1245,14 @@ mark.search-highlight {
 .patient-filter-btn.paid:hover { border-color: #059669; color: #059669; }
 .patient-filter-btn.all:hover { border-color: #0B5ED7; color: #0B5ED7; }
 .patient-filter-btn.active:hover { color: white !important; }
-.patient-filter-btn .filter-count {
-    background: rgba(255,255,255,0.25);
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-size: 0.6rem;
-    font-weight: 900;
-    font-family: var(--font-mono);
-}
-.patient-filter-btn:not(.active) .filter-count {
-    background: var(--bg-body);
-    color: var(--text-primary);
-}
+.patient-filter-btn .filter-count { background: rgba(255,255,255,0.25); padding: 2px 8px; border-radius: 10px; font-size: 0.6rem; font-weight: 900; font-family: var(--font-mono); }
+.patient-filter-btn:not(.active) .filter-count { background: var(--bg-body); color: var(--text-primary); }
 
 .search-input-wrapper { position: relative; width: 100%; }
-.search-input-wrapper input {
-    width: 100%;
-    padding: 12px 16px 12px 42px;
-    border-radius: 12px;
-    border: 2px solid var(--border-color);
-    background: var(--bg-card);
-    color: var(--text-primary);
-    font-size: 0.85rem;
-    font-weight: 600;
-    transition: all 0.25s;
-}
+.search-input-wrapper input { width: 100%; padding: 12px 16px 12px 42px; border-radius: 12px; border: 2px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem; font-weight: 600; transition: all 0.25s; }
 .search-input-wrapper input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.15); }
 .search-input-wrapper .search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--primary); font-size: 0.95rem; pointer-events: none; }
-.search-input-wrapper .clear-search {
-    position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
-    background: var(--danger-bg); color: var(--danger);
-    border: none; width: 24px; height: 24px; border-radius: 50%;
-    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
-    font-size: 0.7rem; text-decoration: none;
-}
+.search-input-wrapper .clear-search { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: var(--danger-bg); color: var(--danger); border: none; width: 24px; height: 24px; border-radius: 50%; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 0.7rem; text-decoration: none; }
 
 .patient-group-card { background: var(--bg-card); border-radius: var(--radius-xl); border: 3px solid var(--primary); overflow: hidden; box-shadow: 0 8px 30px rgba(11, 94, 215, 0.15); margin-bottom: 36px; position: relative; transition: all 0.35s ease; }
 .patient-group-card::before { content: ''; position: absolute; inset: -8px; border-radius: calc(var(--radius-xl) + 8px); background: linear-gradient(135deg, rgba(11, 94, 215, 0.12), rgba(124, 58, 237, 0.08)); z-index: -1; pointer-events: none; }
@@ -1632,6 +1387,452 @@ mark.search-highlight {
 .scroll-btn { width: 30px; height: 30px; border-radius: var(--radius-sm); border: 1.5px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 0.68rem; font-weight: 700; transition: all 0.25s; }
 .scroll-btn:hover { background: var(--primary); color: white; border-color: var(--primary); }
 
+/* ================================================================
+   ✅ V63: PAYMENT HISTORY CARD - TOGGLEABLE
+   ================================================================ */
+.visit-payment-history-card {
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+    border: 2px solid var(--success);
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.15);
+    transition: all 0.3s ease;
+}
+.visit-payment-history-card:hover {
+    box-shadow: 0 6px 20px rgba(5, 150, 105, 0.25);
+    border-color: #10B981;
+}
+
+/* HEADER - Clickable Toggle */
+.vph-header {
+    padding: 12px 18px;
+    background: linear-gradient(135deg, #059669, #047857);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.25s ease;
+    position: relative;
+    overflow: hidden;
+}
+.vph-header::before {
+    content: '';
+    position: absolute;
+    top: 0; left: -100%;
+    width: 100%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+    transition: left 0.6s ease;
+}
+.vph-header:hover::before { left: 100%; }
+.vph-header:hover {
+    background: linear-gradient(135deg, #047857, #065F46);
+}
+
+.vph-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: white;
+    flex: 1;
+    min-width: 200px;
+}
+.vph-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.2);
+    backdrop-filter: blur(10px);
+    border: 1.5px solid rgba(255,255,255,0.3);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    color: white;
+    flex-shrink: 0;
+    transition: transform 0.3s ease;
+}
+.vph-header:hover .vph-icon { transform: scale(1.1) rotate(-5deg); }
+
+.vph-title-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.vph-main {
+    font-size: 0.88rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+.vph-sub {
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.85);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+.vph-sub i { font-size: 0.55rem; }
+
+.vph-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+}
+.vph-total {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.2);
+    backdrop-filter: blur(10px);
+    border: 1.5px solid rgba(255,255,255,0.3);
+    color: white;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: 900;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+.vph-total i { font-size: 0.72rem; color: #FDE047; }
+
+.vph-toggle {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.2);
+    backdrop-filter: blur(10px);
+    border: 1.5px solid rgba(255,255,255,0.35);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    flex-shrink: 0;
+}
+.vph-header:hover .vph-toggle {
+    background: rgba(255,255,255,0.35);
+    transform: scale(1.1);
+}
+.vph-toggle.rotated {
+    transform: rotate(180deg);
+}
+.vph-header:hover .vph-toggle.rotated {
+    transform: rotate(180deg) scale(1.1);
+}
+
+/* BODY - Toggleable */
+.vph-body {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.5s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s ease;
+    padding: 0 18px;
+    background: var(--bg-body);
+}
+.vph-body.open {
+    max-height: 3000px;
+    padding: 16px 18px;
+    overflow-y: auto;
+}
+
+/* Received By Summary */
+.vph-received-summary {
+    background: linear-gradient(135deg, #EFF6FF, #DBEAFE);
+    border: 1.5px solid rgba(11, 94, 215, 0.25);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+}
+[data-theme="dark"] .vph-received-summary {
+    background: linear-gradient(135deg, #12294A, #0F2340);
+}
+.vph-received-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.62rem;
+    font-weight: 900;
+    color: var(--primary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 10px;
+}
+.vph-received-items {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* Payments List */
+.vph-payments-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.vph-bill-group {
+    background: var(--bg-card);
+    border-radius: 10px;
+    border-left: 4px solid var(--primary);
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.vph-bill-header {
+    padding: 10px 14px;
+    background: linear-gradient(135deg, rgba(11, 94, 215, 0.08), rgba(124, 58, 237, 0.04));
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    border-bottom: 1px dashed var(--border-color);
+}
+.vph-bill-number {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 800;
+    color: var(--primary);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.vph-bill-total {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    font-weight: 900;
+    color: var(--success);
+    background: var(--success-bg);
+    padding: 3px 10px;
+    border-radius: 6px;
+}
+.vph-bill-payments {
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Received By Item (with Amounts) */
+.received-by-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.received-by-item {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    background: #E8F0FE;
+    color: #0B5ED7;
+    border: 1px solid rgba(11, 94, 215, 0.2);
+    min-width: 200px;
+    max-width: 260px;
+    transition: all 0.25s ease;
+}
+.received-by-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+.received-by-item .rb-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.68rem;
+    font-weight: 800;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.received-by-item .rb-name i {
+    font-size: 0.6rem;
+    flex-shrink: 0;
+}
+.received-by-item .rb-amount {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 900;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: rgba(5, 150, 105, 0.15);
+    color: #059669;
+    white-space: nowrap;
+}
+.received-by-item .rb-count {
+    font-size: 0.55rem;
+    font-weight: 800;
+    background: rgba(0,0,0,0.08);
+    padding: 1px 6px;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    white-space: nowrap;
+}
+.received-by-item .rb-date {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.58rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+}
+.received-by-item.reception { background: #DBEAFE; color: #1E40AF; border-color: rgba(30, 64, 175, 0.2); }
+.received-by-item.reception .rb-amount { background: rgba(30, 64, 175, 0.15); color: #1E40AF; }
+.received-by-item.cashier { background: #FEF3C7; color: #D97706; border-color: rgba(217, 119, 6, 0.2); }
+.received-by-item.cashier .rb-amount { background: rgba(217, 119, 6, 0.15); color: #D97706; }
+.received-by-item.admin { background: #FCE7F3; color: #BE185D; border-color: rgba(190, 24, 93, 0.2); }
+.received-by-item.admin .rb-amount { background: rgba(190, 24, 93, 0.15); color: #BE185D; }
+.received-by-item.pharmacy { background: #D1FAE5; color: #059669; border-color: rgba(5, 150, 105, 0.2); }
+.received-by-item.pharmacy .rb-amount { background: rgba(5, 150, 105, 0.15); color: #059669; }
+.received-by-item.doctor { background: #EDE9FE; color: #7C3AED; border-color: rgba(124, 58, 237, 0.2); }
+.received-by-item.doctor .rb-amount { background: rgba(124, 58, 237, 0.15); color: #7C3AED; }
+.received-by-item.laboratory { background: #CFFAFE; color: #0891B2; border-color: rgba(8, 145, 178, 0.2); }
+.received-by-item.laboratory .rb-amount { background: rgba(8, 145, 178, 0.15); color: #0891B2; }
+.received-by-item.user { background: #F1F5F9; color: #64748B; border-color: rgba(100, 116, 139, 0.2); }
+.received-by-item.user .rb-amount { background: rgba(100, 116, 139, 0.15); color: #64748B; }
+
+/* Payment Item */
+.payment-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--bg-card);
+    border-radius: 10px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border-color);
+    border-left: 4px solid #059669;
+    flex-wrap: wrap;
+    gap: 12px;
+    transition: all 0.25s ease;
+}
+.payment-item:hover {
+    background: var(--success-bg);
+    border-left-color: #047857;
+    transform: translateX(2px);
+}
+.payment-item:last-child { margin-bottom: 0; }
+
+.payment-left { 
+    display: flex; 
+    align-items: center; 
+    gap: 14px; 
+    flex-wrap: wrap; 
+    flex: 1;
+    min-width: 0;
+}
+.payment-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.payment-index { 
+    display: inline-flex; 
+    align-items: center; 
+    justify-content: center; 
+    width: 28px; 
+    height: 28px; 
+    border-radius: 50%; 
+    background: #D1FAE5; 
+    color: #059669; 
+    font-weight: 900; 
+    font-size: 0.75rem; 
+    font-family: var(--font-mono); 
+    flex-shrink: 0;
+}
+.payment-receipt { 
+    display: inline-flex; 
+    align-items: center; 
+    gap: 4px; 
+    font-family: var(--font-mono); 
+    font-size: 0.7rem; 
+    font-weight: 800; 
+    color: #059669; 
+    background: #D1FAE5; 
+    padding: 4px 10px; 
+    border-radius: 6px; 
+}
+.payment-method { 
+    display: inline-flex; 
+    align-items: center; 
+    gap: 4px; 
+    font-size: 0.65rem; 
+    font-weight: 700; 
+    color: #0B5ED7; 
+    background: #DBEAFE; 
+    padding: 4px 10px; 
+    border-radius: 6px; 
+    text-transform: uppercase; 
+}
+.payment-date { 
+    display: inline-flex; 
+    align-items: center; 
+    gap: 5px; 
+    font-size: 0.72rem; 
+    font-weight: 700; 
+    color: var(--text-primary); 
+    background: var(--gray-100); 
+    padding: 4px 10px; 
+    border-radius: 6px; 
+    font-family: var(--font-mono); 
+}
+[data-theme="dark"] .payment-date { background: #334155; }
+.payment-received-by { 
+    display: inline-flex; 
+    align-items: center; 
+    gap: 4px; 
+    font-size: 0.68rem; 
+    font-weight: 600; 
+    color: #7C3AED; 
+    background: #EDE9FE; 
+    padding: 4px 10px; 
+    border-radius: 6px; 
+}
+.payment-amount {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    font-weight: 900;
+    color: #059669;
+    background: #D1FAE5;
+    padding: 5px 14px;
+    border-radius: 8px;
+    border: 1.5px solid rgba(5, 150, 105, 0.3);
+    white-space: nowrap;
+}
+.payment-amount .currency-prefix {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #047857;
+}
+.payment-amount .amount-value {
+    font-size: 1rem;
+    font-weight: 900;
+}
+
+/* Table */
 .table-card { background: var(--bg-card); border-radius: var(--radius-lg); border: 1px solid var(--border-color); overflow: hidden; box-shadow: var(--shadow-sm); margin-bottom: 20px; }
 .table-card .table-header { padding: 14px 20px; background: linear-gradient(135deg, #0B5ED7, #0A4CA8); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
 .table-card .table-header.green { background: linear-gradient(135deg, #059669, #047857); }
@@ -1675,14 +1876,6 @@ mark.search-highlight {
 .status-badge.pending { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
 .status-badge.cancelled { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
 
-.received-by { display: flex; align-items: center; gap: 8px; }
-.received-by-avatar { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #0B5ED7, #3B82F6); color: white; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 0.68rem; flex-shrink: 0; }
-.received-by-avatar.red { background: linear-gradient(135deg, #DC2626, #F87171) !important; }
-.received-by-avatar.cyan { background: linear-gradient(135deg, #0891B2, #22D3EE) !important; }
-.received-by-info { display: flex; flex-direction: column; gap: 2px; }
-.received-by-name { font-size: 0.72rem; font-weight: 700; color: var(--text-primary); }
-.received-by-role { font-size: 0.55rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; }
-
 .role-tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.5rem; font-weight: 800; text-transform: uppercase; }
 .role-tag.cashier { background: #FEF3C7; color: #D97706; }
 .role-tag.reception { background: #DBEAFE; color: #1E40AF; }
@@ -1691,6 +1884,13 @@ mark.search-highlight {
 .role-tag.doctor { background: #EDE9FE; color: #7C3AED; }
 .role-tag.laboratory { background: #CFFAFE; color: #0891B2; }
 .role-tag.user { background: var(--border-color); color: var(--text-secondary); }
+
+.received-by { display: flex; align-items: center; gap: 8px; }
+.received-by-avatar { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #0B5ED7, #3B82F6); color: white; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 0.68rem; flex-shrink: 0; }
+.received-by-avatar.cyan { background: linear-gradient(135deg, #0891B2, #22D3EE) !important; }
+.received-by-info { display: flex; flex-direction: column; gap: 2px; }
+.received-by-name { font-size: 0.72rem; font-weight: 700; color: var(--text-primary); }
+.received-by-role { font-size: 0.55rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; }
 
 .payment-badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 6px; font-size: 0.66rem; font-weight: 700; background: var(--primary-bg); color: var(--primary); white-space: nowrap; }
 .expense-ref-badge { font-size: 0.68rem; color: #DC2626; font-weight: 800; background: var(--danger-bg); padding: 4px 8px; border-radius: 6px; display: inline-block; font-family: var(--font-mono); }
@@ -1772,6 +1972,8 @@ mark.search-highlight {
     .patient-footer { padding: 12px 16px; flex-direction: column; align-items: flex-start; }
     .patient-footer .footer-right { width: 100%; }
     .custom-date-row { grid-template-columns: 1fr; }
+    .vph-title { flex-wrap: wrap; }
+    .vph-right { width: 100%; justify-content: space-between; }
 }
 @media (max-width: 480px) {
     .stats-grid-8 { grid-template-columns: 1fr; }
@@ -1779,12 +1981,14 @@ mark.search-highlight {
     .pending-partial-grid { grid-template-columns: 1fr; }
     .visit-payment-summary { grid-template-columns: 1fr; }
     .visit-header-row2 { grid-template-columns: 1fr; }
+    .received-by-item { min-width: 100%; max-width: 100%; }
 }
 @media print {
-    .quick-filters-card, .patient-filter-card, .btn-header, .visit-action-buttons, .action-buttons, .modal-overlay, .header-scroll-buttons { display: none !important; }
+    .quick-filters-card, .patient-filter-card, .btn-header, .visit-action-buttons, .action-buttons, .modal-overlay, .header-scroll-buttons, .vph-toggle { display: none !important; }
     .page-header { background: white !important; color: black !important; }
     .stat-card { break-inside: avoid; }
     .patient-group-card { break-inside: avoid; }
+    .vph-body { max-height: none !important; padding: 16px 18px !important; }
 }
 </style>
 </head>
@@ -1810,9 +2014,9 @@ mark.search-highlight {
         <div>
             <h1 class="page-title">
                 <i class="fas fa-chart-line"></i>
-                Revenue Report V60
+                Revenue Report V63
                 <span class="branch-tag" style="background:rgba(255,255,255,0.25);"><i class="fas fa-shield-alt"></i> ADMIN</span>
-                <span class="branch-tag live-tag"><i class="fas fa-check-circle"></i> OTC EQUIPMENT SPLIT</span>
+                <span class="branch-tag recv-tag"><i class="fas fa-toggle-on"></i> TOGGLE PAYMENTS</span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-store-alt"></i>
@@ -1823,6 +2027,9 @@ mark.search-highlight {
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <button onclick="toggleAllPaymentHistories()" class="btn-header" id="globalToggleBtn">
+                <i class="fas fa-expand-alt"></i> Expand All
+            </button>
             <button onclick="window.print()" class="btn-header"><i class="fas fa-print"></i> Print</button>
             <a href="/dispensary_system/frontend/pages/admin/audit/dashboard.php?branch=<?= $selected_branch_id ?>" class="btn-header">
                 <i class="fas fa-arrow-left"></i> Dashboard
@@ -1830,7 +2037,7 @@ mark.search-highlight {
         </div>
     </div>
 
-    <!-- ✅ QUICK FILTERS CARD - JUU KABLA YA CARDS -->
+    <!-- QUICK FILTERS -->
     <div class="quick-filters-card">
         <div class="qfc-header">
             <div class="qfc-title">
@@ -1861,7 +2068,6 @@ mark.search-highlight {
             </a>
         </div>
 
-        <!-- CUSTOM DATE ROW -->
         <div class="custom-date-row" id="customFilterSection" style="display: <?= $quick_filter === 'custom' ? 'grid' : 'none' ?>;">
             <form method="GET" action="" style="display: contents;">
                 <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
@@ -1896,7 +2102,6 @@ mark.search-highlight {
 
     <!-- 8 CARDS -->
     <div class="stats-grid-8">
-        <!-- TOTAL REVENUE -->
         <div class="stat-card revenue">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-money-bill-wave"></i></div>
@@ -1909,7 +2114,6 @@ mark.search-highlight {
             <div class="card-footer"><i class="fas fa-info-circle"></i> Payments + OTC</div>
         </div>
 
-        <!-- PATIENT PAYMENTS -->
         <div class="stat-card payments">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-file-invoice"></i></div>
@@ -1931,7 +2135,6 @@ mark.search-highlight {
             </div>
         </div>
 
-        <!-- PRESCRIPTION (GROSS) -->
         <div class="stat-card prescription">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-prescription"></i></div>
@@ -1944,7 +2147,6 @@ mark.search-highlight {
             <div class="card-footer"><i class="fas fa-list"></i> Items: <span class="highlight"><?= number_format($prescription_count) ?></span></div>
         </div>
 
-        <!-- ✅ V60: OTC CARD - JUMLA YA OTC + EQUIPMENT -->
         <div class="stat-card otc">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-cash-register"></i></div>
@@ -1954,7 +2156,6 @@ mark.search-highlight {
                 <div class="card-label"><i class="fas fa-shopping-cart"></i> OTC Sales (Total)</div>
                 <div class="card-value"><span class="currency"><?= $currency ?></span><?= number_format($otc_revenue, 0) ?></div>
             </div>
-            <!-- ✅ V60: Split breakdown - OTC Products vs Equipment -->
             <div class="otc-split-container">
                 <div class="otc-split-item otc-products">
                     <span class="split-label"><i class="fas fa-pills"></i> OTC Products:</span>
@@ -1967,7 +2168,6 @@ mark.search-highlight {
             </div>
         </div>
 
-        <!-- ✅ V60: CLINICAL SERVICES CARD - Cons + Proc + Equip (za daktari) -->
         <div class="stat-card consultation">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-stethoscope"></i></div>
@@ -1977,7 +2177,6 @@ mark.search-highlight {
                 <div class="card-label"><i class="fas fa-notes-medical"></i> Clinical Services</div>
                 <div class="card-value"><span class="currency"><?= $currency ?></span><?= number_format($clinical_services_revenue, 0) ?></div>
             </div>
-            <!-- ✅ V60: Breakdown - Consultation, Procedures, Equipment (doctor-linked only) -->
             <div class="clinical-breakdown-container">
                 <div class="clinical-breakdown-item consultation">
                     <span class="cb-label"><i class="fas fa-stethoscope"></i> Cons:</span>
@@ -1994,7 +2193,6 @@ mark.search-highlight {
             </div>
         </div>
 
-        <!-- LAB TESTS -->
         <div class="stat-card lab">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-flask"></i></div>
@@ -2007,7 +2205,6 @@ mark.search-highlight {
             <div class="card-footer"><i class="fas fa-check-circle"></i> Tests: <span class="highlight"><?= number_format($lab_count) ?></span></div>
         </div>
 
-        <!-- EXPENSES -->
         <div class="stat-card expenses">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-receipt"></i></div>
@@ -2020,7 +2217,6 @@ mark.search-highlight {
             <div class="card-footer"><i class="fas fa-list"></i> Records: <span class="highlight"><?= number_format($expenses_count) ?></span></div>
         </div>
 
-        <!-- PROFIT -->
         <div class="stat-card profit <?= $net_profit < 0 ? 'loss' : '' ?>">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-<?= $net_profit >= 0 ? 'chart-line' : 'exclamation-triangle' ?>"></i></div>
@@ -2128,7 +2324,7 @@ mark.search-highlight {
         </div>
     </div>
 
-    <!-- ✅ PATIENT FILTER CARD - CHINI YA CARDS ZOTE -->
+    <!-- PATIENT FILTER CARD -->
     <div class="patient-filter-card">
         <div class="pfc-header">
             <div class="pfc-title">
@@ -2141,7 +2337,6 @@ mark.search-highlight {
             </span>
         </div>
 
-        <!-- PATIENT FILTER BUTTONS -->
         <div class="patient-filter-section">
             <div class="patient-filter-label">
                 <i class="fas fa-filter"></i> Patients Filter:
@@ -2167,7 +2362,6 @@ mark.search-highlight {
             </div>
         </div>
 
-        <!-- SEARCH FORM -->
         <form method="GET" id="searchFilterForm">
             <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
             <input type="hidden" name="quick" value="<?= htmlspecialchars($quick_filter) ?>">
@@ -2181,7 +2375,7 @@ mark.search-highlight {
                 <div class="search-input-wrapper" id="liveSearchWrapper">
                     <i class="fas fa-search search-icon"></i>
                     <input type="text" name="search" id="liveSearchInput" value="<?= htmlspecialchars($search) ?>" 
-                           placeholder="🔍 Type to search live: Name, Phone, Patient ID, Bill No, Visit No..." 
+                           placeholder="🔍 Type to search live: Name, Phone, Patient ID, Bill No, Visit No, Received By..." 
                            autocomplete="off">
                     <a href="#" id="liveClearBtn" class="clear-search" title="Clear Search" style="<?= empty($search) ? 'display:none;' : '' ?>">
                         <i class="fas fa-times"></i>
@@ -2245,7 +2439,6 @@ mark.search-highlight {
         <div class="patient-group-card <?= $card_class ?>" id="patientCard_<?= $patient_index ?>">
             
             <div class="patient-info-header" onclick="togglePatientCard(<?= $patient_index ?>)">
-                
                 <div class="patient-number-badge">
                     <i class="fas fa-user-tag"></i>
                     PATIENT #<?= $patient_index + 1 ?> / <?= count($patient_groups) ?>
@@ -2315,6 +2508,30 @@ mark.search-highlight {
                 $v_pending_total = (float)($visit['pending_items_total'] ?? 0);
                 $v_visit_paid = (float)($visit['visit_paid'] ?? 0);
                 $v_visit_balance = (float)($visit['visit_balance'] ?? 0);
+                
+                // V63: Collect ALL payments for this visit's bills
+                $visit_all_payments = [];
+                $visit_bills_with_payments = [];
+                foreach ($visit['bills'] as $v_bill) {
+                    $bill_pmts = $payments_by_bill[$v_bill['bill_id']] ?? [];
+                    if (!empty($bill_pmts)) {
+                        $visit_bills_with_payments[] = [
+                            'bill' => $v_bill,
+                            'payments' => $bill_pmts
+                        ];
+                        foreach ($bill_pmts as $bp) {
+                            $visit_all_payments[] = $bp;
+                        }
+                    }
+                }
+                
+                // V63: Calculate totals for toggle header
+                $visit_total_paid_amount = 0;
+                foreach ($visit_all_payments as $vp) {
+                    $visit_total_paid_amount += (float)($vp['amount'] ?? 0);
+                }
+                $visit_payment_count = count($visit_all_payments);
+                $visit_received_summary = buildReceivedBySummary($visit_all_payments);
             ?>
             <div class="visit-section">
                 
@@ -2391,6 +2608,132 @@ mark.search-highlight {
                     </div>
                 </div>
 
+                <!-- ✅ V63: PAYMENT HISTORY - TOGGLE -->
+                <?php if (count($visit_bills_with_payments) > 0): ?>
+                <div style="padding: 0 20px 14px;">
+                    <div class="visit-payment-history-card" id="paymentHistoryCard_<?= $patient_index ?>_<?= $visit_index ?>">
+                        
+                        <div class="vph-header" onclick="togglePaymentHistory(<?= $patient_index ?>, <?= $visit_index ?>)">
+                            <div class="vph-title">
+                                <span class="vph-icon"><i class="fas fa-receipt"></i></span>
+                                <div class="vph-title-text">
+                                    <span class="vph-main">Payment History</span>
+                                    <span class="vph-sub">
+                                        <i class="fas fa-list"></i> <?= $visit_payment_count ?> payment<?= $visit_payment_count != 1 ? 's' : '' ?>
+                                        • <?= count($visit_bills_with_payments) ?> bill<?= count($visit_bills_with_payments) != 1 ? 's' : '' ?>
+                                    </span>
+                                </div>
+                            </div>
+                            
+                            <div class="vph-right">
+                                <span class="vph-total">
+                                    <i class="fas fa-coins"></i>
+                                    <?= $currency ?> <?= number_format($visit_total_paid_amount, 0) ?>
+                                </span>
+                                <span class="vph-toggle" id="paymentToggleIcon_<?= $patient_index ?>_<?= $visit_index ?>">
+                                    <i class="fas fa-chevron-down"></i>
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div class="vph-body" id="paymentHistoryBody_<?= $patient_index ?>_<?= $visit_index ?>">
+                            
+                            <div class="vph-received-summary">
+                                <span class="vph-received-label">
+                                    <i class="fas fa-users"></i> RECEIVED BY:
+                                </span>
+                                <div class="vph-received-items">
+                                    <?php foreach ($visit_received_summary as $rb): ?>
+                                        <div class="received-by-item <?= htmlspecialchars($rb['role']) ?>">
+                                            <span class="rb-name">
+                                                <i class="fas fa-user"></i>
+                                                <?= htmlspecialchars($rb['name']) ?>
+                                            </span>
+                                            <span class="rb-amount">
+                                                <i class="fas fa-coins" style="font-size:0.6rem;"></i>
+                                                <?= $currency ?> <?= number_format($rb['total_amount'], 0) ?>
+                                            </span>
+                                            <?php if ($rb['count'] > 1): ?>
+                                                <span class="rb-count">
+                                                    <i class="fas fa-receipt"></i> <?= $rb['count'] ?> payments
+                                                </span>
+                                            <?php endif; ?>
+                                            <?php if ($rb['first_date']): ?>
+                                                <span class="rb-date">
+                                                    <i class="far fa-calendar"></i>
+                                                    <?= date('d M Y, h:i A', strtotime($rb['first_date'])) ?>
+                                                </span>
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                            
+                            <div class="vph-payments-list">
+                                <?php foreach ($visit_bills_with_payments as $bill_data): 
+                                    $v_bill = $bill_data['bill'];
+                                    $v_bill_pmts = $bill_data['payments'];
+                                    
+                                    $bill_total_amount = 0;
+                                    foreach ($v_bill_pmts as $bp) {
+                                        $bill_total_amount += (float)($bp['amount'] ?? 0);
+                                    }
+                                ?>
+                                    <div class="vph-bill-group">
+                                        <div class="vph-bill-header">
+                                            <span class="vph-bill-number">
+                                                <i class="fas fa-file-invoice"></i> <?= htmlspecialchars($v_bill['bill_number']) ?>
+                                            </span>
+                                            <span class="vph-bill-total">
+                                                <?= $currency ?> <?= number_format($bill_total_amount, 0) ?>
+                                            </span>
+                                        </div>
+                                        
+                                        <div class="vph-bill-payments">
+                                            <?php foreach ($v_bill_pmts as $payment_idx => $payment): 
+                                                $method_icon = 'money-bill';
+                                                if (strpos($payment['payment_method'] ?? '', 'pesa') !== false || strpos($payment['payment_method'] ?? '', 'mpesa') !== false) $method_icon = 'mobile-alt';
+                                                elseif ($payment['payment_method'] === 'bank') $method_icon = 'university';
+                                                elseif ($payment['payment_method'] === 'card') $method_icon = 'credit-card';
+                                            ?>
+                                                <div class="payment-item">
+                                                    <div class="payment-left">
+                                                        <span class="payment-index"><?= $payment_idx + 1 ?></span>
+                                                        <span class="payment-receipt">
+                                                            <i class="fas fa-hashtag"></i> <?= htmlspecialchars($payment['receipt_number']) ?>
+                                                        </span>
+                                                        <span class="payment-method">
+                                                            <i class="fas fa-<?= $method_icon ?>"></i>
+                                                            <?= htmlspecialchars(str_replace('_', ' ', $payment['payment_method'] ?? 'cash')) ?>
+                                                        </span>
+                                                    </div>
+                                                    <div class="payment-right">
+                                                        <span class="payment-amount">
+                                                            <span class="currency-prefix"><?= $currency ?></span>
+                                                            <span class="amount-value"><?= number_format((float)($payment['amount'] ?? 0), 0) ?></span>
+                                                        </span>
+                                                        <span class="payment-date">
+                                                            <i class="far fa-calendar"></i>
+                                                            <?= date('d M Y, h:i A', strtotime($payment['received_at'])) ?>
+                                                        </span>
+                                                        <?php if (!empty($payment['received_by_name'])): ?>
+                                                            <span class="payment-received-by">
+                                                                <i class="fas fa-user"></i> <?= htmlspecialchars($payment['received_by_name']) ?>
+                                                            </span>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                            
+                        </div>
+                    </div>
+                </div>
+                <?php endif; ?>
+
                 <div class="visit-header-row3">
                     <div class="visit-diagnosis-box">
                         <?php if (!empty($visit['diagnosis'])): ?>
@@ -2430,7 +2773,7 @@ mark.search-highlight {
                         </div>
                     </div>
                     <div class="table-scroll-wrapper" id="itemsWrapper_<?= $patient_index ?>_<?= $visit_index ?>">
-                        <table class="data-table" style="min-width:900px;">
+                        <table class="data-table" style="min-width:1100px;">
                             <thead>
                                 <tr>
                                     <th style="width:40px;">#</th>
@@ -2442,6 +2785,8 @@ mark.search-highlight {
                                     <th style="text-align:right;">Discount</th>
                                     <th style="text-align:right;">Final Price</th>
                                     <th style="text-align:center;">Status</th>
+                                    <th style="min-width:200px;">Received By</th>
+                                    <th style="text-align:center;">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -2458,6 +2803,7 @@ mark.search-highlight {
                                 ];
 
                                 $has_any_items = false;
+                                $shown_bills_received = [];
                                 foreach ($categories_order as $cat_key => $cat_info):
                                     $cat_items = $visit['items_by_category'][$cat_key] ?? [];
                                     if (empty($cat_items)) continue;
@@ -2475,7 +2821,7 @@ mark.search-highlight {
                                     }
                                 ?>
                                     <tr class="category-group-row <?= $cat_info['class'] ?>">
-                                        <td colspan="9">
+                                        <td colspan="11">
                                             <span class="category-icon"><i class="fas <?= $cat_info['icon'] ?>"></i></span>
                                             <?= htmlspecialchars($cat_info['label']) ?> (<?= count($cat_items) ?> items)
                                             
@@ -2513,6 +2859,11 @@ mark.search-highlight {
                                                 $row_class = '';
                                                 break;
                                         }
+                                        
+                                        $item_bill_id = $item['bill_id'] ?? 0;
+                                        $item_bill_pmts = $payments_by_bill[$item_bill_id] ?? [];
+                                        $show_received = !isset($shown_bills_received[$item_bill_id]) && !empty($item_bill_pmts);
+                                        if ($show_received) $shown_bills_received[$item_bill_id] = true;
                                     ?>
                                         <tr class="<?= $row_class ?>">
                                             <td style="text-align:center;font-weight:700;color:var(--text-secondary);"><?= $item_counter++ ?></td>
@@ -2548,13 +2899,45 @@ mark.search-highlight {
                                                     <i class="fas <?= $item_status_icon ?>"></i> <?= strtoupper($item_status) ?>
                                                 </span>
                                             </td>
+                                            <td>
+                                                <?php if ($show_received): 
+                                                    $item_received = buildReceivedBySummary($item_bill_pmts);
+                                                ?>
+                                                    <div class="received-by-summary">
+                                                        <?php foreach ($item_received as $rb): ?>
+                                                            <div class="received-by-item <?= htmlspecialchars($rb['role']) ?>">
+                                                                <span class="rb-name">
+                                                                    <i class="fas fa-user"></i>
+                                                                    <?= htmlspecialchars($rb['name']) ?>
+                                                                </span>
+                                                                <span class="rb-amount">
+                                                                    <i class="fas fa-coins" style="font-size:0.6rem;"></i>
+                                                                    <?= $currency ?> <?= number_format($rb['total_amount'], 0) ?>
+                                                                </span>
+                                                                <?php if ($rb['count'] > 1): ?>
+                                                                    <span class="rb-count">
+                                                                        <i class="fas fa-receipt"></i> <?= $rb['count'] ?>
+                                                                    </span>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                <?php elseif (isset($shown_bills_received[$item_bill_id])): ?>
+                                                    <span style="color:var(--text-secondary);font-size:0.62rem;font-style:italic;">↳ Same bill</span>
+                                                <?php else: ?>
+                                                    <span style="color:var(--text-secondary);font-size:0.65rem;">—</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td style="text-align:center;">
+                                                <span style="color:var(--text-secondary);font-size:0.65rem;">—</span>
+                                            </td>
                                         </tr>
                                     <?php endforeach; ?>
                                 <?php endforeach; ?>
 
                                 <?php if (!$has_any_items): ?>
                                     <tr>
-                                        <td colspan="9">
+                                        <td colspan="11">
                                             <div class="empty-state" style="padding:30px 20px;">
                                                 <i class="fas fa-inbox" style="font-size:2rem;"></i>
                                                 <p style="font-size:0.8rem;">No items for this visit</p>
@@ -2574,6 +2957,7 @@ mark.search-highlight {
                                     <td style="text-align:center;font-weight:800;font-size:0.68rem;">
                                         <span style="color:var(--success);">✅ <?= $v_paid_count ?></span> / <span style="color:var(--danger);">⏳ <?= $v_pending_count ?></span>
                                     </td>
+                                    <td colspan="2"></td>
                                 </tr>
                                 <tr style="background:linear-gradient(135deg, rgba(5,150,105,0.1), rgba(5,150,105,0.05));">
                                     <td colspan="7" style="text-align:right;font-weight:800;font-size:0.75rem;color:var(--success);">
@@ -2585,6 +2969,7 @@ mark.search-highlight {
                                     <td style="text-align:center;">
                                         <span class="status-badge paid" style="font-size:0.55rem;"><i class="fas fa-check"></i> PAID</span>
                                     </td>
+                                    <td colspan="2"></td>
                                 </tr>
                                 <?php if ($v_visit_balance > 0): ?>
                                 <tr style="background:linear-gradient(135deg, rgba(220,38,38,0.1), rgba(220,38,38,0.05));">
@@ -2597,6 +2982,7 @@ mark.search-highlight {
                                     <td style="text-align:center;">
                                         <span class="status-badge pending" style="font-size:0.55rem;"><i class="fas fa-clock"></i> DUE</span>
                                     </td>
+                                    <td colspan="2"></td>
                                 </tr>
                                 <?php endif; ?>
                             </tfoot>
@@ -2719,7 +3105,6 @@ mark.search-highlight {
                             $bill_number = !empty($otc['bill_id']) ? 'BILL-OTC-' . $otc['bill_id'] : '—';
                             $otc_status = strtolower($otc['payment_status'] ?? 'paid');
                         ?>
-                            
                             <?php if ($item_count > 0): ?>
                                 <?php $first = true; foreach ($parsed_items as $idx => $pi): ?>
                                     <tr class="<?= $first ? 'otc-sale-row' : 'otc-item-row' ?>">
@@ -2778,45 +3163,7 @@ mark.search-highlight {
                                     </tr>
                                     <?php $first = false; ?>
                                 <?php endforeach; ?>
-                            <?php else: ?>
-                                <tr class="otc-sale-row">
-                                    <td style="text-align:center;font-weight:800;color:var(--cyan);"><?= $otc_num++ ?></td>
-                                    <td><span style="font-size:0.68rem;color:var(--cyan);font-weight:800;background:var(--cyan-bg);padding:4px 8px;border-radius:5px;font-family:var(--font-mono);"><?= highlightSearchTerm($otc['sale_number'] ?? 'N/A', $search) ?></span></td>
-                                    <td><?= highlightSearchTerm($otc['customer_name'] ?? 'Walk-in Customer', $search) ?></td>
-                                    <td><span style="font-size:0.62rem;color:var(--text-secondary);font-family:var(--font-mono);"><?= htmlspecialchars($bill_number) ?></span></td>
-                                    <td colspan="4" style="text-align:center;color:var(--text-secondary);font-style:italic;">No items recorded</td>
-                                    <td class="money-cell warning"><?= (float)($otc['discount_amount'] ?? 0) > 0 ? '-' . $currency . ' ' . number_format((float)$otc['discount_amount'], 0) : '—' ?></td>
-                                    <td class="money-cell purple"><?= (float)($otc['premium_amount'] ?? 0) > 0 ? '+' . $currency . ' ' . number_format((float)$otc['premium_amount'], 0) : '—' ?></td>
-                                    <td class="money-cell" style="font-weight:900;background:var(--cyan-bg);"><?= $currency ?> <?= number_format((float)($otc['total_amount'] ?? 0), 0) ?></td>
-                                    <td><span class="payment-badge"><i class="fas fa-credit-card"></i> <?= htmlspecialchars(ucfirst(str_replace('_', ' ', $otc['payment_method'] ?? 'Cash'))) ?></span></td>
-                                    <td>
-                                        <div class="received-by">
-                                            <div class="received-by-avatar cyan"><?= htmlspecialchars($initials) ?></div>
-                                            <div class="received-by-info">
-                                                <span class="received-by-name"><?= htmlspecialchars($otc['sold_by_name'] ?? 'N/A') ?></span>
-                                                <span class="received-by-role"><span class="role-tag <?= htmlspecialchars($role) ?>"><?= htmlspecialchars(strtoupper($role)) ?></span></span>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td style="text-align:center;">
-                                        <?php if ($otc_status === 'paid'): ?><span class="status-badge paid"><i class="fas fa-check-circle"></i> PAID</span>
-                                        <?php elseif ($otc_status === 'partial'): ?><span class="status-badge pending"><i class="fas fa-hourglass-half"></i> PARTIAL</span>
-                                        <?php else: ?><span class="status-badge pending"><i class="fas fa-clock"></i> <?= strtoupper($otc_status) ?></span><?php endif; ?>
-                                    </td>
-                                    <td><span style="font-size:0.7rem;color:var(--text-secondary);"><i class="fas fa-store-alt"></i> <?= htmlspecialchars($otc['branch_name'] ?? 'N/A') ?></span></td>
-                                    <td>
-                                        <div style="font-size:0.68rem;font-weight:600;"><?= date('d M Y', strtotime($otc['created_at'] ?? 'now')) ?></div>
-                                        <div style="font-size:0.58rem;color:var(--text-secondary);"><?= date('H:i', strtotime($otc['created_at'] ?? 'now')) ?></div>
-                                    </td>
-                                    <td>
-                                        <div class="action-buttons">
-                                            <a href="view_otc.php?id=<?= (int)$otc['sale_id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-action view"><i class="fas fa-eye"></i></a>
-                                            <button type="button" class="btn-action delete" onclick="confirmDeleteOtc(<?= (int)$otc['sale_id'] ?>, '<?= htmlspecialchars(addslashes($otc['sale_number'] ?? 'N/A')) ?>')"><i class="fas fa-trash"></i></button>
-                                        </div>
-                                    </td>
-                                </tr>
                             <?php endif; ?>
-                            
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr><td colspan="17"><div class="empty-state"><i class="fas fa-cash-register"></i><p>No OTC sales found for <?= htmlspecialchars($date_label) ?></p></div></td></tr>
@@ -3077,8 +3424,57 @@ mark.search-highlight {
 
 <script>
 // ================================================================
-// ✅ LIVE SEARCH WITH HIGHLIGHT
+// ✅ V63: TOGGLE PAYMENT HISTORY
 // ================================================================
+function togglePaymentHistory(patientIndex, visitIndex) {
+    var body = document.getElementById('paymentHistoryBody_' + patientIndex + '_' + visitIndex);
+    var icon = document.getElementById('paymentToggleIcon_' + patientIndex + '_' + visitIndex);
+    
+    if (!body || !icon) return;
+    
+    if (body.classList.contains('open')) {
+        body.classList.remove('open');
+        icon.classList.remove('rotated');
+    } else {
+        body.classList.add('open');
+        icon.classList.add('rotated');
+    }
+}
+
+// ✅ V63: Toggle ALL Payment Histories
+var allPaymentHistoriesExpanded = false;
+function toggleAllPaymentHistories() {
+    var bodies = document.querySelectorAll('.vph-body');
+    var icons = document.querySelectorAll('.vph-toggle');
+    var btn = document.getElementById('globalToggleBtn');
+    
+    allPaymentHistoriesExpanded = !allPaymentHistoriesExpanded;
+    
+    bodies.forEach(function(body) {
+        if (allPaymentHistoriesExpanded) {
+            body.classList.add('open');
+        } else {
+            body.classList.remove('open');
+        }
+    });
+    
+    icons.forEach(function(icon) {
+        if (allPaymentHistoriesExpanded) {
+            icon.classList.add('rotated');
+        } else {
+            icon.classList.remove('rotated');
+        }
+    });
+    
+    if (btn) {
+        if (allPaymentHistoriesExpanded) {
+            btn.innerHTML = '<i class="fas fa-compress-alt"></i> Collapse All';
+        } else {
+            btn.innerHTML = '<i class="fas fa-expand-alt"></i> Expand All';
+        }
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     
     const searchInput = document.getElementById('liveSearchInput');
@@ -3105,9 +3501,9 @@ document.addEventListener('DOMContentLoaded', function() {
         
         const textSelectors = [
             '.patient-name', '.patient-meta span', '.received-by-name',
-            '.otc-customer-name', '.otc-customer-phone', '.otc-sale-id-badge',
             '.visit-number-badge', '.expense-ref-badge', '.otc-item-name',
-            '.badge-value', '.patient-number-badge'
+            '.badge-value', '.patient-number-badge', '.rb-name',
+            '.payment-received-by', '.payment-receipt', '.vph-bill-number'
         ];
         
         textSelectors.forEach(selector => {
@@ -3156,8 +3552,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 .map(el => el.textContent.toLowerCase()).join(' ');
             const itemNames = Array.from(card.querySelectorAll('.data-table tbody td div'))
                 .map(el => el.textContent.toLowerCase()).join(' ');
+            const receivedBy = Array.from(card.querySelectorAll('.received-by-item, .payment-received-by, .rb-name'))
+                .map(el => el.textContent.toLowerCase()).join(' ');
+            const billNumbers = Array.from(card.querySelectorAll('.vph-bill-number'))
+                .map(el => el.textContent.toLowerCase()).join(' ');
             
-            const searchableText = `${patientName} ${patientCode} ${patientPhone} ${visitNumbers} ${itemNames}`;
+            const searchableText = `${patientName} ${patientCode} ${patientPhone} ${visitNumbers} ${itemNames} ${receivedBy} ${billNumbers}`;
             
             if (searchableText.includes(q)) {
                 card.style.display = '';
@@ -3229,6 +3629,7 @@ document.addEventListener('DOMContentLoaded', function() {
         applyLiveFilter(searchInput.value);
     }
     
+    // Auto-open first patient card
     var firstBody = document.getElementById('patientBody_0');
     var firstBtn = document.getElementById('toggleBtn_0');
     if (firstBody && firstBtn) {
@@ -3360,13 +3761,11 @@ document.addEventListener('DOMContentLoaded', function() {
     <?php endif; ?>
 });
 
-console.log('%c📊 Revenue Report V60 - ADMIN (OTC EQUIPMENT SPLIT)', 'font-size:18px; font-weight:bold; color:#0891B2;');
-console.log('%c✅ V60: OTC Card = OTC Products + Equipment (Total shown)', 'font-size:13px; color:#0891B2; font-weight:bold;');
-console.log('%c✅ V60: Clinical = Cons + Proc + Equip (Doctor-linked only)', 'font-size:13px; color:#059669; font-weight:bold;');
+console.log('%c📊 Revenue Report V63 - TOGGLE PAYMENT HISTORY', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+console.log('%c✅ V63: Payment History ina TOGGLE button', 'font-size:13px; color:#7C3AED; font-weight:bold;');
+console.log('%c✅ V63: Global Expand All / Collapse All', 'font-size:13px; color:#7C3AED; font-weight:bold;');
 console.log('%c💰 Total Revenue: <?= $currency ?> <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
-console.log('%c💰 OTC Products: <?= $currency ?> <?= number_format($otc_products_revenue_rounded, 0) ?> (<?= $otc_products_count ?>)', 'font-size:13px; color:#0891B2; font-weight:bold;');
-console.log('%c💰 OTC Equipment: <?= $currency ?> <?= number_format($otc_equipment_revenue_rounded, 0) ?> (<?= $otc_equipment_count ?>)', 'font-size:13px; color:#0D9488; font-weight:bold;');
-console.log('%c💰 Clinical Services: <?= $currency ?> <?= number_format($clinical_services_revenue, 0) ?>', 'font-size:13px; color:#059669; font-weight:bold;');
+console.log('%c📋 Received By + Amounts + Dates zinaonekana', 'font-size:13px; color:#059669; font-weight:bold;');
 </script>
 
 </body>

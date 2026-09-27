@@ -1,27 +1,23 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/services.php
-// SERVICES MANAGEMENT - FIXED VERSION
-// ONLY: Procedures & Lab Tests (Equipment removed)
-// Lab Tests: Equipment selection (FREE) - shows ALL equipment
+// SERVICES MANAGEMENT - V2 (WITH DIAGNOSIS MANAGEMENT)
+// ================================================================
+// ✅ Procedures + Lab Tests + Diseases (Diagnosis)
+// ✅ Doctors can ADD + VIEW + EDIT Diagnosis
+// ✅ Only DIAGNOSIS has View/Edit buttons
+// ✅ Lab Tests: Equipment selection (FREE) - shows ALL equipment
 // ================================================================
 
-// Start session
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// CHECK IF USER IS DOCTOR OR ADMIN
-// ================================================================
 if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -34,42 +30,34 @@ if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
     exit;
 }
 
-// ================================================================
-// GET DOCTOR INFO
-// ================================================================
-$doctor_id = $_SESSION['user_id'];
-$doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
+$doctor_id        = $_SESSION['user_id'];
+$doctor_name      = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
-$profile_pic = $_SESSION['profile_pic'] ?? '';
-$is_admin = ($_SESSION['role'] === 'admin');
+$profile_pic      = $_SESSION['profile_pic'] ?? '';
+$is_admin         = ($_SESSION['role'] === 'admin');
 
-// ================================================================
-// GET BRANCH NAME
-// ================================================================
 $branch_name = 'Main Branch';
 try {
     require_once __DIR__ . '/../../../backend/config/database.php';
     $db = Database::getInstance()->getConnection();
-    
+
     $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
     $stmt->execute([$doctor_branch_id]);
     $branch = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($branch) {
-        $branch_name = $branch['name'];
-    }
+    if ($branch) $branch_name = $branch['name'];
 } catch (Exception $e) {
     $branch_name = 'Branch';
 }
 
 // ================================================================
-// GET CATEGORIES FROM service_categories
+// GET SERVICE CATEGORIES
 // ================================================================
 $service_categories = [];
 try {
     $stmt = $db->prepare("
-        SELECT id, category_name, description, icon, color 
-        FROM service_categories 
-        WHERE is_active = 1 
+        SELECT id, category_name, description, icon, color
+        FROM service_categories
+        WHERE is_active = 1
         ORDER BY display_order, category_name
     ");
     $stmt->execute();
@@ -78,42 +66,48 @@ try {
     $service_categories = [];
 }
 
-// ================================================================
-// GET ACTIVE TAB
-// ================================================================
 $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'procedures';
 
 // ================================================================
-// HANDLE FORM SUBMISSIONS
+// MESSAGE SYSTEM
 // ================================================================
 $message = '';
 $message_type = '';
 
-// ================================================================
-// MONEY FORMAT FUNCTION
-// ================================================================
+if (isset($_SESSION['flash_message'])) {
+    $message = $_SESSION['flash_message'];
+    $message_type = $_SESSION['flash_type'] ?? 'success';
+    unset($_SESSION['flash_message'], $_SESSION['flash_type']);
+}
+
+function setFlash($msg, $type = 'success') {
+    $_SESSION['flash_message'] = $msg;
+    $_SESSION['flash_type'] = $type;
+}
+
 function formatMoneyInput($value) {
     if (empty($value)) return 0;
     return floatval(str_replace(',', '', $value));
 }
 
-// ================================================================
-// FUNCTION TO GENERATE PROCEDURE CODE
-// ================================================================
 function generateProcedureCode() {
     return 'PROC-' . date('Ymd') . '-' . rand(1000, 9999);
 }
 
+function generateDiseaseCode() {
+    return 'D-' . strtoupper(substr(md5(uniqid()), 0, 4)) . '-' . rand(100, 999);
+}
+
 // ================================================================
-// ADD PROCEDURE
+// ✅ ADD PROCEDURE
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_procedure'])) {
     $procedure_name = trim($_POST['procedure_name'] ?? '');
-    $category_id = isset($_POST['category_id']) ? (int)$_POST['category_id'] : 0;
-    $category_name = trim($_POST['category_name'] ?? '');
-    $price = formatMoneyInput($_POST['price'] ?? 0);
-    $description = trim($_POST['description'] ?? '');
-    
+    $category_id    = isset($_POST['category_id']) ? (int)$_POST['category_id'] : 0;
+    $category_name  = trim($_POST['category_name'] ?? '');
+    $price          = formatMoneyInput($_POST['price'] ?? 0);
+    $description    = trim($_POST['description'] ?? '');
+
     $final_category = '';
     if ($category_id > 0) {
         foreach ($service_categories as $cat) {
@@ -125,54 +119,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_procedure'])) {
     } elseif (!empty($category_name)) {
         $final_category = $category_name;
     }
-    
+
     if (empty($procedure_name) || $price < 0) {
-        $message = "❌ Procedure name and valid price are required!";
-        $message_type = 'error';
+        setFlash("❌ Procedure name and valid price are required!", 'error');
     } else {
         try {
             $procedure_code = generateProcedureCode();
-            
             $stmt = $db->prepare("
                 INSERT INTO procedures_catalog (
-                    procedure_name, procedure_code, category, price, 
+                    procedure_name, procedure_code, category, price,
                     description, is_active, branch_id, created_by, created_at
                 ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, NOW())
             ");
             $stmt->execute([
-                $procedure_name,
-                $procedure_code,
-                $final_category,
-                $price,
-                $description,
-                $doctor_branch_id,
-                $doctor_id
+                $procedure_name, $procedure_code, $final_category,
+                $price, $description, $doctor_branch_id, $doctor_id
             ]);
-            
-            $message = "✅ Procedure added successfully! Code: " . $procedure_code;
-            $message_type = 'success';
+            setFlash("✅ Procedure added successfully! Code: " . $procedure_code, 'success');
         } catch (Exception $e) {
-            $message = "❌ Error: " . $e->getMessage();
-            $message_type = 'error';
+            setFlash("❌ Error: " . $e->getMessage(), 'error');
         }
     }
+    header("Location: services.php?tab=procedures");
+    exit;
 }
 
 // ================================================================
-// ADD LAB TEST - With Equipment Selection (FREE)
+// ✅ ADD LAB TEST - With Equipment (FREE)
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_lab_test'])) {
-    $test_name = trim($_POST['test_name'] ?? '');
-    $category_id = isset($_POST['category_id']) ? (int)$_POST['category_id'] : 0;
+    $test_name     = trim($_POST['test_name'] ?? '');
+    $category_id   = isset($_POST['category_id']) ? (int)$_POST['category_id'] : 0;
     $category_name = trim($_POST['category_name'] ?? '');
-    $price = formatMoneyInput($_POST['price'] ?? 0);
-    $description = trim($_POST['description'] ?? '');
+    $price         = formatMoneyInput($_POST['price'] ?? 0);
+    $description   = trim($_POST['description'] ?? '');
     $equipment_ids = isset($_POST['equipment_ids']) ? $_POST['equipment_ids'] : [];
-    
-    if (!is_array($equipment_ids)) {
-        $equipment_ids = [];
-    }
-    
+
+    if (!is_array($equipment_ids)) $equipment_ids = [];
+
     $final_category = '';
     if ($category_id > 0) {
         foreach ($service_categories as $cat) {
@@ -184,15 +168,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_lab_test'])) {
     } elseif (!empty($category_name)) {
         $final_category = $category_name;
     }
-    
+
     if (empty($test_name) || $price < 0) {
-        $message = "❌ Test name and valid price are required!";
-        $message_type = 'error';
+        setFlash("❌ Test name and valid price are required!", 'error');
     } else {
         try {
             $db->beginTransaction();
-            
-            // Insert lab test
             $stmt = $db->prepare("
                 INSERT INTO lab_tests_catalog (
                     test_name, category, branch_id, price, description,
@@ -200,29 +181,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_lab_test'])) {
                 ) VALUES (?, ?, ?, ?, ?, 1, ?, NOW())
             ");
             $stmt->execute([
-                $test_name, 
-                $final_category, 
-                $doctor_branch_id, 
-                $price, 
-                $description,
-                $doctor_id
+                $test_name, $final_category, $doctor_branch_id,
+                $price, $description, $doctor_id
             ]);
             $test_id = $db->lastInsertId();
-            
-            // ✅ Link equipment to lab test (FREE) - with branch check
+
             if (!empty($equipment_ids)) {
                 $equipment_ids = array_map('intval', $equipment_ids);
                 foreach ($equipment_ids as $equip_id) {
-                    // Verify equipment exists and belongs to branch
                     $stmt = $db->prepare("
-                        SELECT id FROM medical_equipment 
+                        SELECT id FROM medical_equipment
                         WHERE id = ? AND branch_id = ? AND status = 'active'
                     ");
                     $stmt->execute([$equip_id, $doctor_branch_id]);
                     if ($stmt->fetch()) {
-                        // Check if link already exists
                         $stmt_check = $db->prepare("
-                            SELECT id FROM lab_test_equipment 
+                            SELECT id FROM lab_test_equipment
                             WHERE lab_test_id = ? AND equipment_id = ? AND branch_id = ?
                         ");
                         $stmt_check->execute([$test_id, $equip_id, $doctor_branch_id]);
@@ -236,82 +210,142 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_lab_test'])) {
                     }
                 }
             }
-            
+
             $db->commit();
-            
-            $equipment_text = '';
-            if (!empty($equipment_ids)) {
-                $equipment_text = ' with ' . count($equipment_ids) . ' equipment(s) linked (FREE)';
-            }
-            
-            $message = "✅ Lab test added successfully!$equipment_text";
-            $message_type = 'success';
+            $equipment_text = !empty($equipment_ids) ? ' with ' . count($equipment_ids) . ' equipment(s) linked (FREE)' : '';
+            setFlash("✅ Lab test added successfully!$equipment_text", 'success');
         } catch (Exception $e) {
             $db->rollBack();
-            $message = "❌ Error: " . $e->getMessage();
-            $message_type = 'error';
+            setFlash("❌ Error: " . $e->getMessage(), 'error');
         }
     }
+    header("Location: services.php?tab=lab_tests");
+    exit;
 }
 
 // ================================================================
-// FETCH DATA
+// ✅ ADD DISEASE (DIAGNOSIS)
 // ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_disease'])) {
+    $disease_name = trim($_POST['disease_name'] ?? '');
+    $disease_code = trim($_POST['disease_code'] ?? '');
+    $icd_code     = trim($_POST['icd_code'] ?? '');
+    $category     = trim($_POST['disease_category'] ?? '');
+    $description  = trim($_POST['description'] ?? '');
+    $treatment    = trim($_POST['treatment'] ?? '');
 
-// Procedures
+    if (empty($disease_code)) {
+        $disease_code = generateDiseaseCode();
+    }
+
+    if (empty($disease_name)) {
+        setFlash("❌ Disease name is required!", 'error');
+    } else {
+        try {
+            $stmt = $db->prepare("
+                INSERT INTO diseases (
+                    disease_code, disease_name, icd_code, category,
+                    description, treatment, is_active, created_by, branch_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, NOW())
+            ");
+            $stmt->execute([
+                $disease_code, $disease_name, $icd_code ?: null, $category ?: null,
+                $description ?: null, $treatment ?: null,
+                $doctor_id, $doctor_branch_id
+            ]);
+            setFlash("✅ Diagnosis added successfully! Code: " . $disease_code, 'success');
+        } catch (Exception $e) {
+            setFlash("❌ Error: " . $e->getMessage(), 'error');
+        }
+    }
+    header("Location: services.php?tab=diagnosis");
+    exit;
+}
+
+// ================================================================
+// ✅ UPDATE DISEASE (EDIT)
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_disease'])) {
+    $disease_id   = (int)($_POST['disease_id'] ?? 0);
+    $disease_name = trim($_POST['edit_disease_name'] ?? '');
+    $disease_code = trim($_POST['edit_disease_code'] ?? '');
+    $icd_code     = trim($_POST['edit_icd_code'] ?? '');
+    $category     = trim($_POST['edit_disease_category'] ?? '');
+    $description  = trim($_POST['edit_description'] ?? '');
+    $treatment    = trim($_POST['edit_treatment'] ?? '');
+    $is_active    = isset($_POST['edit_is_active']) ? (int)$_POST['edit_is_active'] : 1;
+
+    if ($disease_id <= 0 || empty($disease_name)) {
+        setFlash("❌ Invalid data. Disease name is required!", 'error');
+    } else {
+        try {
+            $stmt = $db->prepare("
+                UPDATE diseases SET
+                    disease_name = ?,
+                    disease_code = ?,
+                    icd_code = ?,
+                    category = ?,
+                    description = ?,
+                    treatment = ?,
+                    is_active = ?,
+                    updated_at = NOW()
+                WHERE id = ? AND (branch_id = ? OR branch_id IS NULL)
+            ");
+            $stmt->execute([
+                $disease_name, $disease_code, $icd_code ?: null, $category ?: null,
+                $description ?: null, $treatment ?: null,
+                $is_active, $disease_id, $doctor_branch_id
+            ]);
+            setFlash("✅ Diagnosis updated successfully!", 'success');
+        } catch (Exception $e) {
+            setFlash("❌ Error: " . $e->getMessage(), 'error');
+        }
+    }
+    header("Location: services.php?tab=diagnosis");
+    exit;
+}
+
+// ================================================================
+// FETCH PROCEDURES
+// ================================================================
 $procedures = [];
 try {
     $stmt = $db->prepare("
-        SELECT p.*, u.full_name as created_by_name 
+        SELECT p.*, u.full_name as created_by_name
         FROM procedures_catalog p
         LEFT JOIN users u ON p.created_by = u.id
-        WHERE (p.branch_id = ? OR p.branch_id IS NULL) 
+        WHERE (p.branch_id = ? OR p.branch_id IS NULL)
         ORDER BY p.procedure_name
     ");
     $stmt->execute([$doctor_branch_id]);
     $procedures = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) { 
-    $procedures = []; 
-}
+} catch (Exception $e) { $procedures = []; }
 
-// ✅ MEDICAL EQUIPMENT - ALL ACTIVE EQUIPMENT (for lab test linking)
+// ================================================================
+// FETCH EQUIPMENT
+// ================================================================
 $all_equipment = [];
 try {
     $stmt = $db->prepare("
-        SELECT 
-            id,
-            equipment_name,
-            category,
-            unit,
-            quantity,
-            selling_price,
-            batch_number,
-            expiry_date,
-            status
-        FROM medical_equipment 
+        SELECT id, equipment_name, category, unit, quantity, selling_price,
+               batch_number, expiry_date, status
+        FROM medical_equipment
         WHERE branch_id = ? AND status = 'active'
         ORDER BY equipment_name
     ");
     $stmt->execute([$doctor_branch_id]);
     $all_equipment = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) { 
-    $all_equipment = []; 
-}
+} catch (Exception $e) { $all_equipment = []; }
 
-// ✅ LAB TESTS with linked equipment - FIXED QUERY
+// ================================================================
+// FETCH LAB TESTS
+// ================================================================
 $lab_tests = [];
 try {
     $stmt = $db->prepare("
-        SELECT 
-            l.id,
-            l.test_name,
-            l.test_code,
-            l.category,
-            l.price,
-            l.description,
-            l.is_active,
-            l.branch_id,
-            l.created_at,
+        SELECT
+            l.id, l.test_name, l.test_code, l.category, l.price, l.description,
+            l.is_active, l.branch_id, l.created_at,
             u.full_name as created_by_name,
             GROUP_CONCAT(DISTINCT e.id SEPARATOR ',') as equipment_ids,
             GROUP_CONCAT(DISTINCT e.equipment_name SEPARATOR '|') as equipment_names
@@ -325,15 +359,11 @@ try {
     ");
     $stmt->execute([$doctor_branch_id]);
     $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) { 
-    // Fallback query if JOIN fails
+} catch (Exception $e) {
     try {
         $stmt = $db->prepare("
-            SELECT 
-                l.*,
-                u.full_name as created_by_name,
-                '' as equipment_ids,
-                '' as equipment_names
+            SELECT l.*, u.full_name as created_by_name,
+                   '' as equipment_ids, '' as equipment_names
             FROM lab_tests_catalog l
             LEFT JOIN users u ON l.created_by = u.id
             WHERE (l.branch_id = ? OR l.branch_id IS NULL)
@@ -341,27 +371,49 @@ try {
         ");
         $stmt->execute([$doctor_branch_id]);
         $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Exception $e2) { 
-        $lab_tests = []; 
-    }
+    } catch (Exception $e2) { $lab_tests = []; }
 }
 
 // ================================================================
-// PROFILE PICTURE URL
+// ✅ FETCH DISEASES (DIAGNOSIS)
 // ================================================================
-$profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+$diseases = [];
+try {
+    $stmt = $db->prepare("
+        SELECT d.*, u.full_name as created_by_name
+        FROM diseases d
+        LEFT JOIN users u ON d.created_by = u.id
+        WHERE (d.branch_id = ? OR d.branch_id IS NULL)
+        ORDER BY d.disease_name ASC
+    ");
+    $stmt->execute([$doctor_branch_id]);
+    $diseases = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    // Fallback bila join ya users
+    try {
+        $stmt = $db->prepare("
+            SELECT d.*, NULL as created_by_name
+            FROM diseases d
+            WHERE (d.branch_id = ? OR d.branch_id IS NULL)
+            ORDER BY d.disease_name ASC
+        ");
+        $stmt->execute([$doctor_branch_id]);
+        $diseases = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e2) { $diseases = []; }
+}
+
+// ================================================================
+// PROFILE PIC + LOGO
+// ================================================================
+$profile_pic_url = !empty($profile_pic)
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// INCLUDE HEADER & SIDEBAR
-// ================================================================
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
-
 <!DOCTYPE html>
 <html lang="en" data-theme="<?php echo isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light'; ?>">
 <head>
@@ -370,8 +422,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <title>Services Management - Braick Dispensary</title>
     <link rel="icon" href="<?php echo $logo_path; ?>" type="image/png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
     <style>
         :root {
             --primary: #0B5ED7;
@@ -388,6 +440,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             --purple-bg: #EDE9FE;
             --teal: #0D9488;
             --teal-bg: #CCFBF1;
+            --pink: #DB2777;
+            --pink-bg: #FCE7F3;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
@@ -403,15 +457,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             --shadow: 0 1px 3px rgba(0,0,0,0.06);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
         }
-        
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        
         body {
             background: var(--gray-50);
             color: var(--gray-800);
-            font-family: 'Inter', 'Arial', 'Segoe UI', sans-serif;
+            font-family: 'Inter', 'Arial', sans-serif;
         }
-        
+        [data-theme="dark"] body { background: var(--gray-900); color: var(--gray-100); }
+
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -419,14 +472,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             min-height: calc(100vh - 68px);
             background: var(--gray-50);
             transition: all 0.3s ease;
-            font-family: 'Inter', 'Arial', sans-serif;
         }
-        
-        [data-theme="dark"] .main-content {
-            background: var(--gray-900);
-            color: var(--gray-100);
-        }
-        
+        [data-theme="dark"] .main-content { background: var(--gray-900); color: var(--gray-100); }
+
         .page-header {
             display: flex;
             justify-content: space-between;
@@ -440,11 +488,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border: 1px solid var(--gray-200);
             box-shadow: var(--shadow);
         }
-        [data-theme="dark"] .page-header {
-            background: var(--gray-800);
-            border-color: var(--gray-700);
-        }
-        
+        [data-theme="dark"] .page-header { background: var(--gray-800); border-color: var(--gray-700); }
+
         .page-title {
             font-size: 1.5rem;
             font-weight: 700;
@@ -452,19 +497,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             display: flex;
             align-items: center;
             gap: 12px;
-            font-family: 'Inter', 'Arial', sans-serif;
         }
         .page-title i { color: var(--primary); }
         [data-theme="dark"] .page-title { color: var(--gray-100); }
-        
-        .page-subtitle {
-            font-size: 0.9rem;
-            color: var(--gray-500);
-            font-family: 'Inter', 'Arial', sans-serif;
-        }
+
+        .page-subtitle { font-size: 0.9rem; color: var(--gray-500); }
         .page-subtitle strong { color: var(--gray-700); }
         [data-theme="dark"] .page-subtitle strong { color: var(--gray-200); }
-        
+
         .branch-badge {
             display: inline-block;
             background: var(--primary-bg);
@@ -474,14 +514,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-size: 0.75rem;
             font-weight: 600;
             border: 1px solid var(--primary-light);
-            font-family: 'Inter', 'Arial', sans-serif;
         }
         [data-theme="dark"] .branch-badge {
             background: #1E3A5F;
             color: var(--primary-light);
             border-color: var(--primary);
         }
-        
+
         .admin-badge {
             display: inline-block;
             background: #FEE2E2;
@@ -491,21 +530,15 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-size: 0.75rem;
             font-weight: 600;
             border: 1px solid #DC2626;
-            font-family: 'Inter', 'Arial', sans-serif;
         }
-        [data-theme="dark"] .admin-badge {
-            background: #3A1A1A;
-            color: #F87171;
-            border-color: #F87171;
-        }
-        
+
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
+            grid-template-columns: repeat(3, 1fr);
             gap: 16px;
             margin-bottom: 28px;
         }
-        
+
         .stat-card {
             background: #ffffff;
             border-radius: var(--radius-lg);
@@ -516,14 +549,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             align-items: center;
             gap: 16px;
         }
-        [data-theme="dark"] .stat-card {
-            background: var(--gray-800);
-            border-color: var(--gray-700);
-        }
-        
+        [data-theme="dark"] .stat-card { background: var(--gray-800); border-color: var(--gray-700); }
+
         .stat-icon {
-            width: 48px;
-            height: 48px;
+            width: 48px; height: 48px;
             border-radius: 12px;
             display: flex;
             align-items: center;
@@ -532,20 +561,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .stat-icon.purple { background: var(--purple-bg); color: var(--purple); }
         .stat-icon.teal { background: var(--teal-bg); color: var(--teal); }
-        
+        .stat-icon.pink { background: var(--pink-bg); color: var(--pink); }
+
         .stat-number {
             font-size: 1.8rem;
             font-weight: 700;
             color: var(--gray-800);
-            font-family: 'Inter', 'Arial', sans-serif;
+            font-family: 'JetBrains Mono', monospace;
         }
         [data-theme="dark"] .stat-number { color: var(--gray-100); }
-        .stat-label {
-            font-size: 0.8rem;
-            color: var(--gray-500);
-            font-family: 'Inter', 'Arial', sans-serif;
-        }
-        
+        .stat-label { font-size: 0.8rem; color: var(--gray-500); }
+
         .tabs {
             display: flex;
             gap: 4px;
@@ -555,11 +581,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             margin-bottom: 24px;
             border: 1px solid var(--gray-200);
         }
-        [data-theme="dark"] .tabs {
-            background: var(--gray-700);
-            border-color: var(--gray-600);
-        }
-        
+        [data-theme="dark"] .tabs { background: var(--gray-700); border-color: var(--gray-600); }
+
         .tab-btn {
             padding: 10px 24px;
             border-radius: 8px;
@@ -574,29 +597,20 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             text-align: center;
             font-family: 'Inter', 'Arial', sans-serif;
         }
-        .tab-btn:hover {
-            background: rgba(255,255,255,0.5);
-            color: var(--gray-700);
-        }
+        .tab-btn:hover { background: rgba(255,255,255,0.5); color: var(--gray-700); }
         .tab-btn.active {
             background: #ffffff;
             color: var(--primary);
             box-shadow: var(--shadow-md);
         }
-        [data-theme="dark"] .tab-btn.active {
-            background: var(--gray-800);
-            color: var(--primary-light);
-        }
+        [data-theme="dark"] .tab-btn.active { background: var(--gray-800); color: var(--primary-light); }
         .tab-btn i { margin-right: 8px; }
-        
+
         .tab-content { display: none; }
         .tab-content.active { display: block; }
-        
-        .table-wrapper {
-            position: relative;
-            overflow: hidden;
-        }
-        
+
+        .table-wrapper { position: relative; overflow: hidden; }
+
         .table-scroll {
             overflow-x: auto;
             overflow-y: auto;
@@ -604,57 +618,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             scroll-behavior: smooth;
             -webkit-overflow-scrolling: touch;
         }
-        
-        .table-scroll::-webkit-scrollbar {
-            height: 8px;
-            width: 6px;
-        }
-        
-        .table-scroll::-webkit-scrollbar-track {
-            background: var(--gray-100);
-            border-radius: 4px;
-        }
-        
-        .table-scroll::-webkit-scrollbar-thumb {
-            background: var(--primary);
-            border-radius: 4px;
-        }
-        
-        .table-scroll::-webkit-scrollbar-thumb:hover {
-            background: var(--primary-dark);
-        }
-        
-        .slide-arrow {
-            position: absolute;
-            top: 50%;
-            transform: translateY(-50%);
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            background: var(--primary);
-            color: white;
-            border: none;
-            cursor: pointer;
-            font-size: 1.2rem;
-            z-index: 10;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.3s ease;
-            box-shadow: 0 2px 10px rgba(11, 94, 215, 0.3);
-            opacity: 0;
-            pointer-events: none;
-        }
-        
-        .slide-arrow:hover {
-            background: var(--primary-dark);
-            transform: translateY(-50%) scale(1.1);
-        }
-        
-        .slide-arrow.left { left: 8px; }
-        .slide-arrow.right { right: 8px; }
-        .slide-arrow.visible { opacity: 1; pointer-events: auto; }
-        
+        .table-scroll::-webkit-scrollbar { height: 8px; width: 6px; }
+        .table-scroll::-webkit-scrollbar-track { background: var(--gray-100); border-radius: 4px; }
+        .table-scroll::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
+
         .table-container {
             background: #ffffff;
             border-radius: var(--radius-lg);
@@ -662,11 +629,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             overflow: hidden;
             box-shadow: var(--shadow);
         }
-        [data-theme="dark"] .table-container {
-            background: var(--gray-800);
-            border-color: var(--gray-700);
-        }
-        
+        [data-theme="dark"] .table-container { background: var(--gray-800); border-color: var(--gray-700); }
+
         .table-header {
             padding: 16px 24px;
             border-bottom: 1px solid var(--gray-200);
@@ -676,28 +640,25 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             flex-wrap: wrap;
             gap: 12px;
         }
-        [data-theme="dark"] .table-header {
-            border-color: var(--gray-700);
-        }
-        
+        [data-theme="dark"] .table-header { border-color: var(--gray-700); }
+
         .table-header h3 {
             font-size: 1rem;
             font-weight: 600;
             display: flex;
             align-items: center;
             gap: 8px;
-            font-family: 'Inter', 'Arial', sans-serif;
         }
         .table-header h3 i { color: var(--primary); }
-        
+
         table {
             width: 100%;
             border-collapse: collapse;
             font-size: 0.85rem;
-            min-width: 800px;
+            min-width: 900px;
             font-family: 'Inter', 'Arial', sans-serif;
         }
-        
+
         thead th {
             text-align: left;
             padding: 12px 18px;
@@ -712,31 +673,24 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             position: sticky;
             top: 0;
             z-index: 5;
-            font-family: 'Inter', 'Arial', sans-serif;
         }
-        thead th:first-child { border-radius: 8px 0 0 0; }
-        thead th:last-child { border-radius: 0 8px 0 0; }
         [data-theme="dark"] thead th {
             background: linear-gradient(135deg, #1E3A5F, #0A3D7A);
             border-bottom-color: #0A3D7A;
         }
-        
+
         td {
             padding: 10px 18px;
             border-bottom: 1px solid var(--gray-200);
             color: var(--gray-700);
-            font-family: 'Inter', 'Arial', sans-serif;
             font-size: 0.85rem;
         }
-        [data-theme="dark"] td {
-            color: var(--gray-300);
-            border-color: var(--gray-700);
-        }
+        [data-theme="dark"] td { color: var(--gray-300); border-color: var(--gray-700); }
         tr:hover td { background: var(--gray-50); }
         [data-theme="dark"] tr:hover td { background: var(--gray-700); }
         tr:nth-child(even) td { background: var(--gray-50); }
         [data-theme="dark"] tr:nth-child(even) td { background: #1A2A3A; }
-        
+
         .doctor-name-tag {
             display: inline-block;
             font-size: 0.65rem;
@@ -745,14 +699,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             padding: 1px 10px;
             border-radius: 12px;
             border: 1px solid var(--primary-light);
-            font-family: 'Inter', 'Arial', sans-serif;
         }
         [data-theme="dark"] .doctor-name-tag {
             background: #1E3A5F;
             color: var(--primary-light);
             border-color: var(--primary);
         }
-        
+
         .btn-view {
             display: inline-flex;
             align-items: center;
@@ -768,7 +721,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             background: var(--primary-bg);
             color: var(--primary);
             border: 1px solid var(--primary-light);
-            font-family: 'Inter', 'Arial', sans-serif;
         }
         .btn-view:hover {
             background: var(--primary);
@@ -776,23 +728,36 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(11,94,215,0.3);
         }
-        [data-theme="dark"] .btn-view {
-            background: #1E3A5F;
-            color: var(--primary-light);
-            border-color: var(--primary);
+
+        .btn-edit {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 14px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.7rem;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            background: var(--warning-bg);
+            color: var(--warning);
+            border: 1px solid var(--warning);
         }
-        [data-theme="dark"] .btn-view:hover {
-            background: var(--primary);
+        .btn-edit:hover {
+            background: var(--warning);
             color: #ffffff;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(217,119,6,0.3);
         }
-        
+
         .badge {
             display: inline-block;
             font-size: 0.65rem;
             font-weight: 600;
             padding: 2px 12px;
             border-radius: 20px;
-            font-family: 'Inter', 'Arial', sans-serif;
         }
         .badge-success { background: var(--success-bg); color: var(--success); }
         .badge-danger { background: var(--danger-bg); color: var(--danger); }
@@ -800,7 +765,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .badge-info { background: var(--primary-bg); color: var(--primary); }
         .badge-purple { background: var(--purple-bg); color: var(--purple); }
         .badge-teal { background: var(--teal-bg); color: var(--teal); }
-        
+        .badge-pink { background: var(--pink-bg); color: var(--pink); }
+
         .btn {
             display: inline-flex;
             align-items: center;
@@ -820,7 +786,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .btn-danger { background: var(--danger); color: white; }
         .btn-danger:hover { background: #991B1B; }
         .btn-sm { padding: 4px 12px; font-size: 0.7rem; }
-        
+
         .alert {
             padding: 14px 20px;
             border-radius: var(--radius);
@@ -830,7 +796,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             gap: 12px;
             border: 1px solid transparent;
             animation: slideDown 0.3s ease;
-            font-family: 'Inter', 'Arial', sans-serif;
         }
         @keyframes slideDown {
             from { opacity: 0; transform: translateY(-10px); }
@@ -838,7 +803,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .alert-success { background: var(--success-bg); color: var(--success); border-color: var(--success); }
         .alert-error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
-        
+
         .form-group { margin-bottom: 14px; }
         .form-label {
             display: block;
@@ -846,8 +811,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-weight: 600;
             color: var(--gray-600);
             margin-bottom: 4px;
-            font-family: 'Inter', 'Arial', sans-serif;
         }
+        [data-theme="dark"] .form-label { color: var(--gray-300); }
         .form-control {
             width: 100%;
             padding: 8px 14px;
@@ -869,12 +834,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             color: var(--gray-100);
             border-color: var(--gray-600);
         }
-        
-        .autocomplete-container {
-            position: relative;
-            width: 100%;
-        }
-        
+        textarea.form-control { resize: vertical; min-height: 60px; font-family: 'Inter', 'Arial', sans-serif; }
+
+        .autocomplete-container { position: relative; width: 100%; }
         .autocomplete-list {
             position: absolute;
             top: 100%;
@@ -890,61 +852,31 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             display: none;
             box-shadow: var(--shadow-md);
         }
-        [data-theme="dark"] .autocomplete-list {
-            background: var(--gray-800);
-            border-color: var(--gray-600);
-        }
+        [data-theme="dark"] .autocomplete-list { background: var(--gray-800); border-color: var(--gray-600); }
         .autocomplete-list.show { display: block; }
-        
         .autocomplete-item {
             padding: 8px 14px;
             cursor: pointer;
             border-bottom: 1px solid var(--gray-200);
             font-size: 0.85rem;
             transition: all 0.2s ease;
-            font-family: 'Inter', 'Arial', sans-serif;
         }
-        [data-theme="dark"] .autocomplete-item {
-            border-color: var(--gray-600);
-        }
-        .autocomplete-item:hover {
-            background: var(--primary-bg);
-            color: var(--primary);
-        }
-        .autocomplete-item.active {
-            background: var(--primary);
-            color: white;
-        }
+        [data-theme="dark"] .autocomplete-item { border-color: var(--gray-600); }
+        .autocomplete-item:hover { background: var(--primary-bg); color: var(--primary); }
         .autocomplete-item .item-detail {
             font-size: 0.65rem;
             color: var(--gray-400);
             display: block;
-            font-family: 'Inter', 'Arial', sans-serif;
         }
-        
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 14px;
-        }
-        .form-row-3 {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 14px;
-        }
-        
-        .money-input {
-            font-family: 'Courier New', monospace;
-            font-weight: 600;
-        }
-        
+
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+        .money-input { font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+
         .modal-overlay {
             display: none;
             position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
+            top: 0; left: 0; right: 0; bottom: 0;
             background: rgba(0,0,0,0.5);
             z-index: 1000;
             backdrop-filter: blur(4px);
@@ -970,7 +902,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             display: flex;
             align-items: center;
             gap: 10px;
-            font-family: 'Inter', 'Arial', sans-serif;
         }
         .modal-actions {
             display: flex;
@@ -978,7 +909,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             margin-top: 16px;
             justify-content: flex-end;
         }
-        
+
         .footer {
             padding: 16px 0;
             border-top: 2px solid var(--gray-200);
@@ -986,15 +917,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             text-align: center;
             font-size: 0.7rem;
             color: var(--gray-500);
-            font-family: 'Inter', 'Arial', sans-serif;
         }
         [data-theme="dark"] .footer { border-color: var(--gray-700); }
-        
+
         .empty-state {
             text-align: center;
             padding: 40px 20px;
             color: var(--gray-500);
-            font-family: 'Inter', 'Arial', sans-serif;
         }
         .empty-state i {
             font-size: 3rem;
@@ -1007,7 +936,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             color: var(--gray-400);
             margin-top: 4px;
         }
-        
+
         .code-badge {
             display: inline-block;
             background: var(--gray-100);
@@ -1015,7 +944,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             padding: 1px 10px;
             border-radius: 12px;
             font-size: 0.7rem;
-            font-family: monospace;
+            font-family: 'JetBrains Mono', monospace;
             border: 1px solid var(--gray-300);
         }
         [data-theme="dark"] .code-badge {
@@ -1023,7 +952,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             color: var(--gray-400);
             border-color: var(--gray-600);
         }
-        
+
         .equipment-checkbox-group {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -1047,7 +976,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border-radius: 6px;
             font-size: 0.78rem;
             cursor: pointer;
-            font-family: 'Inter', 'Arial', sans-serif;
             border: 1px solid transparent;
             transition: all 0.2s ease;
         }
@@ -1075,11 +1003,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             padding: 0 6px;
             border-radius: 8px;
         }
-        .equipment-checkbox-item.selected {
-            background: var(--primary-bg);
-            border-color: var(--primary);
-        }
-        
+
         .equipment-tags {
             display: flex;
             flex-wrap: wrap;
@@ -1093,29 +1017,60 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             padding: 2px 10px;
             border-radius: 12px;
             border: 1px solid var(--teal);
-            font-family: 'Inter', 'Arial', sans-serif;
         }
-        
+
+        /* ============================================================
+           DIAGNOSIS / DISEASE SPECIFIC STYLES
+           ============================================================ */
+        .disease-name {
+            font-weight: 600;
+            color: var(--gray-800);
+        }
+        [data-theme="dark"] .disease-name { color: var(--gray-100); }
+        .disease-icd {
+            font-size: 0.65rem;
+            color: var(--gray-400);
+            font-family: 'JetBrains Mono', monospace;
+            margin-left: 6px;
+        }
+        .diagnosis-cell {
+            max-width: 260px;
+            white-space: normal;
+            line-height: 1.4;
+            font-size: 0.78rem;
+        }
+        .treatment-cell {
+            max-width: 240px;
+            white-space: normal;
+            line-height: 1.4;
+            font-size: 0.78rem;
+            color: var(--success);
+            font-weight: 500;
+        }
+        .action-buttons-group {
+            display: flex;
+            gap: 4px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
         @media (max-width: 768px) {
             .main-content { margin-left: 0; padding: 16px; }
             .stats-grid { grid-template-columns: 1fr; }
             .form-row { grid-template-columns: 1fr; }
-            .form-row-3 { grid-template-columns: 1fr; }
             .tabs { flex-direction: column; }
             .tab-btn { flex: none; }
-            .table-container { overflow-x: auto; }
             .page-header { flex-direction: column; align-items: flex-start; }
             .equipment-checkbox-group { grid-template-columns: 1fr; }
             .modal { padding: 16px; }
-            .slide-arrow { display: none !important; }
         }
     </style>
 </head>
 <body>
 
 <main class="main-content">
-    
-    <!-- Page Header -->
+
+    <!-- PAGE HEADER -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1125,15 +1080,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <?php endif; ?>
             </h1>
             <p class="page-subtitle">
-                Manage <strong>Procedures</strong> and <strong>Lab Tests</strong>
+                Manage <strong>Procedures</strong>, <strong>Lab Tests</strong> and <strong>Diagnosis</strong>
                 <span class="branch-badge">
                     <i class="fas fa-store"></i> <?php echo htmlspecialchars($branch_name); ?>
                 </span>
                 <span style="font-size:0.75rem;color:var(--gray-400);">
                     <i class="fas fa-user-md"></i> <?php echo htmlspecialchars($doctor_name); ?>
-                </span>
-                <span style="font-size:0.75rem;color:var(--teal);">
-                    <i class="fas fa-info-circle"></i> Equipment linked to Lab Tests is FREE
                 </span>
             </p>
         </div>
@@ -1143,8 +1095,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </a>
         </div>
     </div>
-    
-    <!-- Stats -->
+
+    <!-- STATS -->
     <div class="stats-grid">
         <div class="stat-card">
             <div class="stat-icon purple"><i class="fas fa-syringe"></i></div>
@@ -1160,17 +1112,24 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <div class="stat-label">Lab Tests</div>
             </div>
         </div>
+        <div class="stat-card">
+            <div class="stat-icon pink"><i class="fas fa-virus"></i></div>
+            <div>
+                <div class="stat-number"><?php echo count($diseases); ?></div>
+                <div class="stat-label">Diagnosis</div>
+            </div>
+        </div>
     </div>
-    
-    <!-- Message -->
+
+    <!-- MESSAGE -->
     <?php if ($message): ?>
-        <div class="alert alert-<?php echo $message_type; ?>">
+        <div class="alert alert-<?php echo $message_type; ?>" id="flashAlert">
             <i class="fas <?php echo $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'; ?>"></i>
             <?php echo $message; ?>
         </div>
     <?php endif; ?>
-    
-    <!-- Tabs -->
+
+    <!-- TABS -->
     <div class="tabs">
         <button class="tab-btn <?php echo $active_tab === 'procedures' ? 'active' : ''; ?>" data-tab="procedures">
             <i class="fas fa-syringe"></i> Procedures (<?php echo count($procedures); ?>)
@@ -1178,10 +1137,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <button class="tab-btn <?php echo $active_tab === 'lab_tests' ? 'active' : ''; ?>" data-tab="lab_tests">
             <i class="fas fa-microscope"></i> Lab Tests (<?php echo count($lab_tests); ?>)
         </button>
+        <button class="tab-btn <?php echo $active_tab === 'diagnosis' ? 'active' : ''; ?>" data-tab="diagnosis">
+            <i class="fas fa-virus"></i> Diagnosis (<?php echo count($diseases); ?>)
+        </button>
     </div>
-    
+
     <!-- ================================================================ -->
-    <!-- TAB 1: PROCEDURES -->
+    <!-- TAB 1: PROCEDURES (no View/Edit on rows) -->
     <!-- ================================================================ -->
     <div class="tab-content <?php echo $active_tab === 'procedures' ? 'active' : ''; ?>" id="tab-procedures">
         <div class="table-container">
@@ -1192,25 +1154,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </button>
             </div>
             <div class="table-wrapper">
-                <button class="slide-arrow left" onclick="slideTable('proceduresTable', 'left')">
-                    <i class="fas fa-chevron-left"></i>
-                </button>
-                <button class="slide-arrow right" onclick="slideTable('proceduresTable', 'right')">
-                    <i class="fas fa-chevron-right"></i>
-                </button>
                 <div class="table-scroll" id="proceduresTable">
                     <?php if (count($procedures) > 0): ?>
                         <table>
                             <thead>
                                 <tr>
                                     <th style="width:5%;">#</th>
-                                    <th style="width:22%;">Procedure Name</th>
-                                    <th style="width:14%;">Code</th>
-                                    <th style="width:18%;">Category</th>
-                                    <th style="width:14%;text-align:right;">Price (TSh)</th>
+                                    <th style="width:25%;">Procedure Name</th>
+                                    <th style="width:15%;">Code</th>
+                                    <th style="width:20%;">Category</th>
+                                    <th style="width:15%;text-align:right;">Price (TSh)</th>
                                     <th style="width:10%;text-align:center;">Status</th>
-                                    <th style="width:12%;">Added By</th>
-                                    <th style="width:5%;text-align:center;">View</th>
+                                    <th style="width:15%;">Added By</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -1220,7 +1175,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                         <td><strong><?php echo htmlspecialchars($proc['procedure_name']); ?></strong></td>
                                         <td><span class="code-badge"><?php echo htmlspecialchars($proc['procedure_code'] ?? 'N/A'); ?></span></td>
                                         <td><?php echo htmlspecialchars($proc['category'] ?? '-'); ?></td>
-                                        <td style="text-align:right;font-weight:600;color:var(--success);">
+                                        <td style="text-align:right;font-weight:600;color:var(--success);font-family:'JetBrains Mono',monospace;">
                                             <?php echo number_format($proc['price'] ?? 0, 0); ?>
                                         </td>
                                         <td style="text-align:center;">
@@ -1230,14 +1185,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                         </td>
                                         <td>
                                             <span class="doctor-name-tag">
-                                                <i class="fas fa-user-md"></i> 
+                                                <i class="fas fa-user-md"></i>
                                                 <?php echo htmlspecialchars($proc['created_by_name'] ?? 'Unknown'); ?>
                                             </span>
-                                        </td>
-                                        <td style="text-align:center;">
-                                            <button class="btn-view" onclick="viewProcedure(<?php echo htmlspecialchars(json_encode($proc)); ?>)">
-                                                <i class="fas fa-eye"></i>
-                                            </button>
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
@@ -1254,9 +1204,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </div>
         </div>
     </div>
-    
+
     <!-- ================================================================ -->
-    <!-- TAB 2: LAB TESTS -->
+    <!-- TAB 2: LAB TESTS (no View/Edit on rows) -->
     <!-- ================================================================ -->
     <div class="tab-content <?php echo $active_tab === 'lab_tests' ? 'active' : ''; ?>" id="tab-lab_tests">
         <div class="table-container">
@@ -1267,29 +1217,22 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </button>
             </div>
             <div class="table-wrapper">
-                <button class="slide-arrow left" onclick="slideTable('labTestsTable', 'left')">
-                    <i class="fas fa-chevron-left"></i>
-                </button>
-                <button class="slide-arrow right" onclick="slideTable('labTestsTable', 'right')">
-                    <i class="fas fa-chevron-right"></i>
-                </button>
                 <div class="table-scroll" id="labTestsTable">
                     <?php if (count($lab_tests) > 0): ?>
                         <table>
                             <thead>
                                 <tr>
                                     <th style="width:5%;">#</th>
-                                    <th style="width:20%;">Test Name</th>
+                                    <th style="width:22%;">Test Name</th>
                                     <th style="width:14%;">Category</th>
                                     <th style="width:12%;text-align:right;">Price (TSh)</th>
                                     <th style="width:25%;">Equipment (FREE)</th>
                                     <th style="width:10%;text-align:center;">Status</th>
-                                    <th style="width:9%;">Added By</th>
-                                    <th style="width:5%;text-align:center;">View</th>
+                                    <th style="width:12%;">Added By</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php $i = 1; foreach ($lab_tests as $test): 
+                                <?php $i = 1; foreach ($lab_tests as $test):
                                     $equipment_names = $test['equipment_names'] ?? '';
                                     $equipment_names_arr = !empty($equipment_names) ? explode('|', $equipment_names) : [];
                                 ?>
@@ -1303,7 +1246,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                                 <span class="badge badge-info">Uncategorized</span>
                                             <?php endif; ?>
                                         </td>
-                                        <td style="text-align:right;font-weight:600;color:var(--success);">
+                                        <td style="text-align:right;font-weight:600;color:var(--success);font-family:'JetBrains Mono',monospace;">
                                             <?php echo number_format($test['price'], 0); ?>
                                         </td>
                                         <td>
@@ -1318,7 +1261,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                                     <?php endforeach; ?>
                                                 </div>
                                             <?php else: ?>
-                                                <span class="text-muted" style="font-size:0.7rem;">No equipment linked</span>
+                                                <span style="font-size:0.7rem;color:var(--gray-400);">No equipment linked</span>
                                             <?php endif; ?>
                                         </td>
                                         <td style="text-align:center;">
@@ -1328,14 +1271,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                         </td>
                                         <td>
                                             <span class="doctor-name-tag">
-                                                <i class="fas fa-user-md"></i> 
+                                                <i class="fas fa-user-md"></i>
                                                 <?php echo htmlspecialchars($test['created_by_name'] ?? 'Unknown'); ?>
                                             </span>
-                                        </td>
-                                        <td style="text-align:center;">
-                                            <button class="btn-view" onclick="viewLabTest(<?php echo htmlspecialchars(json_encode($test)); ?>)">
-                                                <i class="fas fa-eye"></i>
-                                            </button>
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
@@ -1352,12 +1290,97 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </div>
         </div>
     </div>
-    
+
+    <!-- ================================================================ -->
+    <!-- TAB 3: DIAGNOSIS (with View + Edit buttons) -->
+    <!-- ================================================================ -->
+    <div class="tab-content <?php echo $active_tab === 'diagnosis' ? 'active' : ''; ?>" id="tab-diagnosis">
+        <div class="table-container">
+            <div class="table-header">
+                <h3><i class="fas fa-virus"></i> Diagnosis - <?php echo htmlspecialchars($branch_name); ?></h3>
+                <button class="btn btn-primary btn-sm" onclick="openModal('diseaseModal')">
+                    <i class="fas fa-plus"></i> Add Diagnosis
+                </button>
+            </div>
+            <div class="table-wrapper">
+                <div class="table-scroll" id="diseasesTable">
+                    <?php if (count($diseases) > 0): ?>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th style="width:4%;">#</th>
+                                    <th style="width:22%;">Disease Name</th>
+                                    <th style="width:12%;">Code</th>
+                                    <th style="width:10%;">ICD Code</th>
+                                    <th style="width:14%;">Category</th>
+                                    <th style="width:20%;">Description</th>
+                                    <th style="width:10%;text-align:center;">Status</th>
+                                    <th style="width:8%;text-align:center;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php $i = 1; foreach ($diseases as $disease): ?>
+                                    <tr>
+                                        <td><?php echo $i++; ?></td>
+                                        <td>
+                                            <span class="disease-name"><?php echo htmlspecialchars($disease['disease_name']); ?></span>
+                                        </td>
+                                        <td>
+                                            <span class="code-badge"><?php echo htmlspecialchars($disease['disease_code'] ?? 'N/A'); ?></span>
+                                        </td>
+                                        <td>
+                                            <?php if (!empty($disease['icd_code'])): ?>
+                                                <span class="code-badge"><?php echo htmlspecialchars($disease['icd_code']); ?></span>
+                                            <?php else: ?>
+                                                <span style="color:var(--gray-400);font-size:0.7rem;">—</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td>
+                                            <?php if (!empty($disease['category'])): ?>
+                                                <span class="badge badge-purple"><?php echo htmlspecialchars($disease['category']); ?></span>
+                                            <?php else: ?>
+                                                <span class="badge badge-info">Uncategorized</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td class="diagnosis-cell">
+                                            <?php echo htmlspecialchars(mb_substr($disease['description'] ?? '—', 0, 60)) . (mb_strlen($disease['description'] ?? '') > 60 ? '...' : ''); ?>
+                                        </td>
+                                        <td style="text-align:center;">
+                                            <span class="badge <?php echo ($disease['is_active'] ?? 1) ? 'badge-success' : 'badge-danger'; ?>">
+                                                <?php echo ($disease['is_active'] ?? 1) ? 'Active' : 'Inactive'; ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <div class="action-buttons-group">
+                                                <button class="btn-view" onclick='viewDisease(<?php echo json_encode($disease, JSON_HEX_APOS | JSON_HEX_QUOT); ?>)' title="View">
+                                                    <i class="fas fa-eye"></i> View
+                                                </button>
+                                                <button class="btn-edit" onclick='editDisease(<?php echo json_encode($disease, JSON_HEX_APOS | JSON_HEX_QUOT); ?>)' title="Edit">
+                                                    <i class="fas fa-edit"></i> Edit
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php else: ?>
+                        <div class="empty-state">
+                            <i class="fas fa-virus"></i>
+                            <p>No diagnosis added yet.</p>
+                            <p class="sub-text">Click "Add Diagnosis" to add your first diagnosis entry.</p>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <footer class="footer">
         <p>
-            <span style="color:var(--primary);font-weight:600;">Braick Dispensary</span> 
+            <span style="color:var(--primary);font-weight:600;">Braick Dispensary</span>
             <span style="color:var(--teal);font-weight:600;">❤️ Tunajari Afya Yako</span> |
-            Services Management &copy; <?php echo date('Y'); ?> | 
+            Services Management &copy; <?php echo date('Y'); ?> |
             Branch: <?php echo htmlspecialchars($branch_name); ?> |
             <?php if ($is_admin): ?>
                 <span style="color:#DC2626;">👑 Admin Mode</span> |
@@ -1378,7 +1401,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 by <?php echo htmlspecialchars($doctor_name); ?>
             </span>
         </h3>
-        <form method="POST" id="procedureForm">
+        <form method="POST">
             <div class="form-group">
                 <label class="form-label">Procedure Name <span style="color:red;">*</span></label>
                 <div class="autocomplete-container">
@@ -1391,9 +1414,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <select name="category_id" class="form-control" required>
                     <option value="">-- Select Category --</option>
                     <?php foreach ($service_categories as $cat): ?>
-                        <option value="<?php echo $cat['id']; ?>">
-                            <?php echo htmlspecialchars($cat['category_name']); ?>
-                        </option>
+                        <option value="<?php echo $cat['id']; ?>"><?php echo htmlspecialchars($cat['category_name']); ?></option>
                     <?php endforeach; ?>
                     <option value="0">-- Other (Type manually) --</option>
                 </select>
@@ -1419,7 +1440,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- ADD LAB TEST MODAL - With Equipment Selection (FREE) -->
+<!-- ADD LAB TEST MODAL -->
 <!-- ================================================================ -->
 <div class="modal-overlay" id="labTestModal">
     <div class="modal">
@@ -1429,7 +1450,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 by <?php echo htmlspecialchars($doctor_name); ?>
             </span>
         </h3>
-        <form method="POST" id="labTestForm">
+        <form method="POST">
             <div class="form-group">
                 <label class="form-label">Test Name <span style="color:red;">*</span></label>
                 <div class="autocomplete-container">
@@ -1442,9 +1463,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <select name="category_id" class="form-control" required>
                     <option value="">-- Select Category --</option>
                     <?php foreach ($service_categories as $cat): ?>
-                        <option value="<?php echo $cat['id']; ?>">
-                            <?php echo htmlspecialchars($cat['category_name']); ?>
-                        </option>
+                        <option value="<?php echo $cat['id']; ?>"><?php echo htmlspecialchars($cat['category_name']); ?></option>
                     <?php endforeach; ?>
                     <option value="0">-- Other (Type manually) --</option>
                 </select>
@@ -1458,18 +1477,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <label class="form-label">Description</label>
                 <textarea name="description" class="form-control" rows="2" placeholder="Optional description"></textarea>
             </div>
-            
-            <!-- ✅ Equipment Selection - Shows ALL active equipment -->
             <div class="form-group">
                 <label class="form-label">
                     <i class="fas fa-tools"></i> Select Equipment (FREE)
                     <span style="font-size:0.6rem;font-weight:400;color:var(--gray-400);">Equipment price is NOT added to test price</span>
                 </label>
                 <?php if (count($all_equipment) > 0): ?>
-                    <div class="equipment-checkbox-group" id="equipmentCheckboxGroup">
+                    <div class="equipment-checkbox-group">
                         <?php foreach ($all_equipment as $eq): ?>
                             <?php if ($eq['id'] > 0): ?>
-                                <label class="equipment-checkbox-item" data-equip-id="<?php echo $eq['id']; ?>">
+                                <label class="equipment-checkbox-item">
                                     <input type="checkbox" name="equipment_ids[]" value="<?php echo $eq['id']; ?>">
                                     <?php echo htmlspecialchars($eq['equipment_name']); ?>
                                     <span class="equip-qty">(<?php echo $eq['quantity'] ?? 0; ?> in stock)</span>
@@ -1478,16 +1495,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             <?php endif; ?>
                         <?php endforeach; ?>
                     </div>
-                    <div style="font-size:0.6rem;color:var(--gray-400);margin-top:4px;">
-                        <i class="fas fa-info-circle"></i> Selected equipment will be linked to this test. Equipment price is FREE.
-                    </div>
                 <?php else: ?>
                     <div style="padding:10px;background:var(--warning-bg);border-radius:8px;color:var(--warning);font-size:0.8rem;">
-                        <i class="fas fa-exclamation-triangle"></i> No equipment available. Please add equipment first in the main system.
+                        <i class="fas fa-exclamation-triangle"></i> No equipment available. Please add equipment first.
                     </div>
                 <?php endif; ?>
             </div>
-            
             <div style="font-size:0.7rem;color:var(--gray-400);margin-bottom:12px;">
                 <i class="fas fa-user-md"></i> Will be added by: <strong><?php echo htmlspecialchars($doctor_name); ?></strong>
             </div>
@@ -1500,70 +1513,165 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- VIEW MODAL -->
+<!-- ✅ ADD DIAGNOSIS MODAL -->
 <!-- ================================================================ -->
-<div class="modal-overlay" id="viewModal">
-    <div class="modal" style="max-width:600px;">
-        <h3 class="modal-title" id="viewModalTitle">
-            <i class="fas fa-eye"></i> Details
+<div class="modal-overlay" id="diseaseModal">
+    <div class="modal">
+        <h3 class="modal-title">
+            <i class="fas fa-virus"></i> Add Diagnosis
+            <span style="font-size:0.7rem;font-weight:400;color:var(--gray-500);margin-left:8px;">
+                by <?php echo htmlspecialchars($doctor_name); ?>
+            </span>
         </h3>
-        <div id="viewModalContent" style="padding:10px 0;">
-            <!-- Content loaded dynamically -->
-        </div>
+        <form method="POST">
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">Disease Name <span style="color:red;">*</span></label>
+                    <input type="text" name="disease_name" class="form-control" required placeholder="e.g. Malaria" autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Disease Code (auto if empty)</label>
+                    <input type="text" name="disease_code" class="form-control" placeholder="e.g. D-MALARIA-001" autocomplete="off">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">ICD Code</label>
+                    <input type="text" name="icd_code" class="form-control" placeholder="e.g. B54" autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Category</label>
+                    <input type="text" name="disease_category" class="form-control" placeholder="e.g. Infectious Disease" autocomplete="off">
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Description</label>
+                <textarea name="description" class="form-control" rows="3" placeholder="Brief description of the disease..."></textarea>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Treatment / Recommendations</label>
+                <textarea name="treatment" class="form-control" rows="3" placeholder="e.g. Take Coartem 20/120mg for 3 days, plenty of fluids..."></textarea>
+            </div>
+            <div style="font-size:0.7rem;color:var(--gray-400);margin-bottom:12px;">
+                <i class="fas fa-user-md"></i> Will be added by: <strong><?php echo htmlspecialchars($doctor_name); ?></strong>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-danger" onclick="closeModal('diseaseModal')">Cancel</button>
+                <button type="submit" name="add_disease" class="btn btn-primary">Add Diagnosis</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- ✅ VIEW DIAGNOSIS MODAL -->
+<!-- ================================================================ -->
+<div class="modal-overlay" id="viewDiseaseModal">
+    <div class="modal" style="max-width:640px;">
+        <h3 class="modal-title">
+            <i class="fas fa-virus"></i> Diagnosis Details
+        </h3>
+        <div id="viewDiseaseContent" style="padding:10px 0;"></div>
         <div class="modal-actions">
-            <button type="button" class="btn btn-danger" onclick="closeModal('viewModal')">Close</button>
+            <button type="button" class="btn btn-danger" onclick="closeModal('viewDiseaseModal')">Close</button>
         </div>
     </div>
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- ✅ EDIT DIAGNOSIS MODAL -->
 <!-- ================================================================ -->
+<div class="modal-overlay" id="editDiseaseModal">
+    <div class="modal" style="max-width:640px;">
+        <h3 class="modal-title">
+            <i class="fas fa-edit"></i> Edit Diagnosis
+        </h3>
+        <form method="POST" id="editDiseaseForm">
+            <input type="hidden" name="update_disease" value="1">
+            <input type="hidden" name="disease_id" id="edit_disease_id">
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">Disease Name <span style="color:red;">*</span></label>
+                    <input type="text" name="edit_disease_name" id="edit_disease_name" class="form-control" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Disease Code</label>
+                    <input type="text" name="edit_disease_code" id="edit_disease_code" class="form-control">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">ICD Code</label>
+                    <input type="text" name="edit_icd_code" id="edit_icd_code" class="form-control">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Category</label>
+                    <input type="text" name="edit_disease_category" id="edit_disease_category" class="form-control">
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Description</label>
+                <textarea name="edit_description" id="edit_description" class="form-control" rows="3"></textarea>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Treatment / Recommendations</label>
+                <textarea name="edit_treatment" id="edit_treatment" class="form-control" rows="3"></textarea>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Status</label>
+                <select name="edit_is_active" id="edit_is_active" class="form-control">
+                    <option value="1">Active</option>
+                    <option value="0">Inactive</option>
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-danger" onclick="closeModal('editDiseaseModal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <script>
-    // ================================================================
-    // AUTO-SEARCH - Procedure Name
-    // ================================================================
+    /* ================================================================
+       ESCAPE HTML HELPER
+       ================================================================ */
+    function escapeHtml(text) {
+        if (!text) return '';
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    /* ================================================================
+       AUTOCOMPLETE - Procedure
+       ================================================================ */
     (function() {
         var procedureData = <?php echo json_encode($procedures); ?>;
         var input = document.getElementById('procedureNameInput');
         var autocomplete = document.getElementById('procedureAutocomplete');
-        
         if (!input || !autocomplete) return;
-        
+
         input.addEventListener('input', function() {
             var query = this.value.toLowerCase().trim();
-            
-            if (query.length < 1) {
-                autocomplete.classList.remove('show');
-                return;
-            }
-            
+            if (query.length < 1) { autocomplete.classList.remove('show'); return; }
+
             var matches = procedureData.filter(function(item) {
                 return item.procedure_name.toLowerCase().includes(query);
             });
-            
-            if (matches.length === 0) {
-                autocomplete.classList.remove('show');
-                return;
-            }
-            
+            if (matches.length === 0) { autocomplete.classList.remove('show'); return; }
+
             var html = '';
             matches.forEach(function(item) {
-                html += `
-                    <div class="autocomplete-item" data-name="${escapeHtml(item.procedure_name)}">
-                        <strong>${escapeHtml(item.procedure_name)}</strong>
-                        <span class="item-detail">
-                            ${escapeHtml(item.category || 'N/A')} | 
-                            TSh ${Number(item.price || 0).toLocaleString()} | 
-                            ${item.is_active ? 'Active' : 'Inactive'}
-                        </span>
-                    </div>
-                `;
+                html += '<div class="autocomplete-item" data-name="' + escapeHtml(item.procedure_name) + '">' +
+                        '<strong>' + escapeHtml(item.procedure_name) + '</strong>' +
+                        '<span class="item-detail">' + escapeHtml(item.category || 'N/A') + ' | TSh ' + Number(item.price || 0).toLocaleString() + '</span>' +
+                        '</div>';
             });
-            
             autocomplete.innerHTML = html;
             autocomplete.classList.add('show');
-            
+
             autocomplete.querySelectorAll('.autocomplete-item').forEach(function(item) {
                 item.addEventListener('click', function() {
                     input.value = this.dataset.name;
@@ -1571,60 +1679,42 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 });
             });
         });
-        
+
         document.addEventListener('click', function(e) {
-            if (!e.target.closest('.autocomplete-container')) {
-                autocomplete.classList.remove('show');
-            }
+            if (!e.target.closest('.autocomplete-container')) autocomplete.classList.remove('show');
         });
     })();
 
-    // ================================================================
-    // AUTO-SEARCH - Lab Test Name
-    // ================================================================
+    /* ================================================================
+       AUTOCOMPLETE - Lab Test
+       ================================================================ */
     (function() {
         var labTestData = <?php echo json_encode($lab_tests); ?>;
         var input = document.getElementById('labTestNameInput');
         var autocomplete = document.getElementById('labTestAutocomplete');
-        
         if (!input || !autocomplete) return;
-        
+
         input.addEventListener('input', function() {
             var query = this.value.toLowerCase().trim();
-            
-            if (query.length < 1) {
-                autocomplete.classList.remove('show');
-                return;
-            }
-            
+            if (query.length < 1) { autocomplete.classList.remove('show'); return; }
+
             var matches = labTestData.filter(function(item) {
                 return item.test_name.toLowerCase().includes(query);
             });
-            
-            if (matches.length === 0) {
-                autocomplete.classList.remove('show');
-                return;
-            }
-            
+            if (matches.length === 0) { autocomplete.classList.remove('show'); return; }
+
             var html = '';
             matches.forEach(function(item) {
                 var equipmentNames = item.equipment_names || '';
-                var equipDisplay = equipmentNames ? '🔧 ' + equipmentNames.replace(/\|/g, ', ').substring(0, 30) + (equipmentNames.length > 30 ? '...' : '') : 'No equipment';
-                html += `
-                    <div class="autocomplete-item" data-name="${escapeHtml(item.test_name)}">
-                        <strong>${escapeHtml(item.test_name)}</strong>
-                        <span class="item-detail">
-                            ${escapeHtml(item.category || 'N/A')} | 
-                            TSh ${Number(item.price || 0).toLocaleString()} | 
-                            ${equipDisplay}
-                        </span>
-                    </div>
-                `;
+                var equipDisplay = equipmentNames ? '🔧 ' + equipmentNames.replace(/\|/g, ', ').substring(0, 30) : 'No equipment';
+                html += '<div class="autocomplete-item" data-name="' + escapeHtml(item.test_name) + '">' +
+                        '<strong>' + escapeHtml(item.test_name) + '</strong>' +
+                        '<span class="item-detail">' + escapeHtml(item.category || 'N/A') + ' | TSh ' + Number(item.price || 0).toLocaleString() + ' | ' + equipDisplay + '</span>' +
+                        '</div>';
             });
-            
             autocomplete.innerHTML = html;
             autocomplete.classList.add('show');
-            
+
             autocomplete.querySelectorAll('.autocomplete-item').forEach(function(item) {
                 item.addEventListener('click', function() {
                     input.value = this.dataset.name;
@@ -1632,61 +1722,54 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 });
             });
         });
-        
+
         document.addEventListener('click', function(e) {
-            if (!e.target.closest('.autocomplete-container')) {
-                autocomplete.classList.remove('show');
-            }
+            if (!e.target.closest('.autocomplete-container')) autocomplete.classList.remove('show');
         });
     })();
 
-    // ================================================================
-    // SLIDE TABLE FUNCTION
-    // ================================================================
-    function slideTable(tableId, direction) {
-        var container = document.getElementById(tableId);
-        if (!container) return;
-        
-        var scrollAmount = 400;
-        var currentScroll = container.scrollLeft;
-        
-        if (direction === 'left') {
-            container.scrollTo({ left: currentScroll - scrollAmount, behavior: 'smooth' });
-        } else {
-            container.scrollTo({ left: currentScroll + scrollAmount, behavior: 'smooth' });
-        }
-    }
-    
-    // ================================================================
-    // SHOW/HIDE SLIDE ARROWS
-    // ================================================================
-    document.querySelectorAll('.table-scroll').forEach(function(container) {
-        var wrapper = container.closest('.table-wrapper');
-        if (!wrapper) return;
-        
-        var leftArrow = wrapper.querySelector('.slide-arrow.left');
-        var rightArrow = wrapper.querySelector('.slide-arrow.right');
-        
-        function checkArrows() {
-            if (!container) return;
-            var scrollLeft = container.scrollLeft;
-            var maxScroll = container.scrollWidth - container.clientWidth;
-            if (leftArrow) {
-                leftArrow.classList.toggle('visible', scrollLeft > 10);
-            }
-            if (rightArrow) {
-                rightArrow.classList.toggle('visible', scrollLeft < maxScroll - 10);
-            }
-        }
-        
-        container.addEventListener('scroll', checkArrows);
-        setTimeout(checkArrows, 300);
-        window.addEventListener('resize', checkArrows);
+    /* ================================================================
+       TABS
+       ================================================================ */
+    document.querySelectorAll('.tab-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+            this.classList.add('active');
+            var tab = this.dataset.tab;
+            document.querySelectorAll('.tab-content').forEach(function(content) {
+                content.classList.remove('active');
+            });
+            document.getElementById('tab-' + tab).classList.add('active');
+            var url = new URL(window.location.href);
+            url.searchParams.set('tab', tab);
+            window.history.pushState({}, '', url);
+        });
     });
 
-    // ================================================================
-    // MONEY FORMAT
-    // ================================================================
+    /* ================================================================
+       MODAL FUNCTIONS
+       ================================================================ */
+    function openModal(id) {
+        document.getElementById(id).classList.add('show');
+        document.body.style.overflow = 'hidden';
+        document.dispatchEvent(new CustomEvent('modalOpened'));
+    }
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('show');
+        document.body.style.overflow = '';
+    }
+    document.querySelectorAll('.modal-overlay').forEach(function(overlay) {
+        overlay.addEventListener('click', function(e) {
+            if (e.target === this) {
+                this.classList.remove('show');
+                document.body.style.overflow = '';
+            }
+        });
+    });
+
+    /* ================================================================
+       MONEY FORMAT
+       ================================================================ */
     (function() {
         function formatWithCommas(value) {
             if (!value) return '';
@@ -1694,62 +1777,43 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             var parts = clean.split('.');
             var integerPart = parts[0] || '0';
             var decimalPart = parts.length > 1 ? '.' + parts[1] : '';
-            
             if (integerPart.length > 3) {
                 var formatted = '';
                 var counter = 0;
                 for (var i = integerPart.length - 1; i >= 0; i--) {
                     counter++;
                     formatted = integerPart[i] + formatted;
-                    if (counter % 3 === 0 && i !== 0) {
-                        formatted = ',' + formatted;
-                    }
+                    if (counter % 3 === 0 && i !== 0) formatted = ',' + formatted;
                 }
                 integerPart = formatted;
             }
             return integerPart + decimalPart;
         }
-        
-        function autoFormatMoney(input) {
-            if (!input) return;
-            var cursorPos = input.selectionStart;
-            var lengthBefore = input.value.length;
-            var formatted = formatWithCommas(input.value);
-            if (formatted !== input.value) {
-                input.value = formatted;
-                var lengthAfter = formatted.length;
-                var diff = lengthAfter - lengthBefore;
-                input.setSelectionRange(cursorPos + diff, cursorPos + diff);
-            }
-        }
-        
         function initMoneyInputs() {
             document.querySelectorAll('.money-input').forEach(function(input) {
-                if (input.dataset.moneyInitialized) return;
-                input.dataset.moneyInitialized = 'true';
-                input.addEventListener('input', function() { autoFormatMoney(this); });
-                input.addEventListener('focus', function() {
-                    var raw = this.value.replace(/,/g, '');
-                    this.value = raw;
-                    this.select();
-                });
-                input.addEventListener('blur', function() {
-                    this.value = this.value ? formatWithCommas(this.value) : '0';
+                if (input.dataset.moneyInit) return;
+                input.dataset.moneyInit = 'true';
+                input.addEventListener('focus', function() { this.value = this.value.replace(/,/g, ''); this.select(); });
+                input.addEventListener('blur', function() { this.value = this.value ? formatWithCommas(this.value) : '0'; });
+                input.addEventListener('input', function() {
+                    var cursorPos = this.selectionStart;
+                    var lengthBefore = this.value.length;
+                    var formatted = formatWithCommas(this.value);
+                    if (formatted !== this.value) {
+                        this.value = formatted;
+                        var diff = formatted.length - lengthBefore;
+                        this.setSelectionRange(cursorPos + diff, cursorPos + diff);
+                    }
                 });
             });
         }
-        
-        document.addEventListener('DOMContentLoaded', function() {
-            setTimeout(initMoneyInputs, 100);
-        });
-        document.addEventListener('modalOpened', function() {
-            setTimeout(initMoneyInputs, 200);
-        });
+        document.addEventListener('DOMContentLoaded', function() { setTimeout(initMoneyInputs, 100); });
+        document.addEventListener('modalOpened', function() { setTimeout(initMoneyInputs, 200); });
     })();
 
-    // ================================================================
-    // CATEGORY - Toggle manual input
-    // ================================================================
+    /* ================================================================
+       CATEGORY TOGGLE (manual input)
+       ================================================================ */
     document.querySelectorAll('select[name="category_id"]').forEach(function(select) {
         select.addEventListener('change', function() {
             var manualInput = this.parentElement.querySelector('input[name="category_name"]');
@@ -1766,155 +1830,99 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         });
     });
 
-    // ================================================================
-    // TABS
-    // ================================================================
-    document.querySelectorAll('.tab-btn').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
-            this.classList.add('active');
-            var tab = this.dataset.tab;
-            document.querySelectorAll('.tab-content').forEach(function(content) {
-                content.classList.remove('active');
-            });
-            document.getElementById('tab-' + tab).classList.add('active');
-            var url = new URL(window.location.href);
-            url.searchParams.set('tab', tab);
-            window.history.pushState({}, '', url);
-        });
-    });
-    
-    // ================================================================
-    // MODAL FUNCTIONS
-    // ================================================================
-    function openModal(id) {
-        document.getElementById(id).classList.add('show');
-        document.body.style.overflow = 'hidden';
-        var event = new CustomEvent('modalOpened');
-        document.dispatchEvent(event);
-    }
-    
-    function closeModal(id) {
-        document.getElementById(id).classList.remove('show');
-        document.body.style.overflow = '';
-    }
-    
-    document.querySelectorAll('.modal-overlay').forEach(function(overlay) {
-        overlay.addEventListener('click', function(e) {
-            if (e.target === this) {
-                this.classList.remove('show');
-                document.body.style.overflow = '';
-            }
-        });
-    });
-    
-    // ================================================================
-    // VIEW FUNCTIONS
-    // ================================================================
-    function viewProcedure(data) {
-        document.getElementById('viewModalTitle').innerHTML = '<i class="fas fa-syringe"></i> Procedure Details';
-        document.getElementById('viewModalContent').innerHTML = `
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Procedure Name</div>
-                <div style="font-size:1rem;font-weight:600;">${escapeHtml(data.procedure_name)}</div>
+    /* ================================================================
+       ✅ VIEW DISEASE (Diagnosis)
+       ================================================================ */
+    function viewDisease(data) {
+        var desc = data.description || 'No description';
+        var treatment = data.treatment || 'No treatment specified';
+        var icd = data.icd_code || '—';
+        var category = data.category || 'Uncategorized';
+        var code = data.disease_code || 'N/A';
+        var createdBy = data.created_by_name || 'Unknown';
+        var status = data.is_active ? 'Active' : 'Inactive';
+        var statusClass = data.is_active ? 'badge-success' : 'badge-danger';
+
+        document.getElementById('viewDiseaseContent').innerHTML = `
+            <div style="padding:10px 0;border-bottom:1px solid var(--gray-200);">
+                <div style="font-size:0.7rem;color:var(--gray-500);text-transform:uppercase;font-weight:700;">Disease Name</div>
+                <div style="font-size:1.1rem;font-weight:700;color:var(--pink);">${escapeHtml(data.disease_name)}</div>
             </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Code</div>
-                <div><span class="code-badge">${escapeHtml(data.procedure_code || 'N/A')}</span></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:10px 0;border-bottom:1px solid var(--gray-200);">
+                <div>
+                    <div style="font-size:0.7rem;color:var(--gray-500);text-transform:uppercase;font-weight:700;">Disease Code</div>
+                    <div><span class="code-badge">${escapeHtml(code)}</span></div>
+                </div>
+                <div>
+                    <div style="font-size:0.7rem;color:var(--gray-500);text-transform:uppercase;font-weight:700;">ICD Code</div>
+                    <div><span class="code-badge">${escapeHtml(icd)}</span></div>
+                </div>
             </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Category</div>
-                <div>${escapeHtml(data.category || '-')}</div>
+            <div style="padding:10px 0;border-bottom:1px solid var(--gray-200);">
+                <div style="font-size:0.7rem;color:var(--gray-500);text-transform:uppercase;font-weight:700;">Category</div>
+                <div><span class="badge badge-purple">${escapeHtml(category)}</span></div>
             </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Price</div>
-                <div style="font-size:1.2rem;font-weight:700;color:var(--success);">TSh ${Number(data.price || 0).toLocaleString()}</div>
+            <div style="padding:10px 0;border-bottom:1px solid var(--gray-200);">
+                <div style="font-size:0.7rem;color:var(--gray-500);text-transform:uppercase;font-weight:700;">Description</div>
+                <div style="margin-top:4px;font-size:0.85rem;line-height:1.6;">${escapeHtml(desc)}</div>
             </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Description</div>
-                <div>${escapeHtml(data.description || 'No description')}</div>
+            <div style="padding:10px 0;border-bottom:1px solid var(--gray-200);">
+                <div style="font-size:0.7rem;color:var(--gray-500);text-transform:uppercase;font-weight:700;">Treatment / Recommendations</div>
+                <div style="margin-top:4px;font-size:0.85rem;line-height:1.6;color:var(--success);font-weight:500;background:var(--success-bg);padding:10px;border-radius:8px;">${escapeHtml(treatment)}</div>
             </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Status</div>
-                <div><span class="badge ${data.is_active ? 'badge-success' : 'badge-danger'}">${data.is_active ? 'Active' : 'Inactive'}</span></div>
-            </div>
-            <div style="padding:8px 0;">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Added By</div>
-                <div><span class="doctor-name-tag"><i class="fas fa-user-md"></i> ${escapeHtml(data.created_by_name || 'Unknown')}</span></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:10px 0;">
+                <div>
+                    <div style="font-size:0.7rem;color:var(--gray-500);text-transform:uppercase;font-weight:700;">Status</div>
+                    <div><span class="badge ${statusClass}">${status}</span></div>
+                </div>
+                <div>
+                    <div style="font-size:0.7rem;color:var(--gray-500);text-transform:uppercase;font-weight:700;">Added By</div>
+                    <div><span class="doctor-name-tag"><i class="fas fa-user-md"></i> ${escapeHtml(createdBy)}</span></div>
+                </div>
             </div>
         `;
-        openModal('viewModal');
+        openModal('viewDiseaseModal');
     }
-    
-    function viewLabTest(data) {
-        var equipmentNames = data.equipment_names || '';
-        var equipmentHtml = '';
-        if (equipmentNames) {
-            var names = equipmentNames.split('|');
-            equipmentHtml = '<div class="equipment-tags">';
-            names.forEach(function(name) {
-                if (name.trim()) {
-                    equipmentHtml += '<span class="equipment-tag"><i class="fas fa-tools"></i> ' + escapeHtml(name.trim()) + ' <span style="color:var(--success);font-weight:600;">FREE</span></span>';
-                }
-            });
-            equipmentHtml += '</div>';
-        } else {
-            equipmentHtml = '<span class="text-muted">No equipment linked</span>';
-        }
-        
-        document.getElementById('viewModalTitle').innerHTML = '<i class="fas fa-microscope"></i> Lab Test Details';
-        document.getElementById('viewModalContent').innerHTML = `
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Test Name</div>
-                <div style="font-size:1rem;font-weight:600;">${escapeHtml(data.test_name)}</div>
-            </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Category</div>
-                <div>${escapeHtml(data.category || 'Uncategorized')}</div>
-            </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Price</div>
-                <div style="font-size:1.2rem;font-weight:700;color:var(--success);">TSh ${Number(data.price).toLocaleString()}</div>
-            </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Description</div>
-                <div>${escapeHtml(data.description || 'No description')}</div>
-            </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Equipment (FREE)</div>
-                <div>${equipmentHtml}</div>
-            </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Added By</div>
-                <div><span class="doctor-name-tag"><i class="fas fa-user-md"></i> ${escapeHtml(data.created_by_name || 'Unknown')}</span></div>
-            </div>
-            <div style="padding:8px 0;">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Status</div>
-                <div><span class="badge ${data.is_active ? 'badge-success' : 'badge-danger'}">${data.is_active ? 'Active' : 'Inactive'}</span></div>
-            </div>
-        `;
-        openModal('viewModal');
+
+    /* ================================================================
+       ✅ EDIT DISEASE (Diagnosis)
+       ================================================================ */
+    function editDisease(data) {
+        document.getElementById('edit_disease_id').value         = data.id || '';
+        document.getElementById('edit_disease_name').value       = data.disease_name || '';
+        document.getElementById('edit_disease_code').value       = data.disease_code || '';
+        document.getElementById('edit_icd_code').value           = data.icd_code || '';
+        document.getElementById('edit_disease_category').value   = data.category || '';
+        document.getElementById('edit_description').value        = data.description || '';
+        document.getElementById('edit_treatment').value          = data.treatment || '';
+        document.getElementById('edit_is_active').value          = data.is_active ? '1' : '0';
+
+        openModal('editDiseaseModal');
     }
-    
-    function escapeHtml(text) {
-        if (!text) return '';
-        var div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+
+    /* ================================================================
+       AUTO-DISMISS FLASH MESSAGE
+       ================================================================ */
+    var flashAlert = document.getElementById('flashAlert');
+    if (flashAlert) {
+        setTimeout(function() {
+            flashAlert.style.transition = 'all 0.5s ease';
+            flashAlert.style.opacity = '0';
+            flashAlert.style.transform = 'translateY(-10px)';
+            setTimeout(function() { flashAlert.remove(); }, 500);
+        }, 5000);
     }
-    
-    // ================================================================
-    // DARK MODE
-    // ================================================================
+
+    /* ================================================================
+       DARK MODE
+       ================================================================ */
     if (localStorage.getItem('darkMode') === 'true') {
         document.documentElement.setAttribute('data-theme', 'dark');
     }
-    
-    console.log('%c⚙️ Services Management - FIXED VERSION', 'font-size:18px; font-weight:bold; color:#7C3AED;');
-    console.log('%c👤 User: <?php echo htmlspecialchars($doctor_name); ?>', 'font-size:12px; color:#64748B;');
-    console.log('%c✅ Tab ya Equipment imeondolewa', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Lab Tests inaonyesha ALL equipment zilizopo', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Linking inakubalika na inaonekana kwenye database', 'font-size:12px; color:#34D399;');
+
+    console.log('%c⚙️ Services Management - WITH DIAGNOSIS', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c✅ Procedures + Lab Tests + Diagnosis tabs', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Diagnosis has View + Edit buttons', 'font-size:12px; color:#DB2777;');
     console.log('%c❤️ Braick Dispensary - Tunajari Afya Yako', 'font-size:12px; color:#DC2626;');
 </script>
 

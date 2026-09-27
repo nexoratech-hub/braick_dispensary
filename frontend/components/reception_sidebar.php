@@ -4,7 +4,9 @@
 // RECEPTION - SHARED SIDEBAR (BLUE BACKGROUND)
 // WITH LOGIN SESSION PROTECTION
 // WITH SERVICES SECTION - SHOWS ALL SERVICES FROM services TABLE
-// WITH SIDEBAR TOGGLE - FULLY WORKING WITH HEADER
+// ✅ V10: TOGGLE BUTTON (HAMBURGER) - MOBILE ONLY (kama cashier)
+// ✅ V10: Desktop = sidebar always visible (fixed)
+// ✅ V10: Mobile = sidebar hidden, toggle inafungua
 // ✅ JINA NA LOGO KUTOKA system_settings TABLE
 // ✅ MENU MPANGILIO MPYA
 // FULLY RESPONSIVE - ALL DEVICES
@@ -252,7 +254,74 @@ $initial_data = [
 ];
 ?>
 
+<!-- ================================================================ -->
+<!-- ✅ V10: RECEPTION SIDEBAR TOGGLE BUTTON (HAMBURGER) -->
+<!-- Only shows on mobile/tablet (max-width: 1024px) -->
+<!-- ================================================================ -->
+<button class="reception-sidebar-toggle" id="receptionSidebarToggle" aria-label="Open Sidebar" title="Menu">
+    <i class="fas fa-bars"></i>
+</button>
+
 <style>
+    /* ================================================================
+       ✅ V10: RECEPTION SIDEBAR TOGGLE BUTTON (HAMBURGER) - MOBILE ONLY
+       Desktop (>1024px): HIDDEN
+       Mobile (<=1024px): VISIBLE
+       ================================================================ */
+    .reception-sidebar-toggle {
+        display: none;  /* Hidden by default */
+        position: fixed;
+        top: 14px;
+        left: 14px;
+        width: 42px;
+        height: 42px;
+        border-radius: 12px;
+        border: none;
+        background: linear-gradient(135deg, #0B5ED7 0%, #0A3D7A 100%);
+        color: #FFFFFF;
+        font-size: 1.1rem;
+        cursor: pointer;
+        z-index: 9997;
+        box-shadow: 0 4px 14px rgba(11, 94, 215, 0.4);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        align-items: center;
+        justify-content: center;
+    }
+    
+    .reception-sidebar-toggle:hover {
+        transform: scale(1.08);
+        box-shadow: 0 6px 20px rgba(11, 94, 215, 0.55);
+    }
+    
+    .reception-sidebar-toggle:active {
+        transform: scale(0.95);
+    }
+    
+    .reception-sidebar-toggle i {
+        color: #FFFFFF;
+    }
+    
+    /* ✅ SHOW ON MOBILE/TABLET ONLY */
+    @media (max-width: 1024px) {
+        .reception-sidebar-toggle {
+            display: flex;
+        }
+    }
+    
+    /* ✅ HIDE ON DESKTOP */
+    @media (min-width: 1025px) {
+        .reception-sidebar-toggle {
+            display: none !important;
+        }
+    }
+    
+    /* Hide on print */
+    @media print {
+        .reception-sidebar-toggle {
+            display: none !important;
+        }
+    }
+
     /* ================================================================
        SIDEBAR STYLES - FULLY FIXED FOR MOBILE
        ================================================================ */
@@ -268,7 +337,7 @@ $initial_data = [
         z-index: 9999;
         overflow-y: auto;
         overflow-x: hidden;
-        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
         transform: translateX(-100%);
         box-shadow: 4px 0 30px rgba(0,0,0,0.3);
         padding-bottom: 20px;
@@ -277,6 +346,15 @@ $initial_data = [
     [data-theme="dark"] .sidebar {
         background: linear-gradient(180deg, #0A3D7A 0%, #082F5E 100%);
         box-shadow: 4px 0 30px rgba(0,0,0,0.5);
+    }
+    
+    /* ✅ DESKTOP: Sidebar ALWAYS visible */
+    @media (min-width: 1025px) {
+        .sidebar {
+            transform: translateX(0) !important;
+            z-index: 50;
+            box-shadow: 4px 0 20px rgba(0,0,0,0.1);
+        }
     }
     
     .sidebar.open {
@@ -303,6 +381,11 @@ $initial_data = [
         backdrop-filter: blur(4px);
         -webkit-backdrop-filter: blur(4px);
         transition: opacity 0.3s ease;
+    }
+    
+    /* ✅ Overlay ONLY on mobile */
+    @media (min-width: 1025px) {
+        #sidebarOverlay { display: none !important; }
     }
     
     #sidebarOverlay.active {
@@ -334,6 +417,11 @@ $initial_data = [
         background: white;
         padding: 4px;
         border: 2px solid rgba(255,255,255,0.1);
+        transition: transform 0.3s ease;
+    }
+    
+    .sidebar-brand .logo:hover {
+        transform: rotate(-5deg) scale(1.05);
     }
     
     .sidebar-brand .brand-text {
@@ -367,10 +455,12 @@ $initial_data = [
         transform: scale(1.05);
     }
     
+    /* Close button ONLY on mobile */
     @media (max-width: 1024px) {
-        .sidebar-close-btn {
-            display: block;
-        }
+        .sidebar-close-btn { display: block; }
+    }
+    @media (min-width: 1025px) {
+        .sidebar-close-btn { display: none !important; }
     }
     
     /* ================================================================
@@ -434,6 +524,13 @@ $initial_data = [
         text-align: center;
         font-size: 0.9rem;
         flex-shrink: 0;
+    }
+    
+    .sidebar-link .link-text {
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     
     /* ================================================================
@@ -558,13 +655,26 @@ $initial_data = [
        BADGE UPDATE ANIMATION
        ================================================================ */
     .badge-update {
-        animation: badgePop 0.3s ease;
+        animation: badgePop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
     
     @keyframes badgePop {
-        0% { transform: scale(0.5); opacity: 0; }
-        70% { transform: scale(1.3); }
+        0% { transform: scale(0.3); opacity: 0; }
+        60% { transform: scale(1.3); }
         100% { transform: scale(1); opacity: 1; }
+    }
+    
+    /* ================================================================
+       DATA FLASH
+       ================================================================ */
+    .sidebar-data-flash {
+        animation: flashBlue 0.6s ease;
+    }
+    
+    @keyframes flashBlue {
+        0% { background: rgba(110, 168, 254, 0.15); }
+        50% { background: rgba(110, 168, 254, 0.03); }
+        100% { background: transparent; }
     }
     
     /* ================================================================
@@ -607,10 +717,12 @@ $initial_data = [
         height: 8px;
         border-radius: 50%;
         display: inline-block;
+        transition: all 0.3s ease;
     }
     
     .sidebar-status .status-dot.online {
         background: #34D399;
+        box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
         animation: pulse-dot 1.5s infinite;
     }
     
@@ -621,6 +733,7 @@ $initial_data = [
     .sidebar-status .status-text {
         font-size: 0.7rem;
         color: #D2E3FC;
+        font-weight: 500;
     }
     
     .sidebar-status .status-time {
@@ -649,20 +762,6 @@ $initial_data = [
     /* ================================================================
        RESPONSIVE BREAKPOINTS
        ================================================================ */
-    
-    @media (min-width: 1025px) {
-        .sidebar {
-            transform: translateX(0) !important;
-            z-index: 50;
-            box-shadow: 4px 0 20px rgba(0,0,0,0.1);
-        }
-        #sidebarOverlay {
-            display: none !important;
-        }
-        .sidebar-close-btn {
-            display: none !important;
-        }
-    }
     
     @media (max-width: 1024px) {
         .sidebar {
@@ -836,6 +935,9 @@ $initial_data = [
         #sidebarOverlay {
             display: none !important;
         }
+        .reception-sidebar-toggle {
+            display: none !important;
+        }
     }
     
     /* ================================================================
@@ -859,7 +961,7 @@ $initial_data = [
 <!-- ================================================================ -->
 <!-- SIDEBAR - RECEPTION PANEL -->
 <!-- ================================================================ -->
-<aside class="sidebar" id="sidebar">
+<aside class="sidebar" id="sidebar" role="navigation" aria-label="Reception Sidebar">
     
     <!-- ================================================================ -->
     <!-- ✅ BRAND / HEADER - JINA NA LOGO KUTOKA system_settings -->
@@ -870,9 +972,9 @@ $initial_data = [
                  alt="<?= htmlspecialchars($site_name) ?>" 
                  class="logo"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
-            <div>
+            <div class="truncate">
                 <p class="brand-text" id="sidebarSiteName"><?= htmlspecialchars($site_name) ?></p>
-                <p class="brand-sub">Reception Panel</p>
+                <p class="brand-sub">🏥 Reception Panel</p>
             </div>
             <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close Sidebar">
                 <i class="fas fa-times"></i>
@@ -892,17 +994,20 @@ $initial_data = [
         
         <!-- 1. Dashboard -->
         <a href="/dispensary_system/frontend/pages/reception/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
-            <i class="fas fa-home"></i> Dashboard
+            <i class="fas fa-home"></i>
+            <span class="link-text">Dashboard</span>
         </a>
         
         <!-- 2. Register Patient -->
         <a href="/dispensary_system/frontend/pages/reception/new_patient.php" class="sidebar-link <?= isActive('new_patient.php') ?>">
-            <i class="fas fa-user-plus"></i> Register Patient
+            <i class="fas fa-user-plus"></i>
+            <span class="link-text">Register Patient</span>
         </a>
         
         <!-- 3. Patients -->
         <a href="/dispensary_system/frontend/pages/reception/patients.php" class="sidebar-link <?= isActive('patients.php') ?>">
-            <i class="fas fa-users"></i> Patients
+            <i class="fas fa-users"></i>
+            <span class="link-text">Patients</span>
             <span class="badge" id="receptionPatientCount"><?= $patient_count ?></span>
         </a>
         
@@ -939,13 +1044,15 @@ $initial_data = [
         
         <!-- 5. Visit -->
         <a href="/dispensary_system/frontend/pages/reception/visits.php?filter=today" class="sidebar-link <?= isActive('visits.php') ?>">
-            <i class="fas fa-clinic-medical"></i> Visit
+            <i class="fas fa-clinic-medical"></i>
+            <span class="link-text">Visit</span>
             <span class="badge" id="receptionTodayVisits"><?= $today_visits ?></span>
         </a>
         
         <!-- 6. Appointments -->
         <a href="/dispensary_system/frontend/pages/reception/appointments.php" class="sidebar-link <?= isActive('appointments.php') ?>">
-            <i class="fas fa-calendar-check"></i> Appointments
+            <i class="fas fa-calendar-check"></i>
+            <span class="link-text">Appointments</span>
             <?php if ($pending_appointments > 0): ?>
                 <span class="badge danger" id="receptionAppointmentCount"><?= $appointment_count ?></span>
             <?php else: ?>
@@ -960,7 +1067,8 @@ $initial_data = [
         
         <!-- 7. Services -->
         <a href="/dispensary_system/frontend/pages/reception/services.php" class="sidebar-link <?= isActive('services.php') ?>">
-            <i class="fas fa-cog"></i> Services
+            <i class="fas fa-cog"></i>
+            <span class="link-text">Services</span>
             <?php if ($services_count > 0): ?>
                 <span class="badge purple" id="receptionServicesCount"><?= $services_count ?></span>
             <?php else: ?>
@@ -970,7 +1078,8 @@ $initial_data = [
         
         <!-- 8. Cashier -->
         <a href="/dispensary_system/frontend/pages/cashier/dashboard.php" class="sidebar-link <?= (strpos($current_uri, '/cashier/dashboard.php') !== false) ? 'active' : '' ?>">
-            <i class="fas fa-cash-register"></i> Cashier
+            <i class="fas fa-cash-register"></i>
+            <span class="link-text">Cashier</span>
         </a>
         
         <!-- ============================================================ -->
@@ -980,12 +1089,14 @@ $initial_data = [
         
         <!-- 9. Profile -->
         <a href="/dispensary_system/frontend/pages/reception/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
-            <i class="fas fa-user-circle"></i> Profile
+            <i class="fas fa-user-circle"></i>
+            <span class="link-text">Profile</span>
         </a>
         
         <!-- 10. Logout -->
         <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link">
-            <i class="fas fa-sign-out-alt"></i> Logout
+            <i class="fas fa-sign-out-alt"></i>
+            <span class="link-text">Logout</span>
         </a>
         
     </nav>
@@ -1032,14 +1143,14 @@ $initial_data = [
     };
     
     // ================================================================
-    // SIDEBAR TOGGLE - FULLY FIXED FOR ALL DEVICES
+    // ✅ V10: SIDEBAR TOGGLE - MOBILE ONLY (kama cashier)
     // ================================================================
     (function() {
         function initSidebar() {
-            console.log('🔧 Initializing Reception Sidebar...');
+            console.log('🔧 Initializing Reception Sidebar V10...');
             
             var sidebar = document.getElementById('sidebar');
-            var toggleBtn = document.getElementById('sidebarToggle');
+            var toggleBtn = document.getElementById('receptionSidebarToggle');
             var closeBtn = document.getElementById('sidebarCloseBtn');
             var overlay = document.getElementById('sidebarOverlay');
             
@@ -1080,24 +1191,20 @@ $initial_data = [
                 }
             }
             
+            // ✅ V10: Toggle button (hamburger) - MOBILE ONLY
             if (toggleBtn) {
-                var newToggle = toggleBtn.cloneNode(true);
-                toggleBtn.parentNode.replaceChild(newToggle, toggleBtn);
-                var freshToggle = document.getElementById('sidebarToggle');
-                
-                if (freshToggle) {
-                    freshToggle.addEventListener('click', function(e) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        console.log('🔘 Hamburger clicked!');
-                        toggleSidebar();
-                    });
-                    console.log('✅ Toggle button attached');
-                }
+                toggleBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('🔘 Hamburger clicked!');
+                    toggleSidebar();
+                });
+                console.log('✅ Toggle button attached');
             } else {
                 console.warn('⚠️ Toggle button not found');
             }
             
+            // Close button (inside sidebar)
             if (closeBtn) {
                 closeBtn.addEventListener('click', function(e) {
                     e.preventDefault();
@@ -1107,6 +1214,7 @@ $initial_data = [
                 console.log('✅ Close button attached');
             }
             
+            // Overlay click
             if (overlay) {
                 overlay.addEventListener('click', function(e) {
                     if (e.target === overlay) {
@@ -1116,19 +1224,21 @@ $initial_data = [
                 console.log('✅ Overlay click handler attached');
             }
             
+            // ESC key
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape' && sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
             });
             
+            // Auto-close on resize (desktop)
             window.addEventListener('resize', function() {
                 if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
             });
             
-            console.log('✅ Reception Sidebar fully initialized!');
+            console.log('✅ Reception Sidebar V10 fully initialized!');
         }
         
         if (document.readyState === 'loading') {
@@ -1464,8 +1574,14 @@ $initial_data = [
     // ================================================================
     // CONSOLE LOG
     // ================================================================
-    console.log('%c🏥 Braick Dispensary - Reception Sidebar (AJAX)', 
+    console.log('%c🏥 Braick Dispensary - Reception Sidebar V10', 
         'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ V10: Toggle button MOBILE ONLY (kama cashier)', 
+        'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ V10: Desktop = sidebar always visible', 
+        'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ V10: Mobile = sidebar hidden, toggle inafungua', 
+        'font-size:13px; color:#0B5ED7;');
     console.log('%c✅ Jina na logo kutoka system_settings table', 
         'font-size:12px; color:#34D399;');
     console.log('%c📋 MENU: 1.Dashboard 2.Register Patient 3.Patients 4.Assign Doctor|Lab Test 5.Visit 6.Appointments 7.Services 8.Cashier 9.Profile 10.Logout', 
@@ -1480,8 +1596,6 @@ $initial_data = [
     console.log('   ✅ Assigned Doctor: <?= $assigned_doctor_count ?>');
     console.log('   ✅ Lab Test (Direct): <?= $lab_test_count ?>');
     console.log('   Services: <?= $services_count ?>');
-    console.log('%c✅ FIXED: Assign Doctor | Lab Test shows BOTH counts separately', 
-        'font-size:13px; font-weight:bold; color:#34D399;');
     console.log('%c⚡ Auto-Update: Every 2s (only if data changed)', 
         'font-size:13px; color:#34D399;');
     console.log('%c🔄 Force refresh: Every 5s (safety net)', 
@@ -1490,6 +1604,6 @@ $initial_data = [
         'font-size:12px; color:#94A3B8;');
     console.log('%c💡 Call window.refreshSidebarData() to manually update', 
         'font-size:12px; color:#6EA8FE;');
-    console.log('%c📱 Click ☰ in header to open sidebar on mobile', 
+    console.log('%c📱 Click ☰ (hamburger) to open sidebar on mobile', 
         'font-size:12px; color:#34D399;');
 </script>

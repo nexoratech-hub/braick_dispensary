@@ -1,34 +1,24 @@
 <?php
 // ================================================================
 // FILE: frontend/components/cashier_sidebar.php
-// CASHIER - SHARED SIDEBAR (USING AJAX FOR REAL-TIME UPDATES)
-// GREEN THEME - WITH AJAX INTEGRATION
-// BRAICK DISPENSARY
-// FIXED: Real-time auto-update when data changes
-// REMOVED: Cancelled Bills
-// ✅ FIXED: Paid Bills now includes BOTH bills and OTC sales
-// ✅ FIXED: Paid badge shows correct count
-// ✅ FIXED: Pending badge includes OTC pending
+// CASHIER SIDEBAR V9 FINAL
+// ================================================================
+// ✅ V9: Toggle button (hamburger) kwa MOBILE ONLY
+// ✅ V9: Desktop = sidebar always visible (fixed)
+// ✅ V9: Mobile = sidebar hidden, toggle inafungua
+// ✅ V8: Paid Bills = 233 (matches paid_bills.php)
+// ✅ V8: AJAX real-time updates
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
 
-// ================================================================
-// CHECK USER ACCESS
-// ================================================================
 $allowed_roles = ['cashier', 'reception', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
@@ -41,9 +31,6 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
     exit;
 }
 
-// ================================================================
-// GET USER DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Cashier';
 $user_role = $_SESSION['role'] ?? 'cashier';
@@ -52,9 +39,6 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 $user_is_online = $_SESSION['is_online'] ?? 1;
 
-// ================================================================
-// INCLUDE DATABASE FOR INITIAL DATA
-// ================================================================
 require_once __DIR__ . '/../../backend/config/database.php';
 
 try {
@@ -64,68 +48,78 @@ try {
 }
 
 // ================================================================
-// GET INITIAL DATA FOR BADGES
-// ✅ FIXED: Include OTC sales in counts
+// ✅ V8: INITIAL BADGE DATA
 // ================================================================
 $pending_bills = 0;
 $partial_payments = 0;
 $total_paid = 0;
 $total_expenses = 0;
 $patients_waiting = 0;
+$paid_regular = 0;
+$paid_otc = 0;
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
-        // ✅ Pending bills - from bills table
+        // PENDING
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'pending'");
         $stmt->execute([$user_branch_id]);
-        $pending_bills_regular = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $pending_regular = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // ✅ Pending OTC sales
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ? AND payment_status = 'pending'");
         $stmt->execute([$user_branch_id]);
-        $pending_otc = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $pending_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Total pending = regular + OTC
-        $pending_bills = $pending_bills_regular + $pending_otc;
+        $pending_bills = $pending_regular + $pending_otc;
         
-        // ✅ Partial payments
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'partial'");
+        // PARTIAL
+        $stmt = $db->prepare("
+            SELECT COUNT(DISTINCT b.id) as count 
+            FROM bills b
+            INNER JOIN payments p ON b.id = p.bill_id
+            WHERE b.branch_id = ? 
+              AND b.status = 'partial'
+              AND b.patient_id IS NOT NULL
+              AND b.visit_id IS NOT NULL
+              AND b.bill_number NOT LIKE 'BILL-OTC-%'
+        ");
         $stmt->execute([$user_branch_id]);
-        $partial_payments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $partial_payments = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // ✅ FIXED: Paid bills - from BOTH bills and OTC sales
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'paid'");
+        // PAID (matches paid_bills.php)
+        $stmt = $db->prepare("
+            SELECT COUNT(DISTINCT b.id) as count 
+            FROM bills b
+            INNER JOIN payments p ON b.id = p.bill_id
+            WHERE b.branch_id = ? 
+              AND b.status IN ('paid', 'partial')
+              AND b.patient_id IS NOT NULL
+              AND b.visit_id IS NOT NULL
+              AND b.bill_number NOT LIKE 'BILL-OTC-%'
+        ");
         $stmt->execute([$user_branch_id]);
-        $paid_regular = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $paid_regular = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ? AND payment_status = 'paid'");
         $stmt->execute([$user_branch_id]);
-        $paid_otc = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $paid_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Total paid = regular + OTC
         $total_paid = $paid_regular + $paid_otc;
         
-        // ✅ Total expenses
+        // EXPENSES
         $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE branch_id = ? AND status = 'paid'");
         $stmt->execute([$user_branch_id]);
-        $total_expenses = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+        $total_expenses = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
         
-        // ✅ Patients waiting
+        // PATIENTS WAITING
         $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM bills WHERE branch_id = ? AND status IN ('pending', 'partial')");
         $stmt->execute([$user_branch_id]);
-        $patients_waiting = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        
-        // Log for debugging
-        error_log("Cashier Sidebar - Pending: $pending_bills (regular: $pending_bills_regular + otc: $pending_otc), Paid: $total_paid (regular: $paid_regular + otc: $paid_otc), Partial: $partial_payments, Expenses: $total_expenses");
+        $patients_waiting = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
     } catch (Exception $e) {
-        error_log("Cashier sidebar initial data error: " . $e->getMessage());
+        error_log("Sidebar data error: " . $e->getMessage());
     }
 }
 
-// ================================================================
-// GENERATE INITIAL HASH
-// ================================================================
 $hash_data = [
     'pending_bills' => $pending_bills,
     'partial_payments' => $partial_payments,
@@ -135,45 +129,88 @@ $hash_data = [
 ];
 $initial_hash = md5(json_encode($hash_data));
 
-// ================================================================
-// DETECT CURRENT PAGE
-// ================================================================
 $current_page = basename($_SERVER['PHP_SELF']);
 
 function isActive($page) {
     global $current_page;
-    if ($page === $current_page) {
-        return 'active';
-    }
+    if ($page === $current_page) return 'active';
     return '';
 }
 
-// ================================================================
-// LOGO PATH
-// ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-
-// ================================================================
-// PASS DATA TO JAVASCRIPT
-// ================================================================
-$initial_data = [
-    'pending_bills' => $pending_bills,
-    'partial_payments' => $partial_payments,
-    'total_paid' => $total_paid,
-    'total_expenses' => $total_expenses,
-    'patients_waiting' => $patients_waiting,
-    'branch_id' => $user_branch_id,
-    'branch_name' => $user_branch_name,
-    'user_name' => $user_full_name,
-    'user_is_online' => $user_is_online
-];
 ?>
 
+<!-- ================================================================ -->
+<!-- ✅ V9: MOBILE TOGGLE BUTTON (HAMBURGER) -->
+<!-- Only shows on mobile/tablet (max-width: 1024px) -->
+<!-- ================================================================ -->
+<button class="cashier-sidebar-toggle" id="cashierSidebarToggle" aria-label="Open Sidebar" title="Menu">
+    <i class="fas fa-bars"></i>
+</button>
+
 <style>
-    /* ================================================================
-       SIDEBAR STYLES - GREEN THEME
-       ================================================================ */
+    /* ============================================================
+       ✅ V9: TOGGLE BUTTON (HAMBURGER) - MOBILE ONLY
+       Desktop (>1024px): HIDDEN
+       Mobile (<=1024px): VISIBLE
+       ============================================================ */
+    .cashier-sidebar-toggle {
+        display: none;  /* Hidden by default */
+        position: fixed;
+        top: 14px;
+        left: 14px;
+        width: 42px;
+        height: 42px;
+        border-radius: 12px;
+        border: none;
+        background: linear-gradient(135deg, #059669 0%, #047857 100%);
+        color: #FFFFFF;
+        font-size: 1.1rem;
+        cursor: pointer;
+        z-index: 9997;
+        box-shadow: 0 4px 14px rgba(5, 150, 105, 0.4);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        align-items: center;
+        justify-content: center;
+    }
     
+    .cashier-sidebar-toggle:hover {
+        transform: scale(1.08);
+        box-shadow: 0 6px 20px rgba(5, 150, 105, 0.55);
+    }
+    
+    .cashier-sidebar-toggle:active {
+        transform: scale(0.95);
+    }
+    
+    .cashier-sidebar-toggle i {
+        color: #FFFFFF;
+    }
+    
+    /* ✅ SHOW ON MOBILE/TABLET ONLY */
+    @media (max-width: 1024px) {
+        .cashier-sidebar-toggle {
+            display: flex;
+        }
+    }
+    
+    /* ✅ HIDE ON DESKTOP */
+    @media (min-width: 1025px) {
+        .cashier-sidebar-toggle {
+            display: none !important;
+        }
+    }
+    
+    /* Hide on print */
+    @media print {
+        .cashier-sidebar-toggle {
+            display: none !important;
+        }
+    }
+
+    /* ============================================================
+       SIDEBAR - GREEN THEME
+       ============================================================ */
     .sidebar {
         position: fixed;
         top: 0;
@@ -186,10 +223,19 @@ $initial_data = [
         overflow-y: auto;
         overflow-x: hidden;
         transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-        transform: translateX(-100%);
+        transform: translateX(-100%);  /* Hidden by default on mobile */
         box-shadow: 4px 0 30px rgba(0,0,0,0.3);
         padding-bottom: 20px;
         scroll-behavior: smooth;
+    }
+    
+    /* ✅ DESKTOP: Sidebar ALWAYS visible */
+    @media (min-width: 1025px) {
+        .sidebar {
+            transform: translateX(0) !important;
+            z-index: 50;
+            box-shadow: 4px 0 20px rgba(0,0,0,0.1);
+        }
     }
     
     [data-theme="dark"] .sidebar {
@@ -197,8 +243,8 @@ $initial_data = [
         box-shadow: 4px 0 30px rgba(0,0,0,0.5);
     }
     
-    .sidebar.open {
-        transform: translateX(0) !important;
+    .sidebar.open { 
+        transform: translateX(0) !important; 
     }
     
     .sidebar::-webkit-scrollbar { width: 5px; }
@@ -206,15 +252,10 @@ $initial_data = [
     .sidebar::-webkit-scrollbar-thumb { background: #6EE7B7; border-radius: 10px; }
     .sidebar::-webkit-scrollbar-thumb:hover { background: #A7F3D0; }
     
-    /* ================================================================
-       OVERLAY
-       ================================================================ */
+    /* OVERLAY */
     #sidebarOverlay {
         position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
+        top: 0; left: 0; right: 0; bottom: 0;
         background: rgba(0,0,0,0.6);
         z-index: 9998;
         display: none;
@@ -222,25 +263,26 @@ $initial_data = [
         -webkit-backdrop-filter: blur(4px);
         transition: opacity 0.3s ease;
     }
-    #sidebarOverlay.active {
-        display: block !important;
+    
+    /* ✅ Overlay ONLY on mobile */
+    @media (min-width: 1025px) {
+        #sidebarOverlay { display: none !important; }
     }
     
-    /* ================================================================
-       SIDEBAR BRAND
-       ================================================================ */
+    #sidebarOverlay.active { 
+        display: block !important; 
+    }
+    
+    /* BRAND */
     .sidebar-brand {
         padding: 18px 16px 14px;
         border-bottom: 2px solid rgba(255,255,255,0.08);
         background: rgba(0,0,0,0.1);
-        position: sticky;
-        top: 0;
-        z-index: 5;
+        position: sticky; top: 0; z-index: 5;
         backdrop-filter: blur(10px);
     }
     .sidebar-brand .logo {
-        width: 42px;
-        height: 42px;
+        width: 42px; height: 42px;
         border-radius: 10px;
         object-fit: cover;
         background: white;
@@ -248,52 +290,40 @@ $initial_data = [
         border: 2px solid rgba(255,255,255,0.15);
         transition: transform 0.3s ease;
     }
-    .sidebar-brand .logo:hover {
-        transform: rotate(-5deg) scale(1.05);
-    }
+    .sidebar-brand .logo:hover { transform: rotate(-5deg) scale(1.05); }
     .sidebar-brand .brand-text {
-        color: white;
-        font-weight: 700;
-        font-size: 0.95rem;
-        line-height: 1.2;
-        letter-spacing: 0.5px;
+        color: white; font-weight: 700; font-size: 0.95rem;
+        line-height: 1.2; letter-spacing: 0.5px;
     }
     .sidebar-brand .brand-sub {
-        color: #A7F3D0;
-        font-size: 0.65rem;
-        font-weight: 500;
-        letter-spacing: 0.3px;
+        color: #A7F3D0; font-size: 0.65rem;
+        font-weight: 500; letter-spacing: 0.3px;
     }
     
     .sidebar-close-btn {
         display: none;
         background: rgba(255,255,255,0.1);
-        border: none;
-        color: white;
-        font-size: 1.2rem;
-        cursor: pointer;
-        padding: 4px 10px;
-        border-radius: 8px;
+        border: none; color: white;
+        font-size: 1.2rem; cursor: pointer;
+        padding: 4px 10px; border-radius: 8px;
         transition: all 0.3s ease;
         margin-left: auto;
     }
     .sidebar-close-btn:hover {
         background: rgba(255,255,255,0.2);
-        transform: scale(1.05);
-        color: white;
-    }
-    @media (max-width: 1024px) {
-        .sidebar-close-btn {
-            display: block;
-        }
+        transform: scale(1.05); color: white;
     }
     
-    /* ================================================================
-       NAVIGATION
-       ================================================================ */
-    .sidebar-nav {
-        padding: 8px 8px 16px;
+    /* Close button ONLY on mobile */
+    @media (max-width: 1024px) {
+        .sidebar-close-btn { display: block; }
     }
+    @media (min-width: 1025px) {
+        .sidebar-close-btn { display: none !important; }
+    }
+    
+    /* NAV */
+    .sidebar-nav { padding: 8px 8px 16px; }
     .sidebar-nav .nav-label {
         font-size: 0.5rem;
         text-transform: uppercase;
@@ -304,16 +334,10 @@ $initial_data = [
         font-weight: 700;
         opacity: 0.8;
     }
-    .sidebar-nav .nav-label:first-of-type {
-        margin-top: 0;
-    }
-    .sidebar-nav .nav-label .label-icon {
-        margin-right: 4px;
-    }
+    .sidebar-nav .nav-label:first-of-type { margin-top: 0; }
+    .sidebar-nav .nav-label .label-icon { margin-right: 4px; }
     
-    /* ================================================================
-       SIDEBAR LINKS
-       ================================================================ */
+    /* LINKS */
     .sidebar-link {
         display: flex;
         align-items: center;
@@ -347,9 +371,7 @@ $initial_data = [
     .sidebar-link.active::before {
         content: '';
         position: absolute;
-        left: 0;
-        top: 15%;
-        bottom: 15%;
+        left: 0; top: 15%; bottom: 15%;
         width: 4px;
         background: #059669;
         border-radius: 0 4px 4px 0;
@@ -363,9 +385,7 @@ $initial_data = [
         opacity: 0.8;
     }
     .sidebar-link:hover i,
-    .sidebar-link.active i {
-        opacity: 1;
-    }
+    .sidebar-link.active i { opacity: 1; }
     .sidebar-link .link-text {
         flex: 1;
         white-space: nowrap;
@@ -373,9 +393,7 @@ $initial_data = [
         text-overflow: ellipsis;
     }
     
-    /* ================================================================
-       BADGES
-       ================================================================ */
+    /* BADGES */
     .sidebar-link .badge {
         margin-left: auto;
         background: rgba(255,255,255,0.12);
@@ -390,30 +408,12 @@ $initial_data = [
         text-align: center;
         border: 1px solid rgba(255,255,255,0.05);
     }
-    .sidebar-link .badge.orange {
-        background: #D97706;
-        border-color: #D97706;
-    }
-    .sidebar-link .badge.green {
-        background: #059669;
-        border-color: #059669;
-    }
-    .sidebar-link .badge.blue {
-        background: #0B5ED7;
-        border-color: #0B5ED7;
-    }
-    .sidebar-link .badge.red {
-        background: #DC2626;
-        border-color: #DC2626;
-    }
-    .sidebar-link .badge.yellow {
-        background: #D97706;
-        border-color: #D97706;
-    }
-    .sidebar-link .badge.purple {
-        background: #7C3AED;
-        border-color: #7C3AED;
-    }
+    .sidebar-link .badge.orange { background: #D97706; border-color: #D97706; }
+    .sidebar-link .badge.green { background: #059669; border-color: #059669; }
+    .sidebar-link .badge.blue { background: #0B5ED7; border-color: #0B5ED7; }
+    .sidebar-link .badge.red { background: #DC2626; border-color: #DC2626; }
+    .sidebar-link .badge.yellow { background: #D97706; border-color: #D97706; }
+    .sidebar-link .badge.purple { background: #7C3AED; border-color: #7C3AED; }
     .sidebar-link:hover .badge {
         background: rgba(255,255,255,0.2);
         transform: scale(1.05);
@@ -423,9 +423,7 @@ $initial_data = [
         color: white;
     }
     
-    /* ================================================================
-       BADGE UPDATE ANIMATION
-       ================================================================ */
+    /* BADGE ANIMATION */
     .badge-update {
         animation: badgePop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
@@ -435,21 +433,15 @@ $initial_data = [
         100% { transform: scale(1); opacity: 1; }
     }
     
-    /* ================================================================
-       DATA CHANGED FLASH
-       ================================================================ */
-    .sidebar-data-flash {
-        animation: flashGreen 0.6s ease;
-    }
+    /* DATA FLASH */
+    .sidebar-data-flash { animation: flashGreen 0.6s ease; }
     @keyframes flashGreen {
         0% { background: rgba(52, 211, 153, 0.15); }
         50% { background: rgba(52, 211, 153, 0.03); }
         100% { background: transparent; }
     }
     
-    /* ================================================================
-       LOGOUT LINK
-       ================================================================ */
+    /* LOGOUT */
     .sidebar-link.logout-link {
         border-top: 2px solid rgba(255,255,255,0.06);
         padding-top: 10px;
@@ -462,13 +454,9 @@ $initial_data = [
         box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
         transform: translateX(4px);
     }
-    .sidebar-link.logout-link i {
-        opacity: 1;
-    }
+    .sidebar-link.logout-link i { opacity: 1; }
     
-    /* ================================================================
-       LIVE INDICATOR
-       ================================================================ */
+    /* LIVE */
     .sidebar-live-indicator {
         display: inline-flex;
         align-items: center;
@@ -479,17 +467,14 @@ $initial_data = [
         font-weight: 500;
     }
     .sidebar-live-indicator .dot {
-        width: 6px;
-        height: 6px;
+        width: 6px; height: 6px;
         border-radius: 50%;
         background: #34D399;
         animation: pulse-dot 1.5s infinite;
         display: inline-block;
     }
     
-    /* ================================================================
-       SIDEBAR STATUS FOOTER
-       ================================================================ */
+    /* STATUS FOOTER */
     .sidebar-status {
         padding: 10px 16px;
         border-top: 2px solid rgba(255,255,255,0.06);
@@ -502,8 +487,7 @@ $initial_data = [
         backdrop-filter: blur(10px);
     }
     .sidebar-status .status-dot {
-        width: 8px;
-        height: 8px;
+        width: 8px; height: 8px;
         border-radius: 50%;
         display: inline-block;
         transition: all 0.3s ease;
@@ -513,9 +497,7 @@ $initial_data = [
         box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
         animation: pulse-dot 1.5s infinite;
     }
-    .sidebar-status .status-dot.offline {
-        background: #94A3B8;
-    }
+    .sidebar-status .status-dot.offline { background: #94A3B8; }
     .sidebar-status .status-text {
         font-size: 0.65rem;
         color: #D1FAE5;
@@ -535,23 +517,7 @@ $initial_data = [
         50% { opacity: 0.3; transform: scale(0.8); }
     }
     
-    /* ================================================================
-       RESPONSIVE
-       ================================================================ */
-    @media (min-width: 1025px) {
-        .sidebar {
-            transform: translateX(0) !important;
-            z-index: 50;
-            box-shadow: 4px 0 20px rgba(0,0,0,0.1);
-        }
-        #sidebarOverlay {
-            display: none !important;
-        }
-        .sidebar-close-btn {
-            display: none !important;
-        }
-    }
-    
+    /* RESPONSIVE */
     @media (max-width: 1024px) {
         .sidebar {
             width: 280px;
@@ -559,140 +525,59 @@ $initial_data = [
             z-index: 9999;
             border-radius: 0 12px 12px 0;
         }
-        .sidebar.open {
-            transform: translateX(0) !important;
-        }
-        #sidebarOverlay {
-            display: none;
-            z-index: 9998;
-        }
-        #sidebarOverlay.active {
-            display: block !important;
-        }
-        .sidebar-brand {
-            padding: 14px 14px 10px;
-        }
-        .sidebar-brand .logo {
-            width: 36px;
-            height: 36px;
-        }
-        .sidebar-brand .brand-text {
-            font-size: 0.85rem;
-        }
-        .sidebar-link {
-            padding: 7px 10px;
-            font-size: 0.75rem;
-            gap: 8px;
-        }
-        .sidebar-link i {
-            width: 18px;
-            font-size: 0.8rem;
-        }
-        .sidebar-link .badge {
-            font-size: 0.55rem;
-            padding: 1px 7px;
-        }
+        .sidebar.open { transform: translateX(0) !important; }
+        #sidebarOverlay { display: none; z-index: 9998; }
+        #sidebarOverlay.active { display: block !important; }
+        .sidebar-brand { padding: 14px 14px 10px; }
+        .sidebar-brand .logo { width: 36px; height: 36px; }
+        .sidebar-brand .brand-text { font-size: 0.85rem; }
+        .sidebar-link { padding: 7px 10px; font-size: 0.75rem; gap: 8px; }
+        .sidebar-link i { width: 18px; font-size: 0.8rem; }
+        .sidebar-link .badge { font-size: 0.55rem; padding: 1px 7px; }
     }
     
     @media (max-width: 768px) {
-        .sidebar {
-            width: 300px;
-        }
-        .sidebar-brand {
-            padding: 12px 12px 10px;
-        }
-        .sidebar-brand .logo {
-            width: 34px;
-            height: 34px;
-        }
-        .sidebar-brand .brand-text {
-            font-size: 0.8rem;
-        }
-        .sidebar-link {
-            padding: 6px 10px;
-            font-size: 0.7rem;
-        }
-        .sidebar-link i {
-            width: 16px;
-            font-size: 0.75rem;
-        }
+        .sidebar { width: 300px; }
+        .sidebar-brand { padding: 12px 12px 10px; }
+        .sidebar-brand .logo { width: 34px; height: 34px; }
+        .sidebar-brand .brand-text { font-size: 0.8rem; }
+        .sidebar-link { padding: 6px 10px; font-size: 0.7rem; }
+        .sidebar-link i { width: 16px; font-size: 0.75rem; }
     }
     
     @media (max-width: 480px) {
-        .sidebar {
-            width: 100%;
-            max-width: 320px;
-        }
-        .sidebar-brand {
-            padding: 10px 10px 8px;
-        }
-        .sidebar-brand .logo {
-            width: 30px;
-            height: 30px;
-        }
-        .sidebar-brand .brand-text {
-            font-size: 0.75rem;
-        }
-        .sidebar-link {
-            padding: 5px 8px;
-            font-size: 0.65rem;
-            gap: 6px;
-        }
-        .sidebar-link i {
-            width: 14px;
-            font-size: 0.7rem;
-        }
-        .sidebar-link .badge {
-            font-size: 0.45rem;
-            padding: 1px 5px;
-            min-width: 16px;
-        }
-        .sidebar-nav .nav-label {
-            font-size: 0.4rem;
-        }
-        .sidebar-status .status-text {
-            font-size: 0.55rem;
-        }
+        .sidebar { width: 100%; max-width: 320px; }
+        .sidebar-brand { padding: 10px 10px 8px; }
+        .sidebar-brand .logo { width: 30px; height: 30px; }
+        .sidebar-brand .brand-text { font-size: 0.75rem; }
+        .sidebar-link { padding: 5px 8px; font-size: 0.65rem; gap: 6px; }
+        .sidebar-link i { width: 14px; font-size: 0.7rem; }
+        .sidebar-link .badge { font-size: 0.45rem; padding: 1px 5px; min-width: 16px; }
+        .sidebar-nav .nav-label { font-size: 0.4rem; }
+        .sidebar-status .status-text { font-size: 0.55rem; }
     }
     
-    /* ================================================================
-       PRINT HIDE
-       ================================================================ */
     @media print {
-        .sidebar {
-            display: none !important;
-        }
-        #sidebarOverlay {
-            display: none !important;
-        }
+        .sidebar { display: none !important; }
+        #sidebarOverlay { display: none !important; }
+        .cashier-sidebar-toggle { display: none !important; }
     }
     
-    /* ================================================================
-       UTILITY
-       ================================================================ */
+    /* UTILITY */
     .flex { display: flex; }
     .items-center { align-items: center; }
     .gap-2 { gap: 8px; }
     .gap-3 { gap: 12px; }
-    .mt-2 { margin-top: 8px; }
-    .mt-1 { margin-top: 4px; }
-    .ml-auto { margin-left: auto; }
     .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 
-<!-- ================================================================ -->
-<!-- SIDEBAR OVERLAY -->
-<!-- ================================================================ -->
+<!-- OVERLAY -->
 <div id="sidebarOverlay"></div>
 
-<!-- ================================================================ -->
 <!-- SIDEBAR -->
-<!-- ================================================================ -->
 <aside class="sidebar" id="sidebar" role="navigation" aria-label="Cashier Sidebar">
     
-    <!-- ================================================================ -->
     <!-- BRAND -->
-    <!-- ================================================================ -->
     <div class="sidebar-brand">
         <div class="flex items-center gap-3">
             <img src="<?= $logo_url ?>" alt="Braick Logo" class="logo"
@@ -707,12 +592,9 @@ $initial_data = [
         </div>
     </div>
     
-    <!-- ================================================================ -->
     <!-- NAVIGATION -->
-    <!-- ================================================================ -->
     <nav class="sidebar-nav">
         
-        <!-- Cashier Menu -->
         <div class="nav-label"><span class="label-icon">📋</span> Cashier</div>
         
         <a href="/dispensary_system/frontend/pages/cashier/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
@@ -720,36 +602,26 @@ $initial_data = [
             <span class="link-text">Dashboard</span>
         </a>
         
-        <!-- Billing -->
         <div class="nav-label"><span class="label-icon">💰</span> Billing</div>
         
         <a href="/dispensary_system/frontend/pages/cashier/pending_bills.php" class="sidebar-link <?= isActive('pending_bills.php') ?>">
             <i class="fas fa-clock"></i>
             <span class="link-text">Pending Bills</span>
-            <?php if ($pending_bills > 0): ?>
-                <span class="badge orange" id="sidebarPendingBadge"><?= $pending_bills ?></span>
-            <?php else: ?>
-                <span class="badge" id="sidebarPendingBadge">0</span>
-            <?php endif; ?>
+            <span class="badge <?= $pending_bills > 0 ? 'orange' : '' ?>" id="sidebarPendingBadge"><?= $pending_bills ?></span>
         </a>
         
         <a href="/dispensary_system/frontend/pages/cashier/paid_bills.php" class="sidebar-link <?= isActive('paid_bills.php') ?>">
             <i class="fas fa-check-circle"></i>
             <span class="link-text">Paid Bills</span>
-            <span class="badge green" id="sidebarPaidBadge"><?= $total_paid ?></span>
+            <span class="badge <?= $total_paid > 0 ? 'green' : '' ?>" id="sidebarPaidBadge"><?= $total_paid ?></span>
         </a>
         
         <a href="/dispensary_system/frontend/pages/cashier/partial_payments.php" class="sidebar-link <?= isActive('partial_payments.php') ?>">
             <i class="fas fa-hand-holding-usd"></i>
             <span class="link-text">Partial Payments</span>
-            <?php if ($partial_payments > 0): ?>
-                <span class="badge blue" id="sidebarPartialBadge"><?= $partial_payments ?></span>
-            <?php else: ?>
-                <span class="badge" id="sidebarPartialBadge">0</span>
-            <?php endif; ?>
+            <span class="badge <?= $partial_payments > 0 ? 'blue' : '' ?>" id="sidebarPartialBadge"><?= $partial_payments ?></span>
         </a>
         
-        <!-- Payments -->
         <div class="nav-label"><span class="label-icon">💳</span> Payments</div>
         
         <a href="/dispensary_system/frontend/pages/cashier/payment_history.php" class="sidebar-link <?= isActive('payment_history.php') ?>">
@@ -757,7 +629,6 @@ $initial_data = [
             <span class="link-text">Payment History</span>
         </a>
         
-        <!-- Receipts -->
         <div class="nav-label"><span class="label-icon">🧾</span> Receipts</div>
         
         <a href="/dispensary_system/frontend/pages/cashier/receipt_history.php" class="sidebar-link <?= isActive('receipt_history.php') ?>">
@@ -765,20 +636,14 @@ $initial_data = [
             <span class="link-text">Receipt History</span>
         </a>
         
-        <!-- Expenses -->
         <div class="nav-label"><span class="label-icon">💰</span> Expenses</div>
         
         <a href="/dispensary_system/frontend/pages/cashier/expenses.php" class="sidebar-link <?= isActive('expenses.php') ?>">
             <i class="fas fa-coins"></i>
             <span class="link-text">Expenses</span>
-            <?php if ($total_expenses > 0): ?>
-                <span class="badge yellow" id="sidebarExpensesBadge">TSh <?= number_format($total_expenses) ?></span>
-            <?php else: ?>
-                <span class="badge" id="sidebarExpensesBadge">0</span>
-            <?php endif; ?>
+            <span class="badge <?= $total_expenses > 0 ? 'yellow' : '' ?>" id="sidebarExpensesBadge"><?= $total_expenses > 0 ? 'TSh ' . number_format($total_expenses) : '0' ?></span>
         </a>
         
-        <!-- Account -->
         <div class="nav-label"><span class="label-icon">👤</span> Account</div>
         
         <a href="/dispensary_system/frontend/pages/cashier/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
@@ -793,9 +658,7 @@ $initial_data = [
         
     </nav>
     
-    <!-- ================================================================ -->
     <!-- STATUS FOOTER -->
-    <!-- ================================================================ -->
     <div class="sidebar-status">
         <span class="status-dot online" id="sidebarStatusDot"></span>
         <span class="status-text" id="sidebarStatusText">Online</span>
@@ -808,43 +671,36 @@ $initial_data = [
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - WITH AJAX INTEGRATION -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // CONFIGURATION
-    // ================================================================
     var SIDEBAR_CONFIG = {
         AJAX_URL: '/dispensary_system/backend/api/cashier_sidebar_ajax.php',
-        CHECK_INTERVAL: 2000,      // Check every 2 seconds
-        FORCE_INTERVAL: 5000,      // Force refresh every 5 seconds
+        CHECK_INTERVAL: 2000,
+        FORCE_INTERVAL: 5000,
         BRANCH_ID: <?= json_encode($user_branch_id) ?>,
         INITIAL_HASH: '<?= $initial_hash ?>'
     };
     
-    console.log('🔧 Cashier Sidebar Config:', SIDEBAR_CONFIG);
+    console.log('🔧 Cashier Sidebar V9 Config:', SIDEBAR_CONFIG);
     
-    // ================================================================
-    // STATE
-    // ================================================================
     var sidebarState = {
         dataHash: SIDEBAR_CONFIG.INITIAL_HASH,
         isUpdating: false,
         hasInitialData: false,
         updateInterval: null,
         forceInterval: null,
-        lastUpdate: null,
         changeCount: 0,
         lastData: null
     };
     
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
+    // ============================================================
+    // ✅ V9: SIDEBAR TOGGLE (MOBILE ONLY)
+    // ============================================================
     (function() {
         function initSidebar() {
             var sidebar = document.getElementById('sidebar');
-            var toggleBtn = document.getElementById('sidebarToggle');
+            var toggleBtn = document.getElementById('cashierSidebarToggle');
             var closeBtn = document.getElementById('sidebarCloseBtn');
             var overlay = document.getElementById('sidebarOverlay');
             
@@ -878,19 +734,16 @@ $initial_data = [
                 }
             }
             
+            // ✅ V9: Hamburger toggle button (mobile only)
             if (toggleBtn) {
-                var newToggle = toggleBtn.cloneNode(true);
-                toggleBtn.parentNode.replaceChild(newToggle, toggleBtn);
-                var freshToggle = document.getElementById('sidebarToggle');
-                if (freshToggle) {
-                    freshToggle.addEventListener('click', function(e) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        toggleSidebar();
-                    });
-                }
+                toggleBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    toggleSidebar();
+                });
             }
             
+            // Close button (inside sidebar)
             if (closeBtn) {
                 closeBtn.addEventListener('click', function(e) {
                     e.preventDefault();
@@ -899,6 +752,7 @@ $initial_data = [
                 });
             }
             
+            // Overlay click
             if (overlay) {
                 overlay.addEventListener('click', function(e) {
                     if (e.target === overlay) {
@@ -907,12 +761,14 @@ $initial_data = [
                 });
             }
             
+            // ESC key
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape' && sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
             });
             
+            // Auto-close on resize (desktop)
             window.addEventListener('resize', function() {
                 if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
                     closeSidebar();
@@ -927,15 +783,13 @@ $initial_data = [
         }
     })();
 
-    // ================================================================
-    // UPDATE SIDEBAR BADGES
-    // ================================================================
+    // ============================================================
+    // UPDATE BADGES
+    // ============================================================
     function updateSidebarBadges(data) {
         if (!data) return false;
-        
         var hasChanges = false;
         
-        // 1. Pending Bills
         var pendingBadge = document.getElementById('sidebarPendingBadge');
         if (pendingBadge && data.pending_bills !== undefined) {
             var oldVal = pendingBadge.textContent;
@@ -947,11 +801,9 @@ $initial_data = [
                 pendingBadge.classList.remove('badge-update');
                 void pendingBadge.offsetWidth;
                 pendingBadge.classList.add('badge-update');
-                console.log('🔄 Pending Bills: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // 2. Paid Bills
         var paidBadge = document.getElementById('sidebarPaidBadge');
         if (paidBadge && data.paid_bills !== undefined) {
             var oldVal = paidBadge.textContent;
@@ -963,11 +815,9 @@ $initial_data = [
                 paidBadge.classList.remove('badge-update');
                 void paidBadge.offsetWidth;
                 paidBadge.classList.add('badge-update');
-                console.log('🔄 Paid Bills: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // 3. Partial Payments
         var partialBadge = document.getElementById('sidebarPartialBadge');
         if (partialBadge && data.partial_payments !== undefined) {
             var oldVal = partialBadge.textContent;
@@ -979,11 +829,9 @@ $initial_data = [
                 partialBadge.classList.remove('badge-update');
                 void partialBadge.offsetWidth;
                 partialBadge.classList.add('badge-update');
-                console.log('🔄 Partial Payments: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // 4. Expenses
         var expensesBadge = document.getElementById('sidebarExpensesBadge');
         if (expensesBadge && data.total_expenses !== undefined) {
             var oldVal = expensesBadge.textContent;
@@ -996,24 +844,19 @@ $initial_data = [
                 expensesBadge.classList.remove('badge-update');
                 void expensesBadge.offsetWidth;
                 expensesBadge.classList.add('badge-update');
-                console.log('🔄 Expenses: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // 5. Update timestamp
         var timeEl = document.getElementById('sidebarUpdateTime');
         if (timeEl) {
             var now = new Date();
             var timeStr = now.toLocaleTimeString('en-US', {
                 hour: '2-digit', minute: '2-digit', second: '2-digit'
             });
-            var newHtml = '<span class="sidebar-live-indicator"><span class="dot"></span> Live ' + timeStr;
-            if (timeEl.innerHTML !== newHtml) {
-                timeEl.innerHTML = newHtml;
-            }
+            var newHtml = '<span class="sidebar-live-indicator"><span class="dot"></span> Live ' + timeStr + '</span>';
+            if (timeEl.innerHTML !== newHtml) timeEl.innerHTML = newHtml;
         }
         
-        // Flash sidebar if data changed
         if (hasChanges) {
             var sidebarEl = document.getElementById('sidebar');
             if (sidebarEl) {
@@ -1022,18 +865,15 @@ $initial_data = [
                 sidebarEl.classList.add('sidebar-data-flash');
             }
             sidebarState.changeCount++;
-            console.log('📊 Sidebar updated: ' + sidebarState.changeCount + ' changes detected');
         }
         
-        // Store last data
         sidebarState.lastData = data;
-        
         return hasChanges;
     }
 
-    // ================================================================
-    // FETCH SIDEBAR DATA - DIRECT AJAX (NO EXTERNAL API)
-    // ================================================================
+    // ============================================================
+    // FETCH
+    // ============================================================
     function fetchSidebarData(forceUpdate) {
         if (sidebarState.isUpdating && !forceUpdate) return;
         if (!SIDEBAR_CONFIG.BRANCH_ID) return;
@@ -1043,11 +883,7 @@ $initial_data = [
         var formData = new FormData();
         formData.append('branch_id', SIDEBAR_CONFIG.BRANCH_ID);
         formData.append('hash', sidebarState.dataHash);
-        if (forceUpdate) {
-            formData.append('force_update', '1');
-        }
-        
-        console.log('📡 Fetching sidebar data via AJAX... (force: ' + (forceUpdate ? 'YES' : 'NO') + ')');
+        if (forceUpdate) formData.append('force_update', '1');
         
         fetch(SIDEBAR_CONFIG.AJAX_URL, {
             method: 'POST',
@@ -1055,27 +891,20 @@ $initial_data = [
             credentials: 'same-origin'
         })
         .then(function(response) {
-            if (!response.ok) {
-                throw new Error('Network response was not ok: ' + response.status);
-            }
+            if (!response.ok) throw new Error('Network error: ' + response.status);
             return response.json();
         })
         .then(function(data) {
             sidebarState.isUpdating = false;
             
             if (data.success) {
-                console.log('📥 AJAX Response: has_changed=' + data.has_changed + ', hash=' + data.hash);
-                
                 if (data.has_changed && data.data) {
-                    // Data has changed - update badges
                     var hasUpdates = updateSidebarBadges(data.data);
                     if (hasUpdates) {
                         sidebarState.dataHash = data.hash;
-                        console.log('✅ Sidebar updated with new data');
                     }
                     sidebarState.hasInitialData = true;
                     
-                    // Dispatch event for other components
                     var event = new CustomEvent('sidebarDataUpdated', {
                         detail: {
                             data: data.data,
@@ -1084,91 +913,56 @@ $initial_data = [
                         }
                     });
                     document.dispatchEvent(event);
-                    
-                } else if (data.has_changed === false) {
-                    // No changes - just update timestamp
+                } else {
                     var timeEl = document.getElementById('sidebarUpdateTime');
                     if (timeEl) {
                         var now = new Date();
                         var timeStr = now.toLocaleTimeString('en-US', {
                             hour: '2-digit', minute: '2-digit', second: '2-digit'
                         });
-                        var newHtml = '<span class="sidebar-live-indicator"><span class="dot"></span> Live ' + timeStr;
-                        if (timeEl.innerHTML !== newHtml) {
-                            timeEl.innerHTML = newHtml;
-                        }
+                        timeEl.innerHTML = '<span class="sidebar-live-indicator"><span class="dot"></span> Live ' + timeStr + '</span>';
                     }
                     sidebarState.hasInitialData = true;
                 }
                 
-                // Update status dot
                 var statusDot = document.getElementById('sidebarStatusDot');
-                if (statusDot) {
-                    statusDot.className = 'status-dot online';
-                }
+                if (statusDot) statusDot.className = 'status-dot online';
                 var statusText = document.getElementById('sidebarStatusText');
-                if (statusText) {
-                    statusText.textContent = 'Online';
-                }
+                if (statusText) statusText.textContent = 'Online';
                 
             } else {
                 if (data.message && data.message.includes('Unauthorized')) {
                     window.location.href = '/dispensary_system/frontend/pages/login.php';
                 }
-                console.warn('⚠️ AJAX Error:', data.message);
             }
         })
         .catch(function(error) {
             sidebarState.isUpdating = false;
-            console.warn('❌ Sidebar AJAX error:', error.message);
-            
-            // Update status to offline
             var statusDot = document.getElementById('sidebarStatusDot');
-            if (statusDot) {
-                statusDot.className = 'status-dot offline';
-            }
+            if (statusDot) statusDot.className = 'status-dot offline';
             var statusText = document.getElementById('sidebarStatusText');
-            if (statusText) {
-                statusText.textContent = 'Offline';
-            }
+            if (statusText) statusText.textContent = 'Offline';
         });
     }
 
-    // ================================================================
-    // START AUTO-UPDATE
-    // ================================================================
+    // ============================================================
+    // AUTO UPDATE
+    // ============================================================
     function startSidebarAutoUpdate() {
-        if (sidebarState.updateInterval) {
-            clearInterval(sidebarState.updateInterval);
-        }
-        if (sidebarState.forceInterval) {
-            clearInterval(sidebarState.forceInterval);
-        }
+        if (sidebarState.updateInterval) clearInterval(sidebarState.updateInterval);
+        if (sidebarState.forceInterval) clearInterval(sidebarState.forceInterval);
         
-        // Initial fetch immediately
-        setTimeout(function() {
-            console.log('🔄 Initial sidebar data fetch...');
-            fetchSidebarData(true);
-        }, 300);
+        setTimeout(function() { fetchSidebarData(true); }, 300);
         
-        // Check every 2 seconds for changes
         sidebarState.updateInterval = setInterval(function() {
-            if (!sidebarState.isUpdating) {
-                fetchSidebarData(false);
-            }
+            if (!sidebarState.isUpdating) fetchSidebarData(false);
         }, SIDEBAR_CONFIG.CHECK_INTERVAL);
         
-        // Force refresh every 5 seconds as safety net
         sidebarState.forceInterval = setInterval(function() {
             if (!sidebarState.isUpdating && sidebarState.hasInitialData) {
-                console.log('🔄 Force refresh sidebar data...');
                 fetchSidebarData(true);
             }
         }, SIDEBAR_CONFIG.FORCE_INTERVAL);
-        
-        console.log('🔄 Sidebar auto-update started (check: ' + 
-            SIDEBAR_CONFIG.CHECK_INTERVAL/1000 + 's, force: ' + 
-            SIDEBAR_CONFIG.FORCE_INTERVAL/1000 + 's)');
     }
 
     function stopSidebarAutoUpdate() {
@@ -1180,72 +974,32 @@ $initial_data = [
             clearInterval(sidebarState.forceInterval);
             sidebarState.forceInterval = null;
         }
-        console.log('🔄 Sidebar auto-update stopped');
     }
 
-    // ================================================================
-    // MANUAL REFRESH
-    // ================================================================
     function refreshSidebarData() {
-        console.log('🔄 Manual refresh triggered');
         fetchSidebarData(true);
         return true;
     }
 
-    // ================================================================
-    // EXPOSE FUNCTIONS
-    // ================================================================
     window.refreshSidebarData = refreshSidebarData;
     window.fetchSidebarData = fetchSidebarData;
     window.startSidebarAutoUpdate = startSidebarAutoUpdate;
     window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
-    window.getSidebarState = function() { return sidebarState; };
-    window.getSidebarHash = function() { return sidebarState.dataHash; };
 
-    // ================================================================
-    // VISIBILITY CHANGE
-    // ================================================================
     document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopSidebarAutoUpdate();
-        } else {
-            console.log('📱 Tab visible - restarting sidebar auto-update');
+        if (document.hidden) stopSidebarAutoUpdate();
+        else {
             startSidebarAutoUpdate();
-            setTimeout(function() {
-                fetchSidebarData(true);
-            }, 300);
+            setTimeout(function() { fetchSidebarData(true); }, 300);
         }
     });
 
-    // ================================================================
-    // DOM READY
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        console.log('📄 DOM ready - starting sidebar...');
-        setTimeout(function() {
-            startSidebarAutoUpdate();
-        }, 500);
+        setTimeout(function() { startSidebarAutoUpdate(); }, 500);
     });
 
-    // ================================================================
-    // CONSOLE LOG
-    // ================================================================
-    console.log('%c💰 Braick Dispensary - Cashier Sidebar (AJAX)', 
-        'font-size:16px; font-weight:bold; color:#059669;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 
-        'font-size:13px; color:#34D399;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 
-        'font-size:13px; color:#6EA8FE;');
-    console.log('%c📊 Initial Data:', 'font-size:13px; font-weight:bold; color:#D97706;');
-    console.log('   Pending: <?= $pending_bills ?> (regular + OTC)');
-    console.log('   Partial: <?= $partial_payments ?>');
-    console.log('   Paid: <?= $total_paid ?> (bills + OTC)');
-    console.log('   Expenses: TSh <?= number_format($total_expenses) ?>');
-    console.log('   Patients Waiting: <?= $patients_waiting ?>');
-    console.log('%c🔑 Initial Hash: <?= $initial_hash ?>', 'font-size:12px; color:#94A3B8;');
-    console.log('%c⚡ Auto-Update: Every 2s (checks for changes)', 'font-size:13px; color:#34D399;');
-    console.log('%c🔄 Force refresh: Every 5s (safety net)', 'font-size:13px; color:#F59E0B;');
-    console.log('%c📡 AJAX URL: ' + SIDEBAR_CONFIG.AJAX_URL, 'font-size:12px; color:#94A3B8;');
-    console.log('%c💡 Call window.refreshSidebarData() for manual update', 'font-size:12px; color:#6EA8FE;');
-    console.log('%c✅ Paid Bills = Bills table (paid) + OTC sales (paid)', 'font-size:13px; font-weight:bold; color:#34D399;');
+    console.log('%c💰 Braick - Cashier Sidebar V9', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c✅ Toggle button MOBILE ONLY', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Desktop = sidebar always visible', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Paid Bills: <?= $total_paid ?> (matches page)', 'font-size:13px; color:#34D399;');
 </script>
