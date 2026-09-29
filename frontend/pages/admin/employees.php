@@ -1,12 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/employees.php
-// SUPER ADMIN - EMPLOYEES MANAGEMENT
+// SUPER ADMIN - EMPLOYEES MANAGEMENT (V3 FINAL)
 // ✅ Uses SHARED header & sidebar (NO DUPLICATES)
 // ✅ Global CSS variables (--page-*) za header
 // ✅ Search bar + scroll buttons < > kwenye TABLE HEADER
 // ✅ Table MOJA TU - hakuna table ndani ya table
 // ✅ Full dark mode support (handled by header)
+// ✅ V2: Inactive employees WA MWISHO kwenye list
+// ✅ V2: Inactive HAWANA namba (#) - active pekee wanapata namba
+// ✅ V3: DEACTIVATE button INAFANYA KAZI (form POST method)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -82,51 +85,89 @@ $message = '';
 $message_type = '';
 
 // ================================================================
-// HANDLE DEACTIVATE
+// ✅ V3: HANDLE DEACTIVATE (POST method for security)
 // ================================================================
-if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
-    $user_id_to_delete = (int)$_GET['delete'];
-    $stmt = $db->prepare("SELECT id, role, full_name, branch_id FROM users WHERE id = ? AND role != 'admin'");
-    $stmt->execute([$user_id_to_delete]);
-    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'deactivate') {
+    $user_id_to_deactivate = (int)($_POST['user_id'] ?? 0);
     
-    if ($user) {
-        $stmt = $db->prepare("UPDATE users SET status = 'inactive', updated_at = NOW() WHERE id = ?");
-        if ($stmt->execute([$user_id_to_delete])) {
-            $message = "✅ Employee '" . htmlspecialchars($user['full_name']) . "' has been deactivated.";
-            $message_type = 'success';
-            try {
-                $log_stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'employee_deactivated', ?, NOW())");
-                $log_stmt->execute([$user_id, $user['branch_id'] ?? 1, "Deactivated: " . $user['full_name'] . " by " . $user_full_name]);
-            } catch (Exception $e) {}
+    if ($user_id_to_deactivate > 0 && $user_id_to_deactivate !== $user_id) {
+        $stmt = $db->prepare("SELECT id, role, full_name, branch_id FROM users WHERE id = ? AND role != 'admin'");
+        $stmt->execute([$user_id_to_deactivate]);
+        $target_user = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($target_user) {
+            $stmt = $db->prepare("UPDATE users SET status = 'inactive', updated_at = NOW() WHERE id = ?");
+            if ($stmt->execute([$user_id_to_deactivate])) {
+                $message = "✅ Employee '" . htmlspecialchars($target_user['full_name']) . "' amefanywa Inactive.";
+                $message_type = 'success';
+                
+                // Log activity
+                try {
+                    $log_stmt = $db->prepare("
+                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                        VALUES (?, ?, 'employee_deactivated', ?, NOW())
+                    ");
+                    $log_stmt->execute([
+                        $user_id, 
+                        $target_user['branch_id'] ?? 1, 
+                        "Deactivated: " . $target_user['full_name'] . " by " . $user_full_name
+                    ]);
+                } catch (Exception $e) {}
+            } else {
+                $message = "❌ Imeshindwa kumfanya inactive.";
+                $message_type = 'error';
+            }
+        } else {
+            $message = "❌ Employee haipatikani au ni Admin.";
+            $message_type = 'error';
+        }
+    } else {
+        $message = "❌ Haiwezi kujifanya mwenyewe inactive.";
+        $message_type = 'error';
+    }
+}
+
+// ================================================================
+// ✅ V3: HANDLE REACTIVATE (POST method for security)
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'reactivate') {
+    $user_id_to_reactivate = (int)($_POST['user_id'] ?? 0);
+    
+    if ($user_id_to_reactivate > 0) {
+        $stmt = $db->prepare("SELECT id, role, full_name, branch_id FROM users WHERE id = ? AND role != 'admin'");
+        $stmt->execute([$user_id_to_reactivate]);
+        $target_user = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($target_user) {
+            $stmt = $db->prepare("UPDATE users SET status = 'active', updated_at = NOW() WHERE id = ?");
+            if ($stmt->execute([$user_id_to_reactivate])) {
+                $message = "✅ Employee '" . htmlspecialchars($target_user['full_name']) . "' amerudishwa Active.";
+                $message_type = 'success';
+                
+                try {
+                    $log_stmt = $db->prepare("
+                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                        VALUES (?, ?, 'employee_reactivated', ?, NOW())
+                    ");
+                    $log_stmt->execute([
+                        $user_id, 
+                        $target_user['branch_id'] ?? 1, 
+                        "Reactivated: " . $target_user['full_name'] . " by " . $user_full_name
+                    ]);
+                } catch (Exception $e) {}
+            } else {
+                $message = "❌ Imeshindwa kumrudisha Active.";
+                $message_type = 'error';
+            }
+        } else {
+            $message = "❌ Employee haipatikani au ni Admin.";
+            $message_type = 'error';
         }
     }
 }
 
 // ================================================================
-// HANDLE REACTIVATE
-// ================================================================
-if (isset($_GET['reactivate']) && is_numeric($_GET['reactivate'])) {
-    $user_id_to_reactivate = (int)$_GET['reactivate'];
-    $stmt = $db->prepare("SELECT id, role, full_name, branch_id FROM users WHERE id = ? AND role != 'admin'");
-    $stmt->execute([$user_id_to_reactivate]);
-    $user = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if ($user) {
-        $stmt = $db->prepare("UPDATE users SET status = 'active', updated_at = NOW() WHERE id = ?");
-        if ($stmt->execute([$user_id_to_reactivate])) {
-            $message = "✅ Employee '" . htmlspecialchars($user['full_name']) . "' has been reactivated.";
-            $message_type = 'success';
-            try {
-                $log_stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'employee_reactivated', ?, NOW())");
-                $log_stmt->execute([$user_id, $user['branch_id'] ?? 1, "Reactivated: " . $user['full_name'] . " by " . $user_full_name]);
-            } catch (Exception $e) {}
-        }
-    }
-}
-
-// ================================================================
-// FETCH EMPLOYEES
+// ✅ FETCH EMPLOYEES - ACTIVE KWANZA, INACTIVE MWISHO
 // ================================================================
 $employees = [];
 $filter = '';
@@ -144,7 +185,9 @@ $stmt = $db->query("
     LEFT JOIN branches b ON u.branch_id = b.id
     WHERE u.role != 'admin'
     $filter
-    ORDER BY u.status DESC, u.full_name ASC
+    ORDER BY 
+        CASE WHEN u.status = 'active' THEN 0 ELSE 1 END ASC,
+        u.full_name ASC
 ");
 $employees = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -213,13 +256,7 @@ include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC CSS - TUMIA VARIABLES ZA HEADER (--page-*) -->
-<!-- ================================================================ -->
 <style>
-    /* ================================================================
-       PAGE HEADER - BLUE GRADIENT
-       ================================================================ */
     .page-header-emp {
         background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
         border-radius: 18px;
@@ -333,9 +370,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         color: #0A4CA8;
     }
 
-    /* ================================================================
-       STATS CARDS
-       ================================================================ */
     .stats-grid-emp {
         display: grid;
         grid-template-columns: repeat(6, 1fr);
@@ -406,9 +440,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         margin-top: 6px;
     }
 
-    /* ================================================================
-       TABLE CARD
-       ================================================================ */
     .table-card-emp {
         background: var(--page-bg-card, #FFFFFF);
         border-radius: 18px;
@@ -451,9 +482,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         font-weight: 600;
     }
 
-    /* ================================================================
-       ✅ FILTER BAR - SEARCH + SCROLL BUTTONS (KAMA PATIENTS.PHP)
-       ================================================================ */
     .filter-bar-emp {
         display: flex;
         align-items: center;
@@ -572,7 +600,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         white-space: nowrap;
     }
 
-    /* ✅ SCROLL BUTTONS < > */
     .scroll-controls-emp {
         display: flex;
         align-items: center;
@@ -607,9 +634,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         transform: none !important;
     }
 
-    /* ================================================================
-       TABLE
-       ================================================================ */
     .table-scroll-wrapper-emp {
         overflow-x: auto;
         overflow-y: auto;
@@ -684,7 +708,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     .employee-table-emp .col-sno-emp {
-        width: 50px;
+        width: 60px;
         text-align: center;
         font-weight: 700;
         color: var(--page-primary, #0B5ED7);
@@ -692,10 +716,47 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     .inactive-row-emp {
-        opacity: 0.65;
+        opacity: 0.7;
+        background: #F8FAFC !important;
     }
 
-    /* Employee Info */
+    [data-theme="dark"] .inactive-row-emp {
+        background: #1A2234 !important;
+    }
+
+    .inactive-row-emp td {
+        color: var(--page-text-secondary, #64748B) !important;
+    }
+
+    .inactive-row-emp .col-sno-emp {
+        color: var(--page-text-muted, #94A3B8) !important;
+        font-weight: 500;
+    }
+
+    .section-header-row td {
+        background: linear-gradient(135deg, #F1F5F9, #E2E8F0) !important;
+        padding: 10px 16px !important;
+        font-weight: 800 !important;
+        font-size: 0.72rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #0B5ED7 !important;
+        border-bottom: 2px solid #0B5ED7 !important;
+        border-top: 2px solid #0B5ED7 !important;
+    }
+
+    [data-theme="dark"] .section-header-row td {
+        background: linear-gradient(135deg, #1E293B, #334155) !important;
+        color: #6EA8FE !important;
+        border-bottom-color: #6EA8FE !important;
+        border-top-color: #6EA8FE !important;
+    }
+
+    .section-header-row td i {
+        margin-right: 8px;
+        font-size: 0.85rem;
+    }
+
     .emp-info-cell-emp {
         display: flex;
         align-items: center;
@@ -723,6 +784,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         object-fit: cover;
     }
 
+    .inactive-row-emp .emp-avatar-emp {
+        background: linear-gradient(135deg, #94A3B8, #64748B);
+    }
+
     .emp-name-emp {
         font-weight: 600;
         color: var(--page-text-primary, #1E293B);
@@ -736,7 +801,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         margin: 2px 0 0 0;
     }
 
-    /* Badges */
     .role-badge-emp {
         display: inline-block;
         padding: 4px 12px;
@@ -797,9 +861,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     [data-theme="dark"] .status-badge-emp.active { background: #1A3A2A; color: #34D399; }
     [data-theme="dark"] .status-badge-emp.inactive { background: #3A1A1A; color: #F87171; }
 
-    /* ================================================================
-       ACTION BUTTONS
-       ================================================================ */
     .action-buttons-emp {
         display: flex;
         gap: 5px;
@@ -834,21 +895,30 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         box-shadow: 0 4px 10px rgba(0,0,0,0.15);
     }
 
-    .action-btn-emp.btn-view-emp { background: #0B5ED7; color: white; }
-    .action-btn-emp.btn-view-emp:hover { background: #0A4CA8; color: white; }
+    .action-btn-emp.btn-view-emp { 
+        background: linear-gradient(135deg, #3B82F6, #0B5ED7); 
+        color: white; 
+    }
+    .action-btn-emp.btn-view-emp:hover { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); color: white; }
 
-    .action-btn-emp.btn-edit-emp { background: #F59E0B; color: white; }
-    .action-btn-emp.btn-edit-emp:hover { background: #D97706; color: white; }
+    .action-btn-emp.btn-edit-emp { 
+        background: linear-gradient(135deg, #F59E0B, #D97706); 
+        color: white; 
+    }
+    .action-btn-emp.btn-edit-emp:hover { background: linear-gradient(135deg, #D97706, #B45309); color: white; }
 
-    .action-btn-emp.btn-delete-emp { background: #EF4444; color: white; }
-    .action-btn-emp.btn-delete-emp:hover { background: #DC2626; color: white; }
+    .action-btn-emp.btn-delete-emp { 
+        background: linear-gradient(135deg, #EF4444, #DC2626); 
+        color: white; 
+    }
+    .action-btn-emp.btn-delete-emp:hover { background: linear-gradient(135deg, #DC2626, #B91C1C); color: white; box-shadow: 0 6px 16px rgba(220, 38, 38, 0.4); }
 
-    .action-btn-emp.btn-reactivate-emp { background: #059669; color: white; }
-    .action-btn-emp.btn-reactivate-emp:hover { background: #047857; color: white; }
+    .action-btn-emp.btn-reactivate-emp { 
+        background: linear-gradient(135deg, #10B981, #059669); 
+        color: white; 
+    }
+    .action-btn-emp.btn-reactivate-emp:hover { background: linear-gradient(135deg, #059669, #047857); color: white; box-shadow: 0 6px 16px rgba(5, 150, 105, 0.4); }
 
-    /* ================================================================
-       BUTTONS
-       ================================================================ */
     .btn-emp {
         display: inline-flex;
         align-items: center;
@@ -876,40 +946,32 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         color: var(--page-primary, #0B5ED7);
     }
 
-    .btn-emp.btn-primary-emp {
-        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-        color: white;
-    }
-
-    .btn-emp.btn-primary-emp:hover {
-        background: linear-gradient(135deg, #0A4CA8, #083C8A);
-        color: white;
-        transform: translateY(-2px);
-    }
-
     .btn-emp.btn-danger-emp {
-        background: #DC2626;
+        background: linear-gradient(135deg, #EF4444, #DC2626);
         color: white;
+        font-weight: 700;
     }
 
     .btn-emp.btn-danger-emp:hover {
-        background: #B91C1C;
+        background: linear-gradient(135deg, #DC2626, #B91C1C);
         color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(220, 38, 38, 0.35);
     }
 
     .btn-emp.btn-success-emp {
-        background: #059669;
+        background: linear-gradient(135deg, #10B981, #059669);
         color: white;
+        font-weight: 700;
     }
 
     .btn-emp.btn-success-emp:hover {
-        background: #047857;
+        background: linear-gradient(135deg, #059669, #047857);
         color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(5, 150, 105, 0.35);
     }
 
-    /* ================================================================
-       MESSAGE BOX
-       ================================================================ */
     .message-box-emp {
         padding: 14px 20px;
         border-radius: 12px;
@@ -950,9 +1012,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         border-color: #F87171;
     }
 
-    /* ================================================================
-       MODAL
-       ================================================================ */
     .modal-emp {
         position: fixed;
         top: 0; left: 0; right: 0; bottom: 0;
@@ -1034,9 +1093,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         gap: 10px;
     }
 
-    /* ================================================================
-       FOOTER
-       ================================================================ */
     .footer-emp {
         padding: 14px 0;
         border-top: 2px solid var(--page-border, #E2E8F0);
@@ -1051,9 +1107,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         font-weight: 700;
     }
 
-    /* ================================================================
-       EMPTY STATE
-       ================================================================ */
     .empty-state-emp {
         text-align: center;
         padding: 40px 20px;
@@ -1067,9 +1120,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         display: block;
     }
 
-    /* ================================================================
-       ANIMATIONS
-       ================================================================ */
     @keyframes fadeInUpEmp {
         from { opacity: 0; transform: translateY(20px); }
         to { opacity: 1; transform: translateY(0); }
@@ -1080,9 +1130,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         opacity: 0;
     }
 
-    /* ================================================================
-       RESPONSIVE
-       ================================================================ */
     @media (max-width: 1200px) {
         .stats-grid-emp { grid-template-columns: repeat(3, 1fr); }
     }
@@ -1112,14 +1159,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 </style>
 
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
     <div class="page-header-emp animate-fade-in-up-emp">
         <div>
             <h1 class="page-title">
@@ -1151,9 +1193,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- MESSAGE -->
-    <!-- ================================================================ -->
     <?php if ($message): ?>
         <div class="message-box-emp <?= $message_type === 'success' ? 'success' : 'error' ?>">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>" style="font-size:1.2rem;"></i>
@@ -1161,16 +1201,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- STATS CARDS -->
-    <!-- ================================================================ -->
     <div class="stats-grid-emp animate-fade-in-up-emp" style="animation-delay:0.05s;">
-        <div class="stat-card-emp">
+        <div class="stat-card-emp" style="cursor:pointer;" onclick="filterByStatus('active')" title="Click to show Active only">
             <div class="stat-icon-wrap blue"><i class="fas fa-user-check"></i></div>
             <div class="stat-number-emp blue"><?= number_format($total_active) ?></div>
             <div class="stat-label-emp">Total Active</div>
         </div>
-        <div class="stat-card-emp">
+        <div class="stat-card-emp" style="cursor:pointer;" onclick="filterByStatus('inactive')" title="Click to show Inactive only">
             <div class="stat-icon-wrap gray"><i class="fas fa-user-slash"></i></div>
             <div class="stat-number-emp gray"><?= number_format($total_inactive) ?></div>
             <div class="stat-label-emp">Inactive</div>
@@ -1197,12 +1235,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- TABLE CARD - SEARCH BAR + SCROLL BUTTONS KWENYE TABLE HEADER -->
-    <!-- ================================================================ -->
+    <!-- TABLE CARD -->
     <div class="table-card-emp animate-fade-in-up-emp" style="animation-delay:0.1s;">
         
-        <!-- Card Header -->
         <div class="card-header-emp">
             <h3 class="card-title-emp">
                 <i class="fas fa-list"></i>
@@ -1211,7 +1246,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </h3>
         </div>
         
-        <!-- ✅ FILTER BAR - SEARCH + SCROLL BUTTONS (KAMA PATIENTS.PHP) -->
         <div class="filter-bar-emp">
             <div class="filter-bar-left-emp">
                 
@@ -1249,7 +1283,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 </span>
             </div>
             
-            <!-- ✅ SCROLL BUTTONS < > -->
             <div class="filter-bar-right-emp">
                 <div class="scroll-controls-emp">
                     <button type="button" 
@@ -1271,7 +1304,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </div>
         </div>
         
-        <!-- ✅ TABLE MOJA TU -->
         <div class="table-scroll-wrapper-emp" id="tableScrollWrapper">
             <table class="employee-table-emp" id="employeesTable">
                 <thead>
@@ -1283,98 +1315,189 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <th style="min-width: 140px;"><i class="fas fa-phone"></i> Phone</th>
                         <th style="min-width: 140px;"><i class="fas fa-store-alt"></i> Branch</th>
                         <th style="min-width: 110px;"><i class="fas fa-circle"></i> Status</th>
-                        <th style="min-width: 180px;text-align:center;"><i class="fas fa-cog"></i> Actions</th>
+                        <th style="min-width: 240px;text-align:center;"><i class="fas fa-cog"></i> Actions</th>
                     </tr>
                 </thead>
                 <tbody id="tableBody">
-                    <?php if (count($employees) > 0): ?>
-                        <?php $i = 1; foreach ($employees as $emp): 
-                            $initials = strtoupper(substr($emp['full_name'], 0, 1));
-                        ?>
-                            <tr class="emp-row-emp <?= $emp['status'] === 'inactive' ? 'inactive-row-emp' : '' ?>" 
-                                data-search="<?= strtolower(htmlspecialchars($emp['full_name'] . ' ' . $emp['username'] . ' ' . $emp['email'] . ' ' . ($emp['phone'] ?? '') . ' ' . ($emp['branch_name'] ?? '') . ' ' . $emp['role'])) ?>"
-                                data-role="<?= htmlspecialchars($emp['role']) ?>"
-                                data-status="<?= htmlspecialchars($emp['status']) ?>">
-                                <td class="col-sno-emp"><?= $i++ ?></td>
-                                <td>
-                                    <div class="emp-info-cell-emp">
-                                        <?php if (!empty($emp['profile_pic'])): ?>
-                                            <div class="emp-avatar-emp">
-                                                <img src="/dispensary_system/frontend/assets/uploads/profiles/<?= $emp['profile_pic'] ?>" 
-                                                     alt="<?= htmlspecialchars($emp['full_name']) ?>"
-                                                     onerror="this.parentElement.innerHTML='<?= $initials ?>'">
-                                            </div>
-                                        <?php else: ?>
-                                            <div class="emp-avatar-emp"><?= $initials ?></div>
-                                        <?php endif; ?>
-                                        <div>
-                                            <p class="emp-name-emp"><?= htmlspecialchars($emp['full_name']) ?></p>
-                                            <p class="emp-username-emp">@<?= htmlspecialchars($emp['username']) ?></p>
-                                        </div>
-                                    </div>
-                                </td>
-                                <td>
-                                    <span class="role-badge-emp role-<?= $emp['role'] ?>">
-                                        <?php
-                                            $role_labels = [
-                                                'doctor' => '🩺 Doctor',
-                                                'reception' => '🎧 Reception',
-                                                'pharmacy' => '💊 Pharmacy',
-                                                'laboratory' => '🔬 Lab Tech',
-                                                'cashier' => '💰 Cashier',
-                                                'audit' => '📋 Audit'
-                                            ];
-                                            echo $role_labels[$emp['role']] ?? ucfirst($emp['role']);
-                                        ?>
-                                    </span>
-                                </td>
-                                <td style="font-size:0.78rem;"><?= htmlspecialchars($emp['email']) ?></td>
-                                <td style="font-size:0.78rem;"><?= htmlspecialchars($emp['phone'] ?? 'N/A') ?></td>
-                                <td>
-                                    <span class="branch-badge-emp">
-                                        <i class="fas fa-store-alt"></i>
-                                        <?= htmlspecialchars($emp['branch_name'] ?? 'N/A') ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <span class="status-badge-emp <?= $emp['status'] === 'active' ? 'active' : 'inactive' ?>">
-                                        <?= $emp['status'] === 'active' ? '✅ Active' : '⛔ Inactive' ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <div class="action-buttons-emp">
-                                        <a href="view_employee.php?id=<?= $emp['id'] ?>&branch=<?= $selected_branch_id ?>" 
-                                           class="action-btn-emp btn-view-emp" title="View Employee">
-                                            <i class="fas fa-eye"></i> View
-                                        </a>
-                                        <a href="edit_employee.php?id=<?= $emp['id'] ?>&branch=<?= $selected_branch_id ?>" 
-                                           class="action-btn-emp btn-edit-emp" title="Edit Employee">
-                                            <i class="fas fa-edit"></i> Edit
-                                        </a>
-                                        <?php if ($emp['status'] === 'active'): ?>
-                                            <button onclick="confirmDelete(<?= $emp['id'] ?>, '<?= htmlspecialchars(addslashes($emp['full_name'])) ?>')" 
-                                                    class="action-btn-emp btn-delete-emp" title="Deactivate">
-                                                <i class="fas fa-user-slash"></i>
-                                            </button>
-                                        <?php else: ?>
-                                            <button onclick="confirmReactivate(<?= $emp['id'] ?>, '<?= htmlspecialchars(addslashes($emp['full_name'])) ?>')" 
-                                                    class="action-btn-emp btn-reactivate-emp" title="Reactivate">
-                                                <i class="fas fa-undo"></i>
-                                            </button>
-                                        <?php endif; ?>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                        <tr class="no-results-row-emp" id="noResults" style="display:none;">
+                    <?php if (count($employees) > 0): 
+                        $active_employees = array_filter($employees, fn($e) => $e['status'] === 'active');
+                        $inactive_employees = array_filter($employees, fn($e) => $e['status'] !== 'active');
+                    ?>
+                    
+                    <!-- ACTIVE SECTION -->
+                    <?php if (!empty($active_employees)): ?>
+                        <tr class="section-header-row section-active">
                             <td colspan="8">
-                                <div class="empty-state-emp">
-                                    <i class="fas fa-search-minus"></i>
-                                    <p style="font-size:0.9rem;font-weight:600;margin:0;">No employees match your search</p>
-                                    <p style="font-size:0.8rem;margin:4px 0 0 0;">Try adjusting your filters</p>
+                                <i class="fas fa-user-check"></i>
+                                ACTIVE EMPLOYEES (<?= count($active_employees) ?>)
+                            </td>
+                        </tr>
+                    <?php endif; ?>
+                    
+                    <?php $active_counter = 1; foreach ($active_employees as $emp): 
+                        $initials = strtoupper(substr($emp['full_name'], 0, 1));
+                    ?>
+                        <tr class="emp-row-emp" 
+                            data-search="<?= strtolower(htmlspecialchars($emp['full_name'] . ' ' . $emp['username'] . ' ' . $emp['email'] . ' ' . ($emp['phone'] ?? '') . ' ' . ($emp['branch_name'] ?? '') . ' ' . $emp['role'])) ?>"
+                            data-role="<?= htmlspecialchars($emp['role']) ?>"
+                            data-status="<?= htmlspecialchars($emp['status']) ?>"
+                            data-is-inactive="0">
+                            <td class="col-sno-emp"><?= $active_counter++ ?></td>
+                            <td>
+                                <div class="emp-info-cell-emp">
+                                    <?php if (!empty($emp['profile_pic'])): ?>
+                                        <div class="emp-avatar-emp">
+                                            <img src="/dispensary_system/frontend/assets/uploads/profiles/<?= $emp['profile_pic'] ?>" 
+                                                 alt="<?= htmlspecialchars($emp['full_name']) ?>"
+                                                 onerror="this.parentElement.innerHTML='<?= $initials ?>'">
+                                        </div>
+                                    <?php else: ?>
+                                        <div class="emp-avatar-emp"><?= $initials ?></div>
+                                    <?php endif; ?>
+                                    <div>
+                                        <p class="emp-name-emp"><?= htmlspecialchars($emp['full_name']) ?></p>
+                                        <p class="emp-username-emp">@<?= htmlspecialchars($emp['username']) ?></p>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>
+                                <span class="role-badge-emp role-<?= $emp['role'] ?>">
+                                    <?php
+                                        $role_labels = [
+                                            'doctor' => '🩺 Doctor',
+                                            'reception' => '🎧 Reception',
+                                            'pharmacy' => '💊 Pharmacy',
+                                            'laboratory' => '🔬 Lab Tech',
+                                            'cashier' => '💰 Cashier',
+                                            'audit' => '📋 Audit'
+                                        ];
+                                        echo $role_labels[$emp['role']] ?? ucfirst($emp['role']);
+                                    ?>
+                                </span>
+                            </td>
+                            <td style="font-size:0.78rem;"><?= htmlspecialchars($emp['email']) ?></td>
+                            <td style="font-size:0.78rem;"><?= htmlspecialchars($emp['phone'] ?? 'N/A') ?></td>
+                            <td>
+                                <span class="branch-badge-emp">
+                                    <i class="fas fa-store-alt"></i>
+                                    <?= htmlspecialchars($emp['branch_name'] ?? 'N/A') ?>
+                                </span>
+                            </td>
+                            <td>
+                                <span class="status-badge-emp active">
+                                    ✅ Active
+                                </span>
+                            </td>
+                            <td>
+                                <div class="action-buttons-emp">
+                                    <a href="view_employee.php?id=<?= $emp['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                       class="action-btn-emp btn-view-emp" title="View Employee">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
+                                    <a href="edit_employee.php?id=<?= $emp['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                       class="action-btn-emp btn-edit-emp" title="Edit Employee">
+                                        <i class="fas fa-edit"></i> Edit
+                                    </a>
+                                    <button type="button"
+                                            onclick="confirmDeactivate(<?= $emp['id'] ?>, '<?= htmlspecialchars(addslashes($emp['full_name'])) ?>')" 
+                                            class="action-btn-emp btn-delete-emp" 
+                                            title="Deactivate Employee">
+                                        <i class="fas fa-user-slash"></i> Deactivate
+                                    </button>
                                 </div>
                             </td>
                         </tr>
+                    <?php endforeach; ?>
+                    
+                    <!-- INACTIVE SECTION -->
+                    <?php if (!empty($inactive_employees)): ?>
+                        <tr class="section-header-row section-inactive">
+                            <td colspan="8">
+                                <i class="fas fa-user-slash"></i>
+                                INACTIVE EMPLOYEES (<?= count($inactive_employees) ?>) — No row numbers
+                            </td>
+                        </tr>
+                    <?php endif; ?>
+                    
+                    <?php foreach ($inactive_employees as $emp): 
+                        $initials = strtoupper(substr($emp['full_name'], 0, 1));
+                    ?>
+                        <tr class="emp-row-emp inactive-row-emp" 
+                            data-search="<?= strtolower(htmlspecialchars($emp['full_name'] . ' ' . $emp['username'] . ' ' . $emp['email'] . ' ' . ($emp['phone'] ?? '') . ' ' . ($emp['branch_name'] ?? '') . ' ' . $emp['role'])) ?>"
+                            data-role="<?= htmlspecialchars($emp['role']) ?>"
+                            data-status="<?= htmlspecialchars($emp['status']) ?>"
+                            data-is-inactive="1">
+                            <td class="col-sno-emp">
+                                <span style="color:var(--page-text-muted, #94A3B8);font-weight:500;font-size:0.85rem;">—</span>
+                            </td>
+                            <td>
+                                <div class="emp-info-cell-emp">
+                                    <?php if (!empty($emp['profile_pic'])): ?>
+                                        <div class="emp-avatar-emp">
+                                            <img src="/dispensary_system/frontend/assets/uploads/profiles/<?= $emp['profile_pic'] ?>" 
+                                                 alt="<?= htmlspecialchars($emp['full_name']) ?>"
+                                                 onerror="this.parentElement.innerHTML='<?= $initials ?>'">
+                                        </div>
+                                    <?php else: ?>
+                                        <div class="emp-avatar-emp"><?= $initials ?></div>
+                                    <?php endif; ?>
+                                    <div>
+                                        <p class="emp-name-emp"><?= htmlspecialchars($emp['full_name']) ?></p>
+                                        <p class="emp-username-emp">@<?= htmlspecialchars($emp['username']) ?></p>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>
+                                <span class="role-badge-emp role-<?= $emp['role'] ?>" style="opacity:0.7;">
+                                    <?php
+                                        echo $role_labels[$emp['role']] ?? ucfirst($emp['role']);
+                                    ?>
+                                </span>
+                            </td>
+                            <td style="font-size:0.78rem;"><?= htmlspecialchars($emp['email']) ?></td>
+                            <td style="font-size:0.78rem;"><?= htmlspecialchars($emp['phone'] ?? 'N/A') ?></td>
+                            <td>
+                                <span class="branch-badge-emp" style="opacity:0.7;">
+                                    <i class="fas fa-store-alt"></i>
+                                    <?= htmlspecialchars($emp['branch_name'] ?? 'N/A') ?>
+                                </span>
+                            </td>
+                            <td>
+                                <span class="status-badge-emp inactive">
+                                    ⛔ Inactive
+                                </span>
+                            </td>
+                            <td>
+                                <div class="action-buttons-emp">
+                                    <a href="view_employee.php?id=<?= $emp['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                       class="action-btn-emp btn-view-emp" title="View Employee">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
+                                    <a href="edit_employee.php?id=<?= $emp['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                       class="action-btn-emp btn-edit-emp" title="Edit Employee">
+                                        <i class="fas fa-edit"></i> Edit
+                                    </a>
+                                    <button type="button"
+                                            onclick="confirmReactivate(<?= $emp['id'] ?>, '<?= htmlspecialchars(addslashes($emp['full_name'])) ?>')" 
+                                            class="action-btn-emp btn-reactivate-emp" 
+                                            title="Reactivate Employee">
+                                        <i class="fas fa-undo"></i> Reactivate
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    
+                    <tr class="no-results-row-emp" id="noResults" style="display:none;">
+                        <td colspan="8">
+                            <div class="empty-state-emp">
+                                <i class="fas fa-search-minus"></i>
+                                <p style="font-size:0.9rem;font-weight:600;margin:0;">No employees match your search</p>
+                                <p style="font-size:0.8rem;margin:4px 0 0 0;">Try adjusting your filters</p>
+                            </div>
+                        </td>
+                    </tr>
+                    
                     <?php else: ?>
                         <tr>
                             <td colspan="8">
@@ -1391,9 +1514,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer-emp">
         <p>
             <span class="footer-brand-emp">Braick Dispensary</span> Management System
@@ -1409,33 +1530,45 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- DELETE MODAL -->
+<!-- DEACTIVATE MODAL (FORM POST) -->
 <!-- ================================================================ -->
-<div id="deleteModal" class="modal-emp" style="display:none;">
-    <div class="modal-overlay-emp" onclick="closeModal()"></div>
+<div id="deactivateModal" class="modal-emp" style="display:none;">
+    <div class="modal-overlay-emp" onclick="closeDeactivateModal()"></div>
     <div class="modal-content-emp">
         <div class="modal-header-emp">
-            <h3><i class="fas fa-exclamation-triangle" style="color:#DC2626;"></i> Deactivate Employee</h3>
-            <button onclick="closeModal()" class="modal-close-emp">&times;</button>
+            <h3><i class="fas fa-user-slash" style="color:#DC2626;"></i> Deactivate Employee</h3>
+            <button onclick="closeDeactivateModal()" class="modal-close-emp">&times;</button>
         </div>
-        <div class="modal-body-emp">
-            <p style="font-size:0.9rem;margin:0 0 8px 0;">Are you sure you want to deactivate <strong id="deleteName" style="color:#DC2626;"></strong>?</p>
-            <p style="font-size:0.78rem;color:var(--page-text-secondary);margin:0;">
-                <i class="fas fa-info-circle"></i> 
-                This employee will no longer be able to login until reactivated.
-            </p>
-        </div>
-        <div class="modal-footer-emp">
-            <button onclick="closeModal()" class="btn-emp btn-outline-emp">Cancel</button>
-            <a href="#" id="deleteLink" class="btn-emp btn-danger-emp">
-                <i class="fas fa-user-slash"></i> Deactivate
-            </a>
-        </div>
+        <form method="POST" action="" id="deactivateForm">
+            <input type="hidden" name="action" value="deactivate">
+            <input type="hidden" name="user_id" id="deactivateUserId" value="">
+            <div class="modal-body-emp">
+                <p style="font-size:0.9rem;margin:0 0 12px 0;">
+                    Are you sure you want to deactivate 
+                    <strong id="deactivateName" style="color:#DC2626;font-size:1rem;"></strong>?
+                </p>
+                <div style="background:#FEF3C7;border-left:4px solid #D97706;padding:12px 16px;border-radius:8px;margin-top:12px;">
+                    <p style="font-size:0.8rem;color:#92400E;margin:0;font-weight:600;line-height:1.6;">
+                        <i class="fas fa-info-circle"></i> 
+                        Employee hii <strong>haitaweza kuingia (login)</strong> kwenye mfumo hadi 
+                        uirudishe kwenye <strong>Active</strong> tena.
+                    </p>
+                </div>
+            </div>
+            <div class="modal-footer-emp">
+                <button type="button" onclick="closeDeactivateModal()" class="btn-emp btn-outline-emp">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+                <button type="submit" class="btn-emp btn-danger-emp">
+                    <i class="fas fa-user-slash"></i> Yes, Deactivate
+                </button>
+            </div>
+        </form>
     </div>
 </div>
 
 <!-- ================================================================ -->
-<!-- REACTIVATE MODAL -->
+<!-- REACTIVATE MODAL (FORM POST) -->
 <!-- ================================================================ -->
 <div id="reactivateModal" class="modal-emp" style="display:none;">
     <div class="modal-overlay-emp" onclick="closeReactivateModal()"></div>
@@ -1444,21 +1577,33 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <h3><i class="fas fa-undo" style="color:#059669;"></i> Reactivate Employee</h3>
             <button onclick="closeReactivateModal()" class="modal-close-emp">&times;</button>
         </div>
-        <div class="modal-body-emp">
-            <p style="font-size:0.9rem;margin:0;">Are you sure you want to reactivate <strong id="reactivateName" style="color:#059669;"></strong>?</p>
-        </div>
-        <div class="modal-footer-emp">
-            <button onclick="closeReactivateModal()" class="btn-emp btn-outline-emp">Cancel</button>
-            <a href="#" id="reactivateLink" class="btn-emp btn-success-emp">
-                <i class="fas fa-undo"></i> Reactivate
-            </a>
-        </div>
+        <form method="POST" action="" id="reactivateForm">
+            <input type="hidden" name="action" value="reactivate">
+            <input type="hidden" name="user_id" id="reactivateUserId" value="">
+            <div class="modal-body-emp">
+                <p style="font-size:0.9rem;margin:0 0 12px 0;">
+                    Are you sure you want to reactivate 
+                    <strong id="reactivateName" style="color:#059669;font-size:1rem;"></strong>?
+                </p>
+                <div style="background:#D1FAE5;border-left:4px solid #059669;padding:12px 16px;border-radius:8px;margin-top:12px;">
+                    <p style="font-size:0.8rem;color:#065F46;margin:0;font-weight:600;line-height:1.6;">
+                        <i class="fas fa-check-circle"></i> 
+                        Employee hii <strong>ataweza kuingia (login)</strong> kwenye mfumo tena.
+                    </p>
+                </div>
+            </div>
+            <div class="modal-footer-emp">
+                <button type="button" onclick="closeReactivateModal()" class="btn-emp btn-outline-emp">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+                <button type="submit" class="btn-emp btn-success-emp">
+                    <i class="fas fa-undo"></i> Yes, Reactivate
+                </button>
+            </div>
+        </form>
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC JAVASCRIPT (NO dark mode, NO sidebar, NO date-time) -->
-<!-- ================================================================ -->
 <script>
 // ================================================================
 // ✅ TABLE SCROLL FUNCTIONS
@@ -1575,25 +1720,25 @@ function filterTableRows() {
     var rows = document.querySelectorAll('.emp-row-emp');
     var totalRows = rows.length;
     var visibleCount = 0;
+    var visibleActive = 0;
+    var visibleInactive = 0;
     
     rows.forEach(function(row) {
         var searchData = row.getAttribute('data-search') || '';
         var rowRole = row.getAttribute('data-role') || '';
         var rowStatus = row.getAttribute('data-status') || '';
+        var isInactive = row.getAttribute('data-is-inactive') === '1';
         
         var matches = true;
         
-        // Search
         if (query !== '' && !searchData.includes(query)) {
             matches = false;
         }
         
-        // Role filter
         if (role !== 'all' && rowRole !== role) {
             matches = false;
         }
         
-        // Status filter
         if (status !== 'all' && rowStatus !== status) {
             matches = false;
         }
@@ -1601,15 +1746,25 @@ function filterTableRows() {
         if (matches) {
             row.style.display = '';
             visibleCount++;
+            if (isInactive) visibleInactive++;
+            else visibleActive++;
         } else {
             row.style.display = 'none';
         }
     });
     
-    // Update row numbers
     updateRowNumbers();
     
-    // Update count badge
+    // Show/hide section headers
+    document.querySelectorAll('.section-header-row').forEach(function(headerRow) {
+        var isInactiveSection = headerRow.classList.contains('section-inactive');
+        if (isInactiveSection) {
+            headerRow.style.display = visibleInactive > 0 ? '' : 'none';
+        } else {
+            headerRow.style.display = visibleActive > 0 ? '' : 'none';
+        }
+    });
+    
     if (countBadge) {
         if (query === '' && role === 'all' && status === 'all') {
             countBadge.textContent = totalRows + ' employees';
@@ -1618,7 +1773,6 @@ function filterTableRows() {
         }
     }
     
-    // Update clear button
     if (clearBtn) {
         if (query !== '' || role !== 'all' || status !== 'all') {
             clearBtn.classList.add('visible');
@@ -1627,7 +1781,6 @@ function filterTableRows() {
         }
     }
     
-    // Update status text
     if (statusText) {
         if (query !== '' || role !== 'all' || status !== 'all') {
             statusText.textContent = 'Filtered: ' + visibleCount;
@@ -1636,7 +1789,6 @@ function filterTableRows() {
         }
     }
     
-    // Show/hide no results
     if (noResultsRow) {
         if (visibleCount === 0 && totalRows > 0) {
             noResultsRow.style.display = '';
@@ -1648,22 +1800,32 @@ function filterTableRows() {
     setTimeout(updateScrollButtons, 100);
 }
 
+// ================================================================
+// ✅ UPDATE ROW NUMBERS - ACTIVE PEKEE WANA NAMBA
+// ================================================================
 function updateRowNumbers() {
     var rows = document.querySelectorAll('.emp-row-emp');
-    var counter = 1;
+    var activeCounter = 1;
+    
     rows.forEach(function(row) {
         if (row.style.display !== 'none') {
             var snoCell = row.querySelector('.col-sno-emp');
-            if (snoCell) snoCell.textContent = counter;
-            counter++;
+            var isInactive = row.getAttribute('data-is-inactive') === '1';
+            
+            if (snoCell) {
+                if (isInactive) {
+                    snoCell.innerHTML = '<span style="color:var(--page-text-muted, #94A3B8);font-weight:500;font-size:0.85rem;">—</span>';
+                } else {
+                    snoCell.textContent = activeCounter;
+                    activeCounter++;
+                }
+            }
         }
     });
 }
 
-// Search input event
 document.getElementById('tableSearch')?.addEventListener('input', autoFilter);
 
-// Clear search
 document.getElementById('clearSearchBtn')?.addEventListener('click', function() {
     var searchInput = document.getElementById('tableSearch');
     var roleFilter = document.getElementById('roleFilter');
@@ -1677,7 +1839,6 @@ document.getElementById('clearSearchBtn')?.addEventListener('click', function() 
     if (searchInput) searchInput.focus();
 });
 
-// ESC key to clear search
 document.getElementById('tableSearch')?.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         this.value = '';
@@ -1687,26 +1848,42 @@ document.getElementById('tableSearch')?.addEventListener('keydown', function(e) 
 });
 
 // ================================================================
-// ✅ DELETE MODAL
+// ✅ FILTER BY STATUS (click stat card)
 // ================================================================
-function confirmDelete(id, name) {
-    document.getElementById('deleteName').textContent = name;
-    document.getElementById('deleteLink').href = 'employees.php?delete=' + id + '&branch=<?= $selected_branch_id ?>';
-    document.getElementById('deleteModal').style.display = 'flex';
+function filterByStatus(status) {
+    var statusFilter = document.getElementById('statusFilter');
+    if (!statusFilter) return;
+    
+    statusFilter.value = status;
+    autoFilter();
+    
+    var tableCard = document.querySelector('.table-card-emp');
+    if (tableCard) {
+        tableCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+}
+
+// ================================================================
+// ✅ DEACTIVATE MODAL (FORM POST)
+// ================================================================
+function confirmDeactivate(id, name) {
+    document.getElementById('deactivateName').textContent = name;
+    document.getElementById('deactivateUserId').value = id;
+    document.getElementById('deactivateModal').style.display = 'flex';
     document.body.style.overflow = 'hidden';
 }
 
-function closeModal() {
-    document.getElementById('deleteModal').style.display = 'none';
+function closeDeactivateModal() {
+    document.getElementById('deactivateModal').style.display = 'none';
     document.body.style.overflow = '';
 }
 
 // ================================================================
-// ✅ REACTIVATE MODAL
+// ✅ REACTIVATE MODAL (FORM POST)
 // ================================================================
 function confirmReactivate(id, name) {
     document.getElementById('reactivateName').textContent = name;
-    document.getElementById('reactivateLink').href = 'employees.php?reactivate=' + id + '&branch=<?= $selected_branch_id ?>';
+    document.getElementById('reactivateUserId').value = id;
     document.getElementById('reactivateModal').style.display = 'flex';
     document.body.style.overflow = 'hidden';
 }
@@ -1719,7 +1896,7 @@ function closeReactivateModal() {
 // ESC key closes modals
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
-        closeModal();
+        closeDeactivateModal();
         closeReactivateModal();
     }
 });
@@ -1736,12 +1913,12 @@ setInterval(function() {
     if (ftEl) ftEl.textContent = timeStr;
 }, 1000);
 
-console.log('%c👥 Braick - Employees Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#059669;');
-console.log('%c✅ Search bar ipo kwenye TABLE HEADER (kama patients.php)', 'font-size:13px; color:#059669;');
-console.log('%c✅ Scroll buttons < > zipo kwenye TABLE HEADER', 'font-size:13px; color:#059669;');
-console.log('%c✅ Table MOJA TU - hakuna table ndani ya table', 'font-size:13px; color:#059669;');
-console.log('%c🌙 Dark mode: Handled by header', 'font-size:13px; color:#7C3AED;');
+console.log('%c👥 Braick - Employees Management V3', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ DEACTIVATE button INAFANYA KAZI (form POST)', 'font-size:13px; color:#DC2626; font-weight:bold;');
+console.log('%c✅ REACTIVATE button INAFANYA KAZI (form POST)', 'font-size:13px; color:#059669; font-weight:bold;');
+console.log('%c✅ ACTIVE kwanza, INACTIVE mwisho', 'font-size:13px; color:#059669;');
+console.log('%c✅ INACTIVE HAWANA namba (#) — wanaonyesha "—"', 'font-size:13px; color:#D97706;');
+console.log('%c✅ Click stat card ili filter', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>

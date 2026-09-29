@@ -1,17 +1,17 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/edit_visit.php
-// ADMIN AUDIT - FULL EDIT VISIT (V3 - SCROLL FIX)
-// ✅ Blue theme throughout
-// ✅ Visit type: ONLY services with category = 'Consultation'
-// ✅ Live search filter on ALL dropdowns
-// ✅ All sections expanded
-// ✅ Full CRUD on lab tests, medications, procedures, equipment
-// ✅ Stock reversal rules for medications (pending/confirmed only)
-// ✅ Shared recalculateBill() function
-// ✅ AUTO-SCROLL to section after submit (no jump to top!)
-// ✅ Alert auto-dismiss on scroll
-// ✅ Timezone: Africa/Dar_es_Salaam
+// ADMIN AUDIT - FULL EDIT VISIT (V8 FINAL)
+// ================================================================
+// ✅ V8: Cancelled medication/lab test returns stock (if not paid)
+// ✅ V8: Bill status check before stock return
+// ✅ V7: Full stock return for all item types
+// ✅ V7: lab_test_equipment junction support
+// ✅ V7: payments table uses received_at/received_by
+// ✅ V6: prescription_items has NO status (uses prescriptions.status)
+// ✅ V6: procedures uses performed_at
+// ✅ V6: Toggle + Live search with highlight
+// ✅ V6: Money format 1,000,000,000
 // ================================================================
 
 date_default_timezone_set('Africa/Dar_es_Salaam');
@@ -45,6 +45,7 @@ if ($visit_id <= 0) {
     exit;
 }
 
+// ✅ AUDIT path: 4 levels up
 require_once __DIR__ . '/../../../../backend/config/database.php';
 
 try {
@@ -183,6 +184,181 @@ function createBillIfMissing(PDO $db, int $visit_id, int $user_id, int $user_bra
 }
 
 // ================================================================
+// STOCK RETURN HELPERS
+// ================================================================
+
+function returnMedicationStock(PDO $db, int $inventory_id, int $quantity, int $patient_id, int $branch_id, int $user_id, string $reason, int $reference_id = 0): array
+{
+    if ($inventory_id <= 0 || $quantity <= 0) {
+        return ['success' => false, 'returned' => 0];
+    }
+
+    try {
+        $stmt = $db->prepare("
+            SELECT id, medication_name, quantity FROM medications_inventory
+            WHERE id = ? AND branch_id = ?
+            FOR UPDATE
+        ");
+        $stmt->execute([$inventory_id, $branch_id]);
+        $med = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$med) return ['success' => false, 'returned' => 0, 'name' => 'Unknown'];
+
+        $prev = (int)$med['quantity'];
+        $new  = $prev + $quantity;
+
+        $db->prepare("
+            UPDATE medications_inventory
+            SET quantity = ?, updated_at = NOW()
+            WHERE id = ?
+        ")->execute([$new, $med['id']]);
+
+        try {
+            $db->prepare("
+                INSERT INTO stock_movements
+                    (inventory_id, patient_id, movement_type, quantity,
+                     previous_stock, new_stock, reference_type, reference_id,
+                     performed_by, branch_id, notes, created_at)
+                VALUES (?, ?, 'in', ?, ?, ?, 'prescription_delete', ?, ?, ?, ?, NOW())
+            ")->execute([
+                $med['id'], $patient_id, $quantity,
+                $prev, $new,
+                $reference_id, $user_id, $branch_id, $reason
+            ]);
+        } catch (Exception $e) {}
+
+        return [
+            'success'  => true,
+            'returned' => $quantity,
+            'name'     => $med['medication_name'],
+            'prev'     => $prev,
+            'new'      => $new
+        ];
+    } catch (Exception $e) {
+        return ['success' => false, 'returned' => 0, 'error' => $e->getMessage()];
+    }
+}
+
+function returnEquipmentStock(PDO $db, int $equipment_id, int $quantity, int $patient_id, int $branch_id, int $user_id, string $reason, int $reference_id = 0): array
+{
+    if ($equipment_id <= 0 || $quantity <= 0) {
+        return ['success' => false, 'returned' => 0];
+    }
+
+    try {
+        $stmt = $db->prepare("
+            SELECT id, equipment_name, quantity FROM medical_equipment
+            WHERE id = ? AND branch_id = ?
+            FOR UPDATE
+        ");
+        $stmt->execute([$equipment_id, $branch_id]);
+        $eqp = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$eqp) return ['success' => false, 'returned' => 0, 'name' => 'Unknown'];
+
+        $prev = (int)$eqp['quantity'];
+        $new  = $prev + $quantity;
+
+        $db->prepare("
+            UPDATE medical_equipment
+            SET quantity = ?, updated_at = NOW()
+            WHERE id = ?
+        ")->execute([$new, $eqp['id']]);
+
+        try {
+            $db->prepare("
+                INSERT INTO stock_movements
+                    (equipment_id, patient_id, movement_type, quantity,
+                     previous_stock, new_stock, reference_type, reference_id,
+                     performed_by, branch_id, notes, created_at)
+                VALUES (?, ?, 'in', ?, ?, ?, 'lab_test_delete', ?, ?, ?, ?, NOW())
+            ")->execute([
+                $eqp['id'], $patient_id, $quantity,
+                $prev, $new,
+                $reference_id, $user_id, $branch_id, $reason
+            ]);
+        } catch (Exception $e) {}
+
+        return [
+            'success'  => true,
+            'returned' => $quantity,
+            'name'     => $eqp['equipment_name'],
+            'prev'     => $prev,
+            'new'      => $new
+        ];
+    } catch (Exception $e) {
+        return ['success' => false, 'returned' => 0, 'error' => $e->getMessage()];
+    }
+}
+
+function returnLabTestEquipmentStock(PDO $db, int $lab_test_id, int $test_catalog_id, int $patient_id, int $branch_id, int $user_id, string $reason): array
+{
+    $total_returned = 0;
+    $names = [];
+
+    try {
+        $stmt = $db->prepare("
+            SELECT lte.equipment_id
+            FROM lab_test_equipment lte
+            WHERE lte.lab_test_id = ?
+        ");
+        $stmt->execute([$test_catalog_id]);
+        $equipment_links = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($equipment_links)) {
+            $stmt = $db->prepare("SELECT equipment_id, equipment_used FROM lab_tests WHERE id = ?");
+            $stmt->execute([$lab_test_id]);
+            $lt = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($lt && !empty($lt['equipment_id'])) {
+                $qty = (int)($lt['equipment_used'] ?? 1);
+                if ($qty <= 0) $qty = 1;
+                $equipment_links = [['equipment_id' => $lt['equipment_id'], 'qty' => $qty]];
+            }
+        }
+
+        foreach ($equipment_links as $link) {
+            $eq_id = (int)$link['equipment_id'];
+            $qty   = (int)($link['qty'] ?? 1);
+            if ($qty <= 0) $qty = 1;
+
+            $result = returnEquipmentStock($db, $eq_id, $qty, $patient_id, $branch_id, $user_id, $reason, $lab_test_id);
+
+            if ($result['success']) {
+                $total_returned += $result['returned'];
+                $names[] = $result['name'] . ' (x' . $result['returned'] . ')';
+            }
+        }
+    } catch (Exception $e) {}
+
+    return ['total' => $total_returned, 'names' => $names];
+}
+
+function isBillItemPaid(PDO $db, int $bill_item_id): bool
+{
+    try {
+        $stmt = $db->prepare("
+            SELECT bi.status AS item_status, b.status AS bill_status
+            FROM bill_items bi
+            INNER JOIN bills b ON bi.bill_id = b.id
+            WHERE bi.id = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$bill_item_id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row) return false;
+
+        $bi_status   = strtolower($row['item_status'] ?? 'pending');
+        $bill_status = strtolower($row['bill_status'] ?? 'pending');
+
+        return ($bi_status === 'paid' || $bill_status === 'paid');
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+// ================================================================
 // POST HANDLERS
 // ================================================================
 $alert_message = '';
@@ -200,7 +376,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $visit_type       = trim($_POST['visit_type'] ?? '');
             $service_id       = (int)($_POST['service_id'] ?? 0) ?: null;
-            $consultation_fee = (float)($_POST['consultation_fee'] ?? 0);
+            $consultation_fee = (float)str_replace(',', '', $_POST['consultation_fee'] ?? '0');
             $doctor_id        = (int)($_POST['doctor_id'] ?? 0) ?: null;
             $receptionist_id  = (int)($_POST['receptionist_id'] ?? 0) ?: null;
             $status           = $_POST['status'] ?? 'pending';
@@ -237,17 +413,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     "Updated visit details for visit #$visit_id");
             }
 
-            try {
-                $db->prepare("INSERT INTO activity_logs
-                    (user_id, branch_id, action, details, ip_address, created_at)
-                    VALUES (?, ?, 'edit_visit', ?, ?, NOW())")
-                   ->execute([
-                       $user_id, $user_branch_id,
-                       "Updated visit #$visit_id: type='$visit_type', doctor_id=$doctor_id, receptionist_id=$receptionist_id",
-                       $_SERVER['REMOTE_ADDR'] ?? 'cli'
-                   ]);
-            } catch (Exception $e) {}
-
             $db->commit();
             $alert_message = "✅ Visit details updated successfully.";
             $alert_type    = 'success';
@@ -273,17 +438,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 UPDATE visits SET diagnosis = ?, disease_id = ?, disease_code = ?, updated_at = NOW()
                 WHERE id = ?
             ")->execute([$diagnosis, $disease_id, $disease_code, $visit_id]);
-
-            try {
-                $db->prepare("INSERT INTO activity_logs
-                    (user_id, branch_id, action, details, ip_address, created_at)
-                    VALUES (?, ?, 'edit_diagnosis', ?, ?, NOW())")
-                   ->execute([
-                       $user_id, $user_branch_id,
-                       "Updated diagnosis for visit #$visit_id: '$diagnosis'",
-                       $_SERVER['REMOTE_ADDR'] ?? 'cli'
-                   ]);
-            } catch (Exception $e) {}
 
             $db->commit();
             $alert_message = "✅ Diagnosis updated successfully.";
@@ -343,18 +497,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ]);
 
             recalculateBill($db, $bill_id, $user_id, $user_branch_id,
-                "Added lab test '$test_name' (" . money($test_price) . ") to visit #$visit_id");
-
-            try {
-                $db->prepare("INSERT INTO activity_logs
-                    (user_id, branch_id, patient_id, action, details, ip_address, created_at)
-                    VALUES (?, ?, ?, 'add_lab_test', ?, ?, NOW())")
-                   ->execute([
-                       $user_id, $user_branch_id, $patient_id,
-                       "Added lab test '$test_name' (" . money($test_price) . ") to visit #$visit_id",
-                       $_SERVER['REMOTE_ADDR'] ?? 'cli'
-                   ]);
-            } catch (Exception $e) {}
+                "Added lab test '$test_name'");
 
             $db->commit();
             $alert_message = "✅ Lab test '$test_name' added successfully.";
@@ -362,7 +505,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         // ----------------------------------------------------
-        // 4. DELETE LAB TEST
+        // 4. DELETE LAB TEST (V8: cancelled returns stock)
         // ----------------------------------------------------
         elseif ($action === 'delete_lab_test') {
             $db->beginTransaction();
@@ -370,14 +513,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $lab_test_id = (int)($_POST['lab_test_id'] ?? 0);
             if (!$lab_test_id) throw new Exception("Invalid lab test ID.");
 
-            $stmt = $db->prepare("SELECT id, test_name, test_price, visit_id, patient_id FROM lab_tests WHERE id = ?");
+            $stmt = $db->prepare("
+                SELECT lt.id, lt.test_id, lt.test_name, lt.status, lt.visit_id,
+                       lt.patient_id, lt.branch_id
+                FROM lab_tests lt WHERE lt.id = ?
+            ");
             $stmt->execute([$lab_test_id]);
             $lab = $stmt->fetch(PDO::FETCH_ASSOC);
             if (!$lab) throw new Exception("Lab test not found.");
 
             $test_name  = $lab['test_name'];
-            $patient_id = (int)$lab['patient_id'];
+            $test_status = strtolower($lab['status'] ?? 'pending');
+            $lab_branch_id = (int)($lab['branch_id'] ?? $user_branch_id);
+            $patient_id = (int)($lab['patient_id'] ?? 0);
 
+            // ✅ Return stock if pending/in_progress/cancelled AND bill NOT paid
+            $stock_returned  = 0;
+            $returned_names  = [];
+            $should_return   = in_array($test_status, ['pending', 'in_progress', 'cancelled'], true);
+            $skip_reason     = '';
+
+            if ($should_return) {
+                $bill_id_chk = getVisitBillId($db, $visit_id);
+                if ($bill_id_chk) {
+                    $stmt_bi = $db->prepare("
+                        SELECT id, status FROM bill_items
+                        WHERE bill_id = ? AND item_type = 'lab_test' AND item_id = ?
+                        LIMIT 1
+                    ");
+                    $stmt_bi->execute([$bill_id_chk, $lab_test_id]);
+                    $bi_row = $stmt_bi->fetch(PDO::FETCH_ASSOC);
+
+                    if ($bi_row && isBillItemPaid($db, (int)$bi_row['id'])) {
+                        $should_return = false;
+                        $skip_reason = 'Bill already paid';
+                    }
+                }
+            }
+
+            if ($should_return) {
+                $result = returnLabTestEquipmentStock(
+                    $db,
+                    $lab_test_id,
+                    (int)$lab['test_id'],
+                    $patient_id,
+                    $lab_branch_id,
+                    $user_id,
+                    "Stock returned - Deleted {$test_status} lab test: {$test_name}"
+                );
+                $stock_returned = $result['total'];
+                $returned_names = $result['names'];
+            }
+
+            // Delete bill_items
             $bill_id = getVisitBillId($db, $visit_id);
             if ($bill_id) {
                 $db->prepare("
@@ -386,26 +574,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ")->execute([$bill_id, $lab_test_id]);
             }
 
+            // Delete lab_test_equipment links
+            try {
+                $db->prepare("DELETE FROM lab_test_equipment WHERE lab_test_id = ?")
+                   ->execute([$lab['test_id']]);
+            } catch (Exception $e) {}
+
             $db->prepare("DELETE FROM lab_tests WHERE id = ?")->execute([$lab_test_id]);
 
             if ($bill_id) {
                 recalculateBill($db, $bill_id, $user_id, $user_branch_id,
-                    "Deleted lab test '$test_name' from visit #$visit_id");
+                    "Deleted lab test '$test_name'" .
+                    ($stock_returned > 0 ? " (Stock returned: $stock_returned)" : ""));
             }
 
-            try {
-                $db->prepare("INSERT INTO activity_logs
-                    (user_id, branch_id, patient_id, action, details, ip_address, created_at)
-                    VALUES (?, ?, ?, 'delete_lab_test', ?, ?, NOW())")
-                   ->execute([
-                       $user_id, $user_branch_id, $patient_id,
-                       "Deleted lab test '$test_name' (ID: $lab_test_id) from visit #$visit_id",
-                       $_SERVER['REMOTE_ADDR'] ?? 'cli'
-                   ]);
-            } catch (Exception $e) {}
-
             $db->commit();
-            $alert_message = "✅ Lab test '$test_name' deleted. Bill recalculated.";
+
+            $msg = "✅ <strong>Lab test '$test_name' deleted.</strong>";
+            $msg .= "<br>📋 Bill reduced";
+            if ($stock_returned > 0) {
+                $msg .= "<br>📦 Equipment stock returned: <strong>+{$stock_returned}</strong>";
+                if (!empty($returned_names)) {
+                    $msg .= "<br><small>" . implode(', ', $returned_names) . "</small>";
+                }
+            } elseif ($test_status === 'completed') {
+                $msg .= "<br>⚠️ Test completed — stock NOT returned";
+            } elseif ($skip_reason) {
+                $msg .= "<br>⚠️ {$skip_reason} — stock NOT returned";
+            }
+
+            $alert_message = $msg;
             $alert_type    = 'success';
         }
 
@@ -432,10 +630,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ");
             $stmt->execute([$inventory_id, $user_branch_id]);
             $med = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$med) throw new Exception("Medication not found in inventory for this branch.");
+            if (!$med) throw new Exception("Medication not found in inventory.");
 
-            $med_name   = $med['medication_name'];
-            $unit_price = (float)$med['selling_price'];
+            $med_name    = $med['medication_name'];
+            $unit_price  = (float)$med['selling_price'];
             $total_price = $unit_price * $quantity;
 
             $stmt = $db->prepare("SELECT patient_id FROM visits WHERE id = ?");
@@ -494,26 +692,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ]);
 
             recalculateBill($db, $bill_id, $user_id, $user_branch_id,
-                "Added medication '$med_name' x$quantity to visit #$visit_id");
-
-            try {
-                $db->prepare("INSERT INTO activity_logs
-                    (user_id, branch_id, patient_id, action, details, ip_address, created_at)
-                    VALUES (?, ?, ?, 'add_medication', ?, ?, NOW())")
-                   ->execute([
-                       $user_id, $user_branch_id, $patient_id,
-                       "Added medication '$med_name' x$quantity (" . money($total_price) . ") to visit #$visit_id",
-                       $_SERVER['REMOTE_ADDR'] ?? 'cli'
-                   ]);
-            } catch (Exception $e) {}
+                "Added medication '$med_name' x$quantity");
 
             $db->commit();
-            $alert_message = "✅ Medication '$med_name' x$quantity added successfully.";
+            $alert_message = "✅ Medication '$med_name' x$quantity added.";
             $alert_type    = 'success';
         }
 
         // ----------------------------------------------------
-        // 6. DELETE MEDICATION
+        // 6. DELETE MEDICATION (V8: cancelled returns stock)
         // ----------------------------------------------------
         elseif ($action === 'delete_medication') {
             $db->beginTransaction();
@@ -523,9 +710,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $stmt = $db->prepare("
                 SELECT pi.id, pi.inventory_id, pi.medication_name, pi.quantity,
-                       pi.unit_price, pi.total_price, pi.status,
+                       pi.patient_id,
+                       p.id AS prescription_id,
                        p.status AS prescription_status,
-                       p.visit_id, pi.patient_id
+                       p.visit_id
                 FROM prescription_items pi
                 INNER JOIN prescriptions p ON pi.prescription_id = p.id
                 WHERE pi.id = ?
@@ -537,35 +725,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $med_name       = $item['medication_name'];
             $quantity       = (int)$item['quantity'];
             $inventory_id   = (int)($item['inventory_id'] ?? 0);
-            $patient_id     = (int)$item['patient_id'];
-            $item_status    = strtolower($item['status'] ?? $item['prescription_status'] ?? 'pending');
-            $stock_reversed = false;
+            $patient_id     = (int)($item['patient_id'] ?? 0);
+            $item_status    = strtolower($item['prescription_status'] ?? 'pending');
 
-            if (in_array($item_status, ['pending', 'confirmed'], true) && $inventory_id > 0) {
-                $db->prepare("
-                    UPDATE medications_inventory
-                    SET quantity = quantity + ?, updated_at = NOW()
-                    WHERE id = ?
-                ")->execute([$quantity, $inventory_id]);
-                $stock_reversed = true;
+            // ✅ Return stock if pending/confirmed/cancelled AND bill NOT paid
+            $stock_returned = 0;
+            $should_return  = in_array($item_status, ['pending', 'confirmed', 'cancelled'], true);
+            $skip_reason    = '';
 
-                try {
-                    $stmtStock = $db->prepare("SELECT quantity FROM medications_inventory WHERE id = ?");
-                    $stmtStock->execute([$inventory_id]);
-                    $new_stock = (int)$stmtStock->fetchColumn();
-                    $db->prepare("
-                        INSERT INTO stock_movements
-                            (inventory_id, patient_id, movement_type, quantity,
-                             previous_stock, new_stock, reference_type, reference_id,
-                             performed_by, branch_id, notes, created_at)
-                        VALUES (?, ?, 'in', ?, ?, ?, 'prescription', ?, ?, ?, ?, NOW())
-                    ")->execute([
-                        $inventory_id, $patient_id, $quantity,
-                        $new_stock - $quantity, $new_stock,
-                        $item_id, $user_id, $user_branch_id,
-                        "Stock returned due to deletion of prescription item #$item_id"
-                    ]);
-                } catch (Exception $e) {}
+            if ($should_return) {
+                $bill_id_chk = getVisitBillId($db, $visit_id);
+                if ($bill_id_chk) {
+                    $stmt_bi = $db->prepare("
+                        SELECT id, status FROM bill_items
+                        WHERE bill_id = ? AND item_type = 'medication' AND reference_id = ?
+                        LIMIT 1
+                    ");
+                    $stmt_bi->execute([$bill_id_chk, $item_id]);
+                    $bi_row = $stmt_bi->fetch(PDO::FETCH_ASSOC);
+
+                    if ($bi_row && isBillItemPaid($db, (int)$bi_row['id'])) {
+                        $should_return = false;
+                        $skip_reason = 'Bill already paid';
+                    }
+                }
+            }
+
+            if ($should_return && $inventory_id > 0) {
+                $result = returnMedicationStock(
+                    $db, $inventory_id, $quantity, $patient_id, $user_branch_id,
+                    $user_id,
+                    "Stock returned - Deleted {$item_status} Rx: {$med_name}",
+                    $item_id
+                );
+                if ($result['success']) {
+                    $stock_returned = $result['returned'];
+                }
             }
 
             $db->prepare("DELETE FROM prescription_items WHERE id = ?")->execute([$item_id]);
@@ -578,31 +773,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ")->execute([$bill_id, $item_id]);
 
                 recalculateBill($db, $bill_id, $user_id, $user_branch_id,
-                    "Deleted medication '$med_name' x$quantity from visit #$visit_id" .
-                    ($stock_reversed ? " (Stock returned)" : " (Dispensed - stock NOT returned)")
-                );
+                    "Deleted medication '$med_name' x$quantity" .
+                    ($stock_returned > 0 ? " (Stock returned: +$stock_returned)" : ""));
             }
 
-            try {
-                $db->prepare("INSERT INTO activity_logs
-                    (user_id, branch_id, patient_id, action, details, ip_address, created_at)
-                    VALUES (?, ?, ?, 'delete_medication', ?, ?, NOW())")
-                   ->execute([
-                       $user_id, $user_branch_id, $patient_id,
-                       "Deleted medication '$med_name' x$quantity (status: $item_status) from visit #$visit_id" .
-                       ($stock_reversed ? " | STOCK RETURNED +$quantity" : " | DISPENSED - no stock return"),
-                       $_SERVER['REMOTE_ADDR'] ?? 'cli'
-                   ]);
-            } catch (Exception $e) {}
+            if (!empty($item['prescription_id'])) {
+                $stmt_chk = $db->prepare("SELECT COUNT(*) FROM prescription_items WHERE prescription_id = ?");
+                $stmt_chk->execute([$item['prescription_id']]);
+                $remaining_items = (int)$stmt_chk->fetchColumn();
+
+                if ($remaining_items === 0) {
+                    $db->prepare("DELETE FROM prescriptions WHERE id = ?")->execute([$item['prescription_id']]);
+                }
+            }
 
             $db->commit();
-            $msg = "✅ Medication '$med_name' deleted.";
-            if ($stock_reversed) {
-                $msg .= " Stock returned: +$quantity";
-            } else {
-                $msg .= " (Dispensed - stock not reversed)";
+
+            $msg = "✅ <strong>Medication '$med_name' deleted.</strong>";
+            $msg .= "<br>📋 Bill reduced";
+            if ($stock_returned > 0) {
+                $msg .= "<br>💊 Stock returned to inventory: <strong>+{$stock_returned}</strong>";
+            } elseif ($item_status === 'dispensed') {
+                $msg .= "<br>⚠️ Dispensed — stock NOT returned";
+            } elseif ($skip_reason) {
+                $msg .= "<br>⚠️ {$skip_reason} — stock NOT returned";
             }
-            $msg .= " Bill recalculated.";
+
             $alert_message = $msg;
             $alert_type    = 'success';
         }
@@ -665,21 +861,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ]);
 
             recalculateBill($db, $bill_id, $user_id, $user_branch_id,
-                "Added procedure '$proc_name' (" . money($proc_price) . ") to visit #$visit_id");
-
-            try {
-                $db->prepare("INSERT INTO activity_logs
-                    (user_id, branch_id, patient_id, action, details, ip_address, created_at)
-                    VALUES (?, ?, ?, 'add_procedure', ?, ?, NOW())")
-                   ->execute([
-                       $user_id, $user_branch_id, $patient_id,
-                       "Added procedure '$proc_name' (" . money($proc_price) . ") to visit #$visit_id",
-                       $_SERVER['REMOTE_ADDR'] ?? 'cli'
-                   ]);
-            } catch (Exception $e) {}
+                "Added procedure '$proc_name'");
 
             $db->commit();
-            $alert_message = "✅ Procedure '$proc_name' added successfully.";
+            $alert_message = "✅ Procedure '$proc_name' added.";
             $alert_type    = 'success';
         }
 
@@ -692,13 +877,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $procedure_id = (int)($_POST['procedure_record_id'] ?? 0);
             if (!$procedure_id) throw new Exception("Invalid procedure ID.");
 
-            $stmt = $db->prepare("SELECT id, procedure_name, procedure_price, patient_id FROM procedures WHERE id = ?");
+            $stmt = $db->prepare("SELECT id, procedure_name FROM procedures WHERE id = ?");
             $stmt->execute([$procedure_id]);
             $proc = $stmt->fetch(PDO::FETCH_ASSOC);
             if (!$proc) throw new Exception("Procedure not found.");
 
-            $proc_name  = $proc['procedure_name'];
-            $patient_id = (int)$proc['patient_id'];
+            $proc_name = $proc['procedure_name'];
 
             $bill_id = getVisitBillId($db, $visit_id);
             if ($bill_id) {
@@ -712,22 +896,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             if ($bill_id) {
                 recalculateBill($db, $bill_id, $user_id, $user_branch_id,
-                    "Deleted procedure '$proc_name' from visit #$visit_id");
+                    "Deleted procedure '$proc_name'");
             }
 
-            try {
-                $db->prepare("INSERT INTO activity_logs
-                    (user_id, branch_id, patient_id, action, details, ip_address, created_at)
-                    VALUES (?, ?, ?, 'delete_procedure', ?, ?, NOW())")
-                   ->execute([
-                       $user_id, $user_branch_id, $patient_id,
-                       "Deleted procedure '$proc_name' (ID: $procedure_id) from visit #$visit_id",
-                       $_SERVER['REMOTE_ADDR'] ?? 'cli'
-                   ]);
-            } catch (Exception $e) {}
-
             $db->commit();
-            $alert_message = "✅ Procedure '$proc_name' deleted. Bill recalculated.";
+            $alert_message = "✅ Procedure '$proc_name' deleted. Bill reduced.";
             $alert_type    = 'success';
         }
 
@@ -748,7 +921,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ");
             $stmt->execute([$equipment_id, $user_branch_id]);
             $eqp = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$eqp) throw new Exception("Equipment not found for this branch.");
+            if (!$eqp) throw new Exception("Equipment not found.");
 
             $eqp_name    = $eqp['equipment_name'];
             $unit_price  = (float)$eqp['selling_price'];
@@ -778,26 +951,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ]);
 
             recalculateBill($db, $bill_id, $user_id, $user_branch_id,
-                "Added equipment '$eqp_name' x$quantity to visit #$visit_id");
-
-            try {
-                $db->prepare("INSERT INTO activity_logs
-                    (user_id, branch_id, patient_id, action, details, ip_address, created_at)
-                    VALUES (?, ?, ?, 'add_equipment', ?, ?, NOW())")
-                   ->execute([
-                       $user_id, $user_branch_id, $patient_id,
-                       "Added equipment '$eqp_name' x$quantity (" . money($total_price) . ") to visit #$visit_id",
-                       $_SERVER['REMOTE_ADDR'] ?? 'cli'
-                   ]);
-            } catch (Exception $e) {}
+                "Added equipment '$eqp_name' x$quantity");
 
             $db->commit();
-            $alert_message = "✅ Equipment '$eqp_name' x$quantity added successfully.";
+            $alert_message = "✅ Equipment '$eqp_name' x$quantity added.";
             $alert_type    = 'success';
         }
 
         // ----------------------------------------------------
-        // 10. DELETE EQUIPMENT
+        // 10. DELETE EQUIPMENT (V8: returns stock if not paid)
         // ----------------------------------------------------
         elseif ($action === 'delete_equipment') {
             $db->beginTransaction();
@@ -806,35 +968,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!$bill_item_id) throw new Exception("Invalid bill item ID.");
 
             $stmt = $db->prepare("
-                SELECT id, bill_id, item_name, total_price, quantity
-                FROM bill_items
-                WHERE id = ? AND item_type = 'equipment'
+                SELECT bi.id, bi.bill_id, bi.item_id, bi.item_name, bi.quantity,
+                       bi.status, bi.branch_id, bi.patient_id,
+                       b.status AS bill_status
+                FROM bill_items bi
+                INNER JOIN bills b ON bi.bill_id = b.id
+                WHERE bi.id = ? AND bi.item_type = 'equipment'
             ");
             $stmt->execute([$bill_item_id]);
             $item = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$item) throw new Exception("Equipment bill item not found.");
+            if (!$item) throw new Exception("Equipment not found.");
 
-            $eqp_name = $item['item_name'];
-            $bill_id  = (int)$item['bill_id'];
+            $eqp_name       = $item['item_name'];
+            $eqp_id         = (int)($item['item_id'] ?? 0);
+            $qty            = (int)($item['quantity'] ?? 1);
+            $item_status    = strtolower($item['status'] ?? 'pending');
+            $bill_status    = strtolower($item['bill_status'] ?? 'pending');
+            $item_branch_id = (int)($item['branch_id'] ?? $user_branch_id);
+            $patient_id     = (int)($item['patient_id'] ?? 0);
+            $bill_id        = (int)$item['bill_id'];
+
+            $stock_returned = 0;
+            $should_return  = !in_array($item_status, ['paid'], true) &&
+                             !in_array($bill_status, ['paid'], true);
+
+            if ($should_return && $eqp_id > 0) {
+                $result = returnEquipmentStock(
+                    $db, $eqp_id, $qty, $patient_id, $item_branch_id,
+                    $user_id,
+                    "Stock returned - Deleted equipment: {$eqp_name}",
+                    $bill_item_id
+                );
+                if ($result['success']) {
+                    $stock_returned = $result['returned'];
+                }
+            }
 
             $db->prepare("DELETE FROM bill_items WHERE id = ?")->execute([$bill_item_id]);
 
             recalculateBill($db, $bill_id, $user_id, $user_branch_id,
-                "Deleted equipment '$eqp_name' from visit #$visit_id");
-
-            try {
-                $db->prepare("INSERT INTO activity_logs
-                    (user_id, branch_id, action, details, ip_address, created_at)
-                    VALUES (?, ?, 'delete_equipment', ?, ?, NOW())")
-                   ->execute([
-                       $user_id, $user_branch_id,
-                       "Deleted equipment '$eqp_name' (Bill Item ID: $bill_item_id) from visit #$visit_id",
-                       $_SERVER['REMOTE_ADDR'] ?? 'cli'
-                   ]);
-            } catch (Exception $e) {}
+                "Deleted equipment '$eqp_name' x$qty" .
+                ($stock_returned > 0 ? " (Stock returned: +$stock_returned)" : ""));
 
             $db->commit();
-            $alert_message = "✅ Equipment '$eqp_name' deleted. Bill recalculated.";
+
+            $msg = "✅ <strong>Equipment '$eqp_name' deleted.</strong>";
+            $msg .= "<br>📋 Bill reduced";
+            if ($stock_returned > 0) {
+                $msg .= "<br>📦 Equipment stock returned: <strong>+{$stock_returned}</strong>";
+            } elseif ($item_status === 'paid' || $bill_status === 'paid') {
+                $msg .= "<br>⚠️ Already paid — stock NOT returned";
+            }
+
+            $alert_message = $msg;
             $alert_type    = 'success';
         }
 
@@ -845,10 +1031,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $db->beginTransaction();
 
             $bill_id           = (int)($_POST['bill_id'] ?? 0);
-            $pharmacy_discount = (float)($_POST['pharmacy_discount'] ?? 0);
-            $cashier_discount  = (float)($_POST['cashier_discount'] ?? 0);
-            $pharmacy_premium  = (float)($_POST['pharmacy_premium'] ?? 0);
-            $cashier_premium   = (float)($_POST['cashier_premium'] ?? 0);
+            $pharmacy_discount = (float)str_replace(',', '', $_POST['pharmacy_discount'] ?? '0');
+            $cashier_discount  = (float)str_replace(',', '', $_POST['cashier_discount'] ?? '0');
+            $pharmacy_premium  = (float)str_replace(',', '', $_POST['pharmacy_premium'] ?? '0');
+            $cashier_premium   = (float)str_replace(',', '', $_POST['cashier_premium'] ?? '0');
             $pharmacy_note     = trim($_POST['pharmacy_premium_note'] ?? '');
             $cashier_note      = trim($_POST['cashier_premium_note'] ?? '');
 
@@ -871,12 +1057,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 "Updated discounts/premiums for bill #$bill_id");
 
             $db->commit();
-            $alert_message = "✅ Bill totals updated successfully.";
+            $alert_message = "✅ Bill totals updated.";
             $alert_type    = 'success';
         }
 
         // ----------------------------------------------------
-        // 12. UPDATE MEDICATION STATUS
+        // 12. UPDATE MEDICATION STATUS (V8: cancelled returns stock)
         // ----------------------------------------------------
         elseif ($action === 'update_medication_status') {
             $db->beginTransaction();
@@ -891,7 +1077,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $stmt = $db->prepare("
                 SELECT pi.id, pi.inventory_id, pi.medication_name, pi.quantity,
-                       pi.status, pi.prescription_id, p.status AS presc_status
+                       pi.prescription_id, pi.patient_id,
+                       p.status AS presc_status
                 FROM prescription_items pi
                 INNER JOIN prescriptions p ON pi.prescription_id = p.id
                 WHERE pi.id = ?
@@ -900,11 +1087,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $item = $stmt->fetch(PDO::FETCH_ASSOC);
             if (!$item) throw new Exception("Prescription item not found.");
 
-            $old_status   = strtolower($item['status'] ?? 'pending');
+            $old_status   = strtolower($item['presc_status'] ?? 'pending');
             $med_name     = $item['medication_name'];
             $quantity     = (int)$item['quantity'];
             $inventory_id = (int)($item['inventory_id'] ?? 0);
+            $patient_id   = (int)($item['patient_id'] ?? 0);
 
+            $stock_msg = '';
+
+            // pending/confirmed → dispensed: DEDUCT
             if (in_array($old_status, ['pending', 'confirmed'], true)
                 && $new_status === 'dispensed'
                 && $inventory_id > 0) {
@@ -926,53 +1117,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 try {
                     $db->prepare("
                         INSERT INTO stock_movements
-                            (inventory_id, movement_type, quantity,
+                            (inventory_id, patient_id, movement_type, quantity,
                              previous_stock, new_stock, reference_type, reference_id,
                              performed_by, branch_id, notes, created_at)
-                        VALUES (?, 'out', ?, ?, ?, 'prescription', ?, ?, ?, ?, NOW())
+                        VALUES (?, ?, 'out', ?, ?, ?, 'prescription', ?, ?, ?, ?, NOW())
                     ")->execute([
-                        $inventory_id, $quantity,
+                        $inventory_id, $patient_id, $quantity,
                         $current, $current - $quantity,
                         $item_id, $user_id, $user_branch_id,
-                        "Dispensed via status update to 'dispensed'"
+                        "Dispensed via status update"
                     ]);
                 } catch (Exception $e) {}
+
+                $stock_msg = " | Stock deducted: -$quantity";
+            }
+            // Any → cancelled: RETURN stock
+            elseif ($new_status === 'cancelled'
+                && in_array($old_status, ['pending', 'confirmed', 'dispensed'], true)
+                && $inventory_id > 0) {
+
+                $result = returnMedicationStock(
+                    $db, $inventory_id, $quantity, $patient_id, $user_branch_id,
+                    $user_id,
+                    "Stock returned - Status changed from {$old_status} to cancelled",
+                    $item_id
+                );
+                if ($result['success']) {
+                    $stock_msg = " | Stock returned: +{$result['returned']}";
+                }
             }
 
             $db->prepare("
-                UPDATE prescription_items SET status = ?, dispensed_at = ?, dispensed_by = ?
+                UPDATE prescriptions
+                SET status = ?, dispensed_at = ?
                 WHERE id = ?
             ")->execute([
                 $new_status,
                 $new_status === 'dispensed' ? date('Y-m-d H:i:s') : null,
-                $new_status === 'dispensed' ? $user_id : null,
-                $item_id
+                $item['prescription_id']
             ]);
 
-            $stmt = $db->prepare("
-                SELECT COUNT(*) FROM prescription_items
-                WHERE prescription_id = ? AND status NOT IN ('dispensed', 'cancelled')
-            ");
-            $stmt->execute([$item['prescription_id']]);
-            $remaining = (int)$stmt->fetchColumn();
-            if ($remaining === 0) {
-                $db->prepare("UPDATE prescriptions SET status = 'dispensed', dispensed_at = NOW() WHERE id = ?")
-                   ->execute([$item['prescription_id']]);
+            if ($new_status === 'dispensed') {
+                $db->prepare("
+                    UPDATE prescription_items
+                    SET dispensed_at = NOW(), dispensed_by = ?
+                    WHERE prescription_id = ?
+                ")->execute([$user_id, $item['prescription_id']]);
+            } else {
+                $db->prepare("
+                    UPDATE prescription_items
+                    SET dispensed_at = NULL, dispensed_by = NULL
+                    WHERE prescription_id = ?
+                ")->execute([$item['prescription_id']]);
             }
 
-            try {
-                $db->prepare("INSERT INTO activity_logs
-                    (user_id, branch_id, action, details, ip_address, created_at)
-                    VALUES (?, ?, 'update_medication_status', ?, ?, NOW())")
-                   ->execute([
-                       $user_id, $user_branch_id,
-                       "Medication '$med_name' status: $old_status → $new_status",
-                       $_SERVER['REMOTE_ADDR'] ?? 'cli'
-                   ]);
-            } catch (Exception $e) {}
-
             $db->commit();
-            $alert_message = "✅ Medication status updated: $old_status → $new_status.";
+            $alert_message = "✅ Medication status updated: $old_status → $new_status.{$stock_msg}";
             $alert_type    = 'success';
         }
 
@@ -986,7 +1186,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 }
 
 // ================================================================
-// DETECT SECTION AFTER POST (for auto-scroll - NO MORE JUMP TO TOP)
+// DETECT SECTION AFTER POST
 // ================================================================
 $scroll_section = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && !empty($alert_message)) {
@@ -1176,8 +1376,6 @@ if (!empty($bill_ids)) {
 // ================================================================
 // FETCH DROPDOWN LISTS
 // ================================================================
-
-// ✅ VISIT TYPES: ONLY services with category = 'Consultation'
 $visit_types = [];
 try {
     $stmt = $db->prepare("
@@ -1193,7 +1391,6 @@ try {
     $visit_types = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-// Doctors
 $doctors = [];
 try {
     $stmt = $db->prepare("
@@ -1206,7 +1403,6 @@ try {
     $doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-// Receptionists
 $receptionists = [];
 try {
     $stmt = $db->prepare("
@@ -1219,7 +1415,6 @@ try {
     $receptionists = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-// Diseases
 $diseases_list = [];
 try {
     $stmt = $db->prepare("
@@ -1232,7 +1427,6 @@ try {
     $diseases_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-// Lab tests catalog
 $lab_test_catalog = [];
 try {
     $stmt = $db->prepare("
@@ -1245,7 +1439,6 @@ try {
     $lab_test_catalog = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-// Procedures catalog
 $procedures_catalog = [];
 try {
     $stmt = $db->prepare("
@@ -1258,7 +1451,6 @@ try {
     $procedures_catalog = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-// Equipment catalog
 $equipment_catalog = [];
 try {
     $stmt = $db->prepare("
@@ -1271,7 +1463,6 @@ try {
     $equipment_catalog = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
-// Medications inventory
 $medications_inventory = [];
 try {
     $stmt = $db->prepare("
@@ -1285,7 +1476,7 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// HEADER / SIDEBAR
+// HEADER / SIDEBAR (AUDIT versions)
 // ================================================================
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
@@ -1314,13 +1505,9 @@ function getInitials($name)
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
 <style>
-/* ================================================================
-   BLUE THEME - FINAL
-   ================================================================ */
 :root {
     --font-primary: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: 'JetBrains Mono', 'Courier New', monospace;
-
     --blue-50:  #EFF6FF;
     --blue-100: #DBEAFE;
     --blue-200: #BFDBFE;
@@ -1331,20 +1518,17 @@ function getInitials($name)
     --blue-700: #1D4ED8;
     --blue-800: #1E40AF;
     --blue-900: #1E3A8A;
-
     --primary: #1D4ED8;
     --primary-dark: #1E3A8A;
     --primary-light: #3B82F6;
     --primary-bg: #EFF6FF;
     --primary-soft: #DBEAFE;
-
     --success: #059669;
     --success-bg: #D1FAE5;
     --danger: #DC2626;
     --danger-bg: #FEE2E2;
     --warning: #D97706;
     --warning-bg: #FEF3C7;
-
     --slate: #94A3B8;
     --slate-bg: #F1F5F9;
     --bg-body: #F1F5F9;
@@ -1354,13 +1538,11 @@ function getInitials($name)
     --text-muted: #94A3B8;
     --border-color: #E2E8F0;
     --border-strong: #CBD5E1;
-
     --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06);
     --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
     --shadow-lg: 0 10px 25px rgba(15, 23, 42, 0.1);
     --shadow-xl: 0 20px 50px rgba(15, 23, 42, 0.15);
     --shadow-blue: 0 8px 24px rgba(29, 78, 216, 0.25);
-
     --radius-sm: 8px;
     --radius-md: 12px;
     --radius-lg: 16px;
@@ -1393,7 +1575,6 @@ body {
     letter-spacing: -0.02em;
 }
 
-/* ============== ALERT ============== */
 .alert {
     padding: 16px 22px;
     border-radius: var(--radius-md);
@@ -1406,6 +1587,7 @@ body {
     animation: slideDown 0.4s ease;
     border-left: 4px solid;
     box-shadow: var(--shadow-sm);
+    line-height: 1.6;
 }
 @keyframes slideDown {
     from { opacity: 0; transform: translateY(-10px); }
@@ -1415,7 +1597,6 @@ body {
 .alert.error { background: var(--danger-bg); color: var(--danger); border-left-color: var(--danger); }
 .alert i { font-size: 1.2rem; margin-top: 2px; }
 
-/* ============== PAGE HEADER ============== */
 .page-header {
     background: linear-gradient(135deg, var(--blue-700) 0%, var(--blue-800) 60%, var(--blue-900) 100%);
     border-radius: var(--radius-lg);
@@ -1483,7 +1664,6 @@ body {
 }
 .btn-header:hover { background: rgba(255,255,255,0.3); transform: translateY(-2px); box-shadow: var(--shadow-md); }
 
-/* ============== CARDS ============== */
 .card {
     background: var(--bg-card);
     border-radius: var(--radius-lg);
@@ -1516,7 +1696,6 @@ body {
 }
 .card-body { padding: 22px; }
 
-/* ============== FORM ============== */
 .form-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -1550,8 +1729,13 @@ body {
 }
 .form-input[readonly] { background: var(--slate-bg); color: var(--text-secondary); cursor: not-allowed; }
 .form-help { font-size: 0.65rem; color: var(--text-muted); font-weight: 600; }
+.money-input {
+    font-family: var(--font-mono) !important;
+    font-weight: 700 !important;
+    text-align: right;
+    font-size: 0.88rem !important;
+}
 
-/* ============== BUTTONS ============== */
 .btn {
     padding: 10px 20px;
     border-radius: var(--radius-sm);
@@ -1567,15 +1751,12 @@ body {
     font-family: var(--font-primary);
 }
 .btn:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
 .btn-primary {
     background: linear-gradient(135deg, var(--blue-600), var(--blue-700));
     color: white;
     box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
 }
-.btn-primary:hover { box-shadow: 0 8px 22px rgba(37, 99, 235, 0.45); }
 
-/* ============== ADD FORM ============== */
 .add-form {
     display: flex;
     flex-wrap: wrap;
@@ -1589,49 +1770,98 @@ body {
 .add-form .form-group { flex: 1; min-width: 160px; margin: 0; }
 .add-form .btn { flex-shrink: 0; }
 
-/* ============== SEARCHABLE DROPDOWN ============== */
 .searchable { position: relative; width: 100%; }
-.searchable-input-wrap { position: relative; display: flex; align-items: center; }
-.searchable-input-wrap i.search-icon {
-    position: absolute;
-    left: 12px;
-    color: var(--blue-600);
-    font-size: 0.8rem;
-    pointer-events: none;
-    z-index: 2;
-}
-.searchable-input-wrap input.search-input {
-    padding-left: 34px !important;
-    cursor: pointer;
+.searchable-toggle {
+    width: 100%;
+    padding: 10px 14px;
     background: white;
+    border: 1.5px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-size: 0.82rem;
+    font-family: var(--font-primary);
+    font-weight: 600;
+    color: var(--text-primary);
+    cursor: pointer;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    transition: all 0.2s;
+    min-height: 40px;
 }
-.searchable-input-wrap input.search-input:focus {
+.searchable-toggle:hover { border-color: var(--blue-500); background: var(--blue-50); }
+.searchable-toggle.active { border-color: var(--blue-500); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15); }
+.searchable-toggle .toggle-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.searchable-toggle .toggle-text.placeholder { color: var(--text-muted); font-style: italic; font-weight: 500; }
+.searchable-toggle .toggle-icon { color: var(--blue-600); font-size: 0.8rem; transition: transform 0.25s; }
+.searchable-toggle.active .toggle-icon { transform: rotate(180deg); }
+
+.searchable-panel {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0; right: 0;
+    background: white;
+    border: 1.5px solid var(--blue-400);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-xl);
+    z-index: 9999;
+    display: none;
+    max-height: 400px;
+    overflow: hidden;
+    animation: dropdownOpen 0.18s ease;
+}
+.searchable-panel.open { display: flex; flex-direction: column; }
+@keyframes dropdownOpen {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.searchable-search-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    background: linear-gradient(135deg, var(--blue-50), var(--blue-100));
+    border-bottom: 1px solid var(--blue-200);
+    flex-shrink: 0;
+}
+.searchable-search-wrap i.search-icon {
+    position: absolute; left: 22px;
+    color: var(--blue-600); font-size: 0.85rem;
+    pointer-events: none; z-index: 2;
+}
+.searchable-search-wrap input {
+    width: 100%;
+    padding: 9px 12px 9px 34px;
+    border: 1.5px solid var(--blue-300);
+    border-radius: 8px;
+    font-size: 0.82rem;
+    font-family: var(--font-primary);
+    font-weight: 600;
+    background: white;
+    outline: none;
+    transition: all 0.2s;
+}
+.searchable-search-wrap input:focus {
     border-color: var(--blue-500);
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
 }
-.searchable-dropdown {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    right: 0;
-    max-height: 280px;
+.searchable-search-wrap .search-count {
+    position: absolute; right: 22px;
+    font-size: 0.65rem; font-weight: 800;
+    color: var(--blue-700); background: white;
+    padding: 2px 8px; border-radius: 10px;
+    border: 1px solid var(--blue-200);
+    pointer-events: none;
+}
+.searchable-options {
     overflow-y: auto;
-    background: white;
-    border: 1.5px solid var(--blue-300);
-    border-radius: var(--radius-sm);
-    box-shadow: var(--shadow-lg);
-    z-index: 9999;
-    display: none;
-    animation: dropdownOpen 0.15s ease;
+    max-height: 300px;
+    padding: 4px 0;
 }
-.searchable-dropdown.open { display: block; }
-@keyframes dropdownOpen {
-    from { opacity: 0; transform: translateY(-4px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-.searchable-dropdown::-webkit-scrollbar { width: 8px; }
-.searchable-dropdown::-webkit-scrollbar-track { background: var(--blue-50); }
-.searchable-dropdown::-webkit-scrollbar-thumb {
+.searchable-options::-webkit-scrollbar { width: 8px; }
+.searchable-options::-webkit-scrollbar-track { background: var(--blue-50); }
+.searchable-options::-webkit-scrollbar-thumb {
     background: linear-gradient(135deg, var(--blue-400), var(--blue-600));
     border-radius: 10px;
 }
@@ -1641,7 +1871,7 @@ body {
     font-weight: 600;
     cursor: pointer;
     border-bottom: 1px solid var(--blue-50);
-    transition: all 0.15s;
+    transition: all 0.12s;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -1658,6 +1888,11 @@ body {
     color: white;
 }
 .searchable-option .opt-label { flex: 1; font-weight: 700; }
+.searchable-option .opt-label mark {
+    background: #FEF08A; color: #854D0E;
+    padding: 1px 3px; border-radius: 3px; font-weight: 900;
+}
+.searchable-option.selected .opt-label mark { background: white; color: var(--blue-700); }
 .searchable-option .opt-meta {
     font-size: 0.65rem;
     color: var(--text-secondary);
@@ -1670,31 +1905,19 @@ body {
 }
 .searchable-option.selected .opt-meta { background: rgba(255,255,255,0.25); color: white; }
 .searchable-option.no-result {
-    padding: 14px;
-    text-align: center;
-    color: var(--text-muted);
-    font-style: italic;
-    font-weight: 600;
-    cursor: default;
-    justify-content: center;
+    padding: 20px 14px; text-align: center;
+    color: var(--text-muted); font-style: italic;
+    font-weight: 600; cursor: default; justify-content: center;
 }
 .searchable-option.no-result:hover { background: white; }
+@keyframes pulseMatch {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5); }
+    50% { box-shadow: 0 0 0 8px rgba(59, 130, 246, 0); }
+}
+.searchable-option.pulse { animation: pulseMatch 0.8s ease; }
 
-/* ============== TABLES ============== */
 .table-wrapper { overflow-x: auto; border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
-.table-wrapper::-webkit-scrollbar { height: 8px; }
-.table-wrapper::-webkit-scrollbar-track { background: var(--border-color); }
-.table-wrapper::-webkit-scrollbar-thumb {
-    background: linear-gradient(135deg, var(--blue-400), var(--blue-600));
-    border-radius: 10px;
-}
-
-.data-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.78rem;
-    min-width: 800px;
-}
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; min-width: 800px; }
 .data-table thead th {
     text-align: left;
     padding: 12px 14px;
@@ -1714,7 +1937,6 @@ body {
     vertical-align: middle;
     font-weight: 500;
 }
-.data-table tbody tr { transition: background 0.15s; }
 .data-table tbody tr:hover td { background: var(--blue-50); }
 .data-table tbody tr:last-child td { border-bottom: none; }
 
@@ -1732,7 +1954,6 @@ body {
 .status-cell { text-align: center; }
 .actions-cell { text-align: center; white-space: nowrap; width: 100px; }
 
-/* ============== STATUS BADGES ============== */
 .status-badge {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 4px 10px; border-radius: var(--radius-full);
@@ -1748,7 +1969,6 @@ body {
 .status-badge.dispensed { background: var(--blue-200); color: var(--blue-800); border: 1px solid var(--blue-500); }
 .status-badge.confirmed { background: var(--blue-100); color: var(--blue-700); border: 1px solid var(--blue-400); }
 
-/* ============== ACTION BUTTONS ============== */
 .btn-action {
     width: 34px; height: 34px; border-radius: 8px;
     display: inline-flex; align-items: center; justify-content: center;
@@ -1759,7 +1979,6 @@ body {
 .btn-action.delete { background: rgba(220, 38, 38, 0.1); color: #DC2626; border: 1px solid rgba(220, 38, 38, 0.2); }
 .btn-action.delete:hover { background: #DC2626; color: white; box-shadow: 0 6px 16px rgba(220,38,38,0.4); }
 
-/* ============== BILL SUMMARY ============== */
 .summary-grid {
     display: grid;
     grid-template-columns: repeat(6, 1fr);
@@ -1802,7 +2021,6 @@ body {
 .summary-value.balance { color: var(--danger); }
 .summary-value.discount { color: var(--warning); }
 
-/* ============== MODAL ============== */
 .modal-overlay {
     position: fixed; inset: 0; background: rgba(15, 23, 42, 0.65);
     backdrop-filter: blur(8px); z-index: 99999; display: none;
@@ -1852,17 +2070,14 @@ body {
 .modal-btn.danger { background: linear-gradient(135deg, #DC2626, #B91C1C); color: white; }
 .modal-btn.danger:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(220, 38, 38, 0.5); }
 
-/* ============== EMPTY STATE ============== */
 .empty-state { padding: 40px 20px; text-align: center; color: var(--text-secondary); }
 .empty-state i { font-size: 2rem; opacity: 0.35; display: block; margin-bottom: 12px; color: var(--blue-500); }
 .empty-state p { font-weight: 600; font-size: 0.82rem; }
 
-/* ============== SECTION HIGHLIGHT (after scroll) ============== */
 .section-highlighted {
     box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.35), 0 10px 30px rgba(37, 99, 235, 0.2) !important;
 }
 
-/* ============== RESPONSIVE ============== */
 @media (max-width: 1024px) { .summary-grid { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 640px) {
     .summary-grid { grid-template-columns: repeat(2, 1fr); }
@@ -1870,7 +2085,7 @@ body {
     .add-form .form-group { min-width: 100%; }
 }
 @media print {
-    .btn, .btn-action, .btn-header, .add-form, .modal-overlay, .searchable-dropdown { display: none !important; }
+    .btn, .btn-action, .btn-header, .add-form, .modal-overlay, .searchable-panel { display: none !important; }
     .card { break-inside: avoid; }
 }
 </style>
@@ -1879,7 +2094,6 @@ body {
 
 <main class="main-content">
 
-    <!-- HIDDEN INPUT: tells JS which section to scroll to after POST -->
     <input type="hidden" id="scrollSection" value="<?= htmlspecialchars($scroll_section) ?>">
 
     <?php if (!empty($alert_message)): ?>
@@ -1889,11 +2103,10 @@ body {
         </div>
     <?php endif; ?>
 
-    <!-- PAGE HEADER -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-edit"></i> Edit Visit
+                <i class="fas fa-edit"></i> Edit Visit (Audit)
             </h1>
             <p class="page-subtitle">
                 <span class="header-badge solid"><i class="fas fa-hashtag"></i> <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span>
@@ -1912,9 +2125,7 @@ body {
         </div>
     </div>
 
-    <!-- ============================================================
-         SECTION 1: VISIT TYPE + DOCTOR + RECEPTIONIST
-         ============================================================ -->
+    <!-- SECTION 1: VISIT DETAILS -->
     <div class="card" id="section-visit">
         <div class="card-header">
             <div class="title"><i class="fas fa-info-circle"></i> Visit Details & Assignment</div>
@@ -1924,35 +2135,13 @@ body {
             <form method="POST" id="visitForm">
                 <input type="hidden" name="action" value="update_visit">
                 <div class="form-grid">
-
                     <div class="form-group full">
                         <label class="form-label"><i class="fas fa-stethoscope"></i> Visit Type / Consultation Service</label>
-                        <div class="searchable" id="serviceSearchable">
-                            <div class="searchable-input-wrap">
-                                <i class="fas fa-search search-icon"></i>
-                                <input type="text" class="form-input search-input" id="service_search"
-                                       placeholder="Search consultation service..."
-                                       autocomplete="off" readonly>
-                            </div>
-                            <input type="hidden" name="service_id" id="service_id"
-                                   value="<?= (int)($visit['service_id'] ?? 0) ?>">
-                            <input type="hidden" name="visit_type" id="visit_type_hidden"
-                                   value="<?= htmlspecialchars($visit['visit_type'] ?? '') ?>">
-                            <div class="searchable-dropdown" id="service_dropdown">
-                                <?php foreach ($visit_types as $vt): ?>
-                                    <div class="searchable-option"
-                                         data-value="<?= (int)$vt['id'] ?>"
-                                         data-name="<?= htmlspecialchars($vt['service_name']) ?>"
-                                         data-price="<?= (float)$vt['price'] ?>">
-                                        <span class="opt-label">
-                                            <i class="fas fa-stethoscope" style="color:var(--blue-500);margin-right:6px;"></i>
-                                            <?= htmlspecialchars($vt['service_name']) ?>
-                                        </span>
-                                        <span class="opt-meta"><?= $currency ?> <?= number_format((float)$vt['price'], 0) ?></span>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-                        </div>
+                        <div class="searchable" data-searchable="service"></div>
+                        <input type="hidden" name="service_id" id="service_id"
+                               value="<?= (int)($visit['service_id'] ?? 0) ?>">
+                        <input type="hidden" name="visit_type" id="visit_type_hidden"
+                               value="<?= htmlspecialchars($visit['visit_type'] ?? '') ?>">
                         <span class="form-help">Services in "Consultation" category only.</span>
                     </div>
 
@@ -1960,68 +2149,29 @@ body {
                         <label class="form-label"><i class="fas fa-heading"></i> Visit Type Label</label>
                         <input type="text" id="visit_type_label" class="form-input"
                                value="<?= htmlspecialchars($visit['visit_type'] ?? '') ?>"
-                               placeholder="Auto-filled from service" readonly
+                               placeholder="Auto-filled" readonly
                                style="background:var(--blue-50);color:var(--blue-800);">
                     </div>
 
                     <div class="form-group">
                         <label class="form-label"><i class="fas fa-money-bill"></i> Consultation Fee</label>
-                        <input type="number" name="consultation_fee" id="consultation_fee"
-                               class="form-input" step="0.01" min="0"
-                               value="<?= (float)($visit['consultation_fee'] ?? 0) ?>">
+                        <input type="text" name="consultation_fee" id="consultation_fee"
+                               class="form-input money-input" inputmode="numeric"
+                               value="<?= number_format((float)($visit['consultation_fee'] ?? 0), 0, '.', ',') ?>">
                     </div>
 
                     <div class="form-group">
                         <label class="form-label"><i class="fas fa-user-md"></i> Doctor</label>
-                        <div class="searchable" id="doctorSearchable">
-                            <div class="searchable-input-wrap">
-                                <i class="fas fa-search search-icon"></i>
-                                <input type="text" class="form-input search-input" id="doctor_search"
-                                       placeholder="Search doctor..." autocomplete="off" readonly>
-                            </div>
-                            <input type="hidden" name="doctor_id" id="doctor_id"
-                                   value="<?= (int)($visit['doctor_id'] ?? 0) ?>">
-                            <div class="searchable-dropdown" id="doctor_dropdown">
-                                <?php foreach ($doctors as $d): ?>
-                                    <div class="searchable-option"
-                                         data-value="<?= (int)$d['id'] ?>"
-                                         data-name="<?= htmlspecialchars($d['full_name']) ?>">
-                                        <span class="opt-label">
-                                            <i class="fas fa-user-md" style="color:var(--blue-500);margin-right:6px;"></i>
-                                            <?= htmlspecialchars($d['full_name']) ?>
-                                        </span>
-                                        <?php if (!empty($d['specialty'])): ?>
-                                            <span class="opt-meta"><?= htmlspecialchars($d['specialty']) ?></span>
-                                        <?php endif; ?>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-                        </div>
+                        <div class="searchable" data-searchable="doctor"></div>
+                        <input type="hidden" name="doctor_id" id="doctor_id"
+                               value="<?= (int)($visit['doctor_id'] ?? 0) ?>">
                     </div>
 
                     <div class="form-group">
                         <label class="form-label"><i class="fas fa-user-tie"></i> Receptionist</label>
-                        <div class="searchable" id="receptionistSearchable">
-                            <div class="searchable-input-wrap">
-                                <i class="fas fa-search search-icon"></i>
-                                <input type="text" class="form-input search-input" id="receptionist_search"
-                                       placeholder="Search receptionist..." autocomplete="off" readonly>
-                            </div>
-                            <input type="hidden" name="receptionist_id" id="receptionist_id"
-                                   value="<?= (int)($visit['receptionist_id'] ?? 0) ?>">
-                            <div class="searchable-dropdown" id="receptionist_dropdown">
-                                <?php foreach ($receptionists as $r): ?>
-                                    <div class="searchable-option"
-                                         data-value="<?= (int)$r['id'] ?>"
-                                         data-name="<?= htmlspecialchars($r['full_name']) ?>">
-                                        <span class="opt-label">
-                                            <i class="fas fa-user-tie" style="color:var(--blue-500);margin-right:6px;"></i>
-                                            <?= htmlspecialchars($r['full_name']) ?>
-                                        </span>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-                        </div>
+                        <div class="searchable" data-searchable="receptionist"></div>
+                        <input type="hidden" name="receptionist_id" id="receptionist_id"
+                               value="<?= (int)($visit['receptionist_id'] ?? 0) ?>">
                     </div>
 
                     <div class="form-group">
@@ -2050,7 +2200,7 @@ body {
                     </div>
 
                     <div class="form-group full">
-                        <label class="form-label"><i class="fas fa-history"></i> HPI (History of Present Illness)</label>
+                        <label class="form-label"><i class="fas fa-history"></i> HPI</label>
                         <textarea name="hpi" class="form-textarea" rows="3"><?= htmlspecialchars($visit['hpi'] ?? '') ?></textarea>
                     </div>
 
@@ -2074,9 +2224,7 @@ body {
         </div>
     </div>
 
-    <!-- ============================================================
-         SECTION 2: DIAGNOSIS
-         ============================================================ -->
+    <!-- SECTION 2: DIAGNOSIS -->
     <div class="card" id="section-diagnosis">
         <div class="card-header">
             <div class="title"><i class="fas fa-diagnoses"></i> Diagnosis</div>
@@ -2086,41 +2234,17 @@ body {
             <form method="POST">
                 <input type="hidden" name="action" value="update_diagnosis">
                 <div class="form-grid">
-
                     <div class="form-group">
                         <label class="form-label"><i class="fas fa-list"></i> Select from Diseases</label>
-                        <div class="searchable" id="diseaseSearchable">
-                            <div class="searchable-input-wrap">
-                                <i class="fas fa-search search-icon"></i>
-                                <input type="text" class="form-input search-input" id="disease_search"
-                                       placeholder="Search disease..." autocomplete="off" readonly>
-                            </div>
-                            <input type="hidden" name="disease_id" id="disease_id"
-                                   value="<?= (int)($visit['disease_id'] ?? 0) ?>">
-                            <div class="searchable-dropdown" id="disease_dropdown">
-                                <?php foreach ($diseases_list as $dis): ?>
-                                    <div class="searchable-option"
-                                         data-value="<?= (int)$dis['id'] ?>"
-                                         data-name="<?= htmlspecialchars($dis['disease_name']) ?>"
-                                         data-code="<?= htmlspecialchars($dis['disease_code'] ?? '') ?>"
-                                         data-treatment="<?= htmlspecialchars($dis['treatment'] ?? '') ?>">
-                                        <span class="opt-label">
-                                            <i class="fas fa-virus" style="color:var(--blue-500);margin-right:6px;"></i>
-                                            <?= htmlspecialchars($dis['disease_name']) ?>
-                                        </span>
-                                        <?php if (!empty($dis['disease_code'])): ?>
-                                            <span class="opt-meta"><?= htmlspecialchars($dis['disease_code']) ?></span>
-                                        <?php endif; ?>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-                        </div>
+                        <div class="searchable" data-searchable="disease"></div>
+                        <input type="hidden" name="disease_id" id="disease_id"
+                               value="<?= (int)($visit['disease_id'] ?? 0) ?>">
                     </div>
 
                     <div class="form-group">
                         <label class="form-label"><i class="fas fa-hashtag"></i> Disease Code</label>
                         <input type="text" name="disease_code" id="disease_code" class="form-input"
-                               value="<?= htmlspecialchars($visit['disease_code'] ?? '') ?>" placeholder="Auto-filled">
+                               value="<?= htmlspecialchars($visit['disease_code'] ?? '') ?>">
                     </div>
 
                     <div class="form-group full">
@@ -2138,9 +2262,7 @@ body {
         </div>
     </div>
 
-    <!-- ============================================================
-         SECTION 3: LAB TESTS
-         ============================================================ -->
+    <!-- SECTION 3: LAB TESTS -->
     <div class="card" id="section-lab">
         <div class="card-header">
             <div class="title"><i class="fas fa-flask"></i> Lab Tests</div>
@@ -2151,28 +2273,8 @@ body {
             <input type="hidden" name="action" value="add_lab_test">
             <div class="form-group" style="flex:2;">
                 <label class="form-label"><i class="fas fa-vial"></i> Add Lab Test</label>
-                <div class="searchable" id="labSearchable">
-                    <div class="searchable-input-wrap">
-                        <i class="fas fa-search search-icon"></i>
-                        <input type="text" class="form-input search-input" id="lab_search"
-                               placeholder="Search lab test..." autocomplete="off" readonly>
-                    </div>
-                    <input type="hidden" name="test_id" id="lab_test_id" required>
-                    <div class="searchable-dropdown" id="lab_dropdown">
-                        <?php foreach ($lab_test_catalog as $lt): ?>
-                            <div class="searchable-option"
-                                 data-value="<?= (int)$lt['id'] ?>"
-                                 data-name="<?= htmlspecialchars($lt['test_name']) ?>">
-                                <span class="opt-label">
-                                    <i class="fas fa-flask" style="color:var(--blue-500);margin-right:6px;"></i>
-                                    <?= htmlspecialchars($lt['test_name']) ?>
-                                    <?= !empty($lt['test_code']) ? ' (' . htmlspecialchars($lt['test_code']) . ')' : '' ?>
-                                </span>
-                                <span class="opt-meta"><?= $currency ?> <?= number_format((float)$lt['price'], 0) ?></span>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
+                <div class="searchable" data-searchable="lab"></div>
+                <input type="hidden" name="test_id" id="lab_test_id" required>
             </div>
             <button type="submit" class="btn btn-primary">
                 <i class="fas fa-plus"></i> Add Test
@@ -2202,12 +2304,10 @@ body {
                     ?>
                         <tr>
                             <td><?= $i++ ?></td>
-                            <td>
-                                <div class="item-name"><?= htmlspecialchars($lt['test_name'] ?? 'N/A') ?></div>
-                            </td>
+                            <td><div class="item-name"><?= htmlspecialchars($lt['test_name'] ?? 'N/A') ?></div></td>
                             <td>
                                 <div class="item-sub" style="max-width:300px;">
-                                    <?= !empty($lt['results']) ? htmlspecialchars(substr($lt['results'], 0, 100)) . (strlen($lt['results']) > 100 ? '...' : '') : '<em style="color:var(--text-muted);">No results yet</em>' ?>
+                                    <?= !empty($lt['results']) ? htmlspecialchars(substr($lt['results'], 0, 100)) : '<em style="color:var(--text-muted);">No results yet</em>' ?>
                                 </div>
                             </td>
                             <td class="status-cell">
@@ -2215,7 +2315,7 @@ body {
                                     <i class="fas <?= $st_icon ?>"></i> <?= strtoupper($st) ?>
                                 </span>
                             </td>
-                            <td class="money-cell"><?= $currency ?> <?= number_format((float)($lt['test_price'] ?? 0), 0) ?></td>
+                            <td class="money-cell"><?= $currency ?> <?= number_format((float)($lt['test_price'] ?? 0), 0, '.', ',') ?></td>
                             <td class="actions-cell">
                                 <button type="button" class="btn-action delete"
                                         onclick="confirmDelete('delete_lab_test', {lab_test_id: <?= (int)$lt['id'] ?>}, 'lab test', '<?= htmlspecialchars(addslashes($lt['test_name'])) ?>', <?= (float)$lt['test_price'] ?>)">
@@ -2235,9 +2335,7 @@ body {
         <?php endif; ?>
     </div>
 
-    <!-- ============================================================
-         SECTION 4: MEDICATIONS
-         ============================================================ -->
+    <!-- SECTION 4: MEDICATIONS -->
     <div class="card" id="section-medication">
         <div class="card-header">
             <div class="title"><i class="fas fa-pills"></i> Medications</div>
@@ -2248,30 +2346,8 @@ body {
             <input type="hidden" name="action" value="add_medication">
             <div class="form-group" style="flex:2; min-width:220px;">
                 <label class="form-label"><i class="fas fa-prescription-bottle-medical"></i> Medication</label>
-                <div class="searchable" id="medSearchable">
-                    <div class="searchable-input-wrap">
-                        <i class="fas fa-search search-icon"></i>
-                        <input type="text" class="form-input search-input" id="med_search"
-                               placeholder="Search medication..." autocomplete="off" readonly>
-                    </div>
-                    <input type="hidden" name="inventory_id" id="med_inventory_id" required>
-                    <div class="searchable-dropdown" id="med_dropdown">
-                        <?php foreach ($medications_inventory as $mi): ?>
-                            <div class="searchable-option"
-                                 data-value="<?= (int)$mi['id'] ?>"
-                                 data-name="<?= htmlspecialchars($mi['medication_name']) ?>">
-                                <span class="opt-label">
-                                    <i class="fas fa-pills" style="color:var(--blue-500);margin-right:6px;"></i>
-                                    <?= htmlspecialchars($mi['medication_name']) ?>
-                                </span>
-                                <span class="opt-meta">
-                                    Stock: <?= (int)$mi['quantity'] ?> <?= htmlspecialchars($mi['unit'] ?? '') ?>
-                                    • <?= $currency ?> <?= number_format((float)$mi['selling_price'], 0) ?>
-                                </span>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
+                <div class="searchable" data-searchable="medication"></div>
+                <input type="hidden" name="inventory_id" id="med_inventory_id" required>
             </div>
             <div class="form-group" style="max-width:110px;">
                 <label class="form-label"><i class="fas fa-sort-numeric-up"></i> Quantity</label>
@@ -2307,7 +2383,7 @@ body {
                 </thead>
                 <tbody>
                     <?php $i = 1; foreach ($prescription_items as $pi):
-                        $st = strtolower($pi['status'] ?? 'pending');
+                        $st = strtolower($pi['prescription_status'] ?? 'pending');
                         $st_class = 'pending'; $st_icon = 'fa-clock';
                         if ($st === 'dispensed') { $st_class = 'dispensed'; $st_icon = 'fa-check-circle'; }
                         elseif ($st === 'confirmed') { $st_class = 'confirmed'; $st_icon = 'fa-check'; }
@@ -2329,16 +2405,16 @@ body {
                                 <div class="item-sub">
                                     <?= htmlspecialchars($pi['dosage'] ?? '') ?>
                                     <?= !empty($pi['frequency']) ? ' • ' . htmlspecialchars($pi['frequency']) : '' ?>
-                                    <?= !empty($pi['duration']) ? ' • ' . htmlspecialchars($pi['duration']) : '' ?>
                                 </div>
                             </td>
-                            <td class="money-cell"><?= $currency ?> <?= number_format((float)($pi['unit_price'] ?? 0), 0) ?></td>
-                            <td class="money-cell total"><?= $currency ?> <?= number_format((float)($pi['total_price'] ?? 0), 0) ?></td>
+                            <td class="money-cell"><?= $currency ?> <?= number_format((float)($pi['unit_price'] ?? 0), 0, '.', ',') ?></td>
+                            <td class="money-cell total"><?= $currency ?> <?= number_format((float)($pi['total_price'] ?? 0), 0, '.', ',') ?></td>
                             <td class="status-cell">
                                 <form method="POST" style="display:inline;">
                                     <input type="hidden" name="action" value="update_medication_status">
                                     <input type="hidden" name="prescription_item_id" value="<?= (int)$pi['id'] ?>">
-                                    <select name="new_status" class="form-select" style="padding:5px 8px;font-size:0.65rem;width:auto;"
+                                    <select name="new_status" class="form-select"
+                                            style="padding:5px 8px;font-size:0.65rem;width:auto;"
                                             onchange="this.form.submit()">
                                         <option value="pending" <?= $st === 'pending' ? 'selected' : '' ?>>PENDING</option>
                                         <option value="confirmed" <?= $st === 'confirmed' ? 'selected' : '' ?>>CONFIRMED</option>
@@ -2349,7 +2425,7 @@ body {
                             </td>
                             <td class="actions-cell">
                                 <button type="button" class="btn-action delete"
-                                        onclick="confirmDelete('delete_medication', {prescription_item_id: <?= (int)$pi['id'] ?>}, 'medication (<?= $st ?>)', '<?= htmlspecialchars(addslashes($pi['medication_name'])) ?> x<?= (int)$pi['quantity'] ?>', <?= (float)$pi['total_price'] ?>)">
+                                        onclick="confirmDelete('delete_medication', {prescription_item_id: <?= (int)$pi['id'] ?>}, 'medication', '<?= htmlspecialchars(addslashes($pi['medication_name'])) ?> x<?= (int)$pi['quantity'] ?>', <?= (float)$pi['total_price'] ?>)">
                                     <i class="fas fa-trash"></i>
                                 </button>
                             </td>
@@ -2366,9 +2442,7 @@ body {
         <?php endif; ?>
     </div>
 
-    <!-- ============================================================
-         SECTION 5: PROCEDURES
-         ============================================================ -->
+    <!-- SECTION 5: PROCEDURES -->
     <div class="card" id="section-procedure">
         <div class="card-header">
             <div class="title"><i class="fas fa-procedures"></i> Procedures</div>
@@ -2379,27 +2453,8 @@ body {
             <input type="hidden" name="action" value="add_procedure">
             <div class="form-group" style="flex:2;">
                 <label class="form-label"><i class="fas fa-syringe"></i> Add Procedure</label>
-                <div class="searchable" id="procSearchable">
-                    <div class="searchable-input-wrap">
-                        <i class="fas fa-search search-icon"></i>
-                        <input type="text" class="form-input search-input" id="proc_search"
-                               placeholder="Search procedure..." autocomplete="off" readonly>
-                    </div>
-                    <input type="hidden" name="procedure_id" id="proc_id" required>
-                    <div class="searchable-dropdown" id="proc_dropdown">
-                        <?php foreach ($procedures_catalog as $pc): ?>
-                            <div class="searchable-option"
-                                 data-value="<?= (int)$pc['id'] ?>"
-                                 data-name="<?= htmlspecialchars($pc['procedure_name']) ?>">
-                                <span class="opt-label">
-                                    <i class="fas fa-procedures" style="color:var(--blue-500);margin-right:6px;"></i>
-                                    <?= htmlspecialchars($pc['procedure_name']) ?>
-                                </span>
-                                <span class="opt-meta"><?= $currency ?> <?= number_format((float)$pc['price'], 0) ?></span>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
+                <div class="searchable" data-searchable="procedure"></div>
+                <input type="hidden" name="procedure_id" id="proc_id" required>
             </div>
             <button type="submit" class="btn btn-primary">
                 <i class="fas fa-plus"></i> Add Procedure
@@ -2436,7 +2491,7 @@ body {
                                     <i class="fas <?= $st_icon ?>"></i> <?= strtoupper($st) ?>
                                 </span>
                             </td>
-                            <td class="money-cell"><?= $currency ?> <?= number_format((float)($p['procedure_price'] ?? 0), 0) ?></td>
+                            <td class="money-cell"><?= $currency ?> <?= number_format((float)($p['procedure_price'] ?? 0), 0, '.', ',') ?></td>
                             <td class="actions-cell">
                                 <button type="button" class="btn-action delete"
                                         onclick="confirmDelete('delete_procedure', {procedure_record_id: <?= (int)$p['id'] ?>}, 'procedure', '<?= htmlspecialchars(addslashes($p['procedure_name'])) ?>', <?= (float)$p['procedure_price'] ?>)">
@@ -2456,9 +2511,7 @@ body {
         <?php endif; ?>
     </div>
 
-    <!-- ============================================================
-         SECTION 6: EQUIPMENT
-         ============================================================ -->
+    <!-- SECTION 6: EQUIPMENT -->
     <div class="card" id="section-equipment">
         <div class="card-header">
             <div class="title"><i class="fas fa-toolbox"></i> Equipment / Materials</div>
@@ -2469,30 +2522,8 @@ body {
             <input type="hidden" name="action" value="add_equipment">
             <div class="form-group" style="flex:2;">
                 <label class="form-label"><i class="fas fa-tools"></i> Add Equipment</label>
-                <div class="searchable" id="eqpSearchable">
-                    <div class="searchable-input-wrap">
-                        <i class="fas fa-search search-icon"></i>
-                        <input type="text" class="form-input search-input" id="eqp_search"
-                               placeholder="Search equipment..." autocomplete="off" readonly>
-                    </div>
-                    <input type="hidden" name="equipment_id" id="eqp_id" required>
-                    <div class="searchable-dropdown" id="eqp_dropdown">
-                        <?php foreach ($equipment_catalog as $eq): ?>
-                            <div class="searchable-option"
-                                 data-value="<?= (int)$eq['id'] ?>"
-                                 data-name="<?= htmlspecialchars($eq['equipment_name']) ?>">
-                                <span class="opt-label">
-                                    <i class="fas fa-tools" style="color:var(--blue-500);margin-right:6px;"></i>
-                                    <?= htmlspecialchars($eq['equipment_name']) ?>
-                                </span>
-                                <span class="opt-meta">
-                                    Stock: <?= (int)$eq['quantity'] ?>
-                                    • <?= $currency ?> <?= number_format((float)$eq['selling_price'], 0) ?>
-                                </span>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
+                <div class="searchable" data-searchable="equipment"></div>
+                <input type="hidden" name="equipment_id" id="eqp_id" required>
             </div>
             <div class="form-group" style="max-width:120px;">
                 <label class="form-label"><i class="fas fa-sort-numeric-up"></i> Quantity</label>
@@ -2529,8 +2560,8 @@ body {
                                 <?php endif; ?>
                             </td>
                             <td class="qty-cell"><?= (int)($eq['quantity'] ?? 1) ?></td>
-                            <td class="money-cell"><?= $currency ?> <?= number_format((float)($eq['unit_price'] ?? 0), 0) ?></td>
-                            <td class="money-cell total"><?= $currency ?> <?= number_format((float)($eq['total_price'] ?? 0), 0) ?></td>
+                            <td class="money-cell"><?= $currency ?> <?= number_format((float)($eq['unit_price'] ?? 0), 0, '.', ',') ?></td>
+                            <td class="money-cell total"><?= $currency ?> <?= number_format((float)($eq['total_price'] ?? 0), 0, '.', ',') ?></td>
                             <td class="actions-cell">
                                 <button type="button" class="btn-action delete"
                                         onclick="confirmDelete('delete_equipment', {bill_item_id: <?= (int)$eq['id'] ?>}, 'equipment', '<?= htmlspecialchars(addslashes($eq['item_name'])) ?>', <?= (float)$eq['total_price'] ?>)">
@@ -2550,9 +2581,7 @@ body {
         <?php endif; ?>
     </div>
 
-    <!-- ============================================================
-         SECTION 7: BILL SUMMARY
-         ============================================================ -->
+    <!-- SECTION 7: BILL SUMMARY -->
     <?php if ($primary_bill_id): ?>
     <div class="card" id="section-bill">
         <div class="card-header">
@@ -2562,64 +2591,68 @@ body {
         <div class="summary-grid">
             <div class="summary-box">
                 <div class="summary-label"><i class="fas fa-file-invoice"></i> Total Billed</div>
-                <div class="summary-value"><?= $currency ?> <?= number_format($total_billed, 0) ?></div>
+                <div class="summary-value"><?= $currency ?> <?= number_format($total_billed, 0, '.', ',') ?></div>
             </div>
             <div class="summary-box">
                 <div class="summary-label"><i class="fas fa-check-circle"></i> Total Paid</div>
-                <div class="summary-value paid"><?= $currency ?> <?= number_format($total_paid, 0) ?></div>
+                <div class="summary-value paid"><?= $currency ?> <?= number_format($total_paid, 0, '.', ',') ?></div>
             </div>
             <div class="summary-box">
                 <div class="summary-label"><i class="fas fa-percent"></i> Pharm Disc</div>
-                <div class="summary-value discount"><?= $currency ?> <?= number_format($pharm_disc_total, 0) ?></div>
+                <div class="summary-value discount"><?= $currency ?> <?= number_format($pharm_disc_total, 0, '.', ',') ?></div>
             </div>
             <div class="summary-box">
                 <div class="summary-label"><i class="fas fa-percent"></i> Cashier Disc</div>
-                <div class="summary-value discount"><?= $currency ?> <?= number_format($cash_disc_total, 0) ?></div>
+                <div class="summary-value discount"><?= $currency ?> <?= number_format($cash_disc_total, 0, '.', ',') ?></div>
             </div>
             <div class="summary-box">
                 <div class="summary-label"><i class="fas fa-star"></i> Premium</div>
-                <div class="summary-value discount"><?= $currency ?> <?= number_format($total_premium, 0) ?></div>
+                <div class="summary-value discount"><?= $currency ?> <?= number_format($total_premium, 0, '.', ',') ?></div>
             </div>
             <div class="summary-box">
                 <div class="summary-label"><i class="fas fa-exclamation-circle"></i> Balance</div>
-                <div class="summary-value balance"><?= $currency ?> <?= number_format($total_balance, 0) ?></div>
+                <div class="summary-value balance"><?= $currency ?> <?= number_format($total_balance, 0, '.', ',') ?></div>
             </div>
         </div>
 
         <?php $primary_bill = null; foreach ($bills as $b) { if ((int)$b['id'] === $primary_bill_id) { $primary_bill = $b; break; } } ?>
         <?php if ($primary_bill): ?>
-        <form method="POST" class="card-body" style="border-top:2px solid var(--blue-200);">
+        <form method="POST" class="card-body" id="billForm" style="border-top:2px solid var(--blue-200);">
             <input type="hidden" name="action" value="update_bill_totals">
             <input type="hidden" name="bill_id" value="<?= (int)$primary_bill_id ?>">
 
             <div class="form-grid">
                 <div class="form-group">
                     <label class="form-label"><i class="fas fa-percent"></i> Pharmacy Discount</label>
-                    <input type="number" name="pharmacy_discount" class="form-input" step="0.01" min="0"
-                           value="<?= (float)($primary_bill['pharmacy_discount'] ?? 0) ?>">
+                    <input type="text" name="pharmacy_discount" class="form-input money-input"
+                           inputmode="numeric"
+                           value="<?= number_format((float)($primary_bill['pharmacy_discount'] ?? 0), 0, '.', ',') ?>">
                 </div>
                 <div class="form-group">
                     <label class="form-label"><i class="fas fa-percent"></i> Cashier Discount</label>
-                    <input type="number" name="cashier_discount" class="form-input" step="0.01" min="0"
-                           value="<?= (float)($primary_bill['cashier_discount'] ?? 0) ?>">
+                    <input type="text" name="cashier_discount" class="form-input money-input"
+                           inputmode="numeric"
+                           value="<?= number_format((float)($primary_bill['cashier_discount'] ?? 0), 0, '.', ',') ?>">
                 </div>
                 <div class="form-group">
                     <label class="form-label"><i class="fas fa-star"></i> Pharmacy Premium</label>
-                    <input type="number" name="pharmacy_premium" class="form-input" step="0.01" min="0"
-                           value="<?= (float)($primary_bill['pharmacy_premium'] ?? 0) ?>">
+                    <input type="text" name="pharmacy_premium" class="form-input money-input"
+                           inputmode="numeric"
+                           value="<?= number_format((float)($primary_bill['pharmacy_premium'] ?? 0), 0, '.', ',') ?>">
                 </div>
                 <div class="form-group">
                     <label class="form-label"><i class="fas fa-star"></i> Cashier Premium</label>
-                    <input type="number" name="cashier_premium" class="form-input" step="0.01" min="0"
-                           value="<?= (float)($primary_bill['cashier_premium'] ?? 0) ?>">
+                    <input type="text" name="cashier_premium" class="form-input money-input"
+                           inputmode="numeric"
+                           value="<?= number_format((float)($primary_bill['cashier_premium'] ?? 0), 0, '.', ',') ?>">
                 </div>
                 <div class="form-group">
-                    <label class="form-label"><i class="fas fa-sticky-note"></i> Pharmacy Premium Note</label>
+                    <label class="form-label"><i class="fas fa-sticky-note"></i> Pharmacy Note</label>
                     <input type="text" name="pharmacy_premium_note" class="form-input"
                            value="<?= htmlspecialchars($primary_bill['pharmacy_premium_note'] ?? '') ?>">
                 </div>
                 <div class="form-group">
-                    <label class="form-label"><i class="fas fa-sticky-note"></i> Cashier Premium Note</label>
+                    <label class="form-label"><i class="fas fa-sticky-note"></i> Cashier Note</label>
                     <input type="text" name="cashier_premium_note" class="form-input"
                            value="<?= htmlspecialchars($primary_bill['cashier_premium_note'] ?? '') ?>">
                 </div>
@@ -2637,7 +2670,7 @@ body {
 
 </main>
 
-<!-- DELETE MODAL -->
+<!-- MODAL: DELETE -->
 <div class="modal-overlay" id="deleteModal">
     <div class="modal-box">
         <div class="modal-icon"><i class="fas fa-exclamation-triangle"></i></div>
@@ -2646,9 +2679,6 @@ body {
             Are you sure you want to delete<br>
             <strong id="deleteRecordNumber">#</strong><br>
             <span id="deleteItemAmount" style="font-size:0.8rem;color:var(--danger);font-weight:700;"></span>
-            <span class="modal-warning">
-                <i class="fas fa-exclamation-circle"></i> Bill totals and payments will be recalculated!
-            </span>
         </p>
         <form method="POST" id="deleteForm">
             <input type="hidden" name="action" id="deleteAction" value="">
@@ -2666,309 +2696,350 @@ body {
 
 <script>
 /* ================================================================
-   AUTO-SCROLL TO SECTION AFTER FORM SUBMIT
-   Prevents page jump to top after add/delete operations
+   DATA FOR SEARCHABLE DROPDOWNS (from PHP)
    ================================================================ */
-(function() {
-    var section = document.getElementById('scrollSection');
-    if (section && section.value) {
-        var sectionId = 'section-' + section.value;
-        var target    = document.getElementById(sectionId);
+var SEARCH_DATA = {
+    service: [
+        <?php foreach ($visit_types as $vt): ?>
+        { value: '<?= (int)$vt['id'] ?>', name: '<?= addslashes($vt['service_name']) ?>', meta: '<?= $currency ?> <?= number_format((float)$vt['price'], 0, '.', ',') ?>', price: <?= (float)$vt['price'] ?> },
+        <?php endforeach; ?>
+    ],
+    doctor: [
+        <?php foreach ($doctors as $d): ?>
+        { value: '<?= (int)$d['id'] ?>', name: '<?= addslashes($d['full_name']) ?>', meta: '<?= addslashes($d['specialty'] ?? '') ?>' },
+        <?php endforeach; ?>
+    ],
+    receptionist: [
+        <?php foreach ($receptionists as $r): ?>
+        { value: '<?= (int)$r['id'] ?>', name: '<?= addslashes($r['full_name']) ?>', meta: '' },
+        <?php endforeach; ?>
+    ],
+    disease: [
+        <?php foreach ($diseases_list as $dis): ?>
+        { value: '<?= (int)$dis['id'] ?>', name: '<?= addslashes($dis['disease_name']) ?>', meta: '<?= addslashes($dis['disease_code'] ?? '') ?>', code: '<?= addslashes($dis['disease_code'] ?? '') ?>' },
+        <?php endforeach; ?>
+    ],
+    lab: [
+        <?php foreach ($lab_test_catalog as $lt): ?>
+        { value: '<?= (int)$lt['id'] ?>', name: '<?= addslashes($lt['test_name']) ?><?= !empty($lt['test_code']) ? ' (' . addslashes($lt['test_code']) . ')' : '' ?>', meta: '<?= $currency ?> <?= number_format((float)$lt['price'], 0, '.', ',') ?>' },
+        <?php endforeach; ?>
+    ],
+    medication: [
+        <?php foreach ($medications_inventory as $mi): ?>
+        { value: '<?= (int)$mi['id'] ?>', name: '<?= addslashes($mi['medication_name']) ?>', meta: 'Stock: <?= (int)$mi['quantity'] ?> <?= addslashes($mi['unit'] ?? '') ?> • <?= $currency ?> <?= number_format((float)$mi['selling_price'], 0, '.', ',') ?>' },
+        <?php endforeach; ?>
+    ],
+    procedure: [
+        <?php foreach ($procedures_catalog as $pc): ?>
+        { value: '<?= (int)$pc['id'] ?>', name: '<?= addslashes($pc['procedure_name']) ?>', meta: '<?= $currency ?> <?= number_format((float)$pc['price'], 0, '.', ',') ?>' },
+        <?php endforeach; ?>
+    ],
+    equipment: [
+        <?php foreach ($equipment_catalog as $eq): ?>
+        { value: '<?= (int)$eq['id'] ?>', name: '<?= addslashes($eq['equipment_name']) ?>', meta: 'Stock: <?= (int)$eq['quantity'] ?> • <?= $currency ?> <?= number_format((float)$eq['selling_price'], 0, '.', ',') ?>' },
+        <?php endforeach; ?>
+    ]
+};
 
-        if (target) {
-            // Wait for layout to settle, then smooth scroll
-            setTimeout(function() {
-                var yOffset = target.getBoundingClientRect().top + window.pageYOffset - 20;
-                window.scrollTo({ top: yOffset, behavior: 'smooth' });
+var SEARCH_META = {
+    service:      { placeholder: 'Search consultation service...', icon: 'fa-stethoscope' },
+    doctor:       { placeholder: 'Search doctor...', icon: 'fa-user-md' },
+    receptionist: { placeholder: 'Search receptionist...', icon: 'fa-user-tie' },
+    disease:      { placeholder: 'Search disease...', icon: 'fa-virus' },
+    lab:          { placeholder: 'Search lab test...', icon: 'fa-flask' },
+    medication:   { placeholder: 'Search medication...', icon: 'fa-pills' },
+    procedure:    { placeholder: 'Search procedure...', icon: 'fa-procedures' },
+    equipment:    { placeholder: 'Search equipment...', icon: 'fa-tools' }
+};
 
-                // Highlight section briefly so user sees confirmation
-                target.classList.add('section-highlighted');
-                setTimeout(function() {
-                    target.classList.remove('section-highlighted');
-                }, 1800);
-            }, 120);
-
-            // Clean URL so refresh doesn't re-scroll
-            if (window.history && window.history.replaceState) {
-                window.history.replaceState({}, document.title,
-                    window.location.pathname + window.location.search);
-            }
-        }
-    }
-
-    /* Auto-dismiss alert when user scrolls */
-    var alertBox = document.getElementById('alertBox');
-    if (alertBox) {
-        var dismissTimer = setTimeout(function() {
-            alertBox.style.transition = 'all 0.5s ease';
-            alertBox.style.opacity = '0';
-            setTimeout(function() { if (alertBox.parentNode) alertBox.remove(); }, 500);
-        }, 8000);
-
-        window.addEventListener('scroll', function() {
-            if (alertBox && alertBox.parentNode) {
-                clearTimeout(dismissTimer);
-                alertBox.style.transition = 'all 0.4s ease';
-                alertBox.style.opacity = '0';
-                alertBox.style.transform = 'translateY(-10px)';
-                setTimeout(function() { if (alertBox.parentNode) alertBox.remove(); }, 400);
-            }
-        }, { once: true, passive: true });
-    }
-})();
-
-/* ================================================================
-   SEARCHABLE DROPDOWN FACTORY
-   ================================================================ */
-function initSearchable(config) {
-    var wrap       = document.getElementById(config.wrapId);
-    if (!wrap) return null;
-
-    var input       = document.getElementById(config.inputId);
-    var dropdown    = document.getElementById(config.dropdownId);
-    var hiddenInput = document.getElementById(config.hiddenId);
-    var allOptions  = Array.from(dropdown.querySelectorAll('.searchable-option'));
+function createSearchable(container, type, hiddenInputId, config) {
+    config = config || {};
+    var meta = SEARCH_META[type] || { placeholder: 'Search...', icon: 'fa-search' };
+    var data = SEARCH_DATA[type] || [];
+    var hiddenInput = document.getElementById(hiddenInputId);
 
     var selectedLabel = '';
+    var selectedValue = hiddenInput ? hiddenInput.value : '';
 
-    // Set initial display text
-    if (hiddenInput && hiddenInput.value) {
-        var matched = allOptions.find(function(opt) {
-            return opt.getAttribute('data-value') === hiddenInput.value;
-        });
-        if (matched) {
-            selectedLabel = matched.getAttribute('data-name') || matched.textContent.trim();
-            input.value = selectedLabel;
-            matched.classList.add('selected');
-        }
+    if (selectedValue) {
+        var found = data.find(function(item) { return String(item.value) === String(selectedValue); });
+        if (found) selectedLabel = found.name;
     }
 
-    // Filter function (live)
-    function filterOptions(query) {
+    container.innerHTML =
+        '<button type="button" class="searchable-toggle">' +
+            '<span class="toggle-text' + (selectedLabel ? '' : ' placeholder') + '">' +
+                (selectedLabel || meta.placeholder) +
+            '</span>' +
+            '<i class="fas fa-chevron-down toggle-icon"></i>' +
+        '</button>' +
+        '<div class="searchable-panel">' +
+            '<div class="searchable-search-wrap">' +
+                '<i class="fas fa-search search-icon"></i>' +
+                '<input type="text" class="search-input-field" placeholder="Type to search..." autocomplete="off">' +
+                '<span class="search-count">0</span>' +
+            '</div>' +
+            '<div class="searchable-options"></div>' +
+        '</div>';
+
+    var toggle       = container.querySelector('.searchable-toggle');
+    var toggleText   = container.querySelector('.toggle-text');
+    var panel        = container.querySelector('.searchable-panel');
+    var searchInput  = container.querySelector('.search-input-field');
+    var optionsWrap  = container.querySelector('.searchable-options');
+    var searchCount  = container.querySelector('.search-count');
+
+    function escapeHtml(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function highlightMatch(text, query) {
+        if (!query) return escapeHtml(text);
+        var safe = escapeHtml(text);
+        var q = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        var regex = new RegExp('(' + q + ')', 'gi');
+        return safe.replace(regex, '<mark>$1</mark>');
+    }
+
+    function renderOptions(query) {
         var q = (query || '').toLowerCase().trim();
-        var visibleCount = 0;
 
-        allOptions.forEach(function(opt) {
-            var label = (opt.getAttribute('data-name') || opt.textContent).toLowerCase();
-            if (q === '' || label.indexOf(q) !== -1) {
-                opt.style.display = 'flex';
-                visibleCount++;
-            } else {
-                opt.style.display = 'none';
-            }
+        var filteredData = q === ''
+            ? data.slice()
+            : data.filter(function(item) {
+                return String(item.name).toLowerCase().indexOf(q) !== -1 ||
+                       String(item.meta || '').toLowerCase().indexOf(q) !== -1;
+            });
+
+        searchCount.textContent = filteredData.length;
+
+        if (filteredData.length === 0) {
+            optionsWrap.innerHTML = '<div class="searchable-option no-result">' +
+                '<i class="fas fa-search" style="margin-right:8px;opacity:0.5;"></i>' +
+                'No matching result</div>';
+            return;
+        }
+
+        var html = '';
+        filteredData.forEach(function(item) {
+            var isSelected = String(item.value) === String(hiddenInput ? hiddenInput.value : '');
+            html += '<div class="searchable-option' + (isSelected ? ' selected' : '') + '" ' +
+                    'data-value="' + escapeHtml(item.value) + '" ' +
+                    'data-name="' + escapeHtml(item.name) + '">' +
+                    '<span class="opt-label">' +
+                        '<i class="fas ' + meta.icon + '" style="margin-right:6px;opacity:0.7;"></i>' +
+                        highlightMatch(item.name, q) +
+                    '</span>' +
+                    (item.meta ? '<span class="opt-meta">' + escapeHtml(item.meta) + '</span>' : '') +
+                    '</div>';
+        });
+        optionsWrap.innerHTML = html;
+
+        optionsWrap.querySelectorAll('.searchable-option:not(.no-result)').forEach(function(opt) {
+            opt.addEventListener('click', function(e) {
+                e.stopPropagation();
+                selectOption(opt.getAttribute('data-value'), opt.getAttribute('data-name'));
+            });
         });
 
-        // "No result" message
-        var noResult = dropdown.querySelector('.searchable-option.no-result');
-        if (visibleCount === 0) {
-            if (!noResult) {
-                noResult = document.createElement('div');
-                noResult.className = 'searchable-option no-result';
-                noResult.textContent = 'No matching result';
-                dropdown.appendChild(noResult);
-            } else {
-                noResult.style.display = 'flex';
-            }
-        } else if (noResult) {
-            noResult.remove();
+        var first = optionsWrap.querySelector('.searchable-option:not(.no-result)');
+        if (first && q) {
+            first.classList.add('active');
+            first.classList.add('pulse');
+            setTimeout(function() { first.classList.remove('pulse'); }, 800);
         }
     }
 
-    function openDropdown() {
-        // Close others
-        document.querySelectorAll('.searchable-dropdown.open').forEach(function(d) {
-            if (d !== dropdown) d.classList.remove('open');
+    function openPanel() {
+        document.querySelectorAll('.searchable-panel.open').forEach(function(p) {
+            if (p !== panel) p.classList.remove('open');
         });
-        dropdown.classList.add('open');
+        document.querySelectorAll('.searchable-toggle.active').forEach(function(t) {
+            if (t !== toggle) t.classList.remove('active');
+        });
 
-        input.value = '';
-        filterOptions('');
-        input.focus();
+        panel.classList.add('open');
+        toggle.classList.add('active');
+        searchInput.value = '';
+        renderOptions('');
+        setTimeout(function() { searchInput.focus(); }, 50);
     }
 
-    function closeDropdown() {
-        dropdown.classList.remove('open');
-        if (hiddenInput.value && selectedLabel) {
-            input.value = selectedLabel;
-        } else {
-            input.value = '';
+    function closePanel() {
+        panel.classList.remove('open');
+        toggle.classList.remove('active');
+        searchInput.value = '';
+    }
+
+    function selectOption(value, name) {
+        if (hiddenInput) hiddenInput.value = value;
+        selectedLabel = name;
+        toggleText.textContent = name;
+        toggleText.classList.remove('placeholder');
+        closePanel();
+
+        if (typeof config.onSelect === 'function') {
+            var item = data.find(function(d) { return String(d.value) === String(value); });
+            config.onSelect(value, item, name);
         }
     }
 
-    input.addEventListener('click', function(e) {
+    toggle.addEventListener('click', function(e) {
         e.stopPropagation();
-        if (dropdown.classList.contains('open')) {
-            closeDropdown();
-        } else {
-            openDropdown();
-        }
+        if (panel.classList.contains('open')) closePanel();
+        else openPanel();
     });
 
-    input.addEventListener('focus', function() {
-        if (!dropdown.classList.contains('open')) {
-            openDropdown();
-        }
+    searchInput.addEventListener('input', function() {
+        renderOptions(this.value);
     });
 
-    input.addEventListener('input', function() {
-        filterOptions(this.value);
-    });
+    searchInput.addEventListener('keydown', function(e) {
+        var visible = optionsWrap.querySelectorAll('.searchable-option:not(.no-result)');
+        if (visible.length === 0) return;
 
-    input.addEventListener('keydown', function(e) {
-        var visible = allOptions.filter(function(o) { return o.style.display !== 'none'; });
-        var currentIdx = visible.findIndex(function(o) { return o.classList.contains('active'); });
+        var active = optionsWrap.querySelector('.searchable-option.active');
+        var idx = Array.prototype.indexOf.call(visible, active);
 
         if (e.key === 'ArrowDown') {
             e.preventDefault();
-            if (currentIdx < visible.length - 1) {
-                if (currentIdx >= 0) visible[currentIdx].classList.remove('active');
-                visible[currentIdx + 1].classList.add('active');
-                visible[currentIdx + 1].scrollIntoView({ block: 'nearest' });
-            }
+            if (active) active.classList.remove('active');
+            var next = idx < visible.length - 1 ? idx + 1 : 0;
+            visible[next].classList.add('active');
+            visible[next].scrollIntoView({ block: 'nearest' });
         } else if (e.key === 'ArrowUp') {
             e.preventDefault();
-            if (currentIdx > 0) {
-                if (currentIdx >= 0) visible[currentIdx].classList.remove('active');
-                visible[currentIdx - 1].classList.add('active');
-                visible[currentIdx - 1].scrollIntoView({ block: 'nearest' });
-            }
+            if (active) active.classList.remove('active');
+            var prev = idx > 0 ? idx - 1 : visible.length - 1;
+            visible[prev].classList.add('active');
+            visible[prev].scrollIntoView({ block: 'nearest' });
         } else if (e.key === 'Enter') {
             e.preventDefault();
-            if (currentIdx >= 0 && visible[currentIdx]) {
-                visible[currentIdx].click();
-            }
+            if (active) active.click();
+            else if (visible.length > 0) visible[0].click();
         } else if (e.key === 'Escape') {
-            closeDropdown();
+            closePanel();
         }
-    });
-
-    allOptions.forEach(function(opt) {
-        opt.addEventListener('click', function(e) {
-            e.stopPropagation();
-
-            allOptions.forEach(function(o) { o.classList.remove('selected'); });
-            opt.classList.add('selected');
-
-            var value = opt.getAttribute('data-value');
-            var name  = opt.getAttribute('data-name') || opt.textContent.trim();
-
-            hiddenInput.value = value;
-            selectedLabel = name;
-            input.value = name;
-
-            closeDropdown();
-
-            if (typeof config.onSelect === 'function') {
-                config.onSelect(value, opt, name);
-            }
-        });
     });
 
     document.addEventListener('click', function(e) {
-        if (!wrap.contains(e.target)) {
-            closeDropdown();
-        }
+        if (!container.contains(e.target)) closePanel();
     });
 
-    return {
-        open: openDropdown,
-        close: closeDropdown,
-        getValue: function() { return hiddenInput.value; }
-    };
+    return { open: openPanel, close: closePanel, setValue: selectOption };
 }
 
-/* ================================================================
-   INITIALIZE ALL SEARCHABLE DROPDOWNS
-   ================================================================ */
 document.addEventListener('DOMContentLoaded', function() {
-
-    // SERVICE (auto-fills consultation fee + visit type label)
-    initSearchable({
-        wrapId: 'serviceSearchable',
-        inputId: 'service_search',
-        dropdownId: 'service_dropdown',
-        hiddenId: 'service_id',
-        onSelect: function(value, opt, name) {
-            var price = opt.getAttribute('data-price') || '0';
-            document.getElementById('consultation_fee').value = price;
+    var svcEl = document.querySelector('[data-searchable="service"]');
+    if (svcEl) createSearchable(svcEl, 'service', 'service_id', {
+        onSelect: function(value, item, name) {
+            if (item && item.price) {
+                var feeInput = document.getElementById('consultation_fee');
+                feeInput.value = Number(item.price).toLocaleString('en-US');
+            }
             document.getElementById('visit_type_label').value = name;
             document.getElementById('visit_type_hidden').value = name;
         }
     });
 
-    // DOCTOR
-    initSearchable({
-        wrapId: 'doctorSearchable',
-        inputId: 'doctor_search',
-        dropdownId: 'doctor_dropdown',
-        hiddenId: 'doctor_id'
-    });
+    var docEl = document.querySelector('[data-searchable="doctor"]');
+    if (docEl) createSearchable(docEl, 'doctor', 'doctor_id');
 
-    // RECEPTIONIST
-    initSearchable({
-        wrapId: 'receptionistSearchable',
-        inputId: 'receptionist_search',
-        dropdownId: 'receptionist_dropdown',
-        hiddenId: 'receptionist_id'
-    });
+    var recEl = document.querySelector('[data-searchable="receptionist"]');
+    if (recEl) createSearchable(recEl, 'receptionist', 'receptionist_id');
 
-    // DISEASE (auto-fills diagnosis + code)
-    initSearchable({
-        wrapId: 'diseaseSearchable',
-        inputId: 'disease_search',
-        dropdownId: 'disease_dropdown',
-        hiddenId: 'disease_id',
-        onSelect: function(value, opt, name) {
-            var code = opt.getAttribute('data-code') || '';
+    var disEl = document.querySelector('[data-searchable="disease"]');
+    if (disEl) createSearchable(disEl, 'disease', 'disease_id', {
+        onSelect: function(value, item, name) {
             document.getElementById('diagnosis').value = name;
-            if (code) document.getElementById('disease_code').value = code;
+            if (item && item.code) document.getElementById('disease_code').value = item.code;
         }
     });
 
-    // LAB TEST
-    initSearchable({
-        wrapId: 'labSearchable',
-        inputId: 'lab_search',
-        dropdownId: 'lab_dropdown',
-        hiddenId: 'lab_test_id'
-    });
+    var labEl = document.querySelector('[data-searchable="lab"]');
+    if (labEl) createSearchable(labEl, 'lab', 'lab_test_id');
 
-    // MEDICATION
-    initSearchable({
-        wrapId: 'medSearchable',
-        inputId: 'med_search',
-        dropdownId: 'med_dropdown',
-        hiddenId: 'med_inventory_id'
-    });
+    var medEl = document.querySelector('[data-searchable="medication"]');
+    if (medEl) createSearchable(medEl, 'medication', 'med_inventory_id');
 
-    // PROCEDURE
-    initSearchable({
-        wrapId: 'procSearchable',
-        inputId: 'proc_search',
-        dropdownId: 'proc_dropdown',
-        hiddenId: 'proc_id'
-    });
+    var procEl = document.querySelector('[data-searchable="procedure"]');
+    if (procEl) createSearchable(procEl, 'procedure', 'proc_id');
 
-    // EQUIPMENT
-    initSearchable({
-        wrapId: 'eqpSearchable',
-        inputId: 'eqp_search',
-        dropdownId: 'eqp_dropdown',
-        hiddenId: 'eqp_id'
+    var eqpEl = document.querySelector('[data-searchable="equipment"]');
+    if (eqpEl) createSearchable(eqpEl, 'equipment', 'eqp_id');
+});
+
+/* AUTO SCROLL */
+(function() {
+    var section = document.getElementById('scrollSection');
+    if (section && section.value) {
+        var target = document.getElementById('section-' + section.value);
+        if (target) {
+            setTimeout(function() {
+                var y = target.getBoundingClientRect().top + window.pageYOffset - 20;
+                window.scrollTo({ top: y, behavior: 'smooth' });
+                target.classList.add('section-highlighted');
+                setTimeout(function() { target.classList.remove('section-highlighted'); }, 1800);
+            }, 120);
+        }
+        if (window.history && window.history.replaceState) {
+            window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+        }
+    }
+})();
+
+/* MONEY FORMAT */
+function formatMoney(value) {
+    var digits = String(value).replace(/[^\d]/g, '');
+    if (digits === '') return '';
+    return Number(digits).toLocaleString('en-US');
+}
+function getRawMoney(value) {
+    var digits = String(value).replace(/[^\d]/g, '');
+    return digits === '' ? 0 : Number(digits);
+}
+
+document.querySelectorAll('.money-input').forEach(function(input) {
+    if (input.dataset.moneyAttached === '1') return;
+    input.dataset.moneyAttached = '1';
+
+    input.addEventListener('input', function() {
+        var pos = this.selectionStart;
+        var oldLen = this.value.length;
+        var formatted = formatMoney(this.value);
+        this.value = formatted;
+        var newPos = pos + (formatted.length - oldLen);
+        try { this.setSelectionRange(newPos, newPos); } catch(e) {}
+    });
+    input.addEventListener('blur', function() {
+        var raw = getRawMoney(this.value);
+        this.value = raw > 0 ? raw.toLocaleString('en-US') : '0';
     });
 });
 
-/* ================================================================
-   DELETE MODAL
-   ================================================================ */
+['billForm', 'visitForm'].forEach(function(formId) {
+    var form = document.getElementById(formId);
+    if (!form) return;
+    form.addEventListener('submit', function() {
+        form.querySelectorAll('.money-input').forEach(function(input) {
+            input.value = getRawMoney(input.value);
+        });
+    });
+});
+
+/* DELETE MODAL */
 function confirmDelete(action, payload, typeLabel, itemLabel, itemAmount) {
     var CURRENCY = '<?= addslashes($currency) ?>';
-    var title = 'Delete ' + typeLabel + '?';
     var amountText = (itemAmount !== undefined && itemAmount > 0)
-        ? 'Amount: ' + CURRENCY + ' ' + Math.round(itemAmount).toLocaleString()
+        ? 'Amount: ' + CURRENCY + ' ' + Math.round(itemAmount).toLocaleString('en-US')
         : '';
 
-    document.getElementById('deleteModalTitle').textContent = title;
+    document.getElementById('deleteModalTitle').textContent = 'Delete ' + typeLabel + '?';
     document.getElementById('deleteRecordNumber').textContent = itemLabel;
     document.getElementById('deleteItemAmount').textContent = amountText;
     document.getElementById('deleteAction').value = action;
@@ -2998,13 +3069,17 @@ function closeDeleteModal() {
 document.getElementById('deleteModal').addEventListener('click', function(e) {
     if (e.target === this) closeDeleteModal();
 });
+
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') closeDeleteModal();
 });
 
-console.log('%c✏️ Edit Visit — V3 with SCROLL FIX', 'font-size:16px; font-weight:bold; color:#1D4ED8;');
-console.log('%c✅ No more jump-to-top after add/delete', 'font-size:12px; color:#1D4ED8; font-weight:bold;');
-console.log('%c✅ Live search on all dropdowns', 'font-size:12px; color:#1D4ED8; font-weight:bold;');
+console.log('%c✏️ Audit Edit Visit — V8 FINAL', 'font-size:16px; font-weight:bold; color:#1D4ED8;');
+console.log('%c✅ CANCELLED returns stock (if not paid)', 'font-size:12px; color:#059669; font-weight:bold;');
+console.log('%c✅ Bill status check before stock return', 'font-size:12px; color:#059669;');
+console.log('%c✅ Lab test equipment stock via lab_test_equipment', 'font-size:12px; color:#059669;');
+console.log('%c✅ Money format 1,000,000,000', 'font-size:12px; color:#D97706;');
+console.log('%c✅ Toggle + Live search with highlight', 'font-size:12px; color:#1D4ED8;');
 </script>
 
 </body>

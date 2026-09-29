@@ -1,14 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/patient_details.php
-// VIEW PATIENT - V5 (Delete Without Reason + Full English)
+// VIEW PATIENT - V6 (Admin can view ANY branch patient)
 // ================================================================
-// V5 FIXED: Delete visit without typing "DELETE"
-// V5 FIXED: All messages in English
-// V4 FIXED: Full deletion with stock return for ALL tables
-// V4 FIXED: Delete prescription, lab test, visit, bill, bill item
-// V4 FIXED: Smart delete logic (Paid/Dispensed = no changes)
-// V3 FIXED: Zero-quantity prescriptions are hidden
+// V6 FIXED: Admin can view patients from ANY branch
+// V6 FIXED: Branch filter removed for patient query
+// V6 FIXED: Back button preserves branch filter
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -36,7 +33,7 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
 $user_id = $_SESSION['user_id'];
 $full_name = $_SESSION['full_name'] ?? 'User';
 $role = $_SESSION['role'] ?? 'reception';
-$branch_id = $_SESSION['branch_id'] ?? 1;
+$session_branch_id = $_SESSION['branch_id'] ?? 1;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
@@ -47,9 +44,11 @@ $message = '';
 $message_type = '';
 
 $patient_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+// ✅ NEW: Capture branch filter from URL (for back button)
+$back_branch = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
 
 if ($patient_id <= 0) {
-    header('Location: patients.php?error=invalid_patient');
+    header('Location: patients.php?branch=' . urlencode($back_branch) . '&error=invalid_patient');
     exit;
 }
 
@@ -68,10 +67,44 @@ $vital_signs = [];
 $age = 'N/A';
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
+// ✅ NEW: Patient's actual branch (used for stock returns, etc.)
+$patient_branch_id = $session_branch_id;
+
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     die("Database connection failed: " . $e->getMessage());
+}
+
+// ================================================================
+// ✅ FIRST: Load patient WITHOUT branch filter
+// ================================================================
+try {
+    $stmt = $db->prepare("
+        SELECT p.*, u.full_name as created_by_name, b.name as branch_name,
+            doc.full_name as assigned_doctor_name, doc.is_online as assigned_doctor_online
+        FROM patients p
+        LEFT JOIN users u ON p.created_by = u.id
+        LEFT JOIN branches b ON p.branch_id = b.id
+        LEFT JOIN users doc ON p.assigned_doctor_id = doc.id
+        WHERE p.id = ?
+    ");
+    $stmt->execute([$patient_id]);
+    $patient = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$patient) {
+        $_SESSION['flash_message'] = "❌ Patient not found!";
+        $_SESSION['flash_type'] = 'error';
+        header('Location: patients.php?branch=' . urlencode($back_branch));
+        exit;
+    }
+    
+    // ✅ Use patient's actual branch for all subsequent operations
+    $patient_branch_id = (int)($patient['branch_id'] ?? $session_branch_id);
+    $branch_name = $patient['branch_name'] ?? $branch_name;
+    
+} catch (Exception $e) {
+    die("Database error: " . $e->getMessage());
 }
 
 // ================================================================
@@ -390,9 +423,9 @@ function returnEquipmentStockForBillItem($db, $bill_item_id, $patient_id, $user_
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $action = $_POST['action'];
     
-    // ============================================================
-    // DELETE PRESCRIPTION - Full deletion with stock return
-    // ============================================================
+    // All delete handlers use $patient_branch_id for stock returns
+    
+    // DELETE PRESCRIPTION
     if ($action === 'delete_prescription') {
         $prescription_id = (int)($_POST['prescription_id'] ?? 0);
         
@@ -416,8 +449,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $bills_affected = [];
                 
                 if ($should_return_stock) {
+                    // ✅ Use $patient_branch_id
                     $stock_result = returnMedicationStock(
-                        $db, $prescription_id, $patient_id, $user_id, $branch_id,
+                        $db, $prescription_id, $patient_id, $user_id, $patient_branch_id,
                         "Stock returned - Deleted {$presc_status} Rx #{$presc_number}"
                     );
                 }
@@ -462,7 +496,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         INSERT INTO activity_logs (user_id, branch_id, action, details, ip_address, created_at) 
                         VALUES (?, ?, 'DELETE_PRESCRIPTION', ?, ?, NOW())
                     ")->execute([
-                        $user_id, $branch_id, $log_desc, $_SERVER['REMOTE_ADDR'] ?? 'unknown'
+                        $user_id, $patient_branch_id, $log_desc, $_SERVER['REMOTE_ADDR'] ?? 'unknown'
                     ]);
                 } catch (Exception $e) {}
                 
@@ -481,22 +515,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 
                 $_SESSION['flash_message'] = $flash_msg;
                 $_SESSION['flash_type'] = 'success';
-                header('Location: patient_details.php?id=' . $patient_id);
+                header('Location: patient_details.php?id=' . $patient_id . '&branch=' . urlencode($back_branch));
                 exit;
                 
             } catch (Exception $e) {
                 if ($db->inTransaction()) $db->rollBack();
                 $_SESSION['flash_message'] = "❌ Error: " . $e->getMessage();
                 $_SESSION['flash_type'] = 'error';
-                header('Location: patient_details.php?id=' . $patient_id);
+                header('Location: patient_details.php?id=' . $patient_id . '&branch=' . urlencode($back_branch));
                 exit;
             }
         }
     }
     
-    // ============================================================
-    // DELETE LAB TEST - Full deletion with equipment stock return
-    // ============================================================
+    // DELETE LAB TEST
     if ($action === 'delete_lab_test') {
         $test_id = (int)($_POST['test_id'] ?? 0);
         
@@ -522,8 +554,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $bills_affected = [];
                 
                 if ($should_return_stock) {
+                    // ✅ Use $patient_branch_id
                     $stock_result = returnEquipmentStockForLabTest(
-                        $db, $test_id, $patient_id, $user_id, $branch_id,
+                        $db, $test_id, $patient_id, $user_id, $patient_branch_id,
                         "Stock returned - Deleted lab test: {$test['test_name']} (Status: {$test['status']})"
                     );
                 }
@@ -567,7 +600,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         INSERT INTO activity_logs (user_id, branch_id, action, details, ip_address, created_at) 
                         VALUES (?, ?, 'DELETE_LAB_TEST', ?, ?, NOW())
                     ")->execute([
-                        $user_id, $branch_id, $log_desc, $_SERVER['REMOTE_ADDR'] ?? 'unknown'
+                        $user_id, $patient_branch_id, $log_desc, $_SERVER['REMOTE_ADDR'] ?? 'unknown'
                     ]);
                 } catch (Exception $e) {}
                 
@@ -586,22 +619,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 
                 $_SESSION['flash_message'] = $flash_msg;
                 $_SESSION['flash_type'] = 'success';
-                header('Location: patient_details.php?id=' . $patient_id);
+                header('Location: patient_details.php?id=' . $patient_id . '&branch=' . urlencode($back_branch));
                 exit;
                 
             } catch (Exception $e) {
                 if ($db->inTransaction()) $db->rollBack();
                 $_SESSION['flash_message'] = "❌ Error: " . $e->getMessage();
                 $_SESSION['flash_type'] = 'error';
-                header('Location: patient_details.php?id=' . $patient_id);
+                header('Location: patient_details.php?id=' . $patient_id . '&branch=' . urlencode($back_branch));
                 exit;
             }
         }
     }
     
-    // ============================================================
-    // DELETE BILL ITEM (Procedure/Equipment)
-    // ============================================================
+    // DELETE BILL ITEM
     if ($action === 'delete_bill_item') {
         $bill_item_id = (int)($_POST['bill_item_id'] ?? 0);
         $item_type = $_POST['item_type'] ?? '';
@@ -625,8 +656,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $stock_result = ['count' => 0, 'qty' => 0];
                 
                 if ($should_return_stock && $item['item_type'] === 'equipment') {
+                    // ✅ Use $patient_branch_id
                     $stock_result = returnEquipmentStockForBillItem(
-                        $db, $bill_item_id, $patient_id, $user_id, $branch_id,
+                        $db, $bill_item_id, $patient_id, $user_id, $patient_branch_id,
                         "Stock returned - Deleted {$item['item_type']}: {$item['item_name']}"
                     );
                 }
@@ -639,7 +671,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         INSERT INTO activity_logs (user_id, branch_id, action, details, ip_address, created_at) 
                         VALUES (?, ?, 'DELETE_BILL_ITEM', ?, ?, NOW())
                     ")->execute([
-                        $user_id, $branch_id,
+                        $user_id, $patient_branch_id,
                         "Deleted bill item: {$item['item_name']} ({$item['item_type']}) | Bill: {$item['bill_number']}",
                         $_SERVER['REMOTE_ADDR'] ?? 'unknown'
                     ]);
@@ -654,22 +686,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 
                 $_SESSION['flash_message'] = $flash_msg;
                 $_SESSION['flash_type'] = 'success';
-                header('Location: patient_details.php?id=' . $patient_id);
+                header('Location: patient_details.php?id=' . $patient_id . '&branch=' . urlencode($back_branch));
                 exit;
                 
             } catch (Exception $e) {
                 if ($db->inTransaction()) $db->rollBack();
                 $_SESSION['flash_message'] = "❌ Error: " . $e->getMessage();
                 $_SESSION['flash_type'] = 'error';
-                header('Location: patient_details.php?id=' . $patient_id);
+                header('Location: patient_details.php?id=' . $patient_id . '&branch=' . urlencode($back_branch));
                 exit;
             }
         }
     }
     
-    // ============================================================
-    // DELETE ENTIRE VISIT - Full deletion of everything
-    // ============================================================
+    // DELETE ENTIRE VISIT
     if ($action === 'delete_visit') {
         $visit_id = (int)($_POST['visit_id'] ?? 0);
         
@@ -684,14 +714,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (!$visit) throw new Exception("Visit not found");
                 
                 $visit_number = $visit['visit_number'];
-                $total_stock_returned = 0;
                 
-                // 1. Return stock for medications (pending/confirmed only)
-                $stmt = $db->prepare("
-                    SELECT p.id, p.prescription_number, p.status
-                    FROM prescriptions p
-                    WHERE p.visit_id = ?
-                ");
+                // Return meds
+                $stmt = $db->prepare("SELECT id, prescription_number, status FROM prescriptions WHERE visit_id = ?");
                 $stmt->execute([$visit_id]);
                 $prescriptions_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
@@ -699,19 +724,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 foreach ($prescriptions_list as $presc) {
                     if (in_array($presc['status'], ['pending', 'confirmed'])) {
                         $result = returnMedicationStock(
-                            $db, $presc['id'], $patient_id, $user_id, $branch_id,
+                            $db, $presc['id'], $patient_id, $user_id, $patient_branch_id,
                             "Stock returned - Deleted visit: {$visit_number} (Rx #{$presc['prescription_number']})"
                         );
                         $med_stock_count += $result['qty'];
                     }
                 }
                 
-                // 2. Return equipment stock for lab tests
-                $stmt = $db->prepare("
-                    SELECT lt.id, lt.test_name, lt.status
-                    FROM lab_tests lt
-                    WHERE lt.visit_id = ?
-                ");
+                // Return lab equipment
+                $stmt = $db->prepare("SELECT id, test_name, status FROM lab_tests WHERE visit_id = ?");
                 $stmt->execute([$visit_id]);
                 $lab_tests_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
@@ -719,14 +740,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 foreach ($lab_tests_list as $lab) {
                     if (in_array($lab['status'], ['pending', 'in_progress'])) {
                         $result = returnEquipmentStockForLabTest(
-                            $db, $lab['id'], $patient_id, $user_id, $branch_id,
+                            $db, $lab['id'], $patient_id, $user_id, $patient_branch_id,
                             "Stock returned - Deleted visit: {$visit_number} (Test: {$lab['test_name']})"
                         );
                         $lab_stock_count += $result['qty'];
                     }
                 }
                 
-                // 3. Return equipment stock for bill items
+                // Return bill equipment
                 $stmt = $db->prepare("
                     SELECT bi.id, bi.item_name
                     FROM bill_items bi
@@ -741,39 +762,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $equip_stock_count = 0;
                 foreach ($equip_bill_items as $eq_item) {
                     $result = returnEquipmentStockForBillItem(
-                        $db, $eq_item['id'], $patient_id, $user_id, $branch_id,
+                        $db, $eq_item['id'], $patient_id, $user_id, $patient_branch_id,
                         "Stock returned - Deleted visit: {$visit_number} (Item: {$eq_item['item_name']})"
                     );
                     $equip_stock_count += $result['qty'];
                 }
                 
-                // 4. Delete prescription_items
-                $stmt = $db->prepare("
-                    DELETE pi FROM prescription_items pi 
-                    INNER JOIN prescriptions p ON pi.prescription_id = p.id 
-                    WHERE p.visit_id = ?
-                ");
-                $stmt->execute([$visit_id]);
-                $prescription_items_deleted = $stmt->rowCount();
+                // Delete everything
+                $db->prepare("DELETE pi FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id WHERE p.visit_id = ?")->execute([$visit_id]);
+                $prescription_items_deleted = 0;
                 
-                // 5. Delete prescriptions
                 $stmt = $db->prepare("DELETE FROM prescriptions WHERE visit_id = ?");
                 $stmt->execute([$visit_id]);
                 $prescriptions_deleted = $stmt->rowCount();
                 
-                // 6. Delete lab tests
                 $stmt = $db->prepare("DELETE FROM lab_tests WHERE visit_id = ?");
                 $stmt->execute([$visit_id]);
                 $lab_tests_deleted = $stmt->rowCount();
                 
-                // 7. Delete procedures
                 try {
                     $stmt = $db->prepare("DELETE FROM procedures WHERE visit_id = ?");
                     $stmt->execute([$visit_id]);
                     $procedures_deleted = $stmt->rowCount();
                 } catch (Exception $e) { $procedures_deleted = 0; }
                 
-                // 8. Delete bill items, payments, and bills
                 $stmt = $db->prepare("SELECT id FROM bills WHERE visit_id = ?");
                 $stmt->execute([$visit_id]);
                 $visit_bills = $stmt->fetchAll(PDO::FETCH_COLUMN);
@@ -798,14 +810,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $bills_deleted = $stmt->rowCount();
                 }
                 
-                // 9. Delete vital signs
                 try {
                     $stmt = $db->prepare("DELETE FROM vital_signs WHERE visit_id = ?");
                     $stmt->execute([$visit_id]);
                     $vitals_deleted = $stmt->rowCount();
                 } catch (Exception $e) { $vitals_deleted = 0; }
                 
-                // 10. Delete visit
                 $stmt = $db->prepare("DELETE FROM visits WHERE id = ? AND patient_id = ?");
                 $stmt->execute([$visit_id, $patient_id]);
                 $visit_deleted = $stmt->rowCount();
@@ -815,58 +825,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $log_desc .= " | Med stock returned: {$med_stock_count} qty";
                     $log_desc .= " | Lab equip returned: {$lab_stock_count} qty";
                     $log_desc .= " | Bill equip returned: {$equip_stock_count} qty";
-                    $log_desc .= " | Bills: {$bills_deleted}, Items: {$bill_items_deleted}, Payments: {$payments_deleted}";
                     
                     $db->prepare("
                         INSERT INTO activity_logs (user_id, branch_id, action, details, ip_address, created_at) 
                         VALUES (?, ?, 'DELETE_VISIT', ?, ?, NOW())
                     ")->execute([
-                        $user_id, $branch_id, $log_desc, $_SERVER['REMOTE_ADDR'] ?? 'unknown'
+                        $user_id, $patient_branch_id, $log_desc, $_SERVER['REMOTE_ADDR'] ?? 'unknown'
                     ]);
                 } catch (Exception $e) {}
                 
                 $db->commit();
                 
-                $flash_msg = "✅ <strong>Visit deleted successfully!</strong>";
-                $flash_msg .= "<br>📋 Visit: <strong>{$visit_number}</strong>";
-                $flash_msg .= "<br>🗑️ Deleted:";
-                if ($visit_deleted) $flash_msg .= " 1 visit,";
-                if ($prescriptions_deleted) $flash_msg .= " {$prescriptions_deleted} prescription(s),";
-                if ($prescription_items_deleted) $flash_msg .= " {$prescription_items_deleted} prescription item(s),";
-                if ($lab_tests_deleted) $flash_msg .= " {$lab_tests_deleted} lab test(s),";
-                if ($procedures_deleted) $flash_msg .= " {$procedures_deleted} procedure(s),";
-                if ($bills_deleted) $flash_msg .= " {$bills_deleted} bill(s),";
-                if ($bill_items_deleted) $flash_msg .= " {$bill_items_deleted} bill item(s),";
-                if ($payments_deleted) $flash_msg .= " {$payments_deleted} payment(s),";
-                if ($vitals_deleted) $flash_msg .= " {$vitals_deleted} vital sign(s),";
-                $flash_msg = rtrim($flash_msg, ',');
-                
-                if ($med_stock_count + $lab_stock_count + $equip_stock_count > 0) {
-                    $flash_msg .= "<br>📦 Stock returned:";
-                    if ($med_stock_count) $flash_msg .= " Med: {$med_stock_count},";
-                    if ($lab_stock_count) $flash_msg .= " Lab Equip: {$lab_stock_count},";
-                    if ($equip_stock_count) $flash_msg .= " Bill Equip: {$equip_stock_count},";
-                    $flash_msg = rtrim($flash_msg, ',');
-                }
-                
-                $_SESSION['flash_message'] = $flash_msg;
+                $_SESSION['flash_message'] = "✅ <strong>Visit deleted successfully!</strong><br>📋 Visit: <strong>{$visit_number}</strong>";
                 $_SESSION['flash_type'] = 'success';
-                header('Location: patient_details.php?id=' . $patient_id);
+                header('Location: patient_details.php?id=' . $patient_id . '&branch=' . urlencode($back_branch));
                 exit;
                 
             } catch (Exception $e) {
                 if ($db->inTransaction()) $db->rollBack();
                 $_SESSION['flash_message'] = "❌ Error: " . $e->getMessage();
                 $_SESSION['flash_type'] = 'error';
-                header('Location: patient_details.php?id=' . $patient_id);
+                header('Location: patient_details.php?id=' . $patient_id . '&branch=' . urlencode($back_branch));
                 exit;
             }
         }
     }
     
-    // ============================================================
-    // DELETE BILL (with all items & payments)
-    // ============================================================
+    // DELETE BILL
     if ($action === 'delete_bill') {
         $bill_id = (int)($_POST['bill_id'] ?? 0);
         
@@ -891,7 +876,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 foreach ($items as $item) {
                     if ($item['item_type'] === 'equipment' && $item['status'] !== 'paid') {
                         $result = returnEquipmentStockForBillItem(
-                            $db, $item['id'], $patient_id, $user_id, $branch_id,
+                            $db, $item['id'], $patient_id, $user_id, $patient_branch_id,
                             "Stock returned - Deleted bill: {$bill_number} (Item: {$item['item_name']})"
                         );
                         $stock_returned += $result['qty'];
@@ -914,8 +899,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         INSERT INTO activity_logs (user_id, branch_id, action, details, ip_address, created_at) 
                         VALUES (?, ?, 'DELETE_BILL', ?, ?, NOW())
                     ")->execute([
-                        $user_id, $branch_id,
-                        "Deleted bill: {$bill_number} | Items: {$items_deleted}, Payments: {$payments_deleted}, Stock returned: {$stock_returned}",
+                        $user_id, $patient_branch_id,
+                        "Deleted bill: {$bill_number} | Items: {$items_deleted}, Payments: {$payments_deleted}",
                         $_SERVER['REMOTE_ADDR'] ?? 'unknown'
                     ]);
                 } catch (Exception $e) {}
@@ -935,7 +920,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $_SESSION['flash_message'] = "❌ Error: " . $e->getMessage();
                 $_SESSION['flash_type'] = 'error';
             }
-            header('Location: patient_details.php?id=' . $patient_id);
+            header('Location: patient_details.php?id=' . $patient_id . '&branch=' . urlencode($back_branch));
             exit;
         }
     }
@@ -950,26 +935,10 @@ if (isset($_SESSION['flash_message'])) {
 }
 
 // ================================================================
-// LOAD PATIENT DATA
+// LOAD ALL PATIENT DATA
 // ================================================================
 try {
-    $stmt = $db->prepare("
-        SELECT p.*, u.full_name as created_by_name, b.name as branch_name,
-            doc.full_name as assigned_doctor_name, doc.is_online as assigned_doctor_online
-        FROM patients p
-        LEFT JOIN users u ON p.created_by = u.id
-        LEFT JOIN branches b ON p.branch_id = b.id
-        LEFT JOIN users doc ON p.assigned_doctor_id = doc.id
-        WHERE p.id = ? AND p.branch_id = ?
-    ");
-    $stmt->execute([$patient_id, $branch_id]);
-    $patient = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if (!$patient) {
-        header('Location: patients.php?error=patient_not_found');
-        exit;
-    }
-    
+    // Active visit
     $stmt = $db->prepare("
         SELECT v.*, u.full_name as doctor_name
         FROM visits v LEFT JOIN users u ON v.doctor_id = u.id
@@ -979,6 +948,7 @@ try {
     $stmt->execute([$patient_id]);
     $active_visit = $stmt->fetch(PDO::FETCH_ASSOC);
     
+    // Visit history
     $stmt = $db->prepare("
         SELECT v.*, u.full_name as doctor_name, b.total_amount as bill_amount, b.status as bill_status, b.bill_number
         FROM visits v 
@@ -989,6 +959,7 @@ try {
     $stmt->execute([$patient_id]);
     $visit_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
+    // Bills
     $stmt = $db->prepare("
         SELECT b.*, v.visit_number, u.full_name as created_by_name
         FROM bills b
@@ -1005,6 +976,7 @@ try {
         $bill_items[$bill['id']] = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
     
+    // Procedures
     $stmt = $db->prepare("
         SELECT bi.*, b.patient_id, b.bill_number, b.created_at as bill_date
         FROM bill_items bi JOIN bills b ON bi.bill_id = b.id
@@ -1014,6 +986,7 @@ try {
     $stmt->execute([$patient_id]);
     $procedures = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
+    // Tools/Equipment
     $stmt = $db->prepare("
         SELECT bi.*, b.patient_id, b.bill_number, b.created_at as bill_date
         FROM bill_items bi JOIN bills b ON bi.bill_id = b.id
@@ -1023,6 +996,7 @@ try {
     $stmt->execute([$patient_id]);
     $tools = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
+    // Latest vitals
     $stmt = $db->prepare("
         SELECT vs.*, u.full_name as recorded_by_name
         FROM vital_signs vs LEFT JOIN users u ON vs.recorded_by = u.id
@@ -1031,6 +1005,7 @@ try {
     $stmt->execute([$patient_id]);
     $latest_vitals = $stmt->fetch(PDO::FETCH_ASSOC);
     
+    // Prescriptions
     $stmt = $db->prepare("
         SELECT p.*, u.full_name as doctor_name, v.visit_number, v.visit_date,
             (SELECT COUNT(*) FROM prescription_items pi WHERE pi.prescription_id = p.id AND pi.quantity > 0) as item_count,
@@ -1058,6 +1033,7 @@ try {
         $prescriptions_by_visit[$vid][] = $presc;
     }
     
+    // Lab tests
     $stmt = $db->prepare("
         SELECT lt.*, u.full_name as doctor_name
         FROM lab_tests lt LEFT JOIN users u ON lt.doctor_id = u.id
@@ -1072,8 +1048,6 @@ try {
         $today = new DateTime('today');
         $age = $birthDate->diff($today)->y;
     }
-    
-    $branch_name = $patient['branch_name'] ?? $branch_name;
     
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
@@ -1090,6 +1064,14 @@ try {
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// ✅ Build back URL with branch filter
+$back_url = 'patients.php';
+if ($back_branch !== 'all' && $back_branch !== '') {
+    $back_url .= '?branch=' . urlencode($back_branch);
+} else {
+    $back_url .= '?branch=all';
+}
 
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
