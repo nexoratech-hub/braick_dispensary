@@ -1,10 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/consultation.php
-// COMPLETE CONSULTATION V11 - RESTRUCTURED LAYOUT
+// COMPLETE CONSULTATION V12 - RESTORED CHIEF COMPLAINT & HISTORY
 // ================================================================
+// ✅ V12: Restored Chief Complaint, Additional Notes, HPI, Physical Exam
 // ✅ V11: Bill summaries at TOP and BOTTOM
-// ✅ V11: Patient → Visit → Vitals → Labs → Diagnosis → Rx → Procedures → Bills
+// ✅ V11: Patient → Visit → Vitals → Chief Complaint → Labs → Diagnosis → Rx → Procedures → Bills
 // ✅ V11: NO LOCKING on adding items (labs, meds, procedures, equipment)
 // ✅ V11: Pending medications return stock when removed
 // ✅ V11: Pending lab tests return equipment stock when removed
@@ -785,7 +786,6 @@ try {
     $lab_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
     $lab_results_available = count($lab_results) > 0;
     
-    // Get ALL lab tests with technician info for completed view
     $stmt = $db->prepare("
         SELECT lt.*, 
                tech.full_name as technician_name,
@@ -799,7 +799,6 @@ try {
     $stmt->execute([$visit_id]);
     $all_lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Fallback: fetch technician for lab_technician_id
     foreach ($all_lab_tests as &$lt) {
         if (empty($lt['technician_name']) && !empty($lt['lab_technician_id'])) {
             $stmt_t = $db->prepare("SELECT full_name FROM users WHERE id = ?");
@@ -819,11 +818,8 @@ try {
 // ================================================================
 // V11: REMOVED ALL LOCKING LOGIC
 // ================================================================
-// Doctor can always add lab tests, medications, procedures, equipment
-// regardless of visit status (except completed)
-$sections_frozen = false; // V11: NEVER freeze
-
-$can_add_lab_test = !$is_completed; // Can always add unless completed
+$sections_frozen = false;
+$can_add_lab_test = !$is_completed;
 
 // ================================================================
 // GET PRESCRIPTIONS (WITH STATUS INFO)
@@ -1152,7 +1148,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // V11: ALWAYS ALLOW adding lab tests
     if ($action === 'add_lab_test_cart') {
         header('Content-Type: application/json');
         $test_id = (int)($_POST['test_id'] ?? 0);
@@ -1226,7 +1221,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // V11: Remove lab test - ALWAYS return equipment stock for pending tests
     if ($action === 'remove_lab_test') {
         header('Content-Type: application/json');
         $test_id = (int)($_POST['test_id'] ?? 0);
@@ -1249,7 +1243,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 exit;
             }
             
-            // V11: Allow removal of pending/in_progress tests
             if (!in_array($test['status'], ['pending', 'in_progress'])) {
                 $response['message'] = '❌ Cannot remove - test already ' . $test['status'];
                 echo json_encode($response);
@@ -1265,10 +1258,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             
             $db->beginTransaction();
             
-            // Delete bill item
             $deleted_bill_items = deleteBillItemByReference($db, $bill_id, $test_id, 'lab_test', 'lab_test');
             
-            // Return equipment stock
             $stmt_links = $db->prepare("
                 SELECT lte.equipment_id, lte.branch_id as link_branch_id, me.equipment_name, me.quantity as stock
                 FROM lab_test_equipment lte
@@ -1307,7 +1298,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $equipment_returned_details[] = $equip['equipment_name'] . " (x$qty_used)";
             }
             
-            // Delete the lab test
             $stmt = $db->prepare("DELETE FROM lab_tests WHERE id = ? AND visit_id = ?");
             $stmt->execute([$test_id, $visit_id]);
             
@@ -1343,7 +1333,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // V11: Cancel completed lab test - also return equipment stock
     if ($action === 'cancel_completed_lab_test') {
         header('Content-Type: application/json');
         $test_id = (int)($_POST['test_id'] ?? 0);
@@ -1399,7 +1388,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $deleted_bill_items = $stmt_del->rowCount();
             }
             
-            // Return equipment stock
             $stmt_links = $db->prepare("
                 SELECT lte.equipment_id, lte.branch_id as link_branch_id, 
                        me.equipment_name, me.quantity as stock
@@ -1476,7 +1464,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // V11: Add medication - ALWAYS ALLOW
     if ($action === 'add_medication') {
         header('Content-Type: application/json');
         
@@ -1638,7 +1625,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // V11: Remove medication - return stock for pending/confirmed only
     if ($action === 'remove_medication') {
         header('Content-Type: application/json');
         $prescription_id = (int)($_POST['prescription_id'] ?? 0);
@@ -1661,7 +1647,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 exit;
             }
             
-            // V11: Allow removal for pending and confirmed (not dispensed)
             if ($presc['status'] === 'dispensed') {
                 $response['message'] = '❌ Cannot remove - already dispensed by Pharmacy';
                 echo json_encode($response);
@@ -1748,7 +1733,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // V11: Add procedures - ALWAYS ALLOW
     if ($action === 'add_procedures_batch') {
         header('Content-Type: application/json');
         
@@ -1837,9 +1821,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 
                 if (!$procedure) { $failed++; continue; }
                 
-                // V11: Allow duplicate procedures
-                // Removed duplicate check
-                
                 $stmt = $db->prepare("
                     INSERT INTO procedures (visit_id, patient_id, doctor_id, procedure_id, procedure_name,
                         category, procedure_price, status, branch_id, notes, created_at)
@@ -1882,7 +1863,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // V11: Add equipment - ALWAYS ALLOW
     if ($action === 'add_equipment_batch') {
         header('Content-Type: application/json');
         
@@ -2026,7 +2006,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // V11: Remove added item (procedure/equipment) - return stock for equipment
     if ($action === 'remove_added_item') {
         header('Content-Type: application/json');
         
@@ -2158,7 +2137,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // V11: Send lab tests - ALWAYS ALLOW
     if (isset($_POST['send_lab'])) {
         $lab_cart = isset($_SESSION['lab_cart']) ? $_SESSION['lab_cart'] : [];
         
@@ -2193,8 +2171,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             } catch (Exception $e) {}
         }
         
-        // V11: Removed active tests check - ALWAYS ALLOW
-        
         $lab_tests_sent = 0;
         $lab_tests_skipped = 0;
         $errors = [];
@@ -2207,8 +2183,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $test_id = $cart_item['id'];
                 $test_name = $cart_item['name'];
                 $test_price = $cart_item['price'];
-                
-                // V11: Removed duplicate check - ALWAYS ALLOW
                 
                 $stmt_links = $db->prepare("
                     SELECT lte.equipment_id, lte.branch_id as link_branch_id,
@@ -2281,7 +2255,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             }
             
             if ($lab_tests_sent > 0) {
-                // V11: Only update status if not already in a later status
                 $stmt = $db->prepare("
                     UPDATE visits 
                     SET status = 'lab_test', updated_at = NOW() 
@@ -2544,9 +2517,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .status-badge.badge-info { background: #0B5ED7 !important; }
         .status-badge.badge-danger { background: #DC2626 !important; }
         
-        /* ============================================================ */
-        /* V11: BILL SUMMARY CARDS - TOP AND BOTTOM */
-        /* ============================================================ */
         .bill-summary-grid {
             display: grid;
             grid-template-columns: repeat(5, 1fr);
@@ -3455,7 +3425,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .empty-state i { font-size: 2rem; color: var(--border-color); display: block; margin-bottom: 8px; }
         .empty-state p { font-size: 0.85rem; }
         
-        /* Data table for completed view */
         .data-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
         .data-table thead th {
             text-align: left;
@@ -3572,7 +3541,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <?php endif; ?>
 
     <!-- ============================================================ -->
-    <!-- V11: BILL SUMMARY CARDS - TOP (ALWAYS SHOWN) -->
+    <!-- BILL SUMMARY CARDS - TOP (ALWAYS SHOWN) -->
     <!-- ============================================================ -->
     <div class="consultation-card mb-6" id="billSummaryTop">
         <h3 class="card-title">
@@ -3783,7 +3752,44 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <!-- ============================================================ -->
     <form method="POST" action="consultation.php?visit_id=<?= $visit_id ?>" id="consultationForm">
     
-    <!-- LAB TESTS SECTION - V11: ALWAYS UNLOCKED -->
+    <!-- ============================================================ -->
+    <!-- SECTION 4: CHIEF COMPLAINT & HISTORY -->
+    <!-- ============================================================ -->
+    <div class="consultation-card mb-6">
+        <h3 class="card-title"><i class="fas fa-list-ul"></i> Chief Complaint & History</h3>
+        
+        <div class="row-2col">
+            <div class="form-group">
+                <label class="form-label">Chief Complaint <span class="required">*</span></label>
+                <select class="form-control" id="complaintSelect" onchange="addComplaintOnSelect()" style="margin-bottom:8px;">
+                    <option value="">-- Select Common Complaint --</option>
+                    <?php foreach ($common_complaints as $complaint): ?>
+                        <option value="<?= htmlspecialchars($complaint) ?>"><?= htmlspecialchars($complaint) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <textarea name="symptoms" class="form-control" rows="3" placeholder="Complaints..." id="symptomsTextarea" oninput="updateComplaints()"><?= htmlspecialchars($visit['symptoms'] ?? '') ?></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Additional Notes</label>
+                <textarea name="notes" class="form-control" rows="5" placeholder="Additional notes..." id="notesTextarea"><?= htmlspecialchars($visit['notes'] ?? '') ?></textarea>
+            </div>
+        </div>
+        
+        <div class="row-2col">
+            <div class="form-group">
+                <label class="form-label">History of Presenting Illness (HPI)</label>
+                <textarea name="hpi" class="form-control" rows="4" placeholder="Describe HPI..." id="hpiTextarea"><?= htmlspecialchars($visit['hpi'] ?? '') ?></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Physical Examination</label>
+                <textarea name="physical_exam" class="form-control" rows="4" placeholder="Physical exam..." id="physicalExamTextarea"><?= htmlspecialchars($visit['physical_exam'] ?? '') ?></textarea>
+            </div>
+        </div>
+    </div>
+
+    <!-- LAB TESTS SECTION -->
     <div class="consultation-card mb-6" id="labTestsCard">
         <h3 class="card-title">
             <i class="fas fa-flask"></i> Laboratory Tests
@@ -4034,7 +4040,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     </div>
 
-    <!-- V11: NO FROZEN SECTIONS - Always editable -->
     <div id="editableSectionsContainer">
 
         <!-- DIAGNOSIS -->
@@ -4116,7 +4121,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </div>
         </div>
 
-        <!-- MEDICATIONS - V11: ALWAYS UNLOCKED -->
+        <!-- MEDICATIONS -->
         <div class="consultation-card mb-6" id="medicationsCard">
             <h3 class="card-title">
                 <i class="fas fa-prescription"></i> Medications
@@ -4314,7 +4319,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </div>
         </div>
 
-        <!-- PROCEDURES & EQUIPMENT - V11: ALWAYS UNLOCKED -->
+        <!-- PROCEDURES & EQUIPMENT -->
         <div class="consultation-card mb-6" id="proceduresEquipmentCard">
             <h3 class="card-title">
                 <i class="fas fa-syringe"></i> Procedures & Equipment
@@ -4663,7 +4668,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- SECTION 7: MEDICATIONS (WITH STATUS: DISPENSED, CONFIRMED, CANCELLED, PENDING) -->
+    <!-- SECTION 7: MEDICATIONS -->
     <div class="consultation-card mb-6">
         <h3 class="card-title">
             <i class="fas fa-prescription"></i> Prescribed Medications
@@ -4852,9 +4857,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
     <?php endif; ?>
 
-    <!-- ============================================================ -->
-    <!-- V11: BILL ITEMS BREAKDOWN & BILL SUMMARY - BOTTOM -->
-    <!-- ============================================================ -->
+    <!-- BILL ITEMS BREAKDOWN - BOTTOM -->
     <?php if ($is_completed): ?>
     <div class="consultation-card mb-6">
         <h3 class="card-title">
@@ -5028,7 +5031,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
 <script>
 // ================================================================
-// CONSULTATION JAVASCRIPT V11
+// CONSULTATION JAVASCRIPT V12
 // ================================================================
 
 var AUTO_UPDATE_INTERVAL = 3000;
@@ -5050,7 +5053,7 @@ var selectedProcedures = [];
 var selectedEquipment = [];
 var selectedLabTests = [];
 var selectedMedications = [];
-var complaintsList = [];
+var complaintsList = <?= json_encode(array_filter(array_map('trim', explode(',', $visit['symptoms'] ?? '')))) ?>;
 var lastSavedHash = '';
 
 function showToast(title, message, type) {
@@ -5089,6 +5092,24 @@ function escapeHtml(text) {
     var div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// V12: Complaint handlers
+function addComplaintOnSelect() {
+    var select = document.getElementById('complaintSelect');
+    var value = select.value;
+    if (!value) return;
+    if (!complaintsList.includes(value)) {
+        complaintsList.push(value);
+        document.getElementById('symptomsTextarea').value = complaintsList.join(', ');
+        select.value = '';
+        saveDiseasesToVisit();
+    }
+}
+
+function updateComplaints() {
+    var textarea = document.getElementById('symptomsTextarea');
+    if (textarea) complaintsList = textarea.value.split(',').map(s => s.trim()).filter(s => s.length > 0);
 }
 
 function addInstruction(text) {
@@ -6068,9 +6089,9 @@ document.addEventListener('visibilitychange', function() {
     else startAutoUpdate();
 });
 
-console.log('%c🩺 Braick Consultation V11', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c🩺 Braick Consultation V12', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ V12: Restored Chief Complaint, Notes, HPI, Physical Exam', 'font-size:12px; color:#059669;');
 console.log('%c✅ V11: Bill summaries at TOP and BOTTOM', 'font-size:12px; color:#059669;');
-console.log('%c✅ V11: Patient → Visit → Vitals → Labs → Diagnosis → Rx → Procedures → Bills', 'font-size:12px; color:#059669;');
 console.log('%c✅ V11: NO LOCKING - Always can add items', 'font-size:12px; color:#059669;');
 console.log('%c✅ V11: Pending medications return stock when removed', 'font-size:12px; color:#059669;');
 console.log('%c✅ V11: Pending lab tests return equipment stock when removed', 'font-size:12px; color:#059669;');
