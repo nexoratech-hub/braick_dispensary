@@ -1,8 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/consultation.php
-// COMPLETE CONSULTATION V12 - RESTORED CHIEF COMPLAINT & HISTORY
+// COMPLETE CONSULTATION V13 - FINAL
 // ================================================================
+// ✅ V13: Medications Dosage, Frequency, Route - Dropdown + Manual Input
 // ✅ V12: Restored Chief Complaint, Additional Notes, HPI, Physical Exam
 // ✅ V11: Bill summaries at TOP and BOTTOM
 // ✅ V11: Patient → Visit → Vitals → Chief Complaint → Labs → Diagnosis → Rx → Procedures → Bills
@@ -767,7 +768,7 @@ if ($visit_id > 0) {
 }
 
 // ================================================================
-// GET LAB TESTS (WITH LAB TECHNICIAN INFO)
+// GET LAB TESTS
 // ================================================================
 $lab_requests = [];
 $lab_results = [];
@@ -815,14 +816,10 @@ try {
     error_log("Lab fetch error: " . $e->getMessage());
 }
 
-// ================================================================
-// V11: REMOVED ALL LOCKING LOGIC
-// ================================================================
 $sections_frozen = false;
-$can_add_lab_test = !$is_completed;
 
 // ================================================================
-// GET PRESCRIPTIONS (WITH STATUS INFO)
+// GET PRESCRIPTIONS
 // ================================================================
 $prescriptions = [];
 $medications_total = 0;
@@ -2694,6 +2691,38 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11,94,215,0.12); }
         .form-control:disabled { opacity: 0.6; cursor: not-allowed; background: var(--gray-100); }
         
+        /* V13: Manual toggle button for Dosage/Frequency/Route */
+        .btn-manual-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 10px;
+            margin-left: 8px;
+            border-radius: 12px;
+            border: 1px solid var(--primary-light);
+            background: var(--primary-bg);
+            color: var(--primary);
+            font-size: 0.6rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            vertical-align: middle;
+        }
+        .btn-manual-toggle:hover {
+            background: var(--primary);
+            color: #ffffff;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(11,94,215,0.3);
+        }
+        .btn-manual-toggle.active {
+            background: var(--success);
+            border-color: var(--success);
+            color: #ffffff;
+        }
+        .btn-manual-toggle.active:hover {
+            background: #047857;
+        }
+        
         .btn {
             display: inline-flex;
             align-items: center;
@@ -3593,7 +3622,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <?php if (!$is_completed): ?>
-    <!-- STATUS FLOW (only for active consultations) -->
+    <!-- STATUS FLOW -->
     <div class="consultation-card mb-6">
         <div class="status-flow">
             <span class="status-step <?= in_array($visit_status, ['assigned', 'lab_test', 'prescribed', 'waiting', 'completed']) ? 'completed' : '' ?>">
@@ -3633,9 +3662,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
     <?php endif; ?>
 
-    <!-- ============================================================ -->
-    <!-- SECTION 1: PATIENT INFORMATION (ALWAYS SHOWN) -->
-    <!-- ============================================================ -->
+    <!-- SECTION 1: PATIENT INFORMATION -->
     <div class="consultation-card mb-6">
         <h3 class="card-title"><i class="fas fa-user"></i> Patient Information</h3>
         <div class="patient-info-block">
@@ -3657,9 +3684,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     </div>
 
-    <!-- ============================================================ -->
-    <!-- SECTION 2: VISIT INFORMATION (ALWAYS SHOWN) -->
-    <!-- ============================================================ -->
+    <!-- SECTION 2: VISIT INFORMATION -->
     <div class="consultation-card mb-6">
         <h3 class="card-title"><i class="fas fa-clinic-medical"></i> Visit Information</h3>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;">
@@ -3675,9 +3700,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     </div>
 
-    <!-- ============================================================ -->
-    <!-- SECTION 3: VITAL SIGNS (ALWAYS SHOWN) -->
-    <!-- ============================================================ -->
+    <!-- SECTION 3: VITAL SIGNS -->
     <div class="consultation-card mb-6">
         <h3 class="card-title">
             <i class="fas fa-heartbeat"></i> Vital Signs
@@ -3747,14 +3770,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <?php if (!$is_completed): ?>
-    <!-- ============================================================ -->
     <!-- ACTIVE CONSULTATION FORM -->
-    <!-- ============================================================ -->
     <form method="POST" action="consultation.php?visit_id=<?= $visit_id ?>" id="consultationForm">
     
-    <!-- ============================================================ -->
     <!-- SECTION 4: CHIEF COMPLAINT & HISTORY -->
-    <!-- ============================================================ -->
     <div class="consultation-card mb-6">
         <h3 class="card-title"><i class="fas fa-list-ul"></i> Chief Complaint & History</h3>
         
@@ -3945,7 +3964,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </button>
         </div>
         
-        <!-- Sent Tests (Pending/In Progress) -->
         <div class="mt-3" id="sentTestsContainer">
             <?php if (count($lab_requests) > 0): ?>
                 <h5 style="font-size:0.875rem;font-weight:600;color:var(--text-secondary);margin-bottom:8px;"><i class="fas fa-history"></i> Sent Tests (In Progress)</h5>
@@ -4121,7 +4139,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </div>
         </div>
 
-        <!-- MEDICATIONS -->
+        <!-- V13: MEDICATIONS - Dropdown + Manual for Dosage, Frequency, Route -->
         <div class="consultation-card mb-6" id="medicationsCard">
             <h3 class="card-title">
                 <i class="fas fa-prescription"></i> Medications
@@ -4207,16 +4225,54 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <label class="form-label">Quantity</label>
                         <input type="number" id="medQuantity" class="form-control" value="1" min="1" max="999">
                     </div>
+                    <!-- V13: DOSAGE - Dropdown + Manual -->
                     <div class="form-group">
-                        <label class="form-label">Dosage</label>
-                        <input type="text" id="medDosage" class="form-control" placeholder="e.g. 500mg">
+                        <label class="form-label">
+                            Dosage
+                            <button type="button" class="btn-manual-toggle" onclick="toggleManual('dosage')" id="btnManualDosage">
+                                <i class="fas fa-keyboard"></i> Manual
+                            </button>
+                        </label>
+                        <select id="medDosageSelect" class="form-control">
+                            <option value="">Select Dosage</option>
+                            <option value="125mg">125mg</option>
+                            <option value="250mg">250mg</option>
+                            <option value="500mg">500mg</option>
+                            <option value="1g">1g</option>
+                            <option value="2g">2g</option>
+                            <option value="5mg">5mg</option>
+                            <option value="10mg">10mg</option>
+                            <option value="20mg">20mg</option>
+                            <option value="40mg">40mg</option>
+                            <option value="50mg">50mg</option>
+                            <option value="100mg">100mg</option>
+                            <option value="200mg">200mg</option>
+                            <option value="400mg">400mg</option>
+                            <option value="5ml">5ml</option>
+                            <option value="10ml">10ml</option>
+                            <option value="15ml">15ml</option>
+                            <option value="1 tablet">1 tablet</option>
+                            <option value="2 tablets">2 tablets</option>
+                            <option value="1 capsule">1 capsule</option>
+                            <option value="2 capsules">2 capsules</option>
+                            <option value="1 puff">1 puff</option>
+                            <option value="2 puffs">2 puffs</option>
+                        </select>
+                        <input type="text" id="medDosageManual" class="form-control" placeholder="Enter custom dosage..." style="display:none;">
+                        <input type="hidden" id="medDosage" value="">
                     </div>
                 </div>
                 
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+                    <!-- V13: FREQUENCY - Dropdown + Manual -->
                     <div class="form-group">
-                        <label class="form-label">Frequency <span class="required">*</span></label>
-                        <select id="medFrequency" class="form-control">
+                        <label class="form-label">
+                            Frequency <span class="required">*</span>
+                            <button type="button" class="btn-manual-toggle" onclick="toggleManual('frequency')" id="btnManualFrequency">
+                                <i class="fas fa-keyboard"></i> Manual
+                            </button>
+                        </label>
+                        <select id="medFrequencySelect" class="form-control">
                             <option value="">Select Frequency</option>
                             <option value="Once Daily">Once Daily</option>
                             <option value="Twice Daily">Twice Daily</option>
@@ -4230,7 +4286,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             <option value="Before Meals">Before Meals</option>
                             <option value="After Meals">After Meals</option>
                             <option value="At Bedtime">At Bedtime</option>
+                            <option value="Once Weekly">Once Weekly</option>
+                            <option value="Alternate Days">Alternate Days</option>
                         </select>
+                        <input type="text" id="medFrequencyManual" class="form-control" placeholder="Enter custom frequency..." style="display:none;">
+                        <input type="hidden" id="medFrequency" value="">
                     </div>
                     <div class="form-group">
                         <label class="form-label">Duration (Days)</label>
@@ -4238,18 +4298,33 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     </div>
                 </div>
                 
+                <!-- V13: ROUTE - Dropdown + Manual -->
                 <div class="form-group mt-3">
-                    <label class="form-label">Route <span class="required">*</span></label>
-                    <select id="medRoute" class="form-control">
+                    <label class="form-label">
+                        Route <span class="required">*</span>
+                        <button type="button" class="btn-manual-toggle" onclick="toggleManual('route')" id="btnManualRoute">
+                            <i class="fas fa-keyboard"></i> Manual
+                        </button>
+                    </label>
+                    <select id="medRouteSelect" class="form-control">
                         <option value="">Select Route</option>
                         <option value="Oral">Oral</option>
                         <option value="Topical">Topical</option>
                         <option value="Injection">Injection</option>
-                        <option value="IV">IV</option>
-                        <option value="IM">IM</option>
+                        <option value="IV">Intravenous (IV)</option>
+                        <option value="IM">Intramuscular (IM)</option>
+                        <option value="SC">Subcutaneous (SC)</option>
                         <option value="Sublingual">Sublingual</option>
                         <option value="Inhalation">Inhalation</option>
+                        <option value="Nasal">Nasal</option>
+                        <option value="Ocular">Ocular (Eye)</option>
+                        <option value="Otic">Otic (Ear)</option>
+                        <option value="Rectal">Rectal</option>
+                        <option value="Vaginal">Vaginal</option>
+                        <option value="Transdermal">Transdermal</option>
                     </select>
+                    <input type="text" id="medRouteManual" class="form-control" placeholder="Enter custom route..." style="display:none;">
+                    <input type="hidden" id="medRoute" value="">
                 </div>
                 
                 <div class="form-group mt-3">
@@ -4532,10 +4607,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </form>
 
     <?php else: ?>
-    <!-- ============================================================ -->
-    <!-- COMPLETED VIEW - ALL SECTIONS DISPLAYED (READ-ONLY) -->
-    <!-- ============================================================ -->
-
+    <!-- COMPLETED VIEW - READ-ONLY -->
+    
     <!-- SECTION 4: CHIEF COMPLAINT & HISTORY -->
     <div class="consultation-card mb-6">
         <h3 class="card-title"><i class="fas fa-list-ul"></i> Chief Complaint & History</h3>
@@ -4569,7 +4642,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     </div>
 
-    <!-- SECTION 5: LAB TESTS & RESULTS (WITH LAB TECHNICIAN) -->
+    <!-- SECTION 5: LAB TESTS & RESULTS -->
     <div class="consultation-card mb-6">
         <h3 class="card-title">
             <i class="fas fa-flask"></i> Laboratory Tests & Results
@@ -4596,15 +4669,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             $is_paid_lab = isBillItemPaid($db, $bill_id, $lab['id'], 'lab_test');
                         ?>
                             <tr>
-                                <td style="font-weight:500;">
-                                    <?= htmlspecialchars($lab['test_name'] ?? 'N/A') ?>
-                                </td>
+                                <td style="font-weight:500;"><?= htmlspecialchars($lab['test_name'] ?? 'N/A') ?></td>
                                 <td style="font-weight:600;color:var(--success);">
                                     <?= !empty($lab['results']) ? htmlspecialchars($lab['results']) : '<span style="color:var(--text-secondary);font-weight:400;">—</span>' ?>
                                 </td>
-                                <td style="font-size:0.8rem;color:var(--text-secondary);">
-                                    <?= htmlspecialchars($lab['reference_range'] ?? '—') ?>
-                                </td>
+                                <td style="font-size:0.8rem;color:var(--text-secondary);"><?= htmlspecialchars($lab['reference_range'] ?? '—') ?></td>
                                 <td>
                                     <span style="display:inline-flex;align-items:center;gap:6px;font-size:0.8rem;">
                                         <i class="fas fa-user-md" style="color:var(--primary);font-size:0.7rem;"></i>
@@ -4623,9 +4692,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                         <span class="status-badge badge-info" style="font-size:0.6rem;margin-left:4px;">💰 PAID</span>
                                     <?php endif; ?>
                                 </td>
-                                <td style="text-align:right;font-weight:600;color:var(--success);">
-                                    TSh <?= number_format($lab['test_price'] ?? 0, 0) ?>
-                                </td>
+                                <td style="text-align:right;font-weight:600;color:var(--success);">TSh <?= number_format($lab['test_price'] ?? 0, 0) ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
@@ -4697,34 +4764,23 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <tbody>
                         <?php foreach ($valid_prescriptions as $med): 
                             $is_paid_med = isBillItemPaid($db, $bill_id, $med['id'], 'prescription');
-                            
                             $med_status = $med['prescription_status'] ?? 'pending';
                             $status_badge_class = 'badge-warning';
                             $status_text = '⏳ Pending';
                             $status_icon = 'fa-clock';
                             
                             if ($med_status === 'dispensed') {
-                                $status_badge_class = 'badge-success';
-                                $status_text = '✅ Dispensed';
-                                $status_icon = 'fa-check-circle';
+                                $status_badge_class = 'badge-success'; $status_text = '✅ Dispensed'; $status_icon = 'fa-check-circle';
                             } elseif ($med_status === 'confirmed') {
-                                $status_badge_class = 'badge-info';
-                                $status_text = '✔️ Confirmed';
-                                $status_icon = 'fa-check-double';
+                                $status_badge_class = 'badge-info'; $status_text = '✔️ Confirmed'; $status_icon = 'fa-check-double';
                             } elseif ($med_status === 'cancelled') {
-                                $status_badge_class = 'badge-danger';
-                                $status_text = '❌ Cancelled';
-                                $status_icon = 'fa-times-circle';
+                                $status_badge_class = 'badge-danger'; $status_text = '❌ Cancelled'; $status_icon = 'fa-times-circle';
                             } elseif ($is_paid_med) {
-                                $status_badge_class = 'badge-info';
-                                $status_text = '💰 Paid';
-                                $status_icon = 'fa-money-bill';
+                                $status_badge_class = 'badge-info'; $status_text = '💰 Paid'; $status_icon = 'fa-money-bill';
                             }
                         ?>
                             <tr>
-                                <td style="font-weight:600;">
-                                    <?= htmlspecialchars($med['medication_name'] ?? 'Unknown') ?>
-                                </td>
+                                <td style="font-weight:600;"><?= htmlspecialchars($med['medication_name'] ?? 'Unknown') ?></td>
                                 <td><?= htmlspecialchars($med['dosage'] ?? '—') ?></td>
                                 <td><?= htmlspecialchars($med['frequency'] ?? '—') ?></td>
                                 <td><?= htmlspecialchars($med['duration'] ?? '—') ?> <?= !empty($med['duration']) ? 'days' : '' ?></td>
@@ -4788,9 +4844,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             <tr>
                                 <td style="font-weight:500;"><?= htmlspecialchars($proc['procedure_name'] ?? 'N/A') ?></td>
                                 <td style="font-size:0.8rem;color:var(--text-secondary);"><?= htmlspecialchars($proc['category'] ?? $proc['procedure_category'] ?? '—') ?></td>
-                                <td>
-                                    <span class="status-badge <?= $proc_status_class ?>" style="font-size:0.65rem;"><?= $proc_status_text ?></span>
-                                </td>
+                                <td><span class="status-badge <?= $proc_status_class ?>" style="font-size:0.65rem;"><?= $proc_status_text ?></span></td>
                                 <td style="text-align:right;font-weight:600;color:var(--success);">
                                     <?= ($proc['procedure_price'] ?? 0) > 0 ? 'TSh ' . number_format($proc['procedure_price'], 0) : 'FREE' ?>
                                 </td>
@@ -4855,14 +4909,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <?php endif; ?>
-
-    <!-- BILL ITEMS BREAKDOWN - BOTTOM -->
-    <?php if ($is_completed): ?>
+    <!-- BILL ITEMS BREAKDOWN -->
     <div class="consultation-card mb-6">
-        <h3 class="card-title">
-            <i class="fas fa-list-alt"></i> Bill Items Breakdown
-        </h3>
+        <h3 class="card-title"><i class="fas fa-list-alt"></i> Bill Items Breakdown</h3>
         
         <?php if (count($bill_items) > 0): ?>
             <div style="overflow-x:auto;">
@@ -4944,11 +4993,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- BILL SUMMARY CARDS - BOTTOM (Duplicate for completed view) -->
+    <!-- BILL SUMMARY CARDS - BOTTOM (Duplicate) -->
     <div class="consultation-card mb-6">
-        <h3 class="card-title">
-            <i class="fas fa-receipt"></i> Bill Summary & Payment Status
-        </h3>
+        <h3 class="card-title"><i class="fas fa-receipt"></i> Bill Summary & Payment Status</h3>
         <div class="bill-summary-grid">
             <div class="bill-summary-card total-card">
                 <div class="bill-summary-icon"><i class="fas fa-file-invoice"></i></div>
@@ -5031,7 +5078,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
 <script>
 // ================================================================
-// CONSULTATION JAVASCRIPT V12
+// CONSULTATION JAVASCRIPT V13
 // ================================================================
 
 var AUTO_UPDATE_INTERVAL = 3000;
@@ -5110,6 +5157,76 @@ function addComplaintOnSelect() {
 function updateComplaints() {
     var textarea = document.getElementById('symptomsTextarea');
     if (textarea) complaintsList = textarea.value.split(',').map(s => s.trim()).filter(s => s.length > 0);
+}
+
+// ================================================================
+// V13: MANUAL TOGGLE FUNCTIONS for Dosage, Frequency, Route
+// ================================================================
+function toggleManual(field) {
+    var selectEl, manualEl, hiddenEl, btn;
+    
+    if (field === 'dosage') {
+        selectEl = document.getElementById('medDosageSelect');
+        manualEl = document.getElementById('medDosageManual');
+        hiddenEl = document.getElementById('medDosage');
+        btn = document.getElementById('btnManualDosage');
+    } else if (field === 'frequency') {
+        selectEl = document.getElementById('medFrequencySelect');
+        manualEl = document.getElementById('medFrequencyManual');
+        hiddenEl = document.getElementById('medFrequency');
+        btn = document.getElementById('btnManualFrequency');
+    } else if (field === 'route') {
+        selectEl = document.getElementById('medRouteSelect');
+        manualEl = document.getElementById('medRouteManual');
+        hiddenEl = document.getElementById('medRoute');
+        btn = document.getElementById('btnManualRoute');
+    } else {
+        return;
+    }
+    
+    if (selectEl.style.display === 'none') {
+        // Switch back to dropdown
+        selectEl.style.display = 'block';
+        manualEl.style.display = 'none';
+        btn.classList.remove('active');
+        btn.innerHTML = '<i class="fas fa-keyboard"></i> Manual';
+        hiddenEl.value = selectEl.value;
+    } else {
+        // Switch to manual input
+        selectEl.style.display = 'none';
+        manualEl.style.display = 'block';
+        btn.classList.add('active');
+        btn.innerHTML = '<i class="fas fa-list"></i> Dropdown';
+        if (selectEl.value) manualEl.value = selectEl.value;
+        hiddenEl.value = manualEl.value;
+        manualEl.focus();
+    }
+}
+
+function syncMedicationValue(field) {
+    var selectEl, manualEl, hiddenEl;
+    
+    if (field === 'dosage') {
+        selectEl = document.getElementById('medDosageSelect');
+        manualEl = document.getElementById('medDosageManual');
+        hiddenEl = document.getElementById('medDosage');
+    } else if (field === 'frequency') {
+        selectEl = document.getElementById('medFrequencySelect');
+        manualEl = document.getElementById('medFrequencyManual');
+        hiddenEl = document.getElementById('medFrequency');
+    } else if (field === 'route') {
+        selectEl = document.getElementById('medRouteSelect');
+        manualEl = document.getElementById('medRouteManual');
+        hiddenEl = document.getElementById('medRoute');
+    } else {
+        return;
+    }
+    
+    if (selectEl.style.display === 'none') {
+        hiddenEl.value = manualEl.value.trim();
+    } else {
+        hiddenEl.value = selectEl.value;
+    }
 }
 
 function addInstruction(text) {
@@ -5453,11 +5570,21 @@ function addMedicationAjax() {
     if (selectedMedications.length === 0) { showToast('❌ Error', 'Please select at least one medication', 'error'); return; }
     
     var qty = parseInt(document.getElementById('medQuantity').value) || 0;
-    var dosage = document.getElementById('medDosage').value;
-    var frequency = document.getElementById('medFrequency').value;
     var duration = document.getElementById('medDuration').value;
-    var route = document.getElementById('medRoute').value;
     var instructions = document.getElementById('medInstructions').value;
+    
+    // V13: Get values from dropdown OR manual input
+    var dosageSelect = document.getElementById('medDosageSelect');
+    var dosageManual = document.getElementById('medDosageManual');
+    var dosage = (dosageSelect.style.display === 'none') ? dosageManual.value.trim() : dosageSelect.value;
+    
+    var frequencySelect = document.getElementById('medFrequencySelect');
+    var frequencyManual = document.getElementById('medFrequencyManual');
+    var frequency = (frequencySelect.style.display === 'none') ? frequencyManual.value.trim() : frequencySelect.value;
+    
+    var routeSelect = document.getElementById('medRouteSelect');
+    var routeManual = document.getElementById('medRouteManual');
+    var route = (routeSelect.style.display === 'none') ? routeManual.value.trim() : routeSelect.value;
     
     if (qty < 1) { showToast('❌ Error', 'Quantity must be at least 1', 'error'); return; }
     if (!frequency) { showToast('❌ Error', 'Please enter frequency', 'error'); return; }
@@ -5517,12 +5644,7 @@ function addMedicationAjax() {
                 updateMedSelectedInfo();
                 if (added > 0) showToast('✅ Success', 'Added ' + added + ' medication(s)', 'success');
                 else if (errors.length > 0) showToast('❌ Error', 'Failed: ' + errors.join(', '), 'error');
-                document.getElementById('medQuantity').value = '1';
-                document.getElementById('medDosage').value = '';
-                document.getElementById('medFrequency').value = '';
-                document.getElementById('medDuration').value = '7';
-                document.getElementById('medRoute').value = '';
-                document.getElementById('medInstructions').value = '';
+                resetMedicationForm();
             }
         })
         .catch(function() {
@@ -5537,6 +5659,43 @@ function addMedicationAjax() {
             }
         });
     });
+}
+
+// V13: Reset medication form fields including manual toggles
+function resetMedicationForm() {
+    document.getElementById('medQuantity').value = '1';
+    document.getElementById('medDuration').value = '7';
+    document.getElementById('medInstructions').value = '';
+    
+    // Reset Dosage
+    document.getElementById('medDosageSelect').value = '';
+    document.getElementById('medDosageManual').value = '';
+    document.getElementById('medDosage').value = '';
+    document.getElementById('medDosageSelect').style.display = 'block';
+    document.getElementById('medDosageManual').style.display = 'none';
+    var btnDosage = document.getElementById('btnManualDosage');
+    btnDosage.classList.remove('active');
+    btnDosage.innerHTML = '<i class="fas fa-keyboard"></i> Manual';
+    
+    // Reset Frequency
+    document.getElementById('medFrequencySelect').value = '';
+    document.getElementById('medFrequencyManual').value = '';
+    document.getElementById('medFrequency').value = '';
+    document.getElementById('medFrequencySelect').style.display = 'block';
+    document.getElementById('medFrequencyManual').style.display = 'none';
+    var btnFreq = document.getElementById('btnManualFrequency');
+    btnFreq.classList.remove('active');
+    btnFreq.innerHTML = '<i class="fas fa-keyboard"></i> Manual';
+    
+    // Reset Route
+    document.getElementById('medRouteSelect').value = '';
+    document.getElementById('medRouteManual').value = '';
+    document.getElementById('medRoute').value = '';
+    document.getElementById('medRouteSelect').style.display = 'block';
+    document.getElementById('medRouteManual').style.display = 'none';
+    var btnRoute = document.getElementById('btnManualRoute');
+    btnRoute.classList.remove('active');
+    btnRoute.innerHTML = '<i class="fas fa-keyboard"></i> Manual';
 }
 
 function addMedicationToList(med) {
@@ -6076,6 +6235,22 @@ document.addEventListener('DOMContentLoaded', function() {
             if (el) { el.addEventListener('change', () => saveDiseasesToVisit()); el.addEventListener('blur', () => saveDiseasesToVisit()); }
         });
         
+        // V13: Attach change listeners for dropdown/manual sync
+        var dosageSelect = document.getElementById('medDosageSelect');
+        if (dosageSelect) dosageSelect.addEventListener('change', () => syncMedicationValue('dosage'));
+        var dosageManual = document.getElementById('medDosageManual');
+        if (dosageManual) dosageManual.addEventListener('input', () => syncMedicationValue('dosage'));
+        
+        var freqSelect = document.getElementById('medFrequencySelect');
+        if (freqSelect) freqSelect.addEventListener('change', () => syncMedicationValue('frequency'));
+        var freqManual = document.getElementById('medFrequencyManual');
+        if (freqManual) freqManual.addEventListener('input', () => syncMedicationValue('frequency'));
+        
+        var routeSelect = document.getElementById('medRouteSelect');
+        if (routeSelect) routeSelect.addEventListener('change', () => syncMedicationValue('route'));
+        var routeManual = document.getElementById('medRouteManual');
+        if (routeManual) routeManual.addEventListener('input', () => syncMedicationValue('route'));
+        
         window.addEventListener('beforeunload', function() {
             if (!isCompleted && !isWaiting) saveDiseasesToVisit();
         });
@@ -6089,8 +6264,9 @@ document.addEventListener('visibilitychange', function() {
     else startAutoUpdate();
 });
 
-console.log('%c🩺 Braick Consultation V12', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ V12: Restored Chief Complaint, Notes, HPI, Physical Exam', 'font-size:12px; color:#059669;');
+console.log('%c🩺 Braick Consultation V13 FINAL', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ V13: Dosage/Frequency/Route - Dropdown + Manual Input', 'font-size:12px; color:#059669;');
+console.log('%c✅ V12: Chief Complaint, Notes, HPI, Physical Exam restored', 'font-size:12px; color:#059669;');
 console.log('%c✅ V11: Bill summaries at TOP and BOTTOM', 'font-size:12px; color:#059669;');
 console.log('%c✅ V11: NO LOCKING - Always can add items', 'font-size:12px; color:#059669;');
 console.log('%c✅ V11: Pending medications return stock when removed', 'font-size:12px; color:#059669;');

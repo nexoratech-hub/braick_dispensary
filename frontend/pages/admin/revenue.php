@@ -1,8 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/revenue.php
-// SUPER ADMIN - REVENUE REPORT (V18 - WITH PAID/PENDING ITEMS)
+// SUPER ADMIN - REVENUE REPORT (V19 - PAYMENT DATE GROUPING + BACKDATED)
 // ================================================================
+// ✅ V19: Group by PAYMENT DATE (not visit date)
+// ✅ V19: Backdated visits have DARK BLUE color
+// ✅ V19: Visit date preserved (shows service date)
+// ✅ V19: Each payment shows its own Received By
 // ✅ V18: Inaonyesha BILL ITEMS zilizolipwa (PAID) + zilizobaki (PENDING)
 // ✅ V18: Visit header inaonyesha PAID vs PENDING items count + amount
 // ✅ V18: Category group inaonyesha PAID vs PENDING kwa kila category
@@ -12,6 +16,7 @@
 // ✅ V17: OTC ALIGNED with Dashboard (paid + partial)
 // ✅ V16: Prescription = GROSS pekee
 // ✅ Timezone: Africa/Dar_es_Salaam
+// BRAICK DISPENSARY
 // ================================================================
 
 date_default_timezone_set('Africa/Dar_es_Salaam');
@@ -63,6 +68,39 @@ $expenses_date_col = 'payment_date';
 
 function roundTo50($value) {
     return round($value / 50) * 50;
+}
+
+function highlightSearchTerm($text, $search) {
+    if (empty($search) || $text === null || $text === '') {
+        return htmlspecialchars($text ?? '');
+    }
+    $escaped = htmlspecialchars($text);
+    $searchEscaped = preg_quote($search, '/');
+    return preg_replace(
+        '/(' . $searchEscaped . ')/iu',
+        '<mark class="search-highlight">$1</mark>',
+        $escaped
+    );
+}
+
+/**
+ * V19: Check if visit is backdated
+ */
+function isBackdatedVisit($visit_date, $payment_date) {
+    if (empty($visit_date) || empty($payment_date)) return false;
+    $visit_day = date('Y-m-d', strtotime($visit_date));
+    $payment_day = date('Y-m-d', strtotime($payment_date));
+    return $visit_day !== $payment_day;
+}
+
+/**
+ * V19: Check if visit is from previous days
+ */
+function isOldVisit($visit_date) {
+    if (empty($visit_date)) return false;
+    $visit_day = date('Y-m-d', strtotime($visit_date));
+    $today = date('Y-m-d');
+    return $visit_day < $today;
 }
 
 // DELETE ACTIONS
@@ -196,55 +234,64 @@ $payment_method = $_GET['payment_method'] ?? 'all';
 $search = trim($_GET['search'] ?? '');
 
 $date_cond_payments = ""; $date_cond_otc = ""; $date_cond_exp = "";
-$date_params = []; $date_label = "";
+$date_cond_bills = "";
+$date_params = []; $date_params_bills = []; $date_label = "";
 
 switch ($quick_filter) {
     case 'today':
         $date_cond_payments = " AND DATE(p.{$payments_date_col}) = CURDATE()";
         $date_cond_otc = " AND DATE(o.{$otc_date_col}) = CURDATE()";
         $date_cond_exp = " AND DATE(e.{$expenses_date_col}) = CURDATE()";
+        $date_cond_bills = " AND DATE(b.created_at) = CURDATE()";
         $date_label = "Today • " . date('d M Y');
         break;
     case 'yesterday':
         $date_cond_payments = " AND DATE(p.{$payments_date_col}) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
         $date_cond_otc = " AND DATE(o.{$otc_date_col}) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
         $date_cond_exp = " AND DATE(e.{$expenses_date_col}) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
+        $date_cond_bills = " AND DATE(b.created_at) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
         $date_label = "Yesterday • " . date('d M Y', strtotime('-1 day'));
         break;
     case '1d':
         $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 24 HOUR)";
         $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 24 HOUR)";
         $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
+        $date_cond_bills = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)";
         $date_label = "Last 24 Hours";
         break;
     case '1w':
         $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
         $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
         $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)";
+        $date_cond_bills = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
         $date_label = "Last 7 Days";
         break;
     case '1m':
         $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)";
+        $date_cond_bills = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         $date_label = "Last 1 Month";
         break;
     case '3m':
         $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
         $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
         $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)";
+        $date_cond_bills = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
         $date_label = "Last 3 Months";
         break;
     case '6m':
         $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
         $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
         $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)";
+        $date_cond_bills = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
         $date_label = "Last 6 Months";
         break;
     case '1y':
         $date_cond_payments = " AND p.{$payments_date_col} >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
         $date_cond_otc = " AND o.{$otc_date_col} >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
         $date_cond_exp = " AND e.{$expenses_date_col} >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)";
+        $date_cond_bills = " AND b.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
         $date_label = "Last 1 Year";
         break;
     case 'all':
@@ -254,7 +301,9 @@ switch ($quick_filter) {
         $date_cond_payments = " AND DATE(p.{$payments_date_col}) BETWEEN ? AND ?";
         $date_cond_otc = " AND DATE(o.{$otc_date_col}) BETWEEN ? AND ?";
         $date_cond_exp = " AND DATE(e.{$expenses_date_col}) BETWEEN ? AND ?";
+        $date_cond_bills = " AND DATE(b.created_at) BETWEEN ? AND ?";
         $date_params = [$date_from, $date_to];
+        $date_params_bills = [$date_from, $date_to];
         $date_label = date('d M Y', strtotime($date_from)) . ' → ' . date('d M Y', strtotime($date_to));
         break;
     default:
@@ -268,17 +317,19 @@ if ($payment_method !== 'all') {
     $pay_params = [$payment_method];
 }
 
-$branch_cond_p = ""; $branch_cond_o = ""; $branch_cond_e = ""; $branch_cond_bi = "";
-$branch_params_p = []; $branch_params_o = []; $branch_params_e = []; $branch_params_bi = [];
+$branch_cond_p = ""; $branch_cond_o = ""; $branch_cond_e = ""; $branch_cond_bi = ""; $branch_cond_b = "";
+$branch_params_p = []; $branch_params_o = []; $branch_params_e = []; $branch_params_bi = []; $branch_params_b = [];
 if ($selected_branch_id !== 'all') {
     $branch_cond_p = " AND p.branch_id = ?";
     $branch_cond_o = " AND o.branch_id = ?";
     $branch_cond_e = " AND e.branch_id = ?";
     $branch_cond_bi = " AND bi.branch_id = ?";
+    $branch_cond_b = " AND b.branch_id = ?";
     $branch_params_p = [(int)$selected_branch_id];
     $branch_params_o = [(int)$selected_branch_id];
     $branch_params_e = [(int)$selected_branch_id];
     $branch_params_bi = [(int)$selected_branch_id];
+    $branch_params_b = [(int)$selected_branch_id];
 }
 
 // PATIENT PAYMENTS
@@ -510,7 +561,107 @@ try {
 }
 
 // ================================================================
-// PATIENT-GROUPED BILLS - WITH PAID/PENDING ITEMS (V18)
+// ✅ V19: FETCH PAYMENTS WITH RECEIVED BY (ALL PAYMENTS - NO DATE FILTER)
+// ================================================================
+$payments_by_bill = [];
+
+try {
+    $sql_bill_ids = "SELECT DISTINCT p.bill_id 
+                     FROM payments p
+                     INNER JOIN bills b ON p.bill_id = b.id
+                     WHERE p.bill_id IS NOT NULL 
+                     AND b.patient_id IS NOT NULL
+                     AND b.visit_id IS NOT NULL
+                     AND b.bill_number NOT LIKE 'BILL-OTC-%'
+                     $branch_cond_p $date_cond_payments $pay_cond_payments";
+    $stmt = $db->prepare($sql_bill_ids);
+    $stmt->execute(array_merge($branch_params_p, $date_params, $pay_params));
+    $all_patient_bill_ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    
+    if (!empty($all_patient_bill_ids)) {
+        $placeholders = implode(',', array_fill(0, count($all_patient_bill_ids), '?'));
+        
+        $sql_payments = "SELECT 
+                            p.id as payment_id,
+                            p.bill_id,
+                            p.receipt_number,
+                            p.amount,
+                            p.payment_method,
+                            p.reference_number,
+                            p.notes,
+                            p.received_at,
+                            u.full_name as received_by_name,
+                            u.role as received_by_role
+                        FROM payments p
+                        LEFT JOIN users u ON p.received_by = u.id
+                        WHERE p.bill_id IN ($placeholders)
+                        ORDER BY p.received_at ASC";
+        
+        $stmt = $db->prepare($sql_payments);
+        $stmt->execute($all_patient_bill_ids);
+        $payments_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($payments_data as $pmt) {
+            $bill_id = $pmt['bill_id'];
+            if (!isset($payments_by_bill[$bill_id])) {
+                $payments_by_bill[$bill_id] = [];
+            }
+            $payments_by_bill[$bill_id][] = $pmt;
+        }
+    }
+} catch (Exception $e) {
+    error_log("Payments fetch error: " . $e->getMessage());
+}
+
+// ================================================================
+// ✅ V19: BUILD RECEIVED BY SUMMARY
+// ================================================================
+function buildReceivedBySummary($payments) {
+    $summary = [];
+    
+    foreach ($payments as $pmt) {
+        $name = $pmt['received_by_name'] ?? 'Unknown';
+        $role = strtolower($pmt['received_by_role'] ?? 'user');
+        $amount = (float)($pmt['amount'] ?? 0);
+        $received_at = $pmt['received_at'] ?? null;
+        $receipt = $pmt['receipt_number'] ?? '';
+        
+        if (!isset($summary[$name])) {
+            $summary[$name] = [
+                'name' => $name,
+                'role' => $role,
+                'count' => 0,
+                'total_amount' => 0,
+                'payments' => [],
+                'first_date' => $received_at,
+                'last_date' => $received_at
+            ];
+        }
+        
+        $summary[$name]['count']++;
+        $summary[$name]['total_amount'] += $amount;
+        $summary[$name]['payments'][] = [
+            'receipt' => $receipt,
+            'amount' => $amount,
+            'received_at' => $received_at,
+            'payment_method' => $pmt['payment_method'] ?? 'cash'
+        ];
+        
+        if ($received_at) {
+            if (!$summary[$name]['first_date'] || strtotime($received_at) < strtotime($summary[$name]['first_date'])) {
+                $summary[$name]['first_date'] = $received_at;
+            }
+            if (!$summary[$name]['last_date'] || strtotime($received_at) > strtotime($summary[$name]['last_date'])) {
+                $summary[$name]['last_date'] = $received_at;
+            }
+        }
+    }
+    
+    return array_values($summary);
+}
+
+// ================================================================
+// ✅ V19: PATIENT-GROUPED BILLS (GROUP BY PAYMENT DATE + PAID/PENDING)
 // ================================================================
 $patient_groups = [];
 
@@ -518,11 +669,19 @@ try {
     $search_patient = "";
     $search_patient_params = [];
     if (!empty($search)) {
-        $search_patient = " AND (pat.full_name LIKE ? OR pat.patient_id LIKE ? OR b.bill_number LIKE ?)";
-        $search_patient_params = ["%$search%", "%$search%", "%$search%"];
+        $search_patient = " AND (
+            pat.full_name LIKE ? 
+            OR pat.patient_id LIKE ? 
+            OR b.bill_number LIKE ?
+            OR v.visit_number LIKE ?
+            OR EXISTS (SELECT 1 FROM payments p2 
+                       LEFT JOIN users u2 ON p2.received_by = u2.id 
+                       WHERE p2.bill_id = b.id AND u2.full_name LIKE ?)
+        )";
+        $search_patient_params = ["%$search%", "%$search%", "%$search%", "%$search%", "%$search%"];
     }
 
-    $sql_bills = "SELECT b.id as bill_id, b.bill_number, b.patient_id as patient_db_id, b.visit_id,
+    $sql_bills = "SELECT DISTINCT b.id as bill_id, b.bill_number, b.patient_id as patient_db_id, b.visit_id,
                     b.subtotal, b.pharmacy_discount, b.cashier_discount, b.total_discount,
                     b.pharmacy_premium, b.cashier_premium, b.premium_amount,
                     b.total_amount, b.paid_amount, b.balance, b.status as bill_status,
@@ -535,24 +694,21 @@ try {
                     u_doctor.full_name as doctor_name,
                     u_reception.full_name as receptionist_name
                 FROM bills b
+                INNER JOIN payments p ON p.bill_id = b.id
                 LEFT JOIN patients pat ON b.patient_id = pat.id
                 LEFT JOIN visits v ON b.visit_id = v.id
                 LEFT JOIN users u_doctor ON v.doctor_id = u_doctor.id
                 LEFT JOIN users u_reception ON v.receptionist_id = u_reception.id
                 WHERE b.patient_id IS NOT NULL AND b.visit_id IS NOT NULL
                 AND b.bill_number NOT LIKE 'BILL-OTC-%' AND b.status IN ('paid', 'partial')
-                AND b.id IN (SELECT DISTINCT p.bill_id FROM payments p 
-                    INNER JOIN bills b2 ON p.bill_id = b2.id
-                    WHERE p.bill_id IS NOT NULL
-                    AND b2.patient_id IS NOT NULL
-                    AND b2.visit_id IS NOT NULL
-                    AND b2.bill_number NOT LIKE 'BILL-OTC-%'
-                    $branch_cond_p $date_cond_payments $pay_cond_payments)
+                $branch_cond_b
+                $date_cond_payments
+                $pay_cond_payments
                 $search_patient
                 ORDER BY pat.full_name ASC, v.visit_date DESC, b.created_at DESC LIMIT 200";
 
     $stmt = $db->prepare($sql_bills);
-    $stmt->execute(array_merge($branch_params_p, $date_params, $pay_params, $search_patient_params));
+    $stmt->execute(array_merge($branch_params_b, $date_params, $pay_params, $search_patient_params));
     $bills_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($bills_data as $bill) {
@@ -570,7 +726,8 @@ try {
                 'visits' => [],
                 'total_paid' => 0,
                 'total_billed' => 0,
-                'total_balance' => 0
+                'total_balance' => 0,
+                'has_backdated' => false
             ];
         }
 
@@ -605,6 +762,8 @@ try {
                 'paid_items_total' => 0,
                 'pending_items_count' => 0,
                 'pending_items_total' => 0,
+                'is_backdated' => false,
+                'is_old_visit' => false,
                 'items_by_category' => [
                     'consultation' => [], 'lab_test' => [], 'medication' => [],
                     'procedure' => [], 'equipment' => [], 'registration' => [], 'other' => []
@@ -664,7 +823,6 @@ try {
             $patient_groups[$patient_key]['visits'][$visit_key]['items_by_category'][$item_type][] = $item;
             $patient_groups[$patient_key]['visits'][$visit_key]['items'][] = $item;
 
-            // ✅ V18: Hesabu PAID vs PENDING items
             $item_status = strtolower($item['item_status'] ?? 'pending');
             $item_amount = (float)($item['total_price'] ?? 0);
             $item_discount = (float)($item['discount_amount'] ?? 0);
@@ -679,6 +837,28 @@ try {
             }
         }
     }
+
+    // V19: Detect backdated visits
+    foreach ($patient_groups as $p_key => &$patient) {
+        foreach ($patient['visits'] as $v_key => &$visit) {
+            if (isOldVisit($visit['visit_date'])) {
+                $visit['is_old_visit'] = true;
+                $patient['has_backdated'] = true;
+            }
+            
+            foreach ($visit['bills'] as $v_bill) {
+                $bill_pmts = $payments_by_bill[$v_bill['bill_id']] ?? [];
+                foreach ($bill_pmts as $bp) {
+                    if (isBackdatedVisit($visit['visit_date'], $bp['received_at'])) {
+                        $visit['is_backdated'] = true;
+                        break 2;
+                    }
+                }
+            }
+        }
+        unset($visit);
+    }
+    unset($patient);
 
     foreach ($patient_groups as $patient_key => &$patient) {
         $patient['visits'] = array_values($patient['visits']);
@@ -707,6 +887,69 @@ try {
     $expenses_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
+// MONTHLY CHART DATA
+$monthly_labels = []; $monthly_patient = []; $monthly_otc = []; $monthly_expenses = [];
+for ($i = 11; $i >= 0; $i--) {
+    $month = date('Y-m', strtotime("-$i months"));
+    $monthly_labels[] = date('M Y', strtotime("-$i months"));
+    
+    $p_p = [$month]; $p_o = [$month]; $p_e = [$month];
+    $extra_p = ""; $extra_o = ""; $extra_e = "";
+    if ($selected_branch_id !== 'all') {
+        $extra_p = " AND p.branch_id = ?"; $p_p[] = (int)$selected_branch_id;
+        $extra_o = " AND branch_id = ?"; $p_o[] = (int)$selected_branch_id;
+        $extra_e = " AND branch_id = ?"; $p_e[] = (int)$selected_branch_id;
+    }
+    
+    $sql = "SELECT COALESCE(SUM(p.amount), 0) as total FROM payments p 
+            INNER JOIN bills b ON p.bill_id = b.id 
+            WHERE p.bill_id IS NOT NULL AND b.patient_id IS NOT NULL 
+            AND b.visit_id IS NOT NULL AND b.bill_number NOT LIKE 'BILL-OTC-%' 
+            AND DATE_FORMAT(p.{$payments_date_col}, '%Y-%m') = ? $extra_p";
+    $stmt = $db->prepare($sql); $stmt->execute($p_p);
+    $monthly_patient[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    $sql = "SELECT COALESCE(SUM(total_amount), 0) as total FROM otc_sales 
+            WHERE payment_status IN ('paid', 'partial') 
+            AND DATE_FORMAT({$otc_date_col}, '%Y-%m') = ? $extra_o";
+    $stmt = $db->prepare($sql); $stmt->execute($p_o);
+    $monthly_otc[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM expenses 
+            WHERE status = 'paid' 
+            AND DATE_FORMAT({$expenses_date_col}, '%Y-%m') = ? $extra_e";
+    $stmt = $db->prepare($sql); $stmt->execute($p_e);
+    $monthly_expenses[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+}
+
+// DAILY CHART DATA
+$daily_labels = []; $daily_patient = []; $daily_otc = [];
+for ($i = 29; $i >= 0; $i--) {
+    $date = date('Y-m-d', strtotime("-$i days"));
+    $daily_labels[] = date('d M', strtotime($date));
+    
+    $p_p = [$date]; $p_o = [$date];
+    $extra_p = ""; $extra_o = "";
+    if ($selected_branch_id !== 'all') {
+        $extra_p = " AND p.branch_id = ?"; $p_p[] = (int)$selected_branch_id;
+        $extra_o = " AND branch_id = ?"; $p_o[] = (int)$selected_branch_id;
+    }
+    
+    $sql = "SELECT COALESCE(SUM(p.amount), 0) as total FROM payments p 
+            INNER JOIN bills b ON p.bill_id = b.id 
+            WHERE p.bill_id IS NOT NULL AND b.patient_id IS NOT NULL 
+            AND b.visit_id IS NOT NULL AND b.bill_number NOT LIKE 'BILL-OTC-%' 
+            AND DATE(p.{$payments_date_col}) = ? $extra_p";
+    $stmt = $db->prepare($sql); $stmt->execute($p_p);
+    $daily_patient[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    $sql = "SELECT COALESCE(SUM(total_amount), 0) as total FROM otc_sales 
+            WHERE payment_status IN ('paid', 'partial') 
+            AND DATE({$otc_date_col}) = ? $extra_o";
+    $stmt = $db->prepare($sql); $stmt->execute($p_o);
+    $daily_otc[] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+}
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
@@ -734,6 +977,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     --cyan: #0891B2; --cyan-light: #22D3EE; --cyan-bg: #CFFAFE;
     --teal: #0D9488; --teal-bg: #CCFBF1;
     --slate: #94A3B8; --slate-bg: #F1F5F9;
+    --dark-blue: #0A2540; --dark-blue-light: #1E3A5F; --dark-blue-accent: #1E40AF;
     --bg-body: #F1F5F9; --bg-card: #FFFFFF;
     --text-primary: #1E293B; --text-secondary: #64748B; --text-muted: #94A3B8;
     --border-color: #E2E8F0; --border-strong: #CBD5E1;
@@ -750,12 +994,22 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     --primary-bg: #12294A; --success-bg: #0F2E22; --danger-bg: #3A1414;
     --warning-bg: #3A2A0F; --purple-bg: #2A1A4A; --cyan-bg: #0A2E3A;
     --teal-bg: #0A2E2A; --slate-bg: #1E2A3D;
+    --dark-blue: #051A2E; --dark-blue-light: #0A2540;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { scroll-behavior: smooth; }
 body { font-family: var(--font-primary); background: var(--bg-body); color: var(--text-primary); -webkit-font-smoothing: antialiased; line-height: 1.5; min-height: 100vh; }
 
 .money-number, .stat-value, .money-cell, .font-mono, .card-value { font-family: var(--font-mono) !important; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+
+mark.search-highlight {
+    background: linear-gradient(135deg, #FEF08A, #FDE047);
+    color: #78350F;
+    font-weight: 900;
+    padding: 1px 4px;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(250, 204, 21, 0.4);
+}
 
 .alert { padding: 14px 20px; border-radius: var(--radius-md); margin-bottom: 18px; display: flex; align-items: center; gap: 12px; font-weight: 600; font-size: 0.85rem; animation: slideDown 0.4s ease; border-left: 4px solid; box-shadow: var(--shadow-sm); }
 @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
@@ -769,6 +1023,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .page-header .page-subtitle { color: rgba(255,255,255,0.9); font-size: 0.8rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; position: relative; z-index: 1; }
 .branch-tag { background: rgba(255,255,255,0.15); color: white; padding: 4px 12px; border-radius: var(--radius-full); font-size: 0.68rem; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.15); }
 .branch-tag.filter-tag { background: linear-gradient(135deg, #10B981, #059669); border-color: rgba(255,255,255,0.25); font-weight: 800; }
+.branch-tag.backdated-tag { background: linear-gradient(135deg, #0A2540, #1E3A5F); border-color: rgba(255,255,255,0.25); font-weight: 800; }
 .btn-header { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.25); padding: 10px 16px; border-radius: var(--radius-sm); font-weight: 700; font-size: 0.75rem; transition: all 0.25s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; backdrop-filter: blur(10px); position: relative; z-index: 1; cursor: pointer; }
 .btn-header:hover { background: rgba(255,255,255,0.3); transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.2); }
 
@@ -886,9 +1141,26 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .chart-card .chart-header .chart-title i { color: var(--primary); }
 .chart-card .chart-body { padding: 18px; height: 280px; position: relative; }
 
+/* ✅ V19: PATIENT CARD WITH BACKDATED DARK BLUE */
 .patient-group-card { background: var(--bg-card); border-radius: var(--radius-xl); border: 3px solid var(--primary); overflow: hidden; box-shadow: 0 8px 30px rgba(11, 94, 215, 0.15); margin-bottom: 36px; position: relative; transition: all 0.35s ease; }
 .patient-group-card::before { content: ''; position: absolute; inset: -8px; border-radius: calc(var(--radius-xl) + 8px); background: linear-gradient(135deg, rgba(11, 94, 215, 0.12), rgba(124, 58, 237, 0.08)); z-index: -1; pointer-events: none; }
 .patient-group-card:hover { border-color: var(--primary-light); box-shadow: 0 12px 40px rgba(11, 94, 215, 0.25); transform: translateY(-2px); }
+
+/* ✅ V19: BACKDATED PATIENT CARD - DARK BLUE */
+.patient-group-card.has-backdated { 
+    border-color: #0A2540; 
+    box-shadow: 0 8px 30px rgba(10, 37, 64, 0.35);
+}
+.patient-group-card.has-backdated::before { 
+    background: linear-gradient(135deg, rgba(10, 37, 64, 0.25), rgba(30, 58, 95, 0.15)); 
+}
+.patient-group-card.has-backdated:hover {
+    border-color: #1E3A5F;
+    box-shadow: 0 12px 40px rgba(10, 37, 64, 0.45);
+}
+.patient-group-card.has-backdated .patient-info-header {
+    background: linear-gradient(135deg, #0A2540 0%, #1E3A5F 50%, #1E40AF 100%);
+}
 
 .patient-info-header { background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #7C3AED 100%); padding: 18px 24px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 16px; position: relative; overflow: hidden; }
 .patient-info-header::before { content: ''; position: absolute; top: -50%; right: -10%; width: 300px; height: 300px; background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%); border-radius: 50%; pointer-events: none; z-index: 0; }
@@ -909,6 +1181,15 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .summary-badge.paid .badge-value { color: #6EE7B7; }
 .summary-badge.balance .badge-value { color: #FCA5A5; }
 
+/* ✅ V19: Backdated badge */
+.backdated-badge { background: linear-gradient(135deg, #0A2540, #1E3A5F); color: white; padding: 3px 10px; border-radius: 12px; font-size: 0.6rem; font-weight: 800; text-transform: uppercase; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 2px 8px rgba(10,37,64,0.6); border: 1px solid rgba(255,255,255,0.3); animation: backdatedPulse 2s infinite; }
+@keyframes backdatedPulse {
+    0%, 100% { box-shadow: 0 2px 8px rgba(10,37,64,0.6); }
+    50% { box-shadow: 0 2px 16px rgba(10,37,64,0.9); }
+}
+.partial-badge { background: linear-gradient(135deg, #FCD34D, #F59E0B); color: #78350F; padding: 3px 10px; border-radius: 12px; font-size: 0.6rem; font-weight: 800; text-transform: uppercase; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 2px 8px rgba(245,158,11,0.5); border: 1px solid rgba(255,255,255,0.3); }
+.pending-badge { background: linear-gradient(135deg, #F87171, #DC2626); color: white; padding: 3px 10px; border-radius: 12px; font-size: 0.6rem; font-weight: 800; text-transform: uppercase; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 2px 8px rgba(220,38,38,0.5); border: 1px solid rgba(255,255,255,0.3); }
+
 .patient-footer { background: linear-gradient(135deg, rgba(11, 94, 215, 0.08), rgba(124, 58, 237, 0.05)); padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; border-top: 2px dashed var(--primary); }
 .patient-footer .footer-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .patient-footer .footer-end-label { display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem; font-weight: 900; color: var(--primary); text-transform: uppercase; }
@@ -919,8 +1200,69 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .patient-footer .footer-stat.success strong { color: var(--success); }
 .patient-footer .footer-stat.danger strong { color: var(--danger); }
 
+/* ✅ V19: Backdated patient footer */
+.patient-group-card.has-backdated .patient-footer {
+    background: linear-gradient(135deg, rgba(10, 37, 64, 0.12), rgba(30, 58, 95, 0.08));
+    border-top-color: #0A2540;
+}
+.patient-group-card.has-backdated .patient-footer .footer-end-label { color: #0A2540; }
+
 .visit-section { border-top: 2px solid var(--border-color); padding: 0; }
 .visit-section:first-of-type { border-top: none; }
+
+/* ✅ V19: BACKDATED VISIT SECTION - DARK BLUE */
+.visit-section.is-backdated .visit-header-row1 {
+    background: linear-gradient(135deg, #0A2540, #1E3A5F);
+    border-bottom: 2px solid #1E40AF;
+}
+.visit-section.is-backdated .visit-number-badge {
+    background: linear-gradient(135deg, #0A2540, #1E40AF);
+    box-shadow: 0 4px 12px rgba(10, 37, 64, 0.5);
+}
+.visit-section.is-backdated .visit-date-badge {
+    color: #DBEAFE;
+    font-weight: 800;
+}
+.visit-section.is-backdated .visit-info-right .visit-staff-chip {
+    background: rgba(255,255,255,0.12);
+    border-color: rgba(255,255,255,0.25);
+    color: white;
+}
+.visit-section.is-backdated .visit-info-right .visit-staff-chip i {
+    color: #93C5FD;
+}
+.visit-section.is-backdated .visit-info-right .visit-staff-chip .staff-label {
+    color: rgba(255,255,255,0.75);
+}
+.visit-section.is-backdated .visit-info-right .visit-staff-chip .staff-name {
+    color: white;
+}
+.visit-section.is-backdated .visit-status-badge {
+    background: rgba(255,255,255,0.15);
+    color: #DBEAFE;
+    border-color: rgba(255,255,255,0.3);
+}
+.visit-section.is-backdated {
+    border-top: 3px solid #0A2540;
+    position: relative;
+}
+.visit-section.is-backdated::before {
+    content: '📅 BACKDATED';
+    position: absolute;
+    top: -12px;
+    left: 20px;
+    background: linear-gradient(135deg, #0A2540, #1E40AF);
+    color: white;
+    padding: 3px 12px;
+    border-radius: 20px;
+    font-size: 0.6rem;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    box-shadow: 0 4px 12px rgba(10, 37, 64, 0.5);
+    border: 1.5px solid rgba(255,255,255,0.3);
+    z-index: 10;
+    animation: backdatedPulse 2s infinite;
+}
 
 .visit-header-row1 { background: linear-gradient(135deg, rgba(11, 94, 215, 0.08), rgba(124, 58, 237, 0.05)); padding: 14px 20px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid var(--border-color); }
 .visit-info-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -937,27 +1279,8 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .visit-staff-chip .staff-label { color: var(--text-secondary); font-weight: 600; font-size: 0.65rem; text-transform: uppercase; }
 .visit-staff-chip .staff-name { color: var(--text-primary); font-weight: 800; }
 
-/* ✅ V18: VISIT PAID/PENDING SUMMARY */
-.visit-payment-summary {
-    background: var(--bg-card);
-    padding: 12px 20px;
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr 1fr;
-    gap: 12px;
-    border-bottom: 1px solid var(--border-color);
-}
-.vps-item {
-    background: var(--bg-body);
-    border-radius: var(--radius-md);
-    padding: 10px 14px;
-    border: 2px solid var(--border-color);
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    position: relative;
-    overflow: hidden;
-    transition: all 0.25s ease;
-}
+.visit-payment-summary { background: var(--bg-card); padding: 12px 20px; display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; border-bottom: 1px solid var(--border-color); }
+.vps-item { background: var(--bg-body); border-radius: var(--radius-md); padding: 10px 14px; border: 2px solid var(--border-color); display: flex; flex-direction: column; gap: 3px; position: relative; overflow: hidden; transition: all 0.25s ease; }
 .vps-item::before { content: ''; position: absolute; top: 0; left: 0; bottom: 0; width: 4px; }
 .vps-item:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.08); }
 .vps-item .vps-label { font-size: 0.55rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); display: flex; align-items: center; gap: 5px; }
@@ -1002,6 +1325,124 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .visit-dp-card.visit-total { background: linear-gradient(135deg, #059669, #047857); border-color: rgba(5, 150, 105, 0.4); }
 .visit-dp-card.visit-total .dp-label, .visit-dp-card.visit-total .dp-label i { color: rgba(255,255,255,0.9); }
 .visit-dp-card.visit-total .dp-value { color: white; font-size: 1.05rem; }
+
+/* ✅ V19: PAYMENT HISTORY CARD - TOGGLEABLE */
+.visit-payment-history-card {
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+    border: 2px solid var(--success);
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.15);
+    transition: all 0.3s ease;
+}
+.visit-payment-history-card:hover {
+    box-shadow: 0 6px 20px rgba(5, 150, 105, 0.25);
+    border-color: #10B981;
+}
+.visit-section.is-backdated .visit-payment-history-card {
+    border-color: #0A2540;
+    box-shadow: 0 4px 12px rgba(10, 37, 64, 0.35);
+}
+.visit-section.is-backdated .visit-payment-history-card:hover {
+    box-shadow: 0 6px 20px rgba(10, 37, 64, 0.45);
+    border-color: #1E3A5F;
+}
+
+.vph-header {
+    padding: 12px 18px;
+    background: linear-gradient(135deg, #059669, #047857);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.25s ease;
+    position: relative;
+    overflow: hidden;
+}
+.vph-header::before {
+    content: '';
+    position: absolute;
+    top: 0; left: -100%;
+    width: 100%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+    transition: left 0.6s ease;
+}
+.vph-header:hover::before { left: 100%; }
+.vph-header:hover { background: linear-gradient(135deg, #047857, #065F46); }
+.visit-section.is-backdated .vph-header { background: linear-gradient(135deg, #0A2540, #1E40AF); }
+.visit-section.is-backdated .vph-header:hover { background: linear-gradient(135deg, #1E3A5F, #1E40AF); }
+
+.vph-title { display: flex; align-items: center; gap: 12px; color: white; flex: 1; min-width: 200px; }
+.vph-icon { width: 38px; height: 38px; border-radius: 10px; background: rgba(255,255,255,0.2); backdrop-filter: blur(10px); border: 1.5px solid rgba(255,255,255,0.3); display: inline-flex; align-items: center; justify-content: center; font-size: 1rem; color: white; flex-shrink: 0; transition: transform 0.3s ease; }
+.vph-header:hover .vph-icon { transform: scale(1.1) rotate(-5deg); }
+.vph-title-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vph-main { font-size: 0.88rem; font-weight: 800; letter-spacing: 0.02em; white-space: nowrap; }
+.vph-sub { font-size: 0.62rem; font-weight: 600; color: rgba(255,255,255,0.85); display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.vph-sub i { font-size: 0.55rem; }
+.vph-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.vph-total { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 10px; background: rgba(255,255,255,0.2); backdrop-filter: blur(10px); border: 1.5px solid rgba(255,255,255,0.3); color: white; font-family: var(--font-mono); font-size: 0.85rem; font-weight: 900; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+.vph-total i { font-size: 0.72rem; color: #FDE047; }
+.vph-toggle { width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.2); backdrop-filter: blur(10px); border: 1.5px solid rgba(255,255,255,0.35); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 0.8rem; transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1); flex-shrink: 0; }
+.vph-header:hover .vph-toggle { background: rgba(255,255,255,0.35); transform: scale(1.1); }
+.vph-toggle.rotated { transform: rotate(180deg); }
+.vph-header:hover .vph-toggle.rotated { transform: rotate(180deg) scale(1.1); }
+.vph-body { max-height: 0; overflow: hidden; transition: max-height 0.5s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s ease; padding: 0 18px; background: var(--bg-body); }
+.vph-body.open { max-height: 3000px; padding: 16px 18px; overflow-y: auto; }
+
+.vph-received-summary { background: linear-gradient(135deg, #EFF6FF, #DBEAFE); border: 1.5px solid rgba(11, 94, 215, 0.25); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
+[data-theme="dark"] .vph-received-summary { background: linear-gradient(135deg, #12294A, #0F2340); }
+.visit-section.is-backdated .vph-received-summary { background: linear-gradient(135deg, #DBEAFE, #BFDBFE); border-color: rgba(10, 37, 64, 0.3); }
+[data-theme="dark"] .visit-section.is-backdated .vph-received-summary { background: linear-gradient(135deg, #0A2540, #1E3A5F); }
+.vph-received-label { display: inline-flex; align-items: center; gap: 6px; font-size: 0.62rem; font-weight: 900; color: var(--primary); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; }
+.visit-section.is-backdated .vph-received-label { color: #0A2540; }
+[data-theme="dark"] .visit-section.is-backdated .vph-received-label { color: #93C5FD; }
+.vph-received-items { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.vph-payments-list { display: flex; flex-direction: column; gap: 12px; }
+.vph-bill-group { background: var(--bg-card); border-radius: 10px; border-left: 4px solid var(--primary); overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+.vph-bill-header { padding: 10px 14px; background: linear-gradient(135deg, rgba(11, 94, 215, 0.08), rgba(124, 58, 237, 0.04)); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; border-bottom: 1px dashed var(--border-color); }
+.vph-bill-number { font-family: var(--font-mono); font-size: 0.75rem; font-weight: 800; color: var(--primary); display: inline-flex; align-items: center; gap: 6px; }
+.vph-bill-total { font-family: var(--font-mono); font-size: 0.82rem; font-weight: 900; color: var(--success); background: var(--success-bg); padding: 3px 10px; border-radius: 6px; }
+.vph-bill-payments { padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+
+.received-by-summary { display: flex; flex-direction: column; gap: 6px; }
+.received-by-item { display: inline-flex; flex-direction: column; gap: 3px; padding: 8px 12px; border-radius: 10px; font-size: 0.62rem; font-weight: 700; background: #E8F0FE; color: #0B5ED7; border: 1px solid rgba(11, 94, 215, 0.2); min-width: 200px; max-width: 280px; transition: all 0.25s ease; }
+.received-by-item:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+.received-by-item .rb-name { display: inline-flex; align-items: center; gap: 5px; font-size: 0.68rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.received-by-item .rb-name i { font-size: 0.6rem; flex-shrink: 0; }
+.received-by-item .rb-amount { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 0.78rem; font-weight: 900; padding: 3px 8px; border-radius: 6px; background: rgba(5, 150, 105, 0.15); color: #059669; white-space: nowrap; }
+.received-by-item .rb-count { font-size: 0.55rem; font-weight: 800; background: rgba(0,0,0,0.08); padding: 1px 6px; border-radius: 6px; font-family: var(--font-mono); display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.received-by-item .rb-date { display: inline-flex; align-items: center; gap: 4px; font-size: 0.58rem; font-weight: 700; color: var(--text-secondary); font-family: var(--font-mono); white-space: nowrap; }
+.received-by-item.reception { background: #DBEAFE; color: #1E40AF; border-color: rgba(30, 64, 175, 0.2); }
+.received-by-item.cashier { background: #FEF3C7; color: #D97706; border-color: rgba(217, 119, 6, 0.2); }
+.received-by-item.admin { background: #FCE7F3; color: #BE185D; border-color: rgba(190, 24, 93, 0.2); }
+.received-by-item.pharmacy { background: #D1FAE5; color: #059669; border-color: rgba(5, 150, 105, 0.2); }
+.received-by-item.doctor { background: #EDE9FE; color: #7C3AED; border-color: rgba(124, 58, 237, 0.2); }
+.received-by-item.laboratory { background: #CFFAFE; color: #0891B2; border-color: rgba(8, 145, 178, 0.2); }
+.received-by-item.user { background: #F1F5F9; color: #64748B; border-color: rgba(100, 116, 139, 0.2); }
+
+.payment-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: var(--bg-card); border-radius: 10px; margin-bottom: 8px; border: 1px solid var(--border-color); border-left: 4px solid #059669; flex-wrap: wrap; gap: 12px; transition: all 0.25s ease; }
+.payment-item:hover { background: var(--success-bg); border-left-color: #047857; transform: translateX(2px); }
+.payment-item:last-child { margin-bottom: 0; }
+.visit-section.is-backdated .payment-item { border-left-color: #0A2540; background: linear-gradient(135deg, #EFF6FF, #DBEAFE); }
+.visit-section.is-backdated .payment-item:hover { background: linear-gradient(135deg, #DBEAFE, #BFDBFE); border-left-color: #1E40AF; }
+[data-theme="dark"] .visit-section.is-backdated .payment-item { background: linear-gradient(135deg, #0A2540, #1E3A5F); }
+[data-theme="dark"] .visit-section.is-backdated .payment-item:hover { background: linear-gradient(135deg, #1E3A5F, #1E40AF); }
+
+.payment-left { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.payment-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.payment-index { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: #D1FAE5; color: #059669; font-weight: 900; font-size: 0.75rem; font-family: var(--font-mono); flex-shrink: 0; }
+.payment-receipt { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 0.7rem; font-weight: 800; color: #059669; background: #D1FAE5; padding: 4px 10px; border-radius: 6px; }
+.payment-method { display: inline-flex; align-items: center; gap: 4px; font-size: 0.65rem; font-weight: 700; color: #0B5ED7; background: #DBEAFE; padding: 4px 10px; border-radius: 6px; text-transform: uppercase; }
+.payment-date { display: inline-flex; align-items: center; gap: 5px; font-size: 0.72rem; font-weight: 700; color: var(--text-primary); background: var(--gray-100); padding: 4px 10px; border-radius: 6px; font-family: var(--font-mono); }
+[data-theme="dark"] .payment-date { background: #334155; }
+.payment-received-by { display: inline-flex; align-items: center; gap: 4px; font-size: 0.68rem; font-weight: 600; color: #7C3AED; background: #EDE9FE; padding: 4px 10px; border-radius: 6px; }
+.payment-amount { display: inline-flex; align-items: baseline; gap: 4px; font-family: var(--font-mono); font-size: 1rem; font-weight: 900; color: #059669; background: #D1FAE5; padding: 5px 14px; border-radius: 8px; border: 1.5px solid rgba(5, 150, 105, 0.3); white-space: nowrap; }
+.payment-amount .currency-prefix { font-size: 0.65rem; font-weight: 700; color: #047857; }
+.payment-amount .amount-value { font-size: 1rem; font-weight: 900; }
 
 .visit-header-row3 { background: var(--bg-card); padding: 14px 20px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
 .visit-diagnosis-box { display: flex; align-items: flex-start; gap: 10px; background: linear-gradient(135deg, rgba(220, 38, 38, 0.06), rgba(220, 38, 38, 0.02)); border-left: 4px solid var(--danger); padding: 10px 14px; border-radius: var(--radius-sm); flex: 1; min-width: 250px; }
@@ -1055,11 +1496,21 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .data-table tbody tr:hover td { background: var(--primary-bg); }
 .data-table tbody tr.total-row td { border-top: 3px solid var(--primary); font-weight: 800; font-size: 0.88rem; background: var(--primary-bg) !important; color: var(--primary); }
 
-/* ✅ V18: ITEM ROW COLOR CODING */
 .data-table tbody tr.item-paid td { background: linear-gradient(90deg, rgba(5, 150, 105, 0.04), transparent) !important; }
 .data-table tbody tr.item-paid:hover td { background: linear-gradient(90deg, rgba(5, 150, 105, 0.12), rgba(5, 150, 105, 0.05)) !important; }
 .data-table tbody tr.item-pending td { background: linear-gradient(90deg, rgba(217, 119, 6, 0.04), transparent) !important; }
 .data-table tbody tr.item-pending:hover td { background: linear-gradient(90deg, rgba(217, 119, 6, 0.12), rgba(217, 119, 6, 0.05)) !important; }
+
+/* ✅ V19: Backdated visit items table */
+.visit-section.is-backdated .data-table thead th {
+    background: linear-gradient(135deg, #0A2540, #1E40AF);
+}
+.visit-section.is-backdated .data-table tbody tr:hover td {
+    background: linear-gradient(90deg, #DBEAFE, #EFF6FF);
+}
+[data-theme="dark"] .visit-section.is-backdated .data-table tbody tr:hover td {
+    background: linear-gradient(90deg, #0A2540, #1E3A5F);
+}
 
 .money-cell { font-family: var(--font-mono); font-weight: 800; font-size: 0.82rem; color: var(--success); text-align: right; white-space: nowrap; }
 .money-cell .currency-prefix { font-size: 0.65rem; color: var(--text-secondary); margin-right: 3px; font-weight: 600; }
@@ -1113,34 +1564,18 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 .category-group-row.registration td .category-icon { background: linear-gradient(135deg, #64748B, #94A3B8); }
 .category-group-row.other td .category-icon { background: linear-gradient(135deg, #94A3B8, #CBD5E1); }
 .category-group-row td .category-total { float: right; font-family: var(--font-mono); font-size: 0.82rem; color: var(--success); background: var(--success-bg); padding: 3px 10px; border-radius: 6px; font-weight: 900; }
+.category-group-row td .category-breakdown { float: right; display: inline-flex; gap: 6px; align-items: center; margin-right: 12px; }
+.category-group-row td .category-breakdown .cb-paid { font-size: 0.62rem; font-weight: 800; color: #059669; background: #D1FAE5; padding: 2px 8px; border-radius: 6px; font-family: var(--font-mono); border: 1px solid rgba(5, 150, 105, 0.3); }
+.category-group-row td .category-breakdown .cb-pending { font-size: 0.62rem; font-weight: 800; color: #DC2626; background: #FEE2E2; padding: 2px 8px; border-radius: 6px; font-family: var(--font-mono); border: 1px solid rgba(220, 38, 38, 0.3); }
 
-/* ✅ V18: CATEGORY PAID/PENDING BREAKDOWN */
-.category-group-row td .category-breakdown {
-    float: right;
-    display: inline-flex;
-    gap: 6px;
-    align-items: center;
-    margin-right: 12px;
+.visit-section.is-backdated .category-group-row td {
+    background: linear-gradient(135deg, rgba(10, 37, 64, 0.1), rgba(30, 64, 175, 0.06)) !important;
+    color: #0A2540;
+    border-bottom-color: #0A2540 !important;
 }
-.category-group-row td .category-breakdown .cb-paid {
-    font-size: 0.62rem;
-    font-weight: 800;
-    color: #059669;
-    background: #D1FAE5;
-    padding: 2px 8px;
-    border-radius: 6px;
-    font-family: var(--font-mono);
-    border: 1px solid rgba(5, 150, 105, 0.3);
-}
-.category-group-row td .category-breakdown .cb-pending {
-    font-size: 0.62rem;
-    font-weight: 800;
-    color: #DC2626;
-    background: #FEE2E2;
-    padding: 2px 8px;
-    border-radius: 6px;
-    font-family: var(--font-mono);
-    border: 1px solid rgba(220, 38, 38, 0.3);
+[data-theme="dark"] .visit-section.is-backdated .category-group-row td {
+    background: linear-gradient(135deg, rgba(10, 37, 64, 0.4), rgba(30, 64, 175, 0.2)) !important;
+    color: #93C5FD;
 }
 
 .otc-sale-card { background: var(--bg-card); border: 2px solid var(--cyan); border-radius: var(--radius-lg); margin: 16px; overflow: hidden; box-shadow: 0 4px 16px rgba(8, 145, 178, 0.1); }
@@ -1233,6 +1668,8 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
     .patient-footer .footer-right { width: 100%; }
     .otc-sale-header { flex-direction: column; align-items: stretch; }
     .otc-stat-chip { min-width: auto; flex: 1; }
+    .vph-title { flex-wrap: wrap; }
+    .vph-right { width: 100%; justify-content: space-between; }
 }
 @media (max-width: 480px) {
     .stats-grid-8 { grid-template-columns: 1fr; }
@@ -1247,6 +1684,8 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
     .stat-card { break-inside: avoid; }
     .patient-group-card { break-inside: avoid; }
     .otc-sale-card { break-inside: avoid; }
+    .vph-body { max-height: none !important; padding: 16px 18px !important; }
+    .visit-section.is-backdated::before { display: none !important; }
 }
 </style>
 
@@ -1270,9 +1709,9 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
         <div>
             <h1 class="page-title">
                 <i class="fas fa-chart-line"></i>
-                Revenue Report V18
+                Revenue Report V19
                 <span class="branch-tag" style="background:rgba(255,255,255,0.25);"><i class="fas fa-shield-alt"></i> ADMIN</span>
-                <span class="branch-tag" style="background:rgba(16,185,129,0.3);color:#6EE7B7;"><i class="fas fa-check-circle"></i> PAID/PENDING</span>
+                <span class="branch-tag backdated-tag"><i class="fas fa-history"></i> BACKDATED</span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-store-alt"></i>
@@ -1289,6 +1728,9 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <button onclick="toggleAllPaymentHistories()" class="btn-header" id="globalToggleBtn">
+                <i class="fas fa-expand-alt"></i> Expand All
+            </button>
             <button onclick="window.print()" class="btn-header"><i class="fas fa-print"></i> Print</button>
             <a href="dashboard.php?branch=<?= $selected_branch_id ?>" class="btn-header">
                 <i class="fas fa-arrow-left"></i> Dashboard
@@ -1627,8 +2069,16 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                 $patient_initials = strtoupper(substr($patient['patient_name'] ?? 'NA', 0, 2));
             }
             $visit_count = count($patient['visits']);
+            
+            $card_class = '';
+            $status_badge_html = '';
+            
+            if (!empty($patient['has_backdated'])) {
+                $card_class = 'has-backdated';
+                $status_badge_html = '<span class="backdated-badge"><i class="fas fa-history"></i> BACKDATED</span>';
+            }
         ?>
-        <div class="patient-group-card">
+        <div class="patient-group-card <?= $card_class ?>">
             
             <div class="patient-info-header">
                 <div class="patient-number-badge">
@@ -1641,14 +2091,15 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                     <div class="patient-details">
                         <div class="patient-name">
                             <i class="fas fa-user-circle" style="color:#93C5FD;"></i>
-                            <?= htmlspecialchars($patient['patient_name'] ?? 'N/A') ?>
+                            <?= highlightSearchTerm($patient['patient_name'] ?? 'N/A', $search) ?>
+                            <?= $status_badge_html ?>
                         </div>
                         <div class="patient-meta">
                             <?php if (!empty($patient['patient_code'])): ?>
-                                <span><i class="fas fa-id-card"></i> <?= htmlspecialchars($patient['patient_code']) ?></span>
+                                <span><i class="fas fa-id-card"></i> <?= highlightSearchTerm($patient['patient_code'], $search) ?></span>
                             <?php endif; ?>
                             <?php if (!empty($patient['patient_phone'])): ?>
-                                <span><i class="fas fa-phone"></i> <?= htmlspecialchars($patient['patient_phone']) ?></span>
+                                <span><i class="fas fa-phone"></i> <?= highlightSearchTerm($patient['patient_phone'], $search) ?></span>
                             <?php endif; ?>
                             <?php if (!empty($patient['gender'])): ?>
                                 <span><i class="fas fa-venus-mars"></i> <?= htmlspecialchars(ucfirst($patient['gender'])) ?></span>
@@ -1685,20 +2136,48 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                 $v_pharm_prem = (float)($visit['pharmacy_premium'] ?? 0);
                 $v_cash_prem = (float)($visit['cashier_premium'] ?? 0);
                 
-                // ✅ V18: Paid/Pending items
                 $v_paid_count = (int)($visit['paid_items_count'] ?? 0);
                 $v_paid_total = (float)($visit['paid_items_total'] ?? 0);
                 $v_pending_count = (int)($visit['pending_items_count'] ?? 0);
                 $v_pending_total = (float)($visit['pending_items_total'] ?? 0);
                 $v_visit_paid = (float)($visit['visit_paid'] ?? 0);
                 $v_visit_balance = (float)($visit['visit_balance'] ?? 0);
+                
+                // V19: Collect ALL payments for this visit's bills
+                $visit_all_payments = [];
+                $visit_bills_with_payments = [];
+                foreach ($visit['bills'] as $v_bill) {
+                    $bill_pmts = $payments_by_bill[$v_bill['bill_id']] ?? [];
+                    if (!empty($bill_pmts)) {
+                        $visit_bills_with_payments[] = [
+                            'bill' => $v_bill,
+                            'payments' => $bill_pmts
+                        ];
+                        foreach ($bill_pmts as $bp) {
+                            $visit_all_payments[] = $bp;
+                        }
+                    }
+                }
+                
+                $visit_total_paid_amount = 0;
+                foreach ($visit_all_payments as $vp) {
+                    $visit_total_paid_amount += (float)($vp['amount'] ?? 0);
+                }
+                $visit_payment_count = count($visit_all_payments);
+                $visit_received_summary = buildReceivedBySummary($visit_all_payments);
+                
+                // V19: Determine if visit is backdated
+                $visit_is_backdated = !empty($visit['is_backdated']) || !empty($visit['is_old_visit']);
+                $visit_section_class = $visit_is_backdated ? 'is-backdated' : '';
+                
+                $visit_date_formatted = !empty($visit['visit_date']) ? date('d M Y', strtotime($visit['visit_date'])) : 'N/A';
             ?>
-            <div class="visit-section">
+            <div class="visit-section <?= $visit_section_class ?>">
                 
                 <div class="visit-header-row1">
                     <div class="visit-info-left">
                         <span class="visit-number-badge">
-                            <i class="fas fa-notes-medical"></i> <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>
+                            <i class="fas fa-notes-medical"></i> <?= highlightSearchTerm($visit['visit_number'] ?? 'N/A', $search) ?>
                         </span>
                         <span class="visit-status-badge <?= $visit_status ?>">
                             <i class="fas fa-<?= $visit_status === 'completed' ? 'check-circle' : ($visit_status === 'cancelled' ? 'times-circle' : 'clock') ?>"></i>
@@ -1722,7 +2201,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                     </div>
                 </div>
 
-                <!-- ✅ V18: VISIT PAID/PENDING SUMMARY -->
                 <div class="visit-payment-summary">
                     <div class="vps-item paid-items">
                         <div class="vps-label"><i class="fas fa-check-circle"></i> Items Paid</div>
@@ -1795,6 +2273,144 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                         <div class="dp-value"><?= $currency ?> <?= number_format($visit_total_rounded, 0) ?></div>
                     </div>
                 </div>
+
+                <!-- ✅ V19: PAYMENT HISTORY - TOGGLE -->
+                <?php if (count($visit_bills_with_payments) > 0): ?>
+                <div style="padding: 0 20px 14px;">
+                    <div class="visit-payment-history-card" id="paymentHistoryCard_<?= $patient_index ?>_<?= $visit_index ?>">
+                        
+                        <div class="vph-header" onclick="togglePaymentHistory(<?= $patient_index ?>, <?= $visit_index ?>)">
+                            <div class="vph-title">
+                                <span class="vph-icon"><i class="fas fa-receipt"></i></span>
+                                <div class="vph-title-text">
+                                    <span class="vph-main">
+                                        Payment History
+                                        <?php if ($visit_is_backdated): ?>
+                                            <span style="font-size:0.6rem;background:rgba(255,255,255,0.25);padding:2px 8px;border-radius:8px;margin-left:6px;font-weight:800;">
+                                                <i class="fas fa-history"></i> BACKDATED
+                                            </span>
+                                        <?php endif; ?>
+                                    </span>
+                                    <span class="vph-sub">
+                                        <i class="fas fa-list"></i> <?= $visit_payment_count ?> payment<?= $visit_payment_count != 1 ? 's' : '' ?>
+                                        • <?= count($visit_bills_with_payments) ?> bill<?= count($visit_bills_with_payments) != 1 ? 's' : '' ?>
+                                        <?php if ($visit_is_backdated): ?>
+                                            • Visit: <?= $visit_date_formatted ?>
+                                        <?php endif; ?>
+                                    </span>
+                                </div>
+                            </div>
+                            
+                            <div class="vph-right">
+                                <span class="vph-total">
+                                    <i class="fas fa-coins"></i>
+                                    <?= $currency ?> <?= number_format($visit_total_paid_amount, 0) ?>
+                                </span>
+                                <span class="vph-toggle" id="paymentToggleIcon_<?= $patient_index ?>_<?= $visit_index ?>">
+                                    <i class="fas fa-chevron-down"></i>
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div class="vph-body" id="paymentHistoryBody_<?= $patient_index ?>_<?= $visit_index ?>">
+                            
+                            <div class="vph-received-summary">
+                                <span class="vph-received-label">
+                                    <i class="fas fa-users"></i> RECEIVED BY:
+                                </span>
+                                <div class="vph-received-items">
+                                    <?php foreach ($visit_received_summary as $rb): ?>
+                                        <div class="received-by-item <?= htmlspecialchars($rb['role']) ?>">
+                                            <span class="rb-name">
+                                                <i class="fas fa-user"></i>
+                                                <?= htmlspecialchars($rb['name']) ?>
+                                            </span>
+                                            <span class="rb-amount">
+                                                <i class="fas fa-coins" style="font-size:0.6rem;"></i>
+                                                <?= $currency ?> <?= number_format($rb['total_amount'], 0) ?>
+                                            </span>
+                                            <?php if ($rb['count'] > 1): ?>
+                                                <span class="rb-count">
+                                                    <i class="fas fa-receipt"></i> <?= $rb['count'] ?> payments
+                                                </span>
+                                            <?php endif; ?>
+                                            <?php if ($rb['first_date']): ?>
+                                                <span class="rb-date">
+                                                    <i class="far fa-calendar"></i>
+                                                    <?= date('d M Y, h:i A', strtotime($rb['first_date'])) ?>
+                                                </span>
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                            
+                            <div class="vph-payments-list">
+                                <?php foreach ($visit_bills_with_payments as $bill_data): 
+                                    $v_bill = $bill_data['bill'];
+                                    $v_bill_pmts = $bill_data['payments'];
+                                    
+                                    $bill_total_amount = 0;
+                                    foreach ($v_bill_pmts as $bp) {
+                                        $bill_total_amount += (float)($bp['amount'] ?? 0);
+                                    }
+                                ?>
+                                    <div class="vph-bill-group">
+                                        <div class="vph-bill-header">
+                                            <span class="vph-bill-number">
+                                                <i class="fas fa-file-invoice"></i> <?= htmlspecialchars($v_bill['bill_number']) ?>
+                                            </span>
+                                            <span class="vph-bill-total">
+                                                <?= $currency ?> <?= number_format($bill_total_amount, 0) ?>
+                                            </span>
+                                        </div>
+                                        
+                                        <div class="vph-bill-payments">
+                                            <?php foreach ($v_bill_pmts as $payment_idx => $payment): 
+                                                $method_icon = 'money-bill';
+                                                if (strpos($payment['payment_method'] ?? '', 'pesa') !== false || strpos($payment['payment_method'] ?? '', 'mpesa') !== false) $method_icon = 'mobile-alt';
+                                                elseif ($payment['payment_method'] === 'bank') $method_icon = 'university';
+                                                elseif ($payment['payment_method'] === 'card') $method_icon = 'credit-card';
+                                                
+                                                $payment_is_backdated = isBackdatedVisit($visit['visit_date'], $payment['received_at']);
+                                            ?>
+                                                <div class="payment-item">
+                                                    <div class="payment-left">
+                                                        <span class="payment-index"><?= $payment_idx + 1 ?></span>
+                                                        <span class="payment-receipt">
+                                                            <i class="fas fa-hashtag"></i> <?= htmlspecialchars($payment['receipt_number']) ?>
+                                                        </span>
+                                                        <span class="payment-method">
+                                                            <i class="fas fa-<?= $method_icon ?>"></i>
+                                                            <?= htmlspecialchars(str_replace('_', ' ', $payment['payment_method'] ?? 'cash')) ?>
+                                                        </span>
+                                                    </div>
+                                                    <div class="payment-right">
+                                                        <span class="payment-amount">
+                                                            <span class="currency-prefix"><?= $currency ?></span>
+                                                            <span class="amount-value"><?= number_format((float)($payment['amount'] ?? 0), 0) ?></span>
+                                                        </span>
+                                                        <span class="payment-date" style="<?= $payment_is_backdated ? 'background:#DBEAFE;color:#0A2540;font-weight:800;' : '' ?>">
+                                                            <i class="far fa-calendar"></i>
+                                                            <?= date('d M Y, h:i A', strtotime($payment['received_at'])) ?>
+                                                        </span>
+                                                        <?php if (!empty($payment['received_by_name'])): ?>
+                                                            <span class="payment-received-by">
+                                                                <i class="fas fa-user"></i> <?= htmlspecialchars($payment['received_by_name']) ?>
+                                                            </span>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                            
+                        </div>
+                    </div>
+                </div>
+                <?php endif; ?>
 
                 <div class="visit-header-row3">
                     <div class="visit-diagnosis-box">
@@ -1875,7 +2491,6 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                                     if (empty($cat_items)) continue;
                                     $has_any_items = true;
                                     
-                                    // ✅ V18: Hesabu paid/pending kwa category
                                     $cat_paid_count = 0;
                                     $cat_pending_count = 0;
                                     $cat_total = 0;
@@ -1929,7 +2544,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                                     ?>
                                         <tr class="<?= $row_class ?>">
                                             <td style="text-align:center;font-weight:700;color:var(--text-secondary);"><?= $item_counter++ ?></td>
-                                            <td><div style="font-weight:700;font-size:0.78rem;"><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></div></td>
+                                            <td><div style="font-weight:700;font-size:0.78rem;"><?= highlightSearchTerm($item['item_name'] ?? 'N/A', $search) ?></div></td>
                                             <td>
                                                 <span style="font-size:0.6rem;background:var(--bg-body);padding:2px 8px;border-radius:5px;font-weight:700;text-transform:uppercase;">
                                                     <?= htmlspecialchars($item['item_type'] ?? 'item') ?>
@@ -2035,6 +2650,11 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                         <i class="fas fa-notes-medical"></i>
                         <?= $visit_count ?> Visit<?= $visit_count != 1 ? 's' : '' ?>
                     </span>
+                    <?php if (!empty($patient['has_backdated'])): ?>
+                    <span class="footer-visit-count" style="background:linear-gradient(135deg, #0A2540, #1E3A5F);color:white;font-weight:800;">
+                        <i class="fas fa-history"></i> BACKDATED
+                    </span>
+                    <?php endif; ?>
                 </div>
                 <div class="footer-right">
                     <span class="footer-stat">
@@ -2105,16 +2725,16 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                     <div class="otc-sale-header">
                         <div class="otc-header-left">
                             <span class="otc-sale-id-badge">
-                                <i class="fas fa-receipt"></i> <?= htmlspecialchars($otc['sale_number'] ?? 'N/A') ?>
+                                <i class="fas fa-receipt"></i> <?= highlightSearchTerm($otc['sale_number'] ?? 'N/A', $search) ?>
                             </span>
                             <div class="otc-customer-info">
                                 <div class="otc-customer-name">
                                     <i class="fas fa-user-circle"></i>
-                                    <?= htmlspecialchars($otc['customer_name'] ?? 'Walk-in Customer') ?>
+                                    <?= highlightSearchTerm($otc['customer_name'] ?? 'Walk-in Customer', $search) ?>
                                 </div>
                                 <?php if (!empty($otc['customer_phone'])): ?>
                                     <div class="otc-customer-phone">
-                                        <i class="fas fa-phone"></i> <?= htmlspecialchars($otc['customer_phone']) ?>
+                                        <i class="fas fa-phone"></i> <?= highlightSearchTerm($otc['customer_phone'], $search) ?>
                                     </div>
                                 <?php endif; ?>
                             </div>
@@ -2185,7 +2805,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                                             <td>
                                                 <div class="otc-item-name-cell">
                                                     <span class="item-icon"><i class="fas fa-capsules"></i></span>
-                                                    <?= htmlspecialchars($item['item_name'] ?? 'N/A') ?>
+                                                    <?= highlightSearchTerm($item['item_name'] ?? 'N/A', $search) ?>
                                                 </div>
                                             </td>
                                             <td style="text-align:center;">
@@ -2264,7 +2884,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
     <!-- REVENUE BREAKDOWN -->
     <div class="table-card">
         <div class="table-header">
-            <span class="title"><i class="fas fa-chart-pie"></i> Revenue Breakdown by Source (V18)</span>
+            <span class="title"><i class="fas fa-chart-pie"></i> Revenue Breakdown by Source (V19)</span>
             <span class="count">Total: <?= $currency ?> <?= number_format($total_revenue, 0) ?></span>
         </div>
         <div class="table-scroll-wrapper">
@@ -2405,7 +3025,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
                     ?>
                         <tr>
                             <td style="text-align:center;font-weight:700;color:var(--text-secondary);"><?= $exp_num++ ?></td>
-                            <td><span class="expense-ref-badge"><?= htmlspecialchars($exp['expense_number'] ?? 'N/A') ?></span></td>
+                            <td><span class="expense-ref-badge"><?= highlightSearchTerm($exp['expense_number'] ?? 'N/A', $search) ?></span></td>
                             <td><span class="expense-category-badge"><i class="fas fa-tag"></i> <?= htmlspecialchars($exp['category'] ?? 'N/A') ?></span></td>
                             <td style="max-width:250px;"><div style="font-size:0.75rem;font-weight:500;"><?= htmlspecialchars($exp['description'] ?? 'N/A') ?></div></td>
                             <td><span class="payment-badge"><i class="fas fa-credit-card"></i> <?= htmlspecialchars(ucfirst(str_replace('_', ' ', $exp['payment_method'] ?? 'Cash'))) ?></span></td>
@@ -2452,7 +3072,7 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
     <!-- PROFIT SUMMARY -->
     <div class="table-card" style="border-color:<?= $net_profit >= 0 ? 'var(--success)' : 'var(--danger)' ?>;">
         <div class="table-header profit <?= $net_profit < 0 ? 'loss' : '' ?>">
-            <span class="title"><i class="fas fa-chart-pie"></i> Profit Summary (V18)</span>
+            <span class="title"><i class="fas fa-chart-pie"></i> Profit Summary (V19)</span>
             <span class="count"><?= $profit_percentage ?>% Margin</span>
         </div>
         <div class="table-scroll-wrapper">
@@ -2501,6 +3121,57 @@ body { font-family: var(--font-primary); background: var(--bg-body); color: var(
 </div>
 
 <script>
+// ================================================================
+// ✅ V19: TOGGLE PAYMENT HISTORY
+// ================================================================
+function togglePaymentHistory(patientIndex, visitIndex) {
+    var body = document.getElementById('paymentHistoryBody_' + patientIndex + '_' + visitIndex);
+    var icon = document.getElementById('paymentToggleIcon_' + patientIndex + '_' + visitIndex);
+    
+    if (!body || !icon) return;
+    
+    if (body.classList.contains('open')) {
+        body.classList.remove('open');
+        icon.classList.remove('rotated');
+    } else {
+        body.classList.add('open');
+        icon.classList.add('rotated');
+    }
+}
+
+var allPaymentHistoriesExpanded = false;
+function toggleAllPaymentHistories() {
+    var bodies = document.querySelectorAll('.vph-body');
+    var icons = document.querySelectorAll('.vph-toggle');
+    var btn = document.getElementById('globalToggleBtn');
+    
+    allPaymentHistoriesExpanded = !allPaymentHistoriesExpanded;
+    
+    bodies.forEach(function(body) {
+        if (allPaymentHistoriesExpanded) {
+            body.classList.add('open');
+        } else {
+            body.classList.remove('open');
+        }
+    });
+    
+    icons.forEach(function(icon) {
+        if (allPaymentHistoriesExpanded) {
+            icon.classList.add('rotated');
+        } else {
+            icon.classList.remove('rotated');
+        }
+    });
+    
+    if (btn) {
+        if (allPaymentHistoriesExpanded) {
+            btn.innerHTML = '<i class="fas fa-compress-alt"></i> Collapse All';
+        } else {
+            btn.innerHTML = '<i class="fas fa-expand-alt"></i> Expand All';
+        }
+    }
+}
+
 function confirmDeleteVisit(id, visitNumber) {
     document.getElementById('deleteAction').value = 'delete_visit';
     document.getElementById('deleteVisitId').value = id;
@@ -2704,11 +3375,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-console.log('%c📊 Admin Revenue Report V18 - WITH PAID/PENDING ITEMS', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ V18: Inaonyesha items zilizolipwa (PAID) + zilizobaki (PENDING)', 'font-size:13px; color:#059669; font-weight:bold;');
-console.log('%c✅ V17: Patient Payments = patient_id + visit_id + NOT BILL-OTC-%', 'font-size:12px; color:#10B981; font-weight:bold;');
-console.log('%c✅ V17: OTC = paid + partial', 'font-size:12px; color:#10B981; font-weight:bold;');
-console.log('%c✅ V16: Prescription = GROSS pekee', 'font-size:12px; color:#10B981; font-weight:bold;');
+console.log('%c📊 Admin Revenue Report V19 - PAYMENT DATE GROUPING + BACKDATED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ V19: Group by PAYMENT DATE (not visit date)', 'font-size:13px; color:#0A2540; font-weight:bold;');
+console.log('%c✅ V19: Backdated visits have DARK BLUE color', 'font-size:13px; color:#0A2540; font-weight:bold;');
+console.log('%c✅ V19: Visit date preserved (shows service date)', 'font-size:13px; color:#0A2540; font-weight:bold;');
+console.log('%c✅ V19: Each payment shows its own Received By', 'font-size:13px; color:#0A2540; font-weight:bold;');
+console.log('%c✅ V18: PAID vs PENDING items', 'font-size:13px; color:#059669; font-weight:bold;');
+console.log('%c💰 Total Revenue: <?= $currency ?> <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
 </script>
 
 </body>

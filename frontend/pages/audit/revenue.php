@@ -1,8 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/audit/revenue.php
-// AUDIT ROLE - REVENUE REPORT (V64 - RECEIVED BY + TOGGLE)
+// AUDIT ROLE - REVENUE REPORT (V65 - PAYMENT DATE GROUPING + BACKDATED)
 // ================================================================
+// ✅ V65: Group by PAYMENT DATE (not visit date)
+// ✅ V65: Backdated visits have DARK BLUE color
+// ✅ V65: Visit date preserved (shows service date)
+// ✅ V65: Each payment shows its own Received By
 // ✅ V64: Received By (Grouped) na AMOUNTS + DATES
 // ✅ V64: Payment History - TOGGLE (kama cashier paid_bills)
 // ✅ V64: Expand All / Collapse All button
@@ -11,6 +15,7 @@
 // ✅ V63: READ-ONLY (Audit hawaruhusiwi kufuta)
 // ✅ V63: Monthly + Daily Charts zinaendelea
 // ✅ V62: Pending bills zinaonekana bila kuhitaji payments
+// BRAICK DISPENSARY
 // ================================================================
 
 date_default_timezone_set('Africa/Dar_es_Salaam');
@@ -76,6 +81,26 @@ function highlightSearchTerm($text, $search) {
         '<mark class="search-highlight">$1</mark>',
         $escaped
     );
+}
+
+/**
+ * V65: Check if visit is backdated (visit date is different from payment date)
+ */
+function isBackdatedVisit($visit_date, $payment_date) {
+    if (empty($visit_date) || empty($payment_date)) return false;
+    $visit_day = date('Y-m-d', strtotime($visit_date));
+    $payment_day = date('Y-m-d', strtotime($payment_date));
+    return $visit_day !== $payment_day;
+}
+
+/**
+ * V65: Check if visit is from previous days (not today)
+ */
+function isOldVisit($visit_date) {
+    if (empty($visit_date)) return false;
+    $visit_day = date('Y-m-d', strtotime($visit_date));
+    $today = date('Y-m-d');
+    return $visit_day < $today;
 }
 
 $currency = 'TSh';
@@ -511,7 +536,111 @@ try {
     error_log("OTC sales list error: " . $e->getMessage());
 }
 
-// PATIENT-GROUPED BILLS
+// ================================================================
+// ✅ V65: FETCH PAYMENTS WITH RECEIVED BY (ALL PAYMENTS - NO DATE FILTER)
+// ================================================================
+$payments_by_bill = [];
+
+try {
+    // First get all bills that have payments in date range
+    $sql_bill_ids = "SELECT DISTINCT p.bill_id 
+                     FROM payments p
+                     INNER JOIN bills b ON p.bill_id = b.id
+                     WHERE p.bill_id IS NOT NULL 
+                     AND b.patient_id IS NOT NULL
+                     AND b.visit_id IS NOT NULL
+                     AND b.bill_number NOT LIKE 'BILL-OTC-%'
+                     $branch_cond_p $date_cond_payments $pay_cond_payments";
+    $stmt = $db->prepare($sql_bill_ids);
+    $stmt->execute(array_merge($branch_params_p, $date_params, $pay_params));
+    $all_patient_bill_ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    
+    if (!empty($all_patient_bill_ids)) {
+        $placeholders = implode(',', array_fill(0, count($all_patient_bill_ids), '?'));
+        
+        // V65: Get ALL payments for these bills (full history)
+        $sql_payments = "SELECT 
+                            p.id as payment_id,
+                            p.bill_id,
+                            p.receipt_number,
+                            p.amount,
+                            p.payment_method,
+                            p.reference_number,
+                            p.notes,
+                            p.received_at,
+                            u.full_name as received_by_name,
+                            u.role as received_by_role
+                        FROM payments p
+                        LEFT JOIN users u ON p.received_by = u.id
+                        WHERE p.bill_id IN ($placeholders)
+                        ORDER BY p.received_at ASC";
+        
+        $stmt = $db->prepare($sql_payments);
+        $stmt->execute($all_patient_bill_ids);
+        $payments_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($payments_data as $pmt) {
+            $bill_id = $pmt['bill_id'];
+            if (!isset($payments_by_bill[$bill_id])) {
+                $payments_by_bill[$bill_id] = [];
+            }
+            $payments_by_bill[$bill_id][] = $pmt;
+        }
+    }
+} catch (Exception $e) {
+    error_log("Payments fetch error: " . $e->getMessage());
+}
+
+// ================================================================
+// ✅ V65: BUILD RECEIVED BY SUMMARY NA AMOUNTS + DATES
+// ================================================================
+function buildReceivedBySummary($payments) {
+    $summary = [];
+    
+    foreach ($payments as $pmt) {
+        $name = $pmt['received_by_name'] ?? 'Unknown';
+        $role = strtolower($pmt['received_by_role'] ?? 'user');
+        $amount = (float)($pmt['amount'] ?? 0);
+        $received_at = $pmt['received_at'] ?? null;
+        $receipt = $pmt['receipt_number'] ?? '';
+        
+        if (!isset($summary[$name])) {
+            $summary[$name] = [
+                'name' => $name,
+                'role' => $role,
+                'count' => 0,
+                'total_amount' => 0,
+                'payments' => [],
+                'first_date' => $received_at,
+                'last_date' => $received_at
+            ];
+        }
+        
+        $summary[$name]['count']++;
+        $summary[$name]['total_amount'] += $amount;
+        $summary[$name]['payments'][] = [
+            'receipt' => $receipt,
+            'amount' => $amount,
+            'received_at' => $received_at,
+            'payment_method' => $pmt['payment_method'] ?? 'cash'
+        ];
+        
+        if ($received_at) {
+            if (!$summary[$name]['first_date'] || strtotime($received_at) < strtotime($summary[$name]['first_date'])) {
+                $summary[$name]['first_date'] = $received_at;
+            }
+            if (!$summary[$name]['last_date'] || strtotime($received_at) > strtotime($summary[$name]['last_date'])) {
+                $summary[$name]['last_date'] = $received_at;
+            }
+        }
+    }
+    
+    return array_values($summary);
+}
+
+// ================================================================
+// ✅ V65: PATIENT-GROUPED BILLS (GROUP BY PAYMENT DATE)
+// ================================================================
 $patient_groups = [];
 
 try {
@@ -524,9 +653,12 @@ try {
             OR pat.phone LIKE ? 
             OR b.bill_number LIKE ?
             OR v.visit_number LIKE ?
+            OR EXISTS (SELECT 1 FROM payments p2 
+                       LEFT JOIN users u2 ON p2.received_by = u2.id 
+                       WHERE p2.bill_id = b.id AND u2.full_name LIKE ?)
         )";
         $search_patient_params = [
-            "%$search%", "%$search%", "%$search%", "%$search%", "%$search%"
+            "%$search%", "%$search%", "%$search%", "%$search%", "%$search%", "%$search%"
         ];
     }
 
@@ -539,22 +671,52 @@ try {
         $patient_filter_cond = " AND b.status = 'paid'";
     }
 
-    $payment_require_cond = "";
-    $extra_params_payment = [];
-    
-    if ($patient_filter === 'paid' || $patient_filter === 'partial') {
-        $payment_require_cond = " AND b.id IN (SELECT DISTINCT p.bill_id FROM payments p 
-            INNER JOIN bills b2 ON p.bill_id = b2.id
-            WHERE p.bill_id IS NOT NULL 
-            AND b2.patient_id IS NOT NULL
-            AND b2.visit_id IS NOT NULL
-            AND b2.bill_number NOT LIKE 'BILL-OTC-%'
-            $branch_cond_p $date_cond_payments $pay_cond_payments)";
-        
-        $extra_params_payment = array_merge($branch_params_p, $date_params, $pay_params);
-    }
+    // V65: Get bills that have PAYMENTS in date range
+    $sql_bills = "SELECT DISTINCT b.id as bill_id, b.bill_number, b.patient_id as patient_db_id, b.visit_id,
+                    b.subtotal, b.pharmacy_discount, b.cashier_discount, b.total_discount,
+                    b.pharmacy_premium, b.cashier_premium, b.premium_amount,
+                    b.total_amount, b.paid_amount, b.balance, b.status as bill_status,
+                    b.payment_method, b.created_at as bill_created_at,
+                    pat.full_name as patient_name, pat.patient_id as patient_code,
+                    pat.phone as patient_phone, pat.date_of_birth, pat.gender,
+                    v.visit_number, v.visit_type, v.visit_date, v.status as visit_status,
+                    v.diagnosis, v.disease_code, v.symptoms, v.complaint,
+                    v.consultation_fee, v.visit_total,
+                    u_doctor.full_name as doctor_name,
+                    u_reception.full_name as receptionist_name
+                FROM bills b
+                INNER JOIN payments p ON p.bill_id = b.id
+                LEFT JOIN patients pat ON b.patient_id = pat.id
+                LEFT JOIN visits v ON b.visit_id = v.id
+                LEFT JOIN users u_doctor ON v.doctor_id = u_doctor.id
+                LEFT JOIN users u_reception ON v.receptionist_id = u_reception.id
+                WHERE b.patient_id IS NOT NULL 
+                AND b.visit_id IS NOT NULL
+                AND b.bill_number NOT LIKE 'BILL-OTC-%' 
+                AND b.status IN ('paid', 'partial', 'pending')
+                $branch_cond_b
+                $date_cond_payments
+                $pay_cond_payments
+                $patient_filter_cond
+                $search_patient
+                ORDER BY pat.full_name ASC, v.visit_date DESC, b.created_at DESC 
+                LIMIT 200";
 
-    $sql_bills = "SELECT b.id as bill_id, b.bill_number, b.patient_id as patient_db_id, b.visit_id,
+    $stmt = $db->prepare($sql_bills);
+    
+    $final_params = array_merge(
+        $branch_params_b, 
+        $date_params, 
+        $pay_params,
+        $search_patient_params
+    );
+    
+    $stmt->execute($final_params);
+    $bills_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // V65: Also include PENDING bills (no payments) if filter allows
+    if ($patient_filter === 'pending' || $patient_filter === 'all') {
+        $pending_sql = "SELECT DISTINCT b.id as bill_id, b.bill_number, b.patient_id as patient_db_id, b.visit_id,
                     b.subtotal, b.pharmacy_discount, b.cashier_discount, b.total_discount,
                     b.pharmacy_premium, b.cashier_premium, b.premium_amount,
                     b.total_amount, b.paid_amount, b.balance, b.status as bill_status,
@@ -574,29 +736,28 @@ try {
                 WHERE b.patient_id IS NOT NULL 
                 AND b.visit_id IS NOT NULL
                 AND b.bill_number NOT LIKE 'BILL-OTC-%' 
-                AND b.status IN ('paid', 'partial', 'pending')
+                AND b.status = 'pending'
+                AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.bill_id = b.id)
                 $branch_cond_b
                 $date_cond_bills
                 $patient_filter_cond
                 $search_patient
-                $payment_require_cond
                 ORDER BY pat.full_name ASC, v.visit_date DESC, b.created_at DESC 
-                LIMIT 200";
+                LIMIT 100";
 
-    $stmt = $db->prepare($sql_bills);
-    
-    $final_params = array_merge(
-        $branch_params_b, 
-        $date_params_bills, 
-        $search_patient_params
-    );
-    
-    if (!empty($extra_params_payment)) {
-        $final_params = array_merge($final_params, $extra_params_payment);
+        $stmt_pending = $db->prepare($pending_sql);
+        $pending_params = array_merge($branch_params_b, $date_params_bills, $search_patient_params);
+        $stmt_pending->execute($pending_params);
+        $pending_bills = $stmt_pending->fetchAll(PDO::FETCH_ASSOC);
+        
+        // Merge pending bills with payment bills (avoid duplicates)
+        $existing_bill_ids = array_column($bills_data, 'bill_id');
+        foreach ($pending_bills as $pb) {
+            if (!in_array($pb['bill_id'], $existing_bill_ids)) {
+                $bills_data[] = $pb;
+            }
+        }
     }
-    
-    $stmt->execute($final_params);
-    $bills_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($bills_data as $bill) {
         $patient_key = $bill['patient_db_id'];
@@ -616,7 +777,8 @@ try {
                 'total_balance' => 0,
                 'has_partial' => false,
                 'has_pending' => false,
-                'has_paid' => false
+                'has_paid' => false,
+                'has_backdated' => false
             ];
         }
 
@@ -655,6 +817,8 @@ try {
                 'paid_items_total' => 0,
                 'pending_items_count' => 0,
                 'pending_items_total' => 0,
+                'is_backdated' => false,
+                'is_old_visit' => false,
                 'items_by_category' => [
                     'consultation' => [], 'lab_test' => [], 'medication' => [],
                     'procedure' => [], 'equipment' => [], 'registration' => [], 'other' => []
@@ -729,6 +893,30 @@ try {
         }
     }
 
+    // V65: Detect backdated visits
+    foreach ($patient_groups as $p_key => &$patient) {
+        foreach ($patient['visits'] as $v_key => &$visit) {
+            // Check if visit date is before today
+            if (isOldVisit($visit['visit_date'])) {
+                $visit['is_old_visit'] = true;
+                $patient['has_backdated'] = true;
+            }
+            
+            // Check if any payment date differs from visit date
+            foreach ($visit['bills'] as $v_bill) {
+                $bill_pmts = $payments_by_bill[$v_bill['bill_id']] ?? [];
+                foreach ($bill_pmts as $bp) {
+                    if (isBackdatedVisit($visit['visit_date'], $bp['received_at'])) {
+                        $visit['is_backdated'] = true;
+                        break 2;
+                    }
+                }
+            }
+        }
+        unset($visit);
+    }
+    unset($patient);
+
     foreach ($patient_groups as $patient_key => &$patient) {
         $patient['visits'] = array_values($patient['visits']);
     }
@@ -738,103 +926,6 @@ try {
 
 } catch (Exception $e) {
     error_log("Patient grouped bills error: " . $e->getMessage());
-}
-
-// ================================================================
-// ✅ V64: FETCH PAYMENTS WITH RECEIVED BY
-// ================================================================
-$payments_by_bill = [];
-
-try {
-    $all_patient_bill_ids = [];
-    foreach ($patient_groups as $patient) {
-        foreach ($patient['visits'] as $visit) {
-            foreach ($visit['bills'] as $bill) {
-                $all_patient_bill_ids[] = $bill['bill_id'];
-            }
-        }
-    }
-    
-    if (!empty($all_patient_bill_ids)) {
-        $placeholders = implode(',', array_fill(0, count($all_patient_bill_ids), '?'));
-        
-        $sql_payments = "SELECT 
-                            p.id as payment_id,
-                            p.bill_id,
-                            p.receipt_number,
-                            p.amount,
-                            p.payment_method,
-                            p.reference_number,
-                            p.notes,
-                            p.received_at,
-                            u.full_name as received_by_name,
-                            u.role as received_by_role
-                        FROM payments p
-                        LEFT JOIN users u ON p.received_by = u.id
-                        WHERE p.bill_id IN ($placeholders)
-                        ORDER BY p.received_at ASC";
-        
-        $stmt = $db->prepare($sql_payments);
-        $stmt->execute($all_patient_bill_ids);
-        $payments_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        foreach ($payments_data as $pmt) {
-            $bill_id = $pmt['bill_id'];
-            if (!isset($payments_by_bill[$bill_id])) {
-                $payments_by_bill[$bill_id] = [];
-            }
-            $payments_by_bill[$bill_id][] = $pmt;
-        }
-    }
-} catch (Exception $e) {
-    error_log("Payments fetch error: " . $e->getMessage());
-}
-
-// ================================================================
-// ✅ V64: BUILD RECEIVED BY SUMMARY NA AMOUNTS + DATES
-// ================================================================
-function buildReceivedBySummary($payments) {
-    $summary = [];
-    
-    foreach ($payments as $pmt) {
-        $name = $pmt['received_by_name'] ?? 'Unknown';
-        $role = strtolower($pmt['received_by_role'] ?? 'user');
-        $amount = (float)($pmt['amount'] ?? 0);
-        $received_at = $pmt['received_at'] ?? null;
-        $receipt = $pmt['receipt_number'] ?? '';
-        
-        if (!isset($summary[$name])) {
-            $summary[$name] = [
-                'name' => $name,
-                'role' => $role,
-                'count' => 0,
-                'total_amount' => 0,
-                'payments' => [],
-                'first_date' => $received_at,
-                'last_date' => $received_at
-            ];
-        }
-        
-        $summary[$name]['count']++;
-        $summary[$name]['total_amount'] += $amount;
-        $summary[$name]['payments'][] = [
-            'receipt' => $receipt,
-            'amount' => $amount,
-            'received_at' => $received_at,
-            'payment_method' => $pmt['payment_method'] ?? 'cash'
-        ];
-        
-        if ($received_at) {
-            if (!$summary[$name]['first_date'] || strtotime($received_at) < strtotime($summary[$name]['first_date'])) {
-                $summary[$name]['first_date'] = $received_at;
-            }
-            if (!$summary[$name]['last_date'] || strtotime($received_at) > strtotime($summary[$name]['last_date'])) {
-                $summary[$name]['last_date'] = $received_at;
-            }
-        }
-    }
-    
-    return array_values($summary);
 }
 
 // EXPENSES LIST
@@ -911,7 +1002,7 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Revenue Report V64 • Braick Audit</title>
+<title>Revenue Report V65 • Braick Audit</title>
 <link rel="icon" href="<?= $logo_path ?>" type="image/png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -931,6 +1022,7 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
     --cyan: #0891B2; --cyan-light: #22D3EE; --cyan-bg: #CFFAFE;
     --teal: #0D9488; --teal-bg: #CCFBF1;
     --slate: #94A3B8; --slate-bg: #F1F5F9;
+    --dark-blue: #0A2540; --dark-blue-light: #1E3A5F; --dark-blue-bg: #0A2540; --dark-blue-accent: #1E40AF;
     --bg-body: #F1F5F9; --bg-card: #FFFFFF;
     --text-primary: #1E293B; --text-secondary: #64748B; --text-muted: #94A3B8;
     --border-color: #E2E8F0; --border-strong: #CBD5E1;
@@ -947,6 +1039,7 @@ include_once __DIR__ . '/../../components/audit_sidebar.php';
     --primary-bg: #12294A; --success-bg: #0F2E22; --danger-bg: #3A1414;
     --warning-bg: #3A2A0F; --purple-bg: #2A1A4A; --cyan-bg: #0A2E3A;
     --teal-bg: #0A2E2A; --slate-bg: #1E2A3D;
+    --dark-blue: #051A2E; --dark-blue-light: #0A2540;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { scroll-behavior: smooth; }
@@ -992,6 +1085,7 @@ mark.search-highlight {
 .branch-tag.live-tag { background: linear-gradient(135deg, #FDE047, #FACC15); color: #78350F; font-weight: 900; }
 .branch-tag.readonly-tag { background: linear-gradient(135deg, #64748B, #475569); border-color: rgba(255,255,255,0.25); font-weight: 800; }
 .branch-tag.recv-tag { background: linear-gradient(135deg, #7C3AED, #A78BFA); border-color: rgba(255,255,255,0.25); font-weight: 800; }
+.branch-tag.backdated-tag { background: linear-gradient(135deg, #0A2540, #1E3A5F); border-color: rgba(255,255,255,0.25); font-weight: 800; }
 .btn-header { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.25); padding: 10px 16px; border-radius: var(--radius-sm); font-weight: 700; font-size: 0.75rem; transition: all 0.25s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; backdrop-filter: blur(10px); position: relative; z-index: 1; cursor: pointer; }
 .btn-header:hover { background: rgba(255,255,255,0.3); transform: translateY(-2px); }
 
@@ -1216,6 +1310,22 @@ mark.search-highlight {
 .patient-group-card.has-pending { border-color: #DC2626; }
 .patient-group-card.has-pending::before { background: linear-gradient(135deg, rgba(220, 38, 38, 0.15), rgba(185, 28, 28, 0.08)); }
 
+/* ✅ V65: BACKDATED PATIENT CARD - DARK BLUE */
+.patient-group-card.has-backdated { 
+    border-color: #0A2540; 
+    box-shadow: 0 8px 30px rgba(10, 37, 64, 0.35);
+}
+.patient-group-card.has-backdated::before { 
+    background: linear-gradient(135deg, rgba(10, 37, 64, 0.25), rgba(30, 58, 95, 0.15)); 
+}
+.patient-group-card.has-backdated:hover {
+    border-color: #1E3A5F;
+    box-shadow: 0 12px 40px rgba(10, 37, 64, 0.45);
+}
+.patient-group-card.has-backdated .patient-info-header {
+    background: linear-gradient(135deg, #0A2540 0%, #1E3A5F 50%, #1E40AF 100%);
+}
+
 .patient-info-header { background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #7C3AED 100%); padding: 18px 24px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 16px; position: relative; overflow: hidden; cursor: pointer; }
 .patient-info-header::before { content: ''; position: absolute; top: -50%; right: -10%; width: 300px; height: 300px; background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%); border-radius: 50%; pointer-events: none; z-index: 0; }
 .patient-info-header > * { position: relative; z-index: 1; }
@@ -1246,6 +1356,13 @@ mark.search-highlight {
 .partial-badge { background: linear-gradient(135deg, #FCD34D, #F59E0B); color: #78350F; padding: 3px 10px; border-radius: 12px; font-size: 0.6rem; font-weight: 800; text-transform: uppercase; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 2px 8px rgba(245,158,11,0.5); border: 1px solid rgba(255,255,255,0.3); }
 .pending-badge { background: linear-gradient(135deg, #F87171, #DC2626); color: white; padding: 3px 10px; border-radius: 12px; font-size: 0.6rem; font-weight: 800; text-transform: uppercase; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 2px 8px rgba(220,38,38,0.5); border: 1px solid rgba(255,255,255,0.3); }
 
+/* ✅ V65: Backdated badge */
+.backdated-badge { background: linear-gradient(135deg, #0A2540, #1E3A5F); color: white; padding: 3px 10px; border-radius: 12px; font-size: 0.6rem; font-weight: 800; text-transform: uppercase; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 2px 8px rgba(10,37,64,0.6); border: 1px solid rgba(255,255,255,0.3); animation: backdatedPulse 2s infinite; }
+@keyframes backdatedPulse {
+    0%, 100% { box-shadow: 0 2px 8px rgba(10,37,64,0.6); }
+    50% { box-shadow: 0 2px 16px rgba(10,37,64,0.9); }
+}
+
 .patient-footer { background: linear-gradient(135deg, rgba(11, 94, 215, 0.08), rgba(124, 58, 237, 0.05)); padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; border-top: 2px dashed var(--primary); }
 .patient-footer .footer-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .patient-footer .footer-end-label { display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem; font-weight: 900; color: var(--primary); text-transform: uppercase; }
@@ -1256,8 +1373,71 @@ mark.search-highlight {
 .patient-footer .footer-stat.success strong { color: var(--success); }
 .patient-footer .footer-stat.danger strong { color: var(--danger); }
 
+/* ✅ V65: Backdated patient footer */
+.patient-group-card.has-backdated .patient-footer {
+    background: linear-gradient(135deg, rgba(10, 37, 64, 0.12), rgba(30, 58, 95, 0.08));
+    border-top-color: #0A2540;
+}
+.patient-group-card.has-backdated .patient-footer .footer-end-label { color: #0A2540; }
+
 .visit-section { border-top: 2px solid var(--border-color); padding: 0; }
 .visit-section:first-of-type { border-top: none; }
+
+/* ✅ V65: BACKDATED VISIT SECTION - DARK BLUE */
+.visit-section.is-backdated .visit-header-row1 {
+    background: linear-gradient(135deg, #0A2540, #1E3A5F);
+    border-bottom: 2px solid #1E40AF;
+}
+.visit-section.is-backdated .visit-number-badge {
+    background: linear-gradient(135deg, #0A2540, #1E40AF);
+    box-shadow: 0 4px 12px rgba(10, 37, 64, 0.5);
+}
+.visit-section.is-backdated .visit-date-badge {
+    color: #DBEAFE;
+    font-weight: 800;
+}
+.visit-section.is-backdated .visit-info-right .visit-staff-chip {
+    background: rgba(255,255,255,0.12);
+    border-color: rgba(255,255,255,0.25);
+    color: white;
+}
+.visit-section.is-backdated .visit-info-right .visit-staff-chip i {
+    color: #93C5FD;
+}
+.visit-section.is-backdated .visit-info-right .visit-staff-chip .staff-label {
+    color: rgba(255,255,255,0.75);
+}
+.visit-section.is-backdated .visit-info-right .visit-staff-chip .staff-name {
+    color: white;
+}
+
+.visit-section.is-backdated .visit-status-badge {
+    background: rgba(255,255,255,0.15);
+    color: #DBEAFE;
+    border-color: rgba(255,255,255,0.3);
+}
+
+.visit-section.is-backdated {
+    border-top: 3px solid #0A2540;
+    position: relative;
+}
+.visit-section.is-backdated::before {
+    content: '📅 BACKDATED';
+    position: absolute;
+    top: -12px;
+    left: 20px;
+    background: linear-gradient(135deg, #0A2540, #1E40AF);
+    color: white;
+    padding: 3px 12px;
+    border-radius: 20px;
+    font-size: 0.6rem;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    box-shadow: 0 4px 12px rgba(10, 37, 64, 0.5);
+    border: 1.5px solid rgba(255,255,255,0.3);
+    z-index: 10;
+    animation: backdatedPulse 2s infinite;
+}
 
 .visit-header-row1 { background: linear-gradient(135deg, rgba(11, 94, 215, 0.08), rgba(124, 58, 237, 0.05)); padding: 14px 20px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid var(--border-color); }
 .visit-info-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -1344,7 +1524,7 @@ mark.search-highlight {
 .scroll-btn:hover { background: var(--primary); color: white; border-color: var(--primary); transform: translateY(-2px); }
 
 /* ================================================================
-   ✅ V64: PAYMENT HISTORY CARD - TOGGLEABLE
+   ✅ V65: PAYMENT HISTORY CARD - TOGGLEABLE WITH BACKDATE STYLING
    ================================================================ */
 .visit-payment-history-card {
     background: var(--bg-card);
@@ -1357,6 +1537,16 @@ mark.search-highlight {
 .visit-payment-history-card:hover {
     box-shadow: 0 6px 20px rgba(5, 150, 105, 0.25);
     border-color: #10B981;
+}
+
+/* ✅ V65: Backdated payment history card */
+.visit-section.is-backdated .visit-payment-history-card {
+    border-color: #0A2540;
+    box-shadow: 0 4px 12px rgba(10, 37, 64, 0.35);
+}
+.visit-section.is-backdated .visit-payment-history-card:hover {
+    box-shadow: 0 6px 20px rgba(10, 37, 64, 0.45);
+    border-color: #1E3A5F;
 }
 
 .vph-header {
@@ -1384,6 +1574,14 @@ mark.search-highlight {
 .vph-header:hover::before { left: 100%; }
 .vph-header:hover {
     background: linear-gradient(135deg, #047857, #065F46);
+}
+
+/* ✅ V65: Backdated VPH header */
+.visit-section.is-backdated .vph-header {
+    background: linear-gradient(135deg, #0A2540, #1E40AF);
+}
+.visit-section.is-backdated .vph-header:hover {
+    background: linear-gradient(135deg, #1E3A5F, #1E40AF);
 }
 
 .vph-title {
@@ -1503,6 +1701,16 @@ mark.search-highlight {
 [data-theme="dark"] .vph-received-summary {
     background: linear-gradient(135deg, #12294A, #0F2340);
 }
+
+/* ✅ V65: Backdated received summary */
+.visit-section.is-backdated .vph-received-summary {
+    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+    border-color: rgba(10, 37, 64, 0.3);
+}
+[data-theme="dark"] .visit-section.is-backdated .vph-received-summary {
+    background: linear-gradient(135deg, #0A2540, #1E3A5F);
+}
+
 .vph-received-label {
     display: inline-flex;
     align-items: center;
@@ -1514,6 +1722,15 @@ mark.search-highlight {
     letter-spacing: 0.08em;
     margin-bottom: 10px;
 }
+
+/* ✅ V65: Backdated received label */
+.visit-section.is-backdated .vph-received-label {
+    color: #0A2540;
+}
+[data-theme="dark"] .visit-section.is-backdated .vph-received-label {
+    color: #93C5FD;
+}
+
 .vph-received-items {
     display: flex;
     gap: 8px;
@@ -1567,7 +1784,6 @@ mark.search-highlight {
     gap: 8px;
 }
 
-/* Received By Item with Amounts */
 .received-by-summary {
     display: flex;
     flex-direction: column;
@@ -1655,7 +1871,6 @@ mark.search-highlight {
 .received-by-item.user { background: #F1F5F9; color: #64748B; border-color: rgba(100, 116, 139, 0.2); }
 .received-by-item.user .rb-amount { background: rgba(100, 116, 139, 0.15); color: #64748B; }
 
-/* Payment Item */
 .payment-item {
     display: flex;
     justify-content: space-between;
@@ -1676,6 +1891,22 @@ mark.search-highlight {
     transform: translateX(2px);
 }
 .payment-item:last-child { margin-bottom: 0; }
+
+/* ✅ V65: Backdated payment item */
+.visit-section.is-backdated .payment-item {
+    border-left-color: #0A2540;
+    background: linear-gradient(135deg, #EFF6FF, #DBEAFE);
+}
+.visit-section.is-backdated .payment-item:hover {
+    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+    border-left-color: #1E40AF;
+}
+[data-theme="dark"] .visit-section.is-backdated .payment-item {
+    background: linear-gradient(135deg, #0A2540, #1E3A5F);
+}
+[data-theme="dark"] .visit-section.is-backdated .payment-item:hover {
+    background: linear-gradient(135deg, #1E3A5F, #1E40AF);
+}
 
 .payment-left { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; flex: 1; min-width: 0; }
 .payment-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
@@ -1739,6 +1970,17 @@ mark.search-highlight {
 .data-table tbody tr.item-pending td { background: linear-gradient(90deg, rgba(217, 119, 6, 0.04), transparent) !important; }
 .data-table tbody tr.item-pending:hover td { background: linear-gradient(90deg, rgba(217, 119, 6, 0.12), rgba(217, 119, 6, 0.05)) !important; }
 
+/* ✅ V65: Backdated visit items table */
+.visit-section.is-backdated .data-table thead th {
+    background: linear-gradient(135deg, #0A2540, #1E40AF);
+}
+.visit-section.is-backdated .data-table tbody tr:hover td {
+    background: linear-gradient(90deg, #DBEAFE, #EFF6FF);
+}
+[data-theme="dark"] .visit-section.is-backdated .data-table tbody tr:hover td {
+    background: linear-gradient(90deg, #0A2540, #1E3A5F);
+}
+
 .money-cell { font-family: var(--font-mono); font-weight: 800; font-size: 0.82rem; color: var(--success); text-align: right; white-space: nowrap; }
 .money-cell .currency-prefix { font-size: 0.65rem; color: var(--text-secondary); margin-right: 3px; font-weight: 600; }
 .money-cell.warning { color: #D97706 !important; }
@@ -1794,6 +2036,17 @@ mark.search-highlight {
 .category-group-row td .category-breakdown { float: right; display: inline-flex; gap: 6px; align-items: center; margin-right: 12px; }
 .category-group-row td .category-breakdown .cb-paid { font-size: 0.62rem; font-weight: 800; color: #059669; background: #D1FAE5; padding: 2px 8px; border-radius: 6px; font-family: var(--font-mono); border: 1px solid rgba(5, 150, 105, 0.3); }
 .category-group-row td .category-breakdown .cb-pending { font-size: 0.62rem; font-weight: 800; color: #DC2626; background: #FEE2E2; padding: 2px 8px; border-radius: 6px; font-family: var(--font-mono); border: 1px solid rgba(220, 38, 38, 0.3); }
+
+/* ✅ V65: Backdated category rows */
+.visit-section.is-backdated .category-group-row td {
+    background: linear-gradient(135deg, rgba(10, 37, 64, 0.1), rgba(30, 64, 175, 0.06)) !important;
+    color: #0A2540;
+    border-bottom-color: #0A2540 !important;
+}
+[data-theme="dark"] .visit-section.is-backdated .category-group-row td {
+    background: linear-gradient(135deg, rgba(10, 37, 64, 0.4), rgba(30, 64, 175, 0.2)) !important;
+    color: #93C5FD;
+}
 
 .otc-sale-card { background: var(--bg-card); border: 2px solid var(--cyan); border-radius: var(--radius-lg); margin: 16px; overflow: hidden; box-shadow: 0 4px 16px rgba(8, 145, 178, 0.1); transition: all 0.3s ease; }
 .otc-sale-card:hover { box-shadow: 0 8px 28px rgba(8, 145, 178, 0.2); border-color: var(--cyan-light); }
@@ -1893,6 +2146,7 @@ mark.search-highlight {
     .otc-sale-card { break-inside: avoid; }
     .patient-body-container { max-height: none !important; }
     .vph-body { max-height: none !important; padding: 16px 18px !important; }
+    .visit-section.is-backdated::before { display: none !important; }
 }
 </style>
 </head>
@@ -1905,10 +2159,10 @@ mark.search-highlight {
         <div>
             <h1 class="page-title">
                 <i class="fas fa-chart-line"></i>
-                Revenue Report V64
+                Revenue Report V65
                 <span class="branch-tag" style="background:rgba(255,255,255,0.25);"><i class="fas fa-shield-alt"></i> AUDIT</span>
                 <span class="branch-tag readonly-tag"><i class="fas fa-lock"></i> READ-ONLY</span>
-                <span class="branch-tag recv-tag"><i class="fas fa-user-check"></i> RECEIVED BY</span>
+                <span class="branch-tag backdated-tag"><i class="fas fa-history"></i> BACKDATED</span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-user-circle"></i>
@@ -2001,7 +2255,6 @@ mark.search-highlight {
 
     <!-- 8 CARDS -->
     <div class="stats-grid-8">
-        <!-- TOTAL REVENUE -->
         <div class="stat-card revenue">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-money-bill-wave"></i></div>
@@ -2014,7 +2267,6 @@ mark.search-highlight {
             <div class="card-footer"><i class="fas fa-info-circle"></i> Payments + OTC</div>
         </div>
 
-        <!-- PATIENT PAYMENTS -->
         <div class="stat-card payments">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-file-invoice"></i></div>
@@ -2036,7 +2288,6 @@ mark.search-highlight {
             </div>
         </div>
 
-        <!-- PRESCRIPTION (GROSS) -->
         <div class="stat-card prescription">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-prescription"></i></div>
@@ -2049,7 +2300,6 @@ mark.search-highlight {
             <div class="card-footer"><i class="fas fa-list"></i> Items: <span class="highlight"><?= number_format($prescription_count) ?></span></div>
         </div>
 
-        <!-- OTC CARD -->
         <div class="stat-card otc">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-cash-register"></i></div>
@@ -2071,7 +2321,6 @@ mark.search-highlight {
             </div>
         </div>
 
-        <!-- CLINICAL SERVICES -->
         <div class="stat-card consultation">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-stethoscope"></i></div>
@@ -2097,7 +2346,6 @@ mark.search-highlight {
             </div>
         </div>
 
-        <!-- LAB TESTS -->
         <div class="stat-card lab">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-flask"></i></div>
@@ -2110,7 +2358,6 @@ mark.search-highlight {
             <div class="card-footer"><i class="fas fa-check-circle"></i> Tests: <span class="highlight"><?= number_format($lab_count) ?></span></div>
         </div>
 
-        <!-- EXPENSES -->
         <div class="stat-card expenses">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-receipt"></i></div>
@@ -2123,7 +2370,6 @@ mark.search-highlight {
             <div class="card-footer"><i class="fas fa-list"></i> Records: <span class="highlight"><?= number_format($expenses_count) ?></span></div>
         </div>
 
-        <!-- PROFIT -->
         <div class="stat-card profit <?= $net_profit < 0 ? 'loss' : '' ?>">
             <div class="card-top">
                 <div class="card-icon"><i class="fas fa-<?= $net_profit >= 0 ? 'chart-line' : 'exclamation-triangle' ?>"></i></div>
@@ -2336,12 +2582,19 @@ mark.search-highlight {
             
             $card_class = '';
             $status_badge_html = '';
+            
+            // ✅ V65: Priority - Backdated > Pending > Partial
+            if (!empty($patient['has_backdated'])) {
+                $card_class = 'has-backdated';
+                $status_badge_html = '<span class="backdated-badge"><i class="fas fa-history"></i> BACKDATED</span>';
+            }
+            
             if ($patient['has_pending']) {
-                $card_class = 'has-pending';
-                $status_badge_html = '<span class="pending-badge"><i class="fas fa-clock"></i> PENDING</span>';
+                if (empty($card_class)) $card_class = 'has-pending';
+                $status_badge_html .= '<span class="pending-badge"><i class="fas fa-clock"></i> PENDING</span>';
             } elseif ($patient['has_partial']) {
-                $card_class = 'has-partial';
-                $status_badge_html = '<span class="partial-badge"><i class="fas fa-hourglass-half"></i> PARTIAL</span>';
+                if (empty($card_class)) $card_class = 'has-partial';
+                $status_badge_html .= '<span class="partial-badge"><i class="fas fa-hourglass-half"></i> PARTIAL</span>';
             }
         ?>
         <div class="patient-group-card <?= $card_class ?>" id="patientCard_<?= $patient_index ?>">
@@ -2418,7 +2671,6 @@ mark.search-highlight {
                 $v_visit_paid = (float)($visit['visit_paid'] ?? 0);
                 $v_visit_balance = (float)($visit['visit_balance'] ?? 0);
                 
-                // V64: Collect ALL payments for this visit's bills
                 $visit_all_payments = [];
                 $visit_bills_with_payments = [];
                 foreach ($visit['bills'] as $v_bill) {
@@ -2434,15 +2686,21 @@ mark.search-highlight {
                     }
                 }
                 
-                // V64: Calculate totals for toggle header
                 $visit_total_paid_amount = 0;
                 foreach ($visit_all_payments as $vp) {
                     $visit_total_paid_amount += (float)($vp['amount'] ?? 0);
                 }
                 $visit_payment_count = count($visit_all_payments);
                 $visit_received_summary = buildReceivedBySummary($visit_all_payments);
+                
+                // ✅ V65: Determine if visit is backdated
+                $visit_is_backdated = !empty($visit['is_backdated']) || !empty($visit['is_old_visit']);
+                $visit_section_class = $visit_is_backdated ? 'is-backdated' : '';
+                
+                // ✅ V65: Get visit date formatted
+                $visit_date_formatted = !empty($visit['visit_date']) ? date('d M Y', strtotime($visit['visit_date'])) : 'N/A';
             ?>
-            <div class="visit-section">
+            <div class="visit-section <?= $visit_section_class ?>">
                 
                 <div class="visit-header-row1">
                     <div class="visit-info-left">
@@ -2517,7 +2775,6 @@ mark.search-highlight {
                     </div>
                 </div>
 
-                <!-- ✅ V64: PAYMENT HISTORY - TOGGLE -->
                 <?php if (count($visit_bills_with_payments) > 0): ?>
                 <div style="padding: 0 20px 14px;">
                     <div class="visit-payment-history-card" id="paymentHistoryCard_<?= $patient_index ?>_<?= $visit_index ?>">
@@ -2526,10 +2783,20 @@ mark.search-highlight {
                             <div class="vph-title">
                                 <span class="vph-icon"><i class="fas fa-receipt"></i></span>
                                 <div class="vph-title-text">
-                                    <span class="vph-main">Payment History</span>
+                                    <span class="vph-main">
+                                        Payment History
+                                        <?php if ($visit_is_backdated): ?>
+                                            <span style="font-size:0.6rem;background:rgba(255,255,255,0.25);padding:2px 8px;border-radius:8px;margin-left:6px;font-weight:800;">
+                                                <i class="fas fa-history"></i> BACKDATED
+                                            </span>
+                                        <?php endif; ?>
+                                    </span>
                                     <span class="vph-sub">
                                         <i class="fas fa-list"></i> <?= $visit_payment_count ?> payment<?= $visit_payment_count != 1 ? 's' : '' ?>
                                         • <?= count($visit_bills_with_payments) ?> bill<?= count($visit_bills_with_payments) != 1 ? 's' : '' ?>
+                                        <?php if ($visit_is_backdated): ?>
+                                            • Visit: <?= $visit_date_formatted ?>
+                                        <?php endif; ?>
                                     </span>
                                 </div>
                             </div>
@@ -2604,6 +2871,8 @@ mark.search-highlight {
                                                 if (strpos($payment['payment_method'] ?? '', 'pesa') !== false || strpos($payment['payment_method'] ?? '', 'mpesa') !== false) $method_icon = 'mobile-alt';
                                                 elseif ($payment['payment_method'] === 'bank') $method_icon = 'university';
                                                 elseif ($payment['payment_method'] === 'card') $method_icon = 'credit-card';
+                                                
+                                                $payment_is_backdated = isBackdatedVisit($visit['visit_date'], $payment['received_at']);
                                             ?>
                                                 <div class="payment-item">
                                                     <div class="payment-left">
@@ -2621,7 +2890,7 @@ mark.search-highlight {
                                                             <span class="currency-prefix"><?= $currency ?></span>
                                                             <span class="amount-value"><?= number_format((float)($payment['amount'] ?? 0), 0) ?></span>
                                                         </span>
-                                                        <span class="payment-date">
+                                                        <span class="payment-date" style="<?= $payment_is_backdated ? 'background:#DBEAFE;color:#0A2540;font-weight:800;' : '' ?>">
                                                             <i class="far fa-calendar"></i>
                                                             <?= date('d M Y, h:i A', strtotime($payment['received_at'])) ?>
                                                         </span>
@@ -2906,6 +3175,11 @@ mark.search-highlight {
                     <span class="footer-visit-count">
                         <i class="fas fa-notes-medical"></i> <?= $visit_count ?> Visit<?= $visit_count != 1 ? 's' : '' ?>
                     </span>
+                    <?php if (!empty($patient['has_backdated'])): ?>
+                    <span class="footer-visit-count" style="background:linear-gradient(135deg, #0A2540, #1E3A5F);color:white;font-weight:800;">
+                        <i class="fas fa-history"></i> BACKDATED
+                    </span>
+                    <?php endif; ?>
                 </div>
                 <div class="footer-right">
                     <span class="footer-stat">
@@ -3360,7 +3634,7 @@ mark.search-highlight {
 
 <script>
 // ================================================================
-// ✅ V64: TOGGLE PAYMENT HISTORY
+// ✅ V65: TOGGLE PAYMENT HISTORY
 // ================================================================
 function togglePaymentHistory(patientIndex, visitIndex) {
     var body = document.getElementById('paymentHistoryBody_' + patientIndex + '_' + visitIndex);
@@ -3377,7 +3651,6 @@ function togglePaymentHistory(patientIndex, visitIndex) {
     }
 }
 
-// ✅ V64: Toggle ALL Payment Histories
 var allPaymentHistoriesExpanded = false;
 function toggleAllPaymentHistories() {
     var bodies = document.querySelectorAll('.vph-body');
@@ -3729,8 +4002,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-console.log('%c📊 Audit Revenue Report V64 - RECEIVED BY + TOGGLE', 'font-size:18px; font-weight:bold; color:#7C3AED;');
-console.log('%c✅ V64: Received By (Grouped) na AMOUNTS + DATES', 'font-size:13px; color:#7C3AED; font-weight:bold;');
+console.log('%c📊 Audit Revenue Report V65 - PAYMENT DATE GROUPING + BACKDATED', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+console.log('%c✅ V65: Group by PAYMENT DATE (not visit date)', 'font-size:13px; color:#0A2540; font-weight:bold;');
+console.log('%c✅ V65: Backdated visits have DARK BLUE color', 'font-size:13px; color:#0A2540; font-weight:bold;');
+console.log('%c✅ V65: Visit date preserved (shows service date)', 'font-size:13px; color:#0A2540; font-weight:bold;');
+console.log('%c✅ V65: Each payment shows its own Received By', 'font-size:13px; color:#0A2540; font-weight:bold;');
 console.log('%c✅ V64: Payment History - TOGGLE button', 'font-size:13px; color:#7C3AED; font-weight:bold;');
 console.log('%c✅ V64: Expand All / Collapse All', 'font-size:13px; color:#7C3AED; font-weight:bold;');
 console.log('%c✅ V64: READ-ONLY (Audit hawaruhusiwi kufuta)', 'font-size:13px; color:#64748B; font-weight:bold;');
