@@ -2,18 +2,13 @@
 // ================================================================
 // FILE: frontend/components/reception_sidebar.php
 // RECEPTION - SHARED SIDEBAR (BLUE BACKGROUND)
-// WITH LOGIN SESSION PROTECTION
-// WITH SERVICES SECTION - SHOWS ALL SERVICES FROM services TABLE
-// ✅ V10: TOGGLE BUTTON (HAMBURGER) - MOBILE ONLY (kama cashier)
-// ✅ V10: Desktop = sidebar always visible (fixed)
-// ✅ V10: Mobile = sidebar hidden, toggle inafungua
-// ✅ JINA NA LOGO KUTOKA system_settings TABLE
-// ✅ MENU MPANGILIO MPYA
-// FULLY RESPONSIVE - ALL DEVICES
+// ✅ V10: TOGGLE BUTTON (HAMBURGER) - MOBILE ONLY
+// ✅ NEW: Daily Activities menu (below Appointments)
+// ✅ NEW: Online/Offline status from DB (FIXED - inabaki online)
+// ✅ FIXED: Heartbeat update last_online kila page load
+// ✅ FIXED: AJAX handler ina-update last_online kila request
+// ✅ FIXED: is_online = 1 inatumwa kila mara
 // BRAICK DISPENSARY
-// ✅ FIXED: Assign Doctor | Lab Test shows BOTH counts separately
-//    - Assign Doctor: count visits with doctor_id assigned (assigned status)
-//    - Lab Test: count lab_tests with doctor_id IS NULL (direct lab requests)
 // ================================================================
 
 // ================================================================
@@ -24,7 +19,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN SESSION PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN SESSION PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: /dispensary_system/frontend/pages/login.php');
@@ -80,7 +75,48 @@ try {
 }
 
 // ================================================================
-// ✅ GET SYSTEM SETTINGS - JINA NA LOGO LA DISPENSARY
+// ✅ HEARTBEAT: Update user online status kila page load
+// ================================================================
+if ($db !== null && $user_id > 0) {
+    try {
+        $stmt = $db->prepare("UPDATE users SET is_online = 1, last_online = NOW() WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $_SESSION['is_online'] = 1;
+    } catch (Exception $e) {
+        error_log("Heartbeat error: " . $e->getMessage());
+    }
+}
+
+// ================================================================
+// ✅ GET USER ONLINE STATUS FROM DATABASE
+// ================================================================
+$user_is_online = 0;
+if ($db !== null && $user_id > 0) {
+    try {
+        $stmt = $db->prepare("SELECT is_online, last_online FROM users WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $user_status = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($user_status) {
+            $is_online_db = (int)($user_status['is_online'] ?? 0);
+            $last_online = $user_status['last_online'] ?? null;
+            
+            if ($is_online_db === 1) {
+                $user_is_online = 1;
+            } elseif ($last_online && (time() - strtotime($last_online)) < 300) {
+                $user_is_online = 1;
+            } else {
+                $user_is_online = 0;
+            }
+            $_SESSION['is_online'] = $user_is_online;
+        }
+    } catch (Exception $e) {
+        $user_is_online = $_SESSION['is_online'] ?? 1;
+    }
+}
+
+// ================================================================
+// ✅ GET SYSTEM SETTINGS - JINA NA LOGO
 // ================================================================
 $site_name = 'Braick Dispensary';
 $site_logo = '';
@@ -101,15 +137,11 @@ if ($db !== null) {
         if ($result && !empty($result['setting_value'])) {
             $site_logo = $result['setting_value'];
         }
-        
     } catch (Exception $e) {
         error_log("Error fetching system settings: " . $e->getMessage());
     }
 }
 
-// ================================================================
-// ✅ SITE LOGO PATH
-// ================================================================
 if (!empty($site_logo)) {
     $site_logo_path = '/dispensary_system/frontend/assets/uploads/settings/' . $site_logo;
 } else {
@@ -118,17 +150,16 @@ if (!empty($site_logo)) {
 
 // ================================================================
 // GET REAL DATA FOR BADGES
-// ✅ FIXED: Separate counts for Assign Doctor and Lab Test
 // ================================================================
 $patient_count = 0;
 $appointment_count = 0;
 $pending_appointments = 0;
 $today_visits = 0;
 $services_count = 0;
-
-// ✅ NEW: Separate counts
-$assigned_doctor_count = 0;   // Visits with doctor_id assigned
-$lab_test_count = 0;          // Lab tests with doctor_id IS NULL (direct lab requests)
+$assigned_doctor_count = 0;
+$lab_test_count = 0;
+$daily_activities_count = 0;
+$today_daily_activities = 0;
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
@@ -152,10 +183,7 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // ============================================================
-        // ✅ 5. ASSIGN DOCTOR COUNT
-        // Count visits with doctor_id assigned (waiting to be seen by doctor)
-        // ============================================================
+        // 5. ASSIGN DOCTOR COUNT
         $stmt = $db->prepare("
             SELECT COUNT(DISTINCT v.id) as count 
             FROM visits v 
@@ -166,10 +194,7 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $assigned_doctor_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // ============================================================
-        // ✅ 6. LAB TEST COUNT
-        // Count visits with direct lab requests (no doctor assigned)
-        // ============================================================
+        // 6. LAB TEST COUNT
         $stmt = $db->prepare("
             SELECT COUNT(DISTINCT lt.visit_id) as count 
             FROM lab_tests lt 
@@ -182,14 +207,24 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id, $user_branch_id]);
         $lab_test_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // ============================================================
         // 7. Services count
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM services WHERE branch_id = ? OR branch_id IS NULL");
         $stmt->execute([$user_branch_id]);
         $services_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // Log for debugging
-        error_log("Reception Sidebar - Patients: $patient_count, Assigned Doctor: $assigned_doctor_count, Lab Test: $lab_test_count");
+        // 8. Daily Activities kwa receptionist huyu
+        try {
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ?");
+            $stmt->execute([$user_id]);
+            $daily_activities_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ? AND activity_date = CURDATE()");
+            $stmt->execute([$user_id]);
+            $today_daily_activities = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) {
+            $daily_activities_count = 0;
+            $today_daily_activities = 0;
+        }
         
     } catch (Exception $e) {
         error_log("Reception sidebar stats error: " . $e->getMessage());
@@ -234,8 +269,145 @@ $initial_hash = md5(json_encode([
     'today_visits' => $today_visits,
     'assigned_doctor_count' => $assigned_doctor_count,
     'lab_test_count' => $lab_test_count,
-    'services_count' => $services_count
+    'services_count' => $services_count,
+    'daily_activities' => $daily_activities_count,
+    'today_daily_activities' => $today_daily_activities,
+    'is_online' => $user_is_online
 ]));
+
+// ================================================================
+// ✅ AJAX HANDLER - WITH HEARTBEAT
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_reception_sidebar_data') {
+    header('Content-Type: application/json');
+    
+    // ✅ HEARTBEAT: Update last_online kila AJAX request
+    if ($db !== null && isset($_SESSION['user_id'])) {
+        try {
+            $stmt = $db->prepare("UPDATE users SET is_online = 1, last_online = NOW() WHERE id = ?");
+            $stmt->execute([$_SESSION['user_id']]);
+        } catch (Exception $e) {}
+    }
+    
+    $branch_id = (int)($_POST['branch_id'] ?? 1);
+    $client_hash = $_POST['hash'] ?? '';
+    
+    $response = ['success' => false, 'has_changed' => false, 'hash' => '', 'data' => null];
+    
+    try {
+        // Re-fetch data
+        $data = [
+            'patients' => 0,
+            'appointments' => 0,
+            'pending_appointments' => 0,
+            'today_visits' => 0,
+            'assigned_doctor_count' => 0,
+            'lab_test_count' => 0,
+            'services_count' => 0,
+            'daily_activities' => 0,
+            'today_daily_activities' => 0,
+            'is_online' => 1  // ✅ Always 1 kwa sababu AJAX inafanya kazi
+        ];
+        
+        if ($db !== null) {
+            // 1. Patients
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
+            $stmt->execute([$branch_id]);
+            $data['patients'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 2. Today's appointments
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND DATE(appointment_date) = CURDATE()");
+            $stmt->execute([$branch_id]);
+            $data['appointments'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 3. Pending appointments
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND status IN ('scheduled', 'pending')");
+            $stmt->execute([$branch_id]);
+            $data['pending_appointments'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 4. Today's visits
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
+            $stmt->execute([$branch_id]);
+            $data['today_visits'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 5. Assigned Doctor
+            $stmt = $db->prepare("
+                SELECT COUNT(DISTINCT v.id) as count 
+                FROM visits v 
+                WHERE v.branch_id = ? 
+                AND v.doctor_id IS NOT NULL
+                AND v.status IN ('assigned', 'pending')
+            ");
+            $stmt->execute([$branch_id]);
+            $data['assigned_doctor_count'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 6. Lab Test
+            $stmt = $db->prepare("
+                SELECT COUNT(DISTINCT lt.visit_id) as count 
+                FROM lab_tests lt 
+                INNER JOIN visits v ON lt.visit_id = v.id
+                WHERE lt.branch_id = ? 
+                AND lt.doctor_id IS NULL
+                AND lt.status IN ('pending', 'in_progress')
+                AND v.branch_id = ?
+            ");
+            $stmt->execute([$branch_id, $branch_id]);
+            $data['lab_test_count'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 7. Services
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM services WHERE branch_id = ? OR branch_id IS NULL");
+            $stmt->execute([$branch_id]);
+            $data['services_count'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 8. Daily Activities
+            $user_id = $_SESSION['user_id'] ?? 0;
+            if ($user_id > 0) {
+                try {
+                    $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ?");
+                    $stmt->execute([$user_id]);
+                    $data['daily_activities'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+                    
+                    $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ? AND activity_date = CURDATE()");
+                    $stmt->execute([$user_id]);
+                    $data['today_daily_activities'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+                } catch (Exception $e) {
+                    $data['daily_activities'] = 0;
+                    $data['today_daily_activities'] = 0;
+                }
+            }
+        }
+        
+        // Generate hash
+        $hash = md5(json_encode([
+            'patients' => $data['patients'],
+            'appointments' => $data['appointments'],
+            'pending_appointments' => $data['pending_appointments'],
+            'today_visits' => $data['today_visits'],
+            'assigned_doctor_count' => $data['assigned_doctor_count'],
+            'lab_test_count' => $data['lab_test_count'],
+            'services_count' => $data['services_count'],
+            'daily_activities' => $data['daily_activities'],
+            'today_daily_activities' => $data['today_daily_activities'],
+            'is_online' => 1
+        ]));
+        
+        $response['hash'] = $hash;
+        $response['has_changed'] = ($client_hash !== $hash);
+        
+        if ($response['has_changed'] || empty($client_hash)) {
+            $response['data'] = $data;
+        }
+        
+        $response['success'] = true;
+        
+    } catch (Exception $e) {
+        $response['success'] = false;
+        $response['message'] = $e->getMessage();
+    }
+    
+    echo json_encode($response);
+    exit;
+}
 
 // ================================================================
 // PASS DATA TO JAVASCRIPT
@@ -248,6 +420,9 @@ $initial_data = [
     'assigned_doctor_count' => $assigned_doctor_count,
     'lab_test_count' => $lab_test_count,
     'services_count' => $services_count,
+    'daily_activities' => $daily_activities_count,
+    'today_daily_activities' => $today_daily_activities,
+    'is_online' => 1,
     'branch_id' => $user_branch_id,
     'branch_name' => $user_branch_name,
     'user_name' => $user_full_name
@@ -255,8 +430,7 @@ $initial_data = [
 ?>
 
 <!-- ================================================================ -->
-<!-- ✅ V10: RECEPTION SIDEBAR TOGGLE BUTTON (HAMBURGER) -->
-<!-- Only shows on mobile/tablet (max-width: 1024px) -->
+<!-- RECEPTION SIDEBAR TOGGLE BUTTON (HAMBURGER) -->
 <!-- ================================================================ -->
 <button class="reception-sidebar-toggle" id="receptionSidebarToggle" aria-label="Open Sidebar" title="Menu">
     <i class="fas fa-bars"></i>
@@ -264,12 +438,10 @@ $initial_data = [
 
 <style>
     /* ================================================================
-       ✅ V10: RECEPTION SIDEBAR TOGGLE BUTTON (HAMBURGER) - MOBILE ONLY
-       Desktop (>1024px): HIDDEN
-       Mobile (<=1024px): VISIBLE
+       RECEPTION SIDEBAR TOGGLE BUTTON (HAMBURGER) - MOBILE ONLY
        ================================================================ */
     .reception-sidebar-toggle {
-        display: none;  /* Hidden by default */
+        display: none;
         position: fixed;
         top: 14px;
         left: 14px;
@@ -301,21 +473,18 @@ $initial_data = [
         color: #FFFFFF;
     }
     
-    /* ✅ SHOW ON MOBILE/TABLET ONLY */
     @media (max-width: 1024px) {
         .reception-sidebar-toggle {
             display: flex;
         }
     }
     
-    /* ✅ HIDE ON DESKTOP */
     @media (min-width: 1025px) {
         .reception-sidebar-toggle {
             display: none !important;
         }
     }
     
-    /* Hide on print */
     @media print {
         .reception-sidebar-toggle {
             display: none !important;
@@ -323,9 +492,8 @@ $initial_data = [
     }
 
     /* ================================================================
-       SIDEBAR STYLES - FULLY FIXED FOR MOBILE
+       SIDEBAR STYLES
        ================================================================ */
-    
     .sidebar {
         position: fixed;
         top: 0;
@@ -348,7 +516,6 @@ $initial_data = [
         box-shadow: 4px 0 30px rgba(0,0,0,0.5);
     }
     
-    /* ✅ DESKTOP: Sidebar ALWAYS visible */
     @media (min-width: 1025px) {
         .sidebar {
             transform: translateX(0) !important;
@@ -383,7 +550,6 @@ $initial_data = [
         transition: opacity 0.3s ease;
     }
     
-    /* ✅ Overlay ONLY on mobile */
     @media (min-width: 1025px) {
         #sidebarOverlay { display: none !important; }
     }
@@ -393,7 +559,7 @@ $initial_data = [
     }
     
     /* ================================================================
-       SIDEBAR BRAND / HEADER - KUTOKA system_settings
+       SIDEBAR BRAND / HEADER
        ================================================================ */
     .sidebar-brand {
         padding: 18px 16px 14px;
@@ -455,7 +621,6 @@ $initial_data = [
         transform: scale(1.05);
     }
     
-    /* Close button ONLY on mobile */
     @media (max-width: 1024px) {
         .sidebar-close-btn { display: block; }
     }
@@ -557,7 +722,8 @@ $initial_data = [
         border-color: #EF4444;
     }
     
-    .sidebar-link .badge.green {
+    .sidebar-link .badge.green,
+    .sidebar-link .badge.success {
         background: #059669;
         border-color: #059669;
     }
@@ -694,7 +860,7 @@ $initial_data = [
     }
     
     /* ================================================================
-       SIDEBAR STATUS (Footer)
+       SIDEBAR STATUS (Footer) - ONLINE/OFFLINE ENHANCED
        ================================================================ */
     .sidebar-status {
         padding: 10px 16px;
@@ -718,22 +884,35 @@ $initial_data = [
         border-radius: 50%;
         display: inline-block;
         transition: all 0.3s ease;
+        flex-shrink: 0;
     }
     
     .sidebar-status .status-dot.online {
         background: #34D399;
-        box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
+        box-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
         animation: pulse-dot 1.5s infinite;
     }
     
     .sidebar-status .status-dot.offline {
         background: #94A3B8;
+        box-shadow: none;
+        animation: none;
     }
     
     .sidebar-status .status-text {
         font-size: 0.7rem;
         color: #D2E3FC;
-        font-weight: 500;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        transition: color 0.3s ease;
+    }
+    
+    .sidebar-status .status-text.online {
+        color: #34D399;
+    }
+    
+    .sidebar-status .status-text.offline {
+        color: #94A3B8;
     }
     
     .sidebar-status .status-time {
@@ -762,7 +941,6 @@ $initial_data = [
     /* ================================================================
        RESPONSIVE BREAKPOINTS
        ================================================================ */
-    
     @media (max-width: 1024px) {
         .sidebar {
             width: 280px;
@@ -925,9 +1103,6 @@ $initial_data = [
         }
     }
     
-    /* ================================================================
-       PRINT HIDE
-       ================================================================ */
     @media print {
         .sidebar {
             display: none !important;
@@ -963,9 +1138,7 @@ $initial_data = [
 <!-- ================================================================ -->
 <aside class="sidebar" id="sidebar" role="navigation" aria-label="Reception Sidebar">
     
-    <!-- ================================================================ -->
-    <!-- ✅ BRAND / HEADER - JINA NA LOGO KUTOKA system_settings -->
-    <!-- ================================================================ -->
+    <!-- BRAND -->
     <div class="sidebar-brand">
         <div class="flex items-center gap-3">
             <img src="<?= $site_logo_path ?>" 
@@ -982,14 +1155,9 @@ $initial_data = [
         </div>
     </div>
     
-    <!-- ================================================================ -->
-    <!-- ✅ NAVIGATION - MPANGILIO MPYA (10 MENUS) -->
-    <!-- ================================================================ -->
+    <!-- NAVIGATION -->
     <nav class="sidebar-nav">
         
-        <!-- ============================================================ -->
-        <!-- RECEPTION MENU -->
-        <!-- ============================================================ -->
         <div class="nav-label">Reception</div>
         
         <!-- 1. Dashboard -->
@@ -1011,24 +1179,17 @@ $initial_data = [
             <span class="badge" id="receptionPatientCount"><?= $patient_count ?></span>
         </a>
         
-        <!-- ============================================================ -->
         <!-- 4. Assign Doctor | Lab Test - DUAL BADGE -->
-        <!-- ============================================================ -->
         <a href="/dispensary_system/frontend/pages/reception/assign_doctor.php" class="sidebar-link <?= isActive('assign_doctor.php') ?>">
             <i class="fas fa-user-md"></i>
             <span class="link-text">Assign Doctor</span>
             <div class="dual-badge-container">
-                <!-- Doctor Badge (Assigned) -->
                 <span class="dual-badge doctor-badge <?= $assigned_doctor_count == 0 ? 'zero' : '' ?>" 
                       id="sidebarAssignedDoctorBadge"
                       title="Visits waiting for doctor">
                     <?= $assigned_doctor_count ?>
                 </span>
-                
-                <!-- Separator -->
                 <span class="dual-badge-separator">|</span>
-                
-                <!-- Lab Test Badge -->
                 <span class="dual-badge lab-badge <?= $lab_test_count == 0 ? 'zero' : '' ?>" 
                       id="sidebarLabTestBadge"
                       title="Direct lab requests (no doctor)">
@@ -1057,6 +1218,24 @@ $initial_data = [
                 <span class="badge danger" id="receptionAppointmentCount"><?= $appointment_count ?></span>
             <?php else: ?>
                 <span class="badge" id="receptionAppointmentCount"><?= $appointment_count ?></span>
+            <?php endif; ?>
+        </a>
+        
+        <!-- ============================================================ -->
+        <!-- ✅ NEW: DAILY ACTIVITIES - CHINI YA APPOINTMENTS -->
+        <!-- ============================================================ -->
+        <a href="/dispensary_system/frontend/pages/reception/daily_activities.php" class="sidebar-link <?= isActive('daily_activities.php') ?>">
+            <i class="fas fa-tasks"></i>
+            <span class="link-text">Daily Activities</span>
+            <?php if ($daily_activities_count > 0): ?>
+                <span class="badge success" id="receptionDailyActivitiesBadge"><?= $daily_activities_count ?></span>
+            <?php else: ?>
+                <span class="badge" id="receptionDailyActivitiesBadge">0</span>
+            <?php endif; ?>
+            <?php if ($today_daily_activities > 0): ?>
+                <span class="badge blue" id="receptionDailyActivitiesTodayBadge" style="margin-left:2px;font-size:0.55rem;">+<?= $today_daily_activities ?></span>
+            <?php else: ?>
+                <span class="badge" id="receptionDailyActivitiesTodayBadge" style="display:none;margin-left:2px;font-size:0.55rem;">+0</span>
             <?php endif; ?>
         </a>
         
@@ -1102,11 +1281,13 @@ $initial_data = [
     </nav>
     
     <!-- ================================================================ -->
-    <!-- SIDEBAR STATUS (Footer) -->
+    <!-- SIDEBAR STATUS (Footer) - ONLINE/OFFLINE FROM DB -->
     <!-- ================================================================ -->
     <div class="sidebar-status">
-        <span class="status-dot online" id="sidebarStatusDot"></span>
-        <span class="status-text" id="sidebarStatusText">Online</span>
+        <span class="status-dot <?= $user_is_online ? 'online' : 'offline' ?>" id="sidebarStatusDot"></span>
+        <span class="status-text <?= $user_is_online ? 'online' : 'offline' ?>" id="sidebarStatusText">
+            <?= $user_is_online ? 'Online' : 'Offline' ?>
+        </span>
         <span class="status-time" id="sidebarStatusTime">
             <span class="live-dot"></span>
             <span id="sidebarLiveTime"><?= date('H:i:s') ?></span>
@@ -1122,10 +1303,11 @@ $initial_data = [
     // CONFIGURATION
     // ================================================================
     var SIDEBAR_CONFIG = {
-        AJAX_URL: '/dispensary_system/backend/api/reception_sidebar_ajax.php',
+        AJAX_URL: window.location.pathname,  // ✅ Same page - AJAX inatumia PHP handler ya juu
         CHECK_INTERVAL: 2000,
         FORCE_INTERVAL: 5000,
         BRANCH_ID: <?= json_encode($user_branch_id) ?>,
+        USER_ID: <?= json_encode($user_id) ?>,
         INITIAL_HASH: '<?= $initial_hash ?>'
     };
     
@@ -1143,11 +1325,11 @@ $initial_data = [
     };
     
     // ================================================================
-    // ✅ V10: SIDEBAR TOGGLE - MOBILE ONLY (kama cashier)
+    // SIDEBAR TOGGLE - MOBILE ONLY
     // ================================================================
     (function() {
         function initSidebar() {
-            console.log('🔧 Initializing Reception Sidebar V10...');
+            console.log('🔧 Initializing Reception Sidebar...');
             
             var sidebar = document.getElementById('sidebar');
             var toggleBtn = document.getElementById('receptionSidebarToggle');
@@ -1159,7 +1341,6 @@ $initial_data = [
                 overlay.id = 'sidebarOverlay';
                 overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9998;display:none;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
                 document.body.appendChild(overlay);
-                console.log('✅ Sidebar overlay created');
             }
             
             if (!sidebar) {
@@ -1172,7 +1353,6 @@ $initial_data = [
                 overlay.style.display = 'block';
                 overlay.classList.add('active');
                 document.body.style.overflow = 'hidden';
-                console.log('🔓 Sidebar opened');
             }
             
             function closeSidebar() {
@@ -1180,7 +1360,6 @@ $initial_data = [
                 overlay.style.display = 'none';
                 overlay.classList.remove('active');
                 document.body.style.overflow = '';
-                console.log('🔒 Sidebar closed');
             }
             
             function toggleSidebar() {
@@ -1191,54 +1370,43 @@ $initial_data = [
                 }
             }
             
-            // ✅ V10: Toggle button (hamburger) - MOBILE ONLY
             if (toggleBtn) {
                 toggleBtn.addEventListener('click', function(e) {
                     e.preventDefault();
                     e.stopPropagation();
-                    console.log('🔘 Hamburger clicked!');
                     toggleSidebar();
                 });
-                console.log('✅ Toggle button attached');
-            } else {
-                console.warn('⚠️ Toggle button not found');
             }
             
-            // Close button (inside sidebar)
             if (closeBtn) {
                 closeBtn.addEventListener('click', function(e) {
                     e.preventDefault();
                     e.stopPropagation();
                     closeSidebar();
                 });
-                console.log('✅ Close button attached');
             }
             
-            // Overlay click
             if (overlay) {
                 overlay.addEventListener('click', function(e) {
                     if (e.target === overlay) {
                         closeSidebar();
                     }
                 });
-                console.log('✅ Overlay click handler attached');
             }
             
-            // ESC key
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape' && sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
             });
             
-            // Auto-close on resize (desktop)
             window.addEventListener('resize', function() {
                 if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
             });
             
-            console.log('✅ Reception Sidebar V10 fully initialized!');
+            console.log('✅ Reception Sidebar fully initialized!');
         }
         
         if (document.readyState === 'loading') {
@@ -1247,6 +1415,37 @@ $initial_data = [
             initSidebar();
         }
     })();
+
+    // ================================================================
+    // ✅ UPDATE USER ONLINE/OFFLINE STATUS (FIXED)
+    // ================================================================
+    function updateUserStatus(data) {
+        // ✅ Kama hakuna data, usibadilishe
+        if (!data) return;
+        
+        // ✅ Kama is_online haipo kwenye data, TUSIBADILISHE
+        if (data.is_online === undefined && data.online_status === undefined) {
+            return;
+        }
+        
+        var statusDot = document.getElementById('sidebarStatusDot');
+        var statusText = document.getElementById('sidebarStatusText');
+        
+        var isOnline = false;
+        if (data.is_online !== undefined) {
+            isOnline = (data.is_online == 1);
+        } else if (data.online_status !== undefined) {
+            isOnline = (data.online_status === 'online');
+        }
+        
+        if (statusDot) {
+            statusDot.className = 'status-dot ' + (isOnline ? 'online' : 'offline');
+        }
+        if (statusText) {
+            statusText.className = 'status-text ' + (isOnline ? 'online' : 'offline');
+            statusText.textContent = isOnline ? 'Online' : 'Offline';
+        }
+    }
 
     // ================================================================
     // UPDATE SIDEBAR BADGES
@@ -1268,7 +1467,6 @@ $initial_data = [
                 patientEl.classList.remove('badge-update');
                 void patientEl.offsetWidth;
                 patientEl.classList.add('badge-update');
-                console.log('🔄 Patients: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -1285,7 +1483,6 @@ $initial_data = [
                 apptEl.classList.remove('badge-update');
                 void apptEl.offsetWidth;
                 apptEl.classList.add('badge-update');
-                console.log('🔄 Appointments: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -1301,13 +1498,10 @@ $initial_data = [
                 visitEl.classList.remove('badge-update');
                 void visitEl.offsetWidth;
                 visitEl.classList.add('badge-update');
-                console.log('🔄 Today Visits: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // ============================================================
-        // 4. ASSIGNED DOCTOR BADGE (DUAL)
-        // ============================================================
+        // 4. ASSIGNED DOCTOR BADGE
         var doctorBadge = document.getElementById('sidebarAssignedDoctorBadge');
         if (doctorBadge && data.assigned_doctor_count !== undefined) {
             var oldVal = doctorBadge.textContent;
@@ -1321,13 +1515,10 @@ $initial_data = [
                 doctorBadge.classList.remove('badge-update');
                 void doctorBadge.offsetWidth;
                 doctorBadge.classList.add('badge-update');
-                console.log('🔄 Assigned Doctor: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // ============================================================
-        // 5. LAB TEST BADGE (DUAL)
-        // ============================================================
+        // 5. LAB TEST BADGE
         var labBadge = document.getElementById('sidebarLabTestBadge');
         if (labBadge && data.lab_test_count !== undefined) {
             var oldVal = labBadge.textContent;
@@ -1341,7 +1532,6 @@ $initial_data = [
                 labBadge.classList.remove('badge-update');
                 void labBadge.offsetWidth;
                 labBadge.classList.add('badge-update');
-                console.log('🔄 Lab Test: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -1357,11 +1547,43 @@ $initial_data = [
                 servicesEl.classList.remove('badge-update');
                 void servicesEl.offsetWidth;
                 servicesEl.classList.add('badge-update');
-                console.log('🔄 Services: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // 7. Update timestamp
+        // 7. Daily Activities Badge
+        var daBadge = document.getElementById('receptionDailyActivitiesBadge');
+        if (daBadge && data.daily_activities !== undefined) {
+            var oldVal = daBadge.textContent;
+            var newVal = data.daily_activities;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                daBadge.textContent = newVal;
+                daBadge.className = parseInt(newVal) > 0 ? 'badge success badge-update' : 'badge badge-update';
+                daBadge.classList.remove('badge-update');
+                void daBadge.offsetWidth;
+                daBadge.classList.add('badge-update');
+            }
+        }
+        
+        // 8. Today Daily Activities Badge
+        var daTodayBadge = document.getElementById('receptionDailyActivitiesTodayBadge');
+        if (daTodayBadge && data.today_daily_activities !== undefined) {
+            var oldVal = daTodayBadge.textContent;
+            var newVal = data.today_daily_activities;
+            if (oldVal !== '+' + newVal) {
+                hasChanges = true;
+                daTodayBadge.textContent = '+' + newVal;
+                daTodayBadge.style.display = newVal > 0 ? 'inline-block' : 'none';
+                daTodayBadge.classList.remove('badge-update');
+                void daTodayBadge.offsetWidth;
+                daTodayBadge.classList.add('badge-update');
+            }
+        }
+        
+        // 9. UPDATE ONLINE/OFFLINE STATUS
+        updateUserStatus(data);
+        
+        // 10. Update timestamp
         var timeEl = document.getElementById('sidebarLiveTime');
         if (timeEl) {
             var now = new Date();
@@ -1400,12 +1622,11 @@ $initial_data = [
         var formData = new FormData();
         formData.append('action', 'get_reception_sidebar_data');
         formData.append('branch_id', SIDEBAR_CONFIG.BRANCH_ID);
+        formData.append('user_id', SIDEBAR_CONFIG.USER_ID);
         formData.append('hash', sidebarState.dataHash);
         if (forceUpdate) {
             formData.append('force_update', '1');
         }
-        
-        console.log('📡 Fetching sidebar data via AJAX... (force: ' + (forceUpdate ? 'YES' : 'NO') + ')');
         
         fetch(SIDEBAR_CONFIG.AJAX_URL, {
             method: 'POST',
@@ -1422,8 +1643,6 @@ $initial_data = [
             sidebarState.isUpdating = false;
             
             if (data.success) {
-                console.log('📥 AJAX Response: has_changed=' + data.has_changed + ', hash=' + data.hash);
-                
                 if (data.has_changed && data.data) {
                     updateSidebarBadges(data.data);
                     sidebarState.dataHash = data.hash;
@@ -1439,8 +1658,6 @@ $initial_data = [
                     });
                     document.dispatchEvent(event);
                     
-                    console.log('✅ Sidebar data updated at:', sidebarState.lastUpdate.toLocaleTimeString());
-                    
                 } else if (data.has_changed === false) {
                     var timeEl = document.getElementById('sidebarLiveTime');
                     if (timeEl) {
@@ -1455,13 +1672,9 @@ $initial_data = [
                     sidebarState.hasInitialData = true;
                 }
                 
-                var statusDot = document.getElementById('sidebarStatusDot');
-                if (statusDot) {
-                    statusDot.className = 'status-dot online';
-                }
-                var statusText = document.getElementById('sidebarStatusText');
-                if (statusText) {
-                    statusText.textContent = 'Online';
+                // ✅ Update status - LAKINI tu kama AJAX imetuma is_online
+                if (data.data && data.data.is_online !== undefined) {
+                    updateUserStatus(data.data);
                 }
                 
             } else {
@@ -1473,16 +1686,9 @@ $initial_data = [
         })
         .catch(function(error) {
             sidebarState.isUpdating = false;
-            console.warn('❌ Sidebar AJAX error:', error.message);
-            
-            var statusDot = document.getElementById('sidebarStatusDot');
-            if (statusDot) {
-                statusDot.className = 'status-dot offline';
-            }
-            var statusText = document.getElementById('sidebarStatusText');
-            if (statusText) {
-                statusText.textContent = 'Offline';
-            }
+            // ✅ HATUBADILISHI STATUS KWA KOSA LA NETWORK
+            // Status inabaki kama ilivyo (Online au Offline)
+            console.warn('❌ Sidebar AJAX error (status unchanged):', error.message);
         });
     }
 
@@ -1512,10 +1718,6 @@ $initial_data = [
                 fetchSidebarData(true);
             }
         }, SIDEBAR_CONFIG.FORCE_INTERVAL);
-        
-        console.log('🔄 Sidebar auto-update started (check: ' + 
-            SIDEBAR_CONFIG.CHECK_INTERVAL/1000 + 's, force: ' + 
-            SIDEBAR_CONFIG.FORCE_INTERVAL/1000 + 's)');
     }
 
     function stopSidebarAutoUpdate() {
@@ -1527,20 +1729,13 @@ $initial_data = [
             clearInterval(sidebarState.forceInterval);
             sidebarState.forceInterval = null;
         }
-        console.log('🔄 Sidebar auto-update stopped');
     }
 
-    // ================================================================
-    // MANUAL REFRESH
-    // ================================================================
     function refreshSidebarData() {
         fetchSidebarData(true);
         return true;
     }
 
-    // ================================================================
-    // EXPOSE FUNCTIONS
-    // ================================================================
     window.refreshSidebarData = refreshSidebarData;
     window.fetchSidebarData = fetchSidebarData;
     window.startSidebarAutoUpdate = startSidebarAutoUpdate;
@@ -1548,9 +1743,6 @@ $initial_data = [
     window.getSidebarState = function() { return sidebarState; };
     window.getSidebarHash = function() { return sidebarState.dataHash; };
 
-    // ================================================================
-    // VISIBILITY CHANGE
-    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopSidebarAutoUpdate();
@@ -1562,48 +1754,28 @@ $initial_data = [
         }
     });
 
-    // ================================================================
-    // DOM READY
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         setTimeout(function() {
             startSidebarAutoUpdate();
         }, 1500);
     });
 
-    // ================================================================
-    // CONSOLE LOG
-    // ================================================================
-    console.log('%c🏥 Braick Dispensary - Reception Sidebar V10', 
+    console.log('%c🏥 Braick Dispensary - Reception Sidebar', 
         'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ V10: Toggle button MOBILE ONLY (kama cashier)', 
-        'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ V10: Desktop = sidebar always visible', 
-        'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ V10: Mobile = sidebar hidden, toggle inafungua', 
-        'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Jina na logo kutoka system_settings table', 
-        'font-size:12px; color:#34D399;');
-    console.log('%c📋 MENU: 1.Dashboard 2.Register Patient 3.Patients 4.Assign Doctor|Lab Test 5.Visit 6.Appointments 7.Services 8.Cashier 9.Profile 10.Logout', 
-        'font-size:12px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 
-        'font-size:12px; color:#059669;');
+        'font-size:13px; color:#059669;');
+    console.log('%c🟢 Status: <?= $user_is_online ? "ONLINE" : "OFFLINE" ?>', 
+        'font-size:13px; color:<?= $user_is_online ? "#34D399" : "#94A3B8" ?>; font-weight:bold;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 
-        'font-size:12px; color:#6EA8FE;');
-    console.log('%c📊 Initial Data:', 'font-size:13px; font-weight:bold; color:#D97706;');
-    console.log('   Patients: <?= $patient_count ?>, Appointments: <?= $appointment_count ?>');
-    console.log('   Today Visits: <?= $today_visits ?>');
-    console.log('   ✅ Assigned Doctor: <?= $assigned_doctor_count ?>');
-    console.log('   ✅ Lab Test (Direct): <?= $lab_test_count ?>');
-    console.log('   Services: <?= $services_count ?>');
+        'font-size:13px; color:#6EA8FE;');
+    console.log('%c📊 Patients: <?= $patient_count ?>, Appointments: <?= $appointment_count ?>', 
+        'font-size:12px; color:#34D399;');
+    console.log('%c📅 Daily Activities: <?= $daily_activities_count ?> (Today: <?= $today_daily_activities ?>)', 
+        'font-size:13px; color:#10B981;');
+    console.log('%c✅ FIXED: Heartbeat keeps status online', 
+        'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ FIXED: Status unchanged on network errors', 
+        'font-size:13px; color:#34D399; font-weight:bold;');
     console.log('%c⚡ Auto-Update: Every 2s (only if data changed)', 
         'font-size:13px; color:#34D399;');
-    console.log('%c🔄 Force refresh: Every 5s (safety net)', 
-        'font-size:13px; color:#F59E0B;');
-    console.log('%c📡 AJAX URL: ' + SIDEBAR_CONFIG.AJAX_URL, 
-        'font-size:12px; color:#94A3B8;');
-    console.log('%c💡 Call window.refreshSidebarData() to manually update', 
-        'font-size:12px; color:#6EA8FE;');
-    console.log('%c📱 Click ☰ (hamburger) to open sidebar on mobile', 
-        'font-size:12px; color:#34D399;');
 </script>

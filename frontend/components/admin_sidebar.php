@@ -2,12 +2,9 @@
 // ================================================================
 // FILE: frontend/components/admin_sidebar.php
 // SUPER ADMIN - SHARED SIDEBAR
-// ✅ FIXED: Documents count from patient_documents
-// ✅ FIXED: Sick Sheets count from external_sick_sheets + patient_documents
-// ✅ FIXED: Audit menu - inaelekeza /admin/audit/dashboard.php
-// ✅ FIXED: Audit active state kwa /admin/audit/ path
-// ✅ Uses internal_documents for documents
-// ✅ ADDED: Toggle button inside sidebar component
+// ✅ FIXED: Online/Offline status from DB (login/logout aware)
+// ✅ FIXED: Heartbeat update last_online kila page load
+// ✅ NEW: Daily Activities menu - CHINI YA AUDIT
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -39,7 +36,6 @@ $user_role = $_SESSION['role'] ?? 'admin';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
-$user_is_online = $_SESSION['is_online'] ?? 1;
 
 $selected_branch_id = $selected_branch_id ?? 'all';
 
@@ -54,6 +50,47 @@ if (!isset($db) || $db === null) {
     } catch (Exception $e) {
         error_log("Admin sidebar DB connection error: " . $e->getMessage());
         $db = null;
+    }
+}
+
+// ================================================================
+// ✅ HEARTBEAT: Update user online status kila page load
+// ================================================================
+if ($db !== null && $user_id > 0) {
+    try {
+        $stmt = $db->prepare("UPDATE users SET is_online = 1, last_online = NOW() WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $_SESSION['is_online'] = 1;
+    } catch (Exception $e) {
+        error_log("Heartbeat error: " . $e->getMessage());
+    }
+}
+
+// ================================================================
+// ✅ GET USER ONLINE STATUS FROM DATABASE
+// ================================================================
+$user_is_online = 0;
+if ($db !== null && $user_id > 0) {
+    try {
+        $stmt = $db->prepare("SELECT is_online, last_online FROM users WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $user_status = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($user_status) {
+            $is_online_db = (int)($user_status['is_online'] ?? 0);
+            $last_online = $user_status['last_online'] ?? null;
+            
+            if ($is_online_db === 1) {
+                $user_is_online = 1;
+            } elseif ($last_online && (time() - strtotime($last_online)) < 300) {
+                $user_is_online = 1;
+            } else {
+                $user_is_online = 0;
+            }
+            $_SESSION['is_online'] = $user_is_online;
+        }
+    } catch (Exception $e) {
+        $user_is_online = $_SESSION['is_online'] ?? 1;
     }
 }
 
@@ -76,6 +113,8 @@ $total_appointments = 0;
 $today_appointments = 0;
 $total_audit_logs = 0;
 $today_audit_logs = 0;
+$total_daily_activities = 0;
+$today_daily_activities = 0;
 $module_counts = ['pharmacy' => 0, 'reception' => 0, 'laboratory' => 0, 'cashier' => 0];
 
 if ($db !== null) {
@@ -199,9 +238,7 @@ if ($db !== null) {
                 $stmt->execute([(int)$selected_branch_id]);
             }
             $total_documents = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-        } catch (Exception $e) { 
-            $total_documents = 0; 
-        }
+        } catch (Exception $e) { $total_documents = 0; }
         
         // SICK SHEETS
         try {
@@ -231,9 +268,7 @@ if ($db !== null) {
             $internal_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
             $total_sick_sheets = $external_count + $internal_count;
-        } catch (Exception $e) { 
-            $total_sick_sheets = 0;
-        }
+        } catch (Exception $e) { $total_sick_sheets = 0; }
         
         // APPOINTMENTS
         try {
@@ -252,10 +287,7 @@ if ($db !== null) {
                 $stmt->execute([(int)$selected_branch_id]);
             }
             $today_appointments = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-        } catch (Exception $e) { 
-            $total_appointments = 0; 
-            $today_appointments = 0; 
-        }
+        } catch (Exception $e) { $total_appointments = 0; $today_appointments = 0; }
         
         // AUDIT LOGS
         try {
@@ -274,10 +306,26 @@ if ($db !== null) {
                 $stmt->execute([(int)$selected_branch_id]);
             }
             $today_audit_logs = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-        } catch (Exception $e) { 
-            $total_audit_logs = 0; 
-            $today_audit_logs = 0; 
-        }
+        } catch (Exception $e) { $total_audit_logs = 0; $today_audit_logs = 0; }
+        
+        // DAILY ACTIVITIES
+        try {
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("SELECT COUNT(*) as count FROM daily_activities");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE branch_id = ?");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $total_daily_activities = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("SELECT COUNT(*) as count FROM daily_activities WHERE activity_date = CURDATE()");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE branch_id = ? AND activity_date = CURDATE()");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $today_daily_activities = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) { $total_daily_activities = 0; $today_daily_activities = 0; }
         
     } catch (Exception $e) {
         error_log("Admin sidebar initial data error: " . $e->getMessage());
@@ -287,8 +335,14 @@ if ($db !== null) {
 $current_page = basename($_SERVER['PHP_SELF']);
 $current_path = $_SERVER['PHP_SELF'];
 
-// ✅ Helper: Check kama uko kwenye /admin/audit/ folder
 $is_in_admin_audit = (strpos($current_path, '/admin/audit/') !== false);
+
+$is_daily_activities_page = in_array($current_page, [
+    'daily_activities.php', 
+    'view_daily_activity.php', 
+    'add_daily_activity.php', 
+    'edit_daily_activity.php'
+]);
 
 function isActive($page) {
     global $current_page;
@@ -300,7 +354,6 @@ function isAdminPage($pages) {
     return in_array($current_page, $pages) ? 'active' : '';
 }
 
-// ✅ Helper: Check kama page ni ya audit (admin/audit/*)
 function isAuditPage() {
     global $is_in_admin_audit;
     return $is_in_admin_audit ? 'active' : '';
@@ -574,6 +627,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     display: inline-block;
 }
 
+/* ================================================================
+   ✅ STATUS FOOTER - ONLINE/OFFLINE ENHANCED
+   ================================================================ */
 .sidebar-status {
     padding: 10px 16px;
     border-top: 2px solid rgba(255,255,255,0.06);
@@ -586,18 +642,33 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 .sidebar-status .status-dot {
     width: 8px; height: 8px; border-radius: 50%;
     display: inline-block; transition: all 0.3s ease;
+    flex-shrink: 0;
 }
 
 .sidebar-status .status-dot.online {
     background: #34D399;
-    box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
+    box-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
     animation: pulse-dot 1.5s infinite;
 }
 
-.sidebar-status .status-dot.offline { background: #94A3B8; }
+.sidebar-status .status-dot.offline {
+    background: #94A3B8;
+    box-shadow: none;
+    animation: none;
+}
 
 .sidebar-status .status-text {
-    font-size: 0.65rem; color: #D2E3FC; font-weight: 500;
+    font-size: 0.7rem; color: #D2E3FC; font-weight: 600;
+    letter-spacing: 0.3px;
+    transition: color 0.3s ease;
+}
+
+.sidebar-status .status-text.online {
+    color: #34D399;
+}
+
+.sidebar-status .status-text.offline {
+    color: #94A3B8;
 }
 
 .sidebar-status .update-time {
@@ -865,14 +936,25 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <span class="badge" id="badgeCashier"><?= $module_counts['cashier'] ?? 0 ?></span>
         </a>
         
-        <!-- ============================================================ -->
-        <!-- ✅ AUDIT MODULE — INAELEKEZA /admin/audit/dashboard.php -->
-        <!-- ============================================================ -->
+        <!-- AUDIT -->
         <a href="/dispensary_system/frontend/pages/admin/audit/dashboard.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= $is_in_admin_audit ? 'active' : '' ?>">
             <i class="fas fa-clipboard-check"></i>
             <span class="link-text">Audit</span>
             <span class="badge badge-new" id="badgeAudit">NEW</span>
+        </a>
+        
+        <!-- DAILY ACTIVITIES -->
+        <a href="/dispensary_system/frontend/pages/admin/daily_activities.php?branch=<?= $selected_branch_id ?>" 
+           class="sidebar-link <?= $is_daily_activities_page ? 'active' : '' ?>">
+            <i class="fas fa-tasks"></i>
+            <span class="link-text">Daily Activities</span>
+            <span class="badge" id="badgeDailyActivities"><?= $total_daily_activities ?></span>
+            <?php if ($today_daily_activities > 0): ?>
+                <span class="badge" id="badgeDailyActivitiesToday">+<?= $today_daily_activities ?></span>
+            <?php else: ?>
+                <span class="badge" id="badgeDailyActivitiesToday" style="display:none;">+0</span>
+            <?php endif; ?>
         </a>
         
         <!-- ============================================================ -->
@@ -978,9 +1060,14 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         
     </nav>
     
+    <!-- ================================================================ -->
+    <!-- ✅ STATUS FOOTER - ONLINE/OFFLINE FROM DB -->
+    <!-- ================================================================ -->
     <div class="sidebar-status" id="sidebarStatusFooter">
         <span class="status-dot <?= $user_is_online ? 'online' : 'offline' ?>" id="sidebarFooterDot"></span>
-        <span class="status-text" id="sidebarFooterText"><?= $user_is_online ? 'Online' : 'Offline' ?></span>
+        <span class="status-text <?= $user_is_online ? 'online' : 'offline' ?>" id="sidebarFooterText">
+            <?= $user_is_online ? 'Online' : 'Offline' ?>
+        </span>
         <span class="update-time" id="sidebarUpdateTime">
             <span class="sidebar-live-indicator">
                 <span class="dot"></span> Live
@@ -1134,7 +1221,37 @@ function switchBranch(branchId) {
 })();
 
 // ================================================================
-// AUTO-UPDATE BADGE DATA
+// ✅ UPDATE USER ONLINE/OFFLINE STATUS (FIXED)
+// ================================================================
+function updateUserStatus(data) {
+    if (!data) return;
+    
+    // ✅ Kama AJAX haikutuma is_online, TUSIBADILISHE
+    if (data.is_online === undefined && data.online_status === undefined) {
+        return;
+    }
+    
+    var statusDot = document.getElementById('sidebarFooterDot');
+    var statusText = document.getElementById('sidebarFooterText');
+    
+    var isOnline = false;
+    if (data.is_online !== undefined) {
+        isOnline = (data.is_online == 1);
+    } else if (data.online_status !== undefined) {
+        isOnline = (data.online_status === 'online');
+    }
+    
+    if (statusDot) {
+        statusDot.className = 'status-dot ' + (isOnline ? 'online' : 'offline');
+    }
+    if (statusText) {
+        statusText.className = 'status-text ' + (isOnline ? 'online' : 'offline');
+        statusText.textContent = isOnline ? 'Online' : 'Offline';
+    }
+}
+
+// ================================================================
+// AUTO-UPDATE BADGE DATA + HEARTBEAT
 // ================================================================
 function refreshSidebarBadges() {
     if (sidebarState.isUpdating) return;
@@ -1166,7 +1283,8 @@ function refreshSidebarBadges() {
                 'badgeReferrals': 'total_referrals',
                 'badgeDocuments': 'total_documents',
                 'badgeSickSheets': 'total_sick_sheets',
-                'badgeAppointments': 'total_appointments'
+                'badgeAppointments': 'total_appointments',
+                'badgeDailyActivities': 'total_daily_activities'
             };
             
             for (var elId in badgeMap) {
@@ -1220,10 +1338,23 @@ function refreshSidebarBadges() {
                 if (val6 > 0) { aptEl.textContent = '+' + val6; aptEl.style.display = ''; }
                 else { aptEl.style.display = 'none'; }
             }
+            
+            var daEl = document.getElementById('badgeDailyActivitiesToday');
+            if (daEl && data.data.today_daily_activities !== undefined) {
+                var val7 = parseInt(data.data.today_daily_activities);
+                if (val7 > 0) { daEl.textContent = '+' + val7; daEl.style.display = ''; }
+                else { daEl.style.display = 'none'; }
+            }
+            
+            // ✅ UPDATE ONLINE/OFFLINE STATUS
+            if (data.data.is_online !== undefined) {
+                updateUserStatus(data.data);
+            }
         }
     })
     .catch(function(error) {
         sidebarState.isUpdating = false;
+        // ✅ HATUBADILISHI STATUS KWA KOSA LA NETWORK
     });
 }
 
@@ -1249,9 +1380,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
 window.refreshSidebarData = refreshSidebarBadges;
 
-console.log('%c🏥 Braick - Admin Sidebar (FIXED + Toggle Button)', 'font-size:16px; font-weight:bold; color:#0AA84F;');
-console.log('%c✅ Audit link: /admin/audit/dashboard.php', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Audit active state: /admin/audit/ detection', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Toggle button added for mobile', 'font-size:13px; color:#34D399;');
+console.log('%c🏥 Braick - Admin Sidebar', 'font-size:16px; font-weight:bold; color:#0AA84F;');
 console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#34D399;');
+console.log('%c🟢 Status: <?= $user_is_online ? "ONLINE" : "OFFLINE" ?>', 'font-size:13px; color:<?= $user_is_online ? "#34D399" : "#94A3B8" ?>; font-weight:bold;');
+console.log('%c✅ Online/Offline from DB (login/logout aware)', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Heartbeat keeps status online', 'font-size:13px; color:#34D399;');
+console.log('%c✅ Daily Activities badge + today count', 'font-size:13px; color:#34D399;');
 </script>

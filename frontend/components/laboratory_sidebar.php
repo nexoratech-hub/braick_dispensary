@@ -3,7 +3,8 @@
 // FILE: frontend/components/laboratory_sidebar.php
 // LABORATORY - SHARED SIDEBAR (WITH AJAX AUTO-UPDATE)
 // WITH SIDEBAR TOGGLE BUTTON - SMOOTH SLIDE TRANSITION
-// INCREASED FONT SIZE & SLOWER SLIDE ANIMATION
+// ✅ NEW: Daily Activities menu (below Results History)
+// ✅ NEW: Online/Offline status from DB (session-based)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -48,7 +49,6 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
-$user_is_online = $_SESSION['is_online'] ?? 1;
 
 // ================================================================
 // INCLUDE DATABASE FOR INITIAL DATA
@@ -59,6 +59,43 @@ try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     $db = null;
+}
+
+// ================================================================
+// ✅ GET USER ONLINE STATUS FROM DATABASE
+// ================================================================
+$user_is_online = 1;
+if ($db !== null) {
+    try {
+        $stmt = $db->prepare("SELECT is_online, last_online FROM users WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $user_status = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($user_status) {
+            // Check kama last_online ni ndani ya dakika 5
+            $is_online_db = (int)($user_status['is_online'] ?? 0);
+            $last_online = $user_status['last_online'] ?? null;
+            
+            if ($is_online_db === 1) {
+                // Update session
+                $_SESSION['is_online'] = 1;
+                $user_is_online = 1;
+            } else {
+                // Check last_online
+                if ($last_online && (time() - strtotime($last_online)) < 300) {
+                    // Ndani ya dakika 5 - considered online
+                    $user_is_online = 1;
+                    $_SESSION['is_online'] = 1;
+                } else {
+                    $user_is_online = 0;
+                    $_SESSION['is_online'] = 0;
+                }
+            }
+        }
+    } catch (Exception $e) {
+        $user_is_online = $_SESSION['is_online'] ?? 0;
+    }
+} else {
+    $user_is_online = $_SESSION['is_online'] ?? 0;
 }
 
 // ================================================================
@@ -84,6 +121,8 @@ $in_progress_count = 0;
 $completed_count = 0;
 $today_tests = 0;
 $total_tests = 0;
+$daily_activities_count = 0;
+$today_daily_activities = 0;
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
@@ -117,6 +156,20 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         
         $total_tests = $pending_count + $in_progress_count + $completed_count;
         
+        // ✅ Daily Activities kwa lab technician huyu
+        try {
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ?");
+            $stmt->execute([$user_id]);
+            $daily_activities_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ? AND activity_date = CURDATE()");
+            $stmt->execute([$user_id]);
+            $today_daily_activities = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) {
+            $daily_activities_count = 0;
+            $today_daily_activities = 0;
+        }
+        
     } catch (Exception $e) {
         error_log("Sidebar initial data error: " . $e->getMessage());
     }
@@ -129,7 +182,10 @@ $initial_hash = md5(json_encode([
     'pending' => $pending_count,
     'in_progress' => $in_progress_count,
     'completed' => $completed_count,
-    'today_tests' => $today_tests
+    'today_tests' => $today_tests,
+    'daily_activities' => $daily_activities_count,
+    'today_daily_activities' => $today_daily_activities,
+    'is_online' => $user_is_online
 ]));
 
 // ================================================================
@@ -166,10 +222,12 @@ $initial_data = [
     'completed' => $completed_count,
     'today_tests' => $today_tests,
     'total' => $total_tests,
+    'daily_activities' => $daily_activities_count,
+    'today_daily_activities' => $today_daily_activities,
+    'is_online' => $user_is_online,
     'branch_id' => $user_branch_id,
     'branch_name' => $user_branch_name,
-    'user_name' => $user_full_name,
-    'user_is_online' => $user_is_online
+    'user_name' => $user_full_name
 ];
 ?>
 
@@ -610,24 +668,33 @@ $initial_data = [
         backdrop-filter: blur(10px);
     }
     .sidebar-status .status-dot {
-        width: 6px;
-        height: 6px;
+        width: 8px;
+        height: 8px;
         border-radius: 50%;
         display: inline-block;
         transition: all 0.3s ease;
     }
     .sidebar-status .status-dot.online {
         background: #34D399;
-        box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
+        box-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
         animation: pulse-dot 1.5s infinite;
     }
     .sidebar-status .status-dot.offline {
         background: #94A3B8;
+        box-shadow: none;
+        animation: none;
     }
     .sidebar-status .status-text {
-        font-size: 0.65rem;
+        font-size: 0.7rem;
         color: #D2E3FC;
-        font-weight: 500;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+    }
+    .sidebar-status .status-text.online {
+        color: #34D399;
+    }
+    .sidebar-status .status-text.offline {
+        color: #94A3B8;
     }
     .sidebar-status .update-time {
         font-size: 0.5rem;
@@ -636,6 +703,11 @@ $initial_data = [
         display: flex;
         align-items: center;
         gap: 4px;
+    }
+    
+    @keyframes pulse-dot {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.4; transform: scale(0.8); }
     }
     
     @media (max-width: 1024px) {
@@ -858,6 +930,24 @@ $initial_data = [
             <span class="badge <?= $today_tests > 0 ? 'green' : '' ?>" id="sidebarTodayTests"><?= $today_tests ?></span>
         </a>
         
+        <!-- ============================================================ -->
+        <!-- ✅ NEW: DAILY ACTIVITIES - CHINI YA RESULTS HISTORY -->
+        <!-- ============================================================ -->
+        <a href="/dispensary_system/frontend/pages/laboratory/daily_activities.php" class="sidebar-link <?= isActive('daily_activities.php') ?>">
+            <i class="fas fa-tasks"></i>
+            <span class="link-text">Daily Activities</span>
+            <?php if ($daily_activities_count > 0): ?>
+                <span class="badge success" id="dailyActivitiesBadge"><?= $daily_activities_count ?></span>
+            <?php else: ?>
+                <span class="badge" id="dailyActivitiesBadge">0</span>
+            <?php endif; ?>
+            <?php if ($today_daily_activities > 0): ?>
+                <span class="badge blue" id="dailyActivitiesTodayBadge" style="margin-left:2px;font-size:0.55rem;">+<?= $today_daily_activities ?></span>
+            <?php else: ?>
+                <span class="badge" id="dailyActivitiesTodayBadge" style="display:none;margin-left:2px;font-size:0.55rem;">+0</span>
+            <?php endif; ?>
+        </a>
+        
         <div class="nav-label"><span class="label-icon">👤</span> Account</div>
         
         <a href="/dispensary_system/frontend/pages/laboratory/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
@@ -877,7 +967,9 @@ $initial_data = [
     <!-- ================================================================ -->
     <div class="sidebar-status" id="sidebarStatusFooter">
         <span class="status-dot <?= $user_is_online ? 'online' : 'offline' ?>" id="sidebarFooterDot"></span>
-        <span class="status-text" id="sidebarFooterText"><?= $user_is_online ? 'Online' : 'Offline' ?></span>
+        <span class="status-text <?= $user_is_online ? 'online' : 'offline' ?>" id="sidebarFooterText">
+            <?= $user_is_online ? 'Online' : 'Offline' ?>
+        </span>
         <span class="update-time" id="sidebarUpdateTime">
             <span class="sidebar-live-indicator">
                 <span class="dot"></span> Live
@@ -1062,6 +1154,7 @@ $initial_data = [
         CHECK_INTERVAL: 2000,
         FORCE_INTERVAL: 5000,
         BRANCH_ID: <?= json_encode($user_branch_id) ?>,
+        USER_ID: <?= json_encode($user_id) ?>,
         INITIAL_HASH: '<?= $initial_hash ?>'
     };
     
@@ -1146,6 +1239,50 @@ $initial_data = [
             }
         }
         
+        // ✅ Daily Activities badges
+        var daBadge = document.getElementById('dailyActivitiesBadge');
+        if (daBadge && data.daily_activities !== undefined) {
+            var oldVal = daBadge.textContent;
+            var newVal = data.daily_activities;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                daBadge.textContent = newVal;
+                daBadge.className = parseInt(newVal) > 0 ? 'badge success badge-update' : 'badge badge-update';
+                daBadge.classList.remove('badge-update');
+                void daBadge.offsetWidth;
+                daBadge.classList.add('badge-update');
+            }
+        }
+        
+        var daTodayBadge = document.getElementById('dailyActivitiesTodayBadge');
+        if (daTodayBadge && data.today_daily_activities !== undefined) {
+            var oldVal = daTodayBadge.textContent;
+            var newVal = data.today_daily_activities;
+            if (oldVal !== '+' + newVal) {
+                hasChanges = true;
+                daTodayBadge.textContent = '+' + newVal;
+                daTodayBadge.style.display = newVal > 0 ? 'inline-block' : 'none';
+                daTodayBadge.classList.remove('badge-update');
+                void daTodayBadge.offsetWidth;
+                daTodayBadge.classList.add('badge-update');
+            }
+        }
+        
+        // ✅ UPDATE ONLINE/OFFLINE STATUS
+        if (data.is_online !== undefined) {
+            var statusDot = document.getElementById('sidebarFooterDot');
+            var statusText = document.getElementById('sidebarFooterText');
+            var isOnline = data.is_online == 1;
+            
+            if (statusDot) {
+                statusDot.className = 'status-dot ' + (isOnline ? 'online' : 'offline');
+            }
+            if (statusText) {
+                statusText.className = 'status-text ' + (isOnline ? 'online' : 'offline');
+                statusText.textContent = isOnline ? 'Online' : 'Offline';
+            }
+        }
+        
         var timeEl = document.getElementById('sidebarUpdateTime');
         if (timeEl) {
             var now = new Date();
@@ -1183,6 +1320,7 @@ $initial_data = [
         
         var formData = new FormData();
         formData.append('branch_id', SIDEBAR_CONFIG.BRANCH_ID);
+        formData.append('user_id', SIDEBAR_CONFIG.USER_ID);
         formData.append('hash', sidebarState.dataHash);
         if (forceUpdate) {
             formData.append('force_update', '1');
@@ -1238,16 +1376,6 @@ $initial_data = [
                     }
                     sidebarState.hasInitialData = true;
                 }
-                
-                var statusDot = document.getElementById('sidebarFooterDot');
-                if (statusDot) {
-                    statusDot.className = 'status-dot online';
-                }
-                var statusText = document.getElementById('sidebarFooterText');
-                if (statusText) {
-                    statusText.textContent = 'Online';
-                }
-                
             } else {
                 if (data.message && data.message.includes('Unauthorized')) {
                     window.location.href = '/dispensary_system/frontend/pages/login.php';
@@ -1258,15 +1386,6 @@ $initial_data = [
         .catch(function(error) {
             sidebarState.isUpdating = false;
             console.warn('❌ Sidebar AJAX error:', error.message);
-            
-            var statusDot = document.getElementById('sidebarFooterDot');
-            if (statusDot) {
-                statusDot.className = 'status-dot offline';
-            }
-            var statusText = document.getElementById('sidebarFooterText');
-            if (statusText) {
-                statusText.textContent = 'Offline';
-            }
         });
     }
 
@@ -1347,23 +1466,14 @@ $initial_data = [
         'font-size:16px; font-weight:bold; color:#0AA84F;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 
         'font-size:13px; color:#059669;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 
-        'font-size:13px; color:#6EA8FE;');
-    console.log('%c📊 Initial Data:', 'font-size:13px; font-weight:bold; color:#D97706;');
-    console.log('   Pending: <?= $pending_count ?>, In Progress: <?= $in_progress_count ?>');
-    console.log('   Completed: <?= $completed_count ?>, Today: <?= $today_tests ?>');
-    console.log('%c⚡ Auto-Update: Every 2s (only if data changed)', 
-        'font-size:13px; color:#34D399;');
-    console.log('%c🔄 Force refresh: Every 5s (safety net)', 
-        'font-size:13px; color:#F59E0B;');
-    console.log('%c📡 AJAX URL: ' + SIDEBAR_CONFIG.AJAX_URL, 
-        'font-size:12px; color:#94A3B8;');
-    console.log('%c📱 Toggle button: Shows when sidebar hidden, hides when open', 
-        'font-size:12px; color:#34D399;');
-    console.log('%c✅ SLOW slide transition: 0.6s cubic-bezier', 
-        'font-size:13px; font-weight:bold; color:#34D399;');
-    console.log('%c✅ Font size increased: links 0.85rem, badges 0.65rem', 
-        'font-size:13px; color:#34D399;');
-    console.log('%c✅ Profile removed from sidebar', 
+    console.log('%c✅ NEW: Daily Activities added below Results History', 
+        'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ Online/Offline status from DB (session-based)', 
+        'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c📊 Pending: <?= $pending_count ?> | In Progress: <?= $in_progress_count ?> | Completed: <?= $completed_count ?>', 
+        'font-size:13px; color:#9EC5FE;');
+    console.log('%c📅 Daily Activities: <?= $daily_activities_count ?> (Today: <?= $today_daily_activities ?>)', 
+        'font-size:13px; color:#10B981;');
+    console.log('%c⚡ Auto-Update: Every 2s', 
         'font-size:13px; color:#34D399;');
 </script>

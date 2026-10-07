@@ -3,10 +3,10 @@
 // FILE: frontend/components/pharmacy_sidebar.php
 // PHARMACY - SHARED SIDEBAR
 // ✅ SAME DESIGN AS LABORATORY SIDEBAR
-// ✅ Same fonts, colors, spacing, animations
-// ✅ Direct AJAX - Hakuna API ya nje
-// ✅ Prescriptions + Inventory badges
+// ✅ NEW: Daily Activities menu (below Expired Stock)
+// ✅ NEW: Online/Offline status from DB (login/logout aware)
 // ✅ OTC History REMOVED
+// BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
@@ -50,7 +50,6 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
-$user_is_online = $_SESSION['is_online'] ?? 1;
 
 // ================================================================
 // INCLUDE DATABASE
@@ -61,6 +60,39 @@ try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     $db = null;
+}
+
+// ================================================================
+// ✅ GET USER ONLINE STATUS FROM DATABASE
+// ================================================================
+$user_is_online = 0;
+if ($db !== null && $user_id > 0) {
+    try {
+        $stmt = $db->prepare("SELECT is_online, last_online FROM users WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $user_status = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($user_status) {
+            $is_online_db = (int)($user_status['is_online'] ?? 0);
+            $last_online = $user_status['last_online'] ?? null;
+            
+            if ($is_online_db === 1) {
+                $user_is_online = 1;
+                $_SESSION['is_online'] = 1;
+            } elseif ($last_online && (time() - strtotime($last_online)) < 300) {
+                // Ndani ya dakika 5 - considered online
+                $user_is_online = 1;
+                $_SESSION['is_online'] = 1;
+            } else {
+                $user_is_online = 0;
+                $_SESSION['is_online'] = 0;
+            }
+        }
+    } catch (Exception $e) {
+        $user_is_online = $_SESSION['is_online'] ?? 0;
+    }
+} else {
+    $user_is_online = $_SESSION['is_online'] ?? 0;
 }
 
 // ================================================================
@@ -104,7 +136,9 @@ $today_sales = 0;
 $today_otc = 0;
 $total_prescriptions = 0;
 $total_dispensed = 0;
-$total_otc = 0; // Kept for AJAX data compatibility, but not displayed
+$total_otc = 0;
+$daily_activities_count = 0;
+$today_daily_activities = 0;
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
@@ -163,15 +197,29 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $today_sales = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // 7. Today OTC Sales (kept for AJAX data compatibility)
+        // 7. Today OTC Sales
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
         $stmt->execute([$user_branch_id]);
         $today_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // 8. TOTAL OTC Sales (kept for AJAX data compatibility)
+        // 8. TOTAL OTC Sales
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ?");
         $stmt->execute([$user_branch_id]);
         $total_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        
+        // ✅ Daily Activities - kwa pharmacy user huyu
+        try {
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ?");
+            $stmt->execute([$user_id]);
+            $daily_activities_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ? AND activity_date = CURDATE()");
+            $stmt->execute([$user_id]);
+            $today_daily_activities = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) {
+            $daily_activities_count = 0;
+            $today_daily_activities = 0;
+        }
         
     } catch (Exception $e) {
         error_log("Pharmacy sidebar stats error: " . $e->getMessage());
@@ -189,7 +237,10 @@ $initial_hash = md5(json_encode([
     'today_otc' => $today_otc,
     'total_prescriptions' => $total_prescriptions,
     'total_dispensed' => $total_dispensed,
-    'total_otc' => $total_otc
+    'total_otc' => $total_otc,
+    'daily_activities' => $daily_activities_count,
+    'today_daily_activities' => $today_daily_activities,
+    'is_online' => $user_is_online
 ]));
 
 // ================================================================
@@ -217,6 +268,9 @@ $initial_data = [
     'total_prescriptions' => $total_prescriptions,
     'total_dispensed' => $total_dispensed,
     'total_otc' => $total_otc,
+    'daily_activities' => $daily_activities_count,
+    'today_daily_activities' => $today_daily_activities,
+    'is_online' => $user_is_online,
     'branch_id' => $user_branch_id,
     'branch_name' => $user_branch_name,
     'user_name' => $user_full_name
@@ -652,7 +706,7 @@ $initial_data = [
     }
     
     /* ================================================================
-       SIDEBAR STATUS FOOTER
+       ✅ SIDEBAR STATUS FOOTER - ONLINE/OFFLINE ENHANCED
        ================================================================ */
     .sidebar-status {
         padding: 8px 14px;
@@ -666,24 +720,35 @@ $initial_data = [
         backdrop-filter: blur(10px);
     }
     .sidebar-status .status-dot {
-        width: 6px;
-        height: 6px;
+        width: 8px;
+        height: 8px;
         border-radius: 50%;
         display: inline-block;
         transition: all 0.3s ease;
+        flex-shrink: 0;
     }
     .sidebar-status .status-dot.online {
         background: #34D399;
-        box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
+        box-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
         animation: pulse-dot 1.5s infinite;
     }
     .sidebar-status .status-dot.offline {
         background: #94A3B8;
+        box-shadow: none;
+        animation: none;
     }
     .sidebar-status .status-text {
-        font-size: 0.65rem;
+        font-size: 0.7rem;
         color: #D2E3FC;
-        font-weight: 500;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        transition: color 0.3s ease;
+    }
+    .sidebar-status .status-text.online {
+        color: #34D399;
+    }
+    .sidebar-status .status-text.offline {
+        color: #94A3B8;
     }
     .sidebar-status .update-time {
         font-size: 0.5rem;
@@ -920,8 +985,6 @@ $initial_data = [
             <span class="link-text">New OTC Sale</span>
         </a>
         
-        <!-- ❌ OTC History LINK - REMOVED -->
-        
         <div class="nav-label"><span class="label-icon">📦</span> Medicines</div>
         
         <a href="/dispensary_system/frontend/pages/pharmacy/inventory.php" class="sidebar-link <?= isActive('inventory.php') ?>">
@@ -941,6 +1004,24 @@ $initial_data = [
             <span class="badge <?= $expired_count > 0 ? 'red' : '' ?>" id="sidebarExpiredBadge"><?= $expired_count ?></span>
         </a>
         
+        <!-- ============================================================ -->
+        <!-- ✅ NEW: DAILY ACTIVITIES - CHINI YA EXPIRED STOCK -->
+        <!-- ============================================================ -->
+        <a href="/dispensary_system/frontend/pages/pharmacy/daily_activities.php" class="sidebar-link <?= isActive('daily_activities.php') ?>">
+            <i class="fas fa-tasks"></i>
+            <span class="link-text">Daily Activities</span>
+            <?php if ($daily_activities_count > 0): ?>
+                <span class="badge success" id="dailyActivitiesBadge"><?= $daily_activities_count ?></span>
+            <?php else: ?>
+                <span class="badge" id="dailyActivitiesBadge">0</span>
+            <?php endif; ?>
+            <?php if ($today_daily_activities > 0): ?>
+                <span class="badge blue" id="dailyActivitiesTodayBadge" style="margin-left:2px;font-size:0.55rem;">+<?= $today_daily_activities ?></span>
+            <?php else: ?>
+                <span class="badge" id="dailyActivitiesTodayBadge" style="display:none;margin-left:2px;font-size:0.55rem;">+0</span>
+            <?php endif; ?>
+        </a>
+        
         <div class="nav-label"><span class="label-icon">👤</span> Account</div>
         
         <a href="/dispensary_system/frontend/pages/pharmacy/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
@@ -956,11 +1037,13 @@ $initial_data = [
     </nav>
     
     <!-- ================================================================ -->
-    <!-- STATUS FOOTER -->
+    <!-- ✅ STATUS FOOTER - ONLINE/OFFLINE FROM DB -->
     <!-- ================================================================ -->
     <div class="sidebar-status" id="sidebarStatusFooter">
         <span class="status-dot <?= $user_is_online ? 'online' : 'offline' ?>" id="sidebarFooterDot"></span>
-        <span class="status-text" id="sidebarFooterText"><?= $user_is_online ? 'Online' : 'Offline' ?></span>
+        <span class="status-text <?= $user_is_online ? 'online' : 'offline' ?>" id="sidebarFooterText">
+            <?= $user_is_online ? 'Online' : 'Offline' ?>
+        </span>
         <span class="update-time" id="sidebarUpdateTime">
             <span class="sidebar-live-indicator">
                 <span class="dot"></span> Live
@@ -1137,6 +1220,7 @@ $initial_data = [
         CHECK_INTERVAL: 2000,
         FORCE_INTERVAL: 5000,
         BRANCH_ID: <?= json_encode($user_branch_id) ?>,
+        USER_ID: <?= json_encode($user_id) ?>,
         INITIAL_HASH: '<?= $initial_hash ?>'
     };
     
@@ -1152,6 +1236,31 @@ $initial_data = [
         lastUpdate: null,
         changeCount: 0
     };
+    
+    // ================================================================
+    // ✅ UPDATE DOCTOR ONLINE/OFFLINE STATUS (FROM DB)
+    // ================================================================
+    function updateUserStatus(data) {
+        if (!data) return;
+        
+        var footerDot = document.getElementById('sidebarFooterDot');
+        var footerText = document.getElementById('sidebarFooterText');
+        
+        var isOnline = false;
+        if (data.is_online !== undefined) {
+            isOnline = (data.is_online == 1);
+        } else if (data.online_status !== undefined) {
+            isOnline = (data.online_status === 'online');
+        }
+        
+        if (footerDot) {
+            footerDot.className = 'status-dot ' + (isOnline ? 'online' : 'offline');
+        }
+        if (footerText) {
+            footerText.className = 'status-text ' + (isOnline ? 'online' : 'offline');
+            footerText.textContent = isOnline ? 'Online' : 'Offline';
+        }
+    }
     
     // ================================================================
     // UPDATE SIDEBAR BADGES
@@ -1225,11 +1334,39 @@ $initial_data = [
             }
         }
         
-        // ❌ 5. Total OTC - REMOVED (OTC History link removed from sidebar)
-        // The badge element no longer exists in the HTML, so we skip this update.
-        // Data is still received from AJAX for backward compatibility.
+        // ✅ 5. Daily Activities
+        var daBadge = document.getElementById('dailyActivitiesBadge');
+        if (daBadge && data.daily_activities !== undefined) {
+            var oldVal = daBadge.textContent;
+            var newVal = data.daily_activities;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                daBadge.textContent = newVal;
+                daBadge.className = parseInt(newVal) > 0 ? 'badge success badge-update' : 'badge badge-update';
+                daBadge.classList.remove('badge-update');
+                void daBadge.offsetWidth;
+                daBadge.classList.add('badge-update');
+            }
+        }
         
-        // 6. Update timestamp
+        var daTodayBadge = document.getElementById('dailyActivitiesTodayBadge');
+        if (daTodayBadge && data.today_daily_activities !== undefined) {
+            var oldVal = daTodayBadge.textContent;
+            var newVal = data.today_daily_activities;
+            if (oldVal !== '+' + newVal) {
+                hasChanges = true;
+                daTodayBadge.textContent = '+' + newVal;
+                daTodayBadge.style.display = newVal > 0 ? 'inline-block' : 'none';
+                daTodayBadge.classList.remove('badge-update');
+                void daTodayBadge.offsetWidth;
+                daTodayBadge.classList.add('badge-update');
+            }
+        }
+        
+        // ✅ UPDATE ONLINE/OFFLINE STATUS
+        updateUserStatus(data);
+        
+        // Update timestamp
         var timeEl = document.getElementById('sidebarUpdateTime');
         if (timeEl) {
             var now = new Date();
@@ -1268,6 +1405,7 @@ $initial_data = [
         
         var formData = new FormData();
         formData.append('branch_id', SIDEBAR_CONFIG.BRANCH_ID);
+        formData.append('user_id', SIDEBAR_CONFIG.USER_ID);
         formData.append('hash', sidebarState.dataHash);
         if (forceUpdate) {
             formData.append('force_update', '1');
@@ -1324,13 +1462,9 @@ $initial_data = [
                     sidebarState.hasInitialData = true;
                 }
                 
-                var statusDot = document.getElementById('sidebarFooterDot');
-                if (statusDot) {
-                    statusDot.className = 'status-dot online';
-                }
-                var statusText = document.getElementById('sidebarFooterText');
-                if (statusText) {
-                    statusText.textContent = 'Online';
+                // ✅ Ensure status reflects from AJAX data
+                if (data.data && data.data.is_online !== undefined) {
+                    updateUserStatus(data.data);
                 }
                 
             } else {
@@ -1350,6 +1484,7 @@ $initial_data = [
             }
             var statusText = document.getElementById('sidebarFooterText');
             if (statusText) {
+                statusText.className = 'status-text offline';
                 statusText.textContent = 'Offline';
             }
         });
@@ -1432,17 +1567,18 @@ $initial_data = [
         'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 
         'font-size:13px; color:#059669;');
+    console.log('%c🟢 Status: <?= $user_is_online ? "ONLINE" : "OFFLINE" ?>', 
+        'font-size:13px; color:<?= $user_is_online ? "#34D399" : "#94A3B8" ?>; font-weight:bold;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 
         'font-size:13px; color:#6EA8FE;');
-    console.log('%c📊 Initial Data:', 'font-size:13px; font-weight:bold; color:#D97706;');
-    console.log('   Pending: <?= $pending_prescriptions ?>, Low Stock: <?= $low_stock_count ?>, Expired: <?= $expired_count ?>');
-    console.log('   Total Presc: <?= $total_prescriptions ?>');
+    console.log('%c📊 Pending: <?= $pending_prescriptions ?> | Low Stock: <?= $low_stock_count ?> | Expired: <?= $expired_count ?>', 
+        'font-size:13px; color:#F59E0B;');
+    console.log('%c📅 Daily Activities: <?= $daily_activities_count ?> (Today: <?= $today_daily_activities ?>)', 
+        'font-size:13px; color:#10B981;');
+    console.log('%c✅ NEW: Daily Activities below Expired Stock', 
+        'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ Online/Offline status from DB (login/logout aware)', 
+        'font-size:13px; color:#34D399; font-weight:bold;');
     console.log('%c⚡ Auto-Update: Every 2s (only if data changed)', 
         'font-size:13px; color:#34D399;');
-    console.log('%c🔄 Force refresh: Every 5s (safety net)', 
-        'font-size:13px; color:#F59E0B;');
-    console.log('%c✅ SAME DESIGN AS LABORATORY SIDEBAR', 
-        'font-size:13px; color:#34D399; font-weight:bold;');
-    console.log('%c✅ OTC History link REMOVED', 
-        'font-size:13px; color:#DC2626; font-weight:bold;');
 </script>

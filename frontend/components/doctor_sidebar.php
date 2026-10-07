@@ -2,8 +2,8 @@
 // ================================================================
 // FILE: frontend/components/doctor_sidebar.php
 // DOCTOR - SHARED SIDEBAR (WITH AJAX INTEGRATION - FIXED)
-// FIXED: Sidebar toggles properly with full page width when hidden
-// REMOVED: Doctor profile from sidebar (cleaner design)
+// ✅ NEW: Daily Activities menu (below Appointments)
+// ✅ NEW: Online/Offline status from DB (login/logout aware)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -33,6 +33,7 @@ if ($_SESSION['role'] !== 'doctor') {
         case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
         case 'cashier': header('Location: /dispensary_system/frontend/pages/cashier/dashboard.php'); break;
         case 'reception': header('Location: /dispensary_system/frontend/pages/reception/dashboard.php'); break;
+        case 'audit': header('Location: /dispensary_system/frontend/pages/audit/dashboard.php'); break;
         default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
     }
     exit;
@@ -58,6 +59,40 @@ try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     $db = null;
+}
+
+// ================================================================
+// ✅ GET DOCTOR ONLINE STATUS FROM DATABASE
+// ================================================================
+$doctor_is_online = 0;
+if ($db !== null && $doctor_id > 0) {
+    try {
+        $stmt = $db->prepare("SELECT is_online, last_online FROM users WHERE id = ?");
+        $stmt->execute([$doctor_id]);
+        $user_status = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($user_status) {
+            $is_online_db = (int)($user_status['is_online'] ?? 0);
+            $last_online = $user_status['last_online'] ?? null;
+            
+            // Check kama is_online = 1, au last_online ndani ya dakika 5
+            if ($is_online_db === 1) {
+                $doctor_is_online = 1;
+                $_SESSION['is_online'] = 1;
+            } elseif ($last_online && (time() - strtotime($last_online)) < 300) {
+                // Ndani ya dakika 5 - considered online
+                $doctor_is_online = 1;
+                $_SESSION['is_online'] = 1;
+            } else {
+                $doctor_is_online = 0;
+                $_SESSION['is_online'] = 0;
+            }
+        }
+    } catch (Exception $e) {
+        $doctor_is_online = $_SESSION['is_online'] ?? 0;
+    }
+} else {
+    $doctor_is_online = $_SESSION['is_online'] ?? 0;
 }
 
 // ================================================================
@@ -99,6 +134,8 @@ $total_consultations = 0;
 $procedures_count = 0;
 $lab_tests_count = 0;
 $expiring_medicines = 0;
+$daily_activities_count = 0;
+$today_daily_activities = 0;
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
@@ -192,12 +229,24 @@ if ($db !== null && isset($_SESSION['user_id'])) {
             $expiring_medicines = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         } catch (Exception $e) { $expiring_medicines = 0; }
         
+        // Daily activities count kwa doctor huyu
+        try {
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ?");
+            $stmt->execute([$doctor_id]);
+            $daily_activities_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ? AND activity_date = CURDATE()");
+            $stmt->execute([$doctor_id]);
+            $today_daily_activities = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) { 
+            $daily_activities_count = 0; 
+            $today_daily_activities = 0; 
+        }
+        
     } catch (Exception $e) {
         error_log("Sidebar data error: " . $e->getMessage());
     }
 }
-
-$doctor_is_online = $_SESSION['is_online'] ?? 0;
 
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
@@ -225,6 +274,8 @@ $initial_data_hash = md5(json_encode([
     'procedures_count' => $procedures_count,
     'lab_tests_count' => $lab_tests_count,
     'expiring_medicines' => $expiring_medicines,
+    'daily_activities_count' => $daily_activities_count,
+    'today_daily_activities' => $today_daily_activities,
     'doctor_status' => $doctor_is_online ? 'online' : 'offline'
 ]));
 
@@ -239,11 +290,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         exit;
     }
     
-    $doctor_id = (int)($_POST['doctor_id'] ?? 0);
+    $doctor_id_post = (int)($_POST['doctor_id'] ?? 0);
     $branch_id = (int)($_POST['branch_id'] ?? 1);
     $client_hash = $_POST['hash'] ?? '';
     
-    if ($doctor_id !== (int)$_SESSION['user_id']) {
+    if ($doctor_id_post !== (int)$_SESSION['user_id']) {
         echo json_encode(['success' => false, 'error' => 'Invalid doctor ID']);
         exit;
     }
@@ -263,27 +314,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         'proceduresCount' => 0,
         'labTestsCount' => 0,
         'expiringMedicines' => 0,
+        'dailyActivitiesCount' => 0,
+        'todayDailyActivities' => 0,
         'doctorName' => '',
         'doctorStatus' => 'offline'
     ];
     
-    if ($doctor_id > 0 && $db !== null) {
+    if ($doctor_id_post > 0 && $db !== null) {
         try {
-            $stmt = $db->prepare("SELECT full_name, is_online FROM users WHERE id = ? AND role = 'doctor' AND status = 'active'");
-            $stmt->execute([$doctor_id]);
+            // ✅ Get doctor status from DB
+            $stmt = $db->prepare("SELECT full_name, is_online, last_online FROM users WHERE id = ? AND role = 'doctor' AND status = 'active'");
+            $stmt->execute([$doctor_id_post]);
             $doctor = $stmt->fetch(PDO::FETCH_ASSOC);
+            
             if ($doctor) {
                 $data['doctorName'] = $doctor['full_name'] ?? '';
-                $data['doctorStatus'] = ($doctor['is_online'] ?? 0) ? 'online' : 'offline';
+                
+                // Check online status
+                $is_online_db = (int)($doctor['is_online'] ?? 0);
+                $last_online = $doctor['last_online'] ?? null;
+                
+                if ($is_online_db === 1) {
+                    $data['doctorStatus'] = 'online';
+                } elseif ($last_online && (time() - strtotime($last_online)) < 300) {
+                    $data['doctorStatus'] = 'online';
+                } else {
+                    $data['doctorStatus'] = 'offline';
+                }
             }
             
             $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE doctor_id = ?");
-            $stmt->execute([$doctor_id]);
+            $stmt->execute([$doctor_id_post]);
             $data['patientCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
             try {
                 $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE doctor_id = ? AND status IN ('pending', 'in_progress')");
-                $stmt->execute([$doctor_id]);
+                $stmt->execute([$doctor_id_post]);
                 $data['labCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             } catch (Exception $e) { $data['labCount'] = 0; }
             
@@ -294,13 +360,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     WHERE from_doctor_id = ? 
                     AND status IN ('pending', 'referred')
                 ");
-                $stmt->execute([$doctor_id]);
+                $stmt->execute([$doctor_id_post]);
                 $data['referralCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             } catch (Exception $e) { $data['referralCount'] = 0; }
             
             try {
                 $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE doctor_id = ? AND DATE(appointment_date) = CURDATE() AND status IN ('scheduled', 'confirmed')");
-                $stmt->execute([$doctor_id]);
+                $stmt->execute([$doctor_id_post]);
                 $data['appointmentCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             } catch (Exception $e) { $data['appointmentCount'] = 0; }
             
@@ -311,7 +377,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 AND status IN ('pending', 'assigned', 'with_doctor', 'lab_test', 'prescribed')
                 AND is_completed = 0
             ");
-            $stmt->execute([$doctor_id]);
+            $stmt->execute([$doctor_id_post]);
             $data['pendingConsultations'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
             $stmt = $db->prepare("
@@ -321,7 +387,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 AND status = 'completed'
                 AND is_completed = 1
             ");
-            $stmt->execute([$doctor_id]);
+            $stmt->execute([$doctor_id_post]);
             $data['completedConsultations'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
             $stmt = $db->prepare("
@@ -330,14 +396,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 WHERE doctor_id = ? 
                 AND status = 'cancelled'
             ");
-            $stmt->execute([$doctor_id]);
+            $stmt->execute([$doctor_id_post]);
             $data['cancelledConsultations'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
             $data['totalConsultations'] = $data['pendingConsultations'] + $data['completedConsultations'] + $data['cancelledConsultations'];
             
             try {
                 $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE doctor_id = ? AND status = 'pending'");
-                $stmt->execute([$doctor_id]);
+                $stmt->execute([$doctor_id_post]);
                 $data['pendingPrescriptions'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             } catch (Exception $e) { $data['pendingPrescriptions'] = 0; }
             
@@ -367,6 +433,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $data['expiringMedicines'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             } catch (Exception $e) { $data['expiringMedicines'] = 0; }
             
+            // Daily activities count
+            try {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ?");
+                $stmt->execute([$doctor_id_post]);
+                $data['dailyActivitiesCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+                
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ? AND activity_date = CURDATE()");
+                $stmt->execute([$doctor_id_post]);
+                $data['todayDailyActivities'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            } catch (Exception $e) { 
+                $data['dailyActivitiesCount'] = 0; 
+                $data['todayDailyActivities'] = 0; 
+            }
+            
             $hash = md5(json_encode([
                 'patient_count' => $data['patientCount'],
                 'pending_consultations' => $data['pendingConsultations'],
@@ -377,6 +457,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 'procedures_count' => $data['proceduresCount'],
                 'lab_tests_count' => $data['labTestsCount'],
                 'expiring_medicines' => $data['expiringMedicines'],
+                'daily_activities_count' => $data['dailyActivitiesCount'],
+                'today_daily_activities' => $data['todayDailyActivities'],
                 'doctor_status' => $data['doctorStatus']
             ]));
             
@@ -414,6 +496,8 @@ $initial_data = [
     'proceduresCount' => $procedures_count,
     'labTestsCount' => $lab_tests_count,
     'expiringMedicines' => $expiring_medicines,
+    'dailyActivitiesCount' => $daily_activities_count,
+    'todayDailyActivities' => $today_daily_activities,
     'doctorName' => $doctor_full_name,
     'doctorStatus' => $doctor_is_online ? 'online' : 'offline'
 ];
@@ -699,6 +783,9 @@ $initial_data = [
         50% { opacity: 0.4; transform: scale(0.8); }
     }
     
+    /* ================================================================
+       ✅ STATUS FOOTER - ONLINE/OFFLINE ENHANCED
+       ================================================================ */
     .sidebar-status {
         padding: 10px 16px;
         border-top: 2px solid rgba(255,255,255,0.08);
@@ -718,17 +805,31 @@ $initial_data = [
         height: 8px;
         border-radius: 50%;
         display: inline-block;
+        transition: all 0.3s ease;
+        flex-shrink: 0;
     }
     .sidebar-status .status-dot.online {
         background: #34D399;
+        box-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
         animation: pulse-dot 1.5s infinite;
     }
     .sidebar-status .status-dot.offline {
         background: #94A3B8;
+        box-shadow: none;
+        animation: none;
     }
     .sidebar-status .status-text {
         font-size: 0.7rem;
         color: #D2E3FC;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        transition: color 0.3s ease;
+    }
+    .sidebar-status .status-text.online {
+        color: #34D399;
+    }
+    .sidebar-status .status-text.offline {
+        color: #94A3B8;
     }
     .sidebar-status .update-time {
         font-size: 0.55rem;
@@ -884,6 +985,21 @@ $initial_data = [
             <?php endif; ?>
         </a>
         
+        <!-- ✅ DAILY ACTIVITIES - CHINI YA APPOINTMENTS -->
+        <a href="/dispensary_system/frontend/pages/doctor/daily_activities.php" class="sidebar-link <?= isActive('daily_activities.php') ?>">
+            <i class="fas fa-tasks"></i> Daily Activities
+            <?php if ($daily_activities_count > 0): ?>
+                <span class="badge success" id="dailyActivitiesBadge"><?= $daily_activities_count ?></span>
+            <?php else: ?>
+                <span class="badge" id="dailyActivitiesBadge">0</span>
+            <?php endif; ?>
+            <?php if ($today_daily_activities > 0): ?>
+                <span class="badge blue" id="dailyActivitiesTodayBadge" style="margin-left:2px;font-size:0.55rem;">+<?= $today_daily_activities ?></span>
+            <?php else: ?>
+                <span class="badge" id="dailyActivitiesTodayBadge" style="display:none;margin-left:2px;font-size:0.55rem;">+0</span>
+            <?php endif; ?>
+        </a>
+        
         <div class="nav-label mt-2">Referrals</div>
         
         <a href="/dispensary_system/frontend/pages/doctor/referrals.php" class="sidebar-link <?= isActive('referrals.php') ?>">
@@ -927,10 +1043,14 @@ $initial_data = [
         
     </nav>
     
-    <!-- Status Footer -->
+    <!-- ================================================================ -->
+    <!-- ✅ STATUS FOOTER - ONLINE/OFFLINE FROM DB -->
+    <!-- ================================================================ -->
     <div class="sidebar-status">
         <span class="status-dot <?= $doctor_is_online ? 'online' : 'offline' ?>" id="sidebarFooterDot"></span>
-        <span class="status-text" id="sidebarFooterText"><?= $doctor_is_online ? 'Online' : 'Offline' ?></span>
+        <span class="status-text <?= $doctor_is_online ? 'online' : 'offline' ?>" id="sidebarFooterText">
+            <?= $doctor_is_online ? 'Online' : 'Offline' ?>
+        </span>
         <span class="update-time" id="sidebarUpdateTime">
             <span class="sidebar-live-indicator">
                 <span class="dot"></span> Live
@@ -1140,7 +1260,8 @@ $initial_data = [
             'referralCount': 'referralCount',
             'appointmentCount': 'appointmentCount',
             'pendingConsultations': 'pendingConsultBadge',
-            'pendingPrescriptions': 'prescriptionBadge'
+            'pendingPrescriptions': 'prescriptionBadge',
+            'dailyActivitiesCount': 'dailyActivitiesBadge'
         };
         
         var hasChanges = false;
@@ -1174,7 +1295,27 @@ $initial_data = [
                         if (key === 'patientCount') {
                             el.className = numValue > 0 ? 'badge badge-update' : 'badge badge-update';
                         }
+                        if (key === 'dailyActivitiesCount') {
+                            el.className = numValue > 0 ? 'badge success badge-update' : 'badge badge-update';
+                        }
                     }
+                }
+            }
+        }
+        
+        // Today's daily activities badge
+        if (data.todayDailyActivities !== undefined) {
+            var todayBadge = document.getElementById('dailyActivitiesTodayBadge');
+            if (todayBadge) {
+                var oldTodayVal = todayBadge.textContent;
+                var newTodayVal = data.todayDailyActivities;
+                if (oldTodayVal !== '+' + newTodayVal) {
+                    hasChanges = true;
+                    todayBadge.textContent = '+' + newTodayVal;
+                    todayBadge.style.display = newTodayVal > 0 ? 'inline-block' : 'none';
+                    todayBadge.classList.remove('badge-update');
+                    void todayBadge.offsetWidth;
+                    todayBadge.classList.add('badge-update');
                 }
             }
         }
@@ -1191,6 +1332,9 @@ $initial_data = [
                 }
             }
         }
+        
+        // ✅ UPDATE ONLINE/OFFLINE STATUS
+        updateDoctorStatus(data);
         
         var timeEl = document.getElementById('sidebarUpdateTime');
         if (timeEl) {
@@ -1210,7 +1354,7 @@ $initial_data = [
     }
 
     // ================================================================
-    // UPDATE DOCTOR STATUS
+    // ✅ UPDATE DOCTOR ONLINE/OFFLINE STATUS (FROM DB)
     // ================================================================
     function updateDoctorStatus(data) {
         if (!data) return;
@@ -1218,14 +1362,20 @@ $initial_data = [
         var footerDot = document.getElementById('sidebarFooterDot');
         var footerText = document.getElementById('sidebarFooterText');
         
-        var isOnline = data.doctorStatus === 'online';
+        // ✅ Check data.doctorStatus (kutoka AJAX)
+        var isOnline = false;
+        if (data.doctorStatus !== undefined) {
+            isOnline = (data.doctorStatus === 'online');
+        } else if (data.is_online !== undefined) {
+            isOnline = (data.is_online == 1);
+        }
         
         if (footerDot) {
-            footerDot.className = isOnline ? 'status-dot online' : 'status-dot offline';
+            footerDot.className = 'status-dot ' + (isOnline ? 'online' : 'offline');
         }
         if (footerText) {
+            footerText.className = 'status-text ' + (isOnline ? 'online' : 'offline');
             footerText.textContent = isOnline ? 'Online' : 'Offline';
-            footerText.style.color = isOnline ? '#34D399' : '#94A3B8';
         }
     }
 
@@ -1268,7 +1418,6 @@ $initial_data = [
             if (data.success) {
                 if (data.has_changed && data.data) {
                     updateSidebarBadges(data.data);
-                    updateDoctorStatus(data.data);
                     
                     if (data.hash) {
                         sidebarState.dataHash = data.hash;
@@ -1384,18 +1533,18 @@ $initial_data = [
         'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($doctor_full_name) ?>', 
         'font-size:13px; color:#059669;');
+    console.log('%c🟢 Status: <?= $doctor_is_online ? "ONLINE" : "OFFLINE" ?>', 
+        'font-size:13px; color:<?= $doctor_is_online ? "#34D399" : "#94A3B8" ?>; font-weight:bold;');
     console.log('%c📊 Patients: <?= $patient_count ?>', 
         'font-size:13px; color:#9EC5FE;');
     console.log('%c📋 Pending Consultations: <?= $pending_consultations ?>', 
         'font-size:13px; color:#EF4444;');
-    console.log('%c🔄 Referrals: <?= $referral_count ?> (includes "referred" status)', 
-        'font-size:13px; color:#D97706;');
+    console.log('%c📅 Daily Activities: <?= $daily_activities_count ?>', 
+        'font-size:13px; color:#10B981;');
+    console.log('%c✅ Online/Offline status from DB (login/logout aware)', 
+        'font-size:13px; color:#34D399;');
     console.log('%c⚡ Smart Updates: Every 3s (only if data changed)', 
         'font-size:13px; color:#34D399;');
     console.log('%c💡 Call window.refreshSidebarData() to manually update', 
         'font-size:12px; color:#6EA8FE;');
-    console.log('%c📱 Sidebar toggles properly - full width when hidden', 
-        'font-size:12px; color:#0B5ED7;');
-    console.log('%c👤 Doctor profile removed from sidebar', 
-        'font-size:12px; color:#64748B;');
 </script>

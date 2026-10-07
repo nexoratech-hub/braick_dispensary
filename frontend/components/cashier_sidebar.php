@@ -1,13 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/components/cashier_sidebar.php
-// CASHIER SIDEBAR V9 FINAL
+// CASHIER SIDEBAR V11 FINAL
 // ================================================================
+// ✅ V11: Daily Activities menu (below Expenses)
+// ✅ V11: Online/Offline status from DB (login/logout aware)
+// ✅ V11: Heartbeat update last_online kila page load
+// ✅ V11: AJAX handler ina-update last_online kila request
 // ✅ V9: Toggle button (hamburger) kwa MOBILE ONLY
-// ✅ V9: Desktop = sidebar always visible (fixed)
-// ✅ V9: Mobile = sidebar hidden, toggle inafungua
-// ✅ V8: Paid Bills = 233 (matches paid_bills.php)
-// ✅ V8: AJAX real-time updates
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -37,7 +37,6 @@ $user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
-$user_is_online = $_SESSION['is_online'] ?? 1;
 
 require_once __DIR__ . '/../../backend/config/database.php';
 
@@ -48,7 +47,48 @@ try {
 }
 
 // ================================================================
-// ✅ V8: INITIAL BADGE DATA
+// ✅ HEARTBEAT: Update user online status kila page load
+// ================================================================
+if ($db !== null && $user_id > 0) {
+    try {
+        $stmt = $db->prepare("UPDATE users SET is_online = 1, last_online = NOW() WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $_SESSION['is_online'] = 1;
+    } catch (Exception $e) {
+        error_log("Heartbeat error: " . $e->getMessage());
+    }
+}
+
+// ================================================================
+// ✅ GET USER ONLINE STATUS FROM DATABASE
+// ================================================================
+$user_is_online = 0;
+if ($db !== null && $user_id > 0) {
+    try {
+        $stmt = $db->prepare("SELECT is_online, last_online FROM users WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $user_status = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($user_status) {
+            $is_online_db = (int)($user_status['is_online'] ?? 0);
+            $last_online = $user_status['last_online'] ?? null;
+            
+            if ($is_online_db === 1) {
+                $user_is_online = 1;
+            } elseif ($last_online && (time() - strtotime($last_online)) < 300) {
+                $user_is_online = 1;
+            } else {
+                $user_is_online = 0;
+            }
+            $_SESSION['is_online'] = $user_is_online;
+        }
+    } catch (Exception $e) {
+        $user_is_online = $_SESSION['is_online'] ?? 1;
+    }
+}
+
+// ================================================================
+// ✅ INITIAL BADGE DATA
 // ================================================================
 $pending_bills = 0;
 $partial_payments = 0;
@@ -57,6 +97,8 @@ $total_expenses = 0;
 $patients_waiting = 0;
 $paid_regular = 0;
 $paid_otc = 0;
+$daily_activities_count = 0;
+$today_daily_activities = 0;
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
@@ -85,7 +127,7 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $partial_payments = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // PAID (matches paid_bills.php)
+        // PAID
         $stmt = $db->prepare("
             SELECT COUNT(DISTINCT b.id) as count 
             FROM bills b
@@ -115,6 +157,20 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $patients_waiting = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
+        // ✅ DAILY ACTIVITIES kwa cashier huyu
+        try {
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ?");
+            $stmt->execute([$user_id]);
+            $daily_activities_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ? AND activity_date = CURDATE()");
+            $stmt->execute([$user_id]);
+            $today_daily_activities = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) {
+            $daily_activities_count = 0;
+            $today_daily_activities = 0;
+        }
+        
     } catch (Exception $e) {
         error_log("Sidebar data error: " . $e->getMessage());
     }
@@ -125,9 +181,146 @@ $hash_data = [
     'partial_payments' => $partial_payments,
     'paid_bills' => $total_paid,
     'total_expenses' => round($total_expenses, 2),
-    'patients_waiting' => $patients_waiting
+    'patients_waiting' => $patients_waiting,
+    'daily_activities' => $daily_activities_count,
+    'today_daily_activities' => $today_daily_activities,
+    'is_online' => $user_is_online
 ];
 $initial_hash = md5(json_encode($hash_data));
+
+// ================================================================
+// ✅ AJAX HANDLER - WITH HEARTBEAT
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_cashier_sidebar_data') {
+    header('Content-Type: application/json');
+    
+    // ✅ HEARTBEAT: Update last_online kila AJAX request
+    if ($db !== null && isset($_SESSION['user_id'])) {
+        try {
+            $stmt = $db->prepare("UPDATE users SET is_online = 1, last_online = NOW() WHERE id = ?");
+            $stmt->execute([$_SESSION['user_id']]);
+        } catch (Exception $e) {}
+    }
+    
+    $branch_id = (int)($_POST['branch_id'] ?? 1);
+    $client_hash = $_POST['hash'] ?? '';
+    $user_id_ajax = $_SESSION['user_id'] ?? 0;
+    
+    $response = ['success' => false, 'has_changed' => false, 'hash' => '', 'data' => null];
+    
+    try {
+        $data = [
+            'pending_bills' => 0,
+            'partial_payments' => 0,
+            'paid_bills' => 0,
+            'total_expenses' => 0,
+            'patients_waiting' => 0,
+            'daily_activities' => 0,
+            'today_daily_activities' => 0,
+            'is_online' => 1
+        ];
+        
+        if ($db !== null) {
+            // Pending
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'pending'");
+            $stmt->execute([$branch_id]);
+            $pending_regular = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ? AND payment_status = 'pending'");
+            $stmt->execute([$branch_id]);
+            $pending_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $data['pending_bills'] = $pending_regular + $pending_otc;
+            
+            // Partial
+            $stmt = $db->prepare("
+                SELECT COUNT(DISTINCT b.id) as count 
+                FROM bills b
+                INNER JOIN payments p ON b.id = p.bill_id
+                WHERE b.branch_id = ? 
+                  AND b.status = 'partial'
+                  AND b.patient_id IS NOT NULL
+                  AND b.visit_id IS NOT NULL
+                  AND b.bill_number NOT LIKE 'BILL-OTC-%'
+            ");
+            $stmt->execute([$branch_id]);
+            $data['partial_payments'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // Paid
+            $stmt = $db->prepare("
+                SELECT COUNT(DISTINCT b.id) as count 
+                FROM bills b
+                INNER JOIN payments p ON b.id = p.bill_id
+                WHERE b.branch_id = ? 
+                  AND b.status IN ('paid', 'partial')
+                  AND b.patient_id IS NOT NULL
+                  AND b.visit_id IS NOT NULL
+                  AND b.bill_number NOT LIKE 'BILL-OTC-%'
+            ");
+            $stmt->execute([$branch_id]);
+            $paid_regular = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ? AND payment_status = 'paid'");
+            $stmt->execute([$branch_id]);
+            $paid_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $data['paid_bills'] = $paid_regular + $paid_otc;
+            
+            // Expenses
+            $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE branch_id = ? AND status = 'paid'");
+            $stmt->execute([$branch_id]);
+            $data['total_expenses'] = round((float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0), 2);
+            
+            // Patients waiting
+            $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM bills WHERE branch_id = ? AND status IN ('pending', 'partial')");
+            $stmt->execute([$branch_id]);
+            $data['patients_waiting'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // Daily Activities
+            if ($user_id_ajax > 0) {
+                try {
+                    $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ?");
+                    $stmt->execute([$user_id_ajax]);
+                    $data['daily_activities'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+                    
+                    $stmt = $db->prepare("SELECT COUNT(*) as count FROM daily_activities WHERE user_id = ? AND activity_date = CURDATE()");
+                    $stmt->execute([$user_id_ajax]);
+                    $data['today_daily_activities'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+                } catch (Exception $e) {
+                    $data['daily_activities'] = 0;
+                    $data['today_daily_activities'] = 0;
+                }
+            }
+        }
+        
+        $hash = md5(json_encode([
+            'pending_bills' => $data['pending_bills'],
+            'partial_payments' => $data['partial_payments'],
+            'paid_bills' => $data['paid_bills'],
+            'total_expenses' => $data['total_expenses'],
+            'patients_waiting' => $data['patients_waiting'],
+            'daily_activities' => $data['daily_activities'],
+            'today_daily_activities' => $data['today_daily_activities'],
+            'is_online' => 1
+        ]));
+        
+        $response['hash'] = $hash;
+        $response['has_changed'] = ($client_hash !== $hash);
+        
+        if ($response['has_changed'] || empty($client_hash)) {
+            $response['data'] = $data;
+        }
+        
+        $response['success'] = true;
+        
+    } catch (Exception $e) {
+        $response['success'] = false;
+        $response['message'] = $e->getMessage();
+    }
+    
+    echo json_encode($response);
+    exit;
+}
 
 $current_page = basename($_SERVER['PHP_SELF']);
 
@@ -141,8 +334,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 ?>
 
 <!-- ================================================================ -->
-<!-- ✅ V9: MOBILE TOGGLE BUTTON (HAMBURGER) -->
-<!-- Only shows on mobile/tablet (max-width: 1024px) -->
+<!-- ✅ MOBILE TOGGLE BUTTON (HAMBURGER) -->
 <!-- ================================================================ -->
 <button class="cashier-sidebar-toggle" id="cashierSidebarToggle" aria-label="Open Sidebar" title="Menu">
     <i class="fas fa-bars"></i>
@@ -150,12 +342,10 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 
 <style>
     /* ============================================================
-       ✅ V9: TOGGLE BUTTON (HAMBURGER) - MOBILE ONLY
-       Desktop (>1024px): HIDDEN
-       Mobile (<=1024px): VISIBLE
+       TOGGLE BUTTON (HAMBURGER) - MOBILE ONLY
        ============================================================ */
     .cashier-sidebar-toggle {
-        display: none;  /* Hidden by default */
+        display: none;
         position: fixed;
         top: 14px;
         left: 14px;
@@ -187,21 +377,18 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         color: #FFFFFF;
     }
     
-    /* ✅ SHOW ON MOBILE/TABLET ONLY */
     @media (max-width: 1024px) {
         .cashier-sidebar-toggle {
             display: flex;
         }
     }
     
-    /* ✅ HIDE ON DESKTOP */
     @media (min-width: 1025px) {
         .cashier-sidebar-toggle {
             display: none !important;
         }
     }
     
-    /* Hide on print */
     @media print {
         .cashier-sidebar-toggle {
             display: none !important;
@@ -223,13 +410,12 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         overflow-y: auto;
         overflow-x: hidden;
         transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-        transform: translateX(-100%);  /* Hidden by default on mobile */
+        transform: translateX(-100%);
         box-shadow: 4px 0 30px rgba(0,0,0,0.3);
         padding-bottom: 20px;
         scroll-behavior: smooth;
     }
     
-    /* ✅ DESKTOP: Sidebar ALWAYS visible */
     @media (min-width: 1025px) {
         .sidebar {
             transform: translateX(0) !important;
@@ -264,7 +450,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         transition: opacity 0.3s ease;
     }
     
-    /* ✅ Overlay ONLY on mobile */
     @media (min-width: 1025px) {
         #sidebarOverlay { display: none !important; }
     }
@@ -314,7 +499,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         transform: scale(1.05); color: white;
     }
     
-    /* Close button ONLY on mobile */
     @media (max-width: 1024px) {
         .sidebar-close-btn { display: block; }
     }
@@ -410,6 +594,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     }
     .sidebar-link .badge.orange { background: #D97706; border-color: #D97706; }
     .sidebar-link .badge.green { background: #059669; border-color: #059669; }
+    .sidebar-link .badge.success { background: #059669; border-color: #059669; }
     .sidebar-link .badge.blue { background: #0B5ED7; border-color: #0B5ED7; }
     .sidebar-link .badge.red { background: #DC2626; border-color: #DC2626; }
     .sidebar-link .badge.yellow { background: #D97706; border-color: #D97706; }
@@ -474,7 +659,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         display: inline-block;
     }
     
-    /* STATUS FOOTER */
+    /* ✅ STATUS FOOTER - ONLINE/OFFLINE ENHANCED */
     .sidebar-status {
         padding: 10px 16px;
         border-top: 2px solid rgba(255,255,255,0.06);
@@ -491,17 +676,30 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         border-radius: 50%;
         display: inline-block;
         transition: all 0.3s ease;
+        flex-shrink: 0;
     }
     .sidebar-status .status-dot.online {
         background: #34D399;
-        box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
+        box-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
         animation: pulse-dot 1.5s infinite;
     }
-    .sidebar-status .status-dot.offline { background: #94A3B8; }
+    .sidebar-status .status-dot.offline {
+        background: #94A3B8;
+        box-shadow: none;
+        animation: none;
+    }
     .sidebar-status .status-text {
-        font-size: 0.65rem;
+        font-size: 0.7rem;
         color: #D1FAE5;
-        font-weight: 500;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        transition: color 0.3s ease;
+    }
+    .sidebar-status .status-text.online {
+        color: #34D399;
+    }
+    .sidebar-status .status-text.offline {
+        color: #94A3B8;
     }
     .sidebar-status .update-time {
         font-size: 0.5rem;
@@ -644,6 +842,24 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <span class="badge <?= $total_expenses > 0 ? 'yellow' : '' ?>" id="sidebarExpensesBadge"><?= $total_expenses > 0 ? 'TSh ' . number_format($total_expenses) : '0' ?></span>
         </a>
         
+        <!-- ============================================================ -->
+        <!-- ✅ NEW: DAILY ACTIVITIES - CHINI YA EXPENSES -->
+        <!-- ============================================================ -->
+        <a href="/dispensary_system/frontend/pages/cashier/daily_activities.php" class="sidebar-link <?= isActive('daily_activities.php') ?>">
+            <i class="fas fa-tasks"></i>
+            <span class="link-text">Daily Activities</span>
+            <?php if ($daily_activities_count > 0): ?>
+                <span class="badge success" id="cashierDailyActivitiesBadge"><?= $daily_activities_count ?></span>
+            <?php else: ?>
+                <span class="badge" id="cashierDailyActivitiesBadge">0</span>
+            <?php endif; ?>
+            <?php if ($today_daily_activities > 0): ?>
+                <span class="badge blue" id="cashierDailyActivitiesTodayBadge" style="margin-left:2px;font-size:0.55rem;">+<?= $today_daily_activities ?></span>
+            <?php else: ?>
+                <span class="badge" id="cashierDailyActivitiesTodayBadge" style="display:none;margin-left:2px;font-size:0.55rem;">+0</span>
+            <?php endif; ?>
+        </a>
+        
         <div class="nav-label"><span class="label-icon">👤</span> Account</div>
         
         <a href="/dispensary_system/frontend/pages/cashier/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
@@ -658,10 +874,12 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         
     </nav>
     
-    <!-- STATUS FOOTER -->
+    <!-- ✅ STATUS FOOTER - ONLINE/OFFLINE FROM DB -->
     <div class="sidebar-status">
-        <span class="status-dot online" id="sidebarStatusDot"></span>
-        <span class="status-text" id="sidebarStatusText">Online</span>
+        <span class="status-dot <?= $user_is_online ? 'online' : 'offline' ?>" id="sidebarStatusDot"></span>
+        <span class="status-text <?= $user_is_online ? 'online' : 'offline' ?>" id="sidebarStatusText">
+            <?= $user_is_online ? 'Online' : 'Offline' ?>
+        </span>
         <span class="update-time" id="sidebarUpdateTime">
             <span class="sidebar-live-indicator">
                 <span class="dot"></span> Live
@@ -675,14 +893,15 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 <!-- ================================================================ -->
 <script>
     var SIDEBAR_CONFIG = {
-        AJAX_URL: '/dispensary_system/backend/api/cashier_sidebar_ajax.php',
+        AJAX_URL: window.location.pathname,  // ✅ Same page - AJAX inatumia PHP handler ya juu
         CHECK_INTERVAL: 2000,
         FORCE_INTERVAL: 5000,
         BRANCH_ID: <?= json_encode($user_branch_id) ?>,
+        USER_ID: <?= json_encode($user_id) ?>,
         INITIAL_HASH: '<?= $initial_hash ?>'
     };
     
-    console.log('🔧 Cashier Sidebar V9 Config:', SIDEBAR_CONFIG);
+    console.log('🔧 Cashier Sidebar V11 Config:', SIDEBAR_CONFIG);
     
     var sidebarState = {
         dataHash: SIDEBAR_CONFIG.INITIAL_HASH,
@@ -695,7 +914,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     };
     
     // ============================================================
-    // ✅ V9: SIDEBAR TOGGLE (MOBILE ONLY)
+    // SIDEBAR TOGGLE (MOBILE ONLY)
     // ============================================================
     (function() {
         function initSidebar() {
@@ -734,7 +953,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                 }
             }
             
-            // ✅ V9: Hamburger toggle button (mobile only)
             if (toggleBtn) {
                 toggleBtn.addEventListener('click', function(e) {
                     e.preventDefault();
@@ -743,7 +961,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                 });
             }
             
-            // Close button (inside sidebar)
             if (closeBtn) {
                 closeBtn.addEventListener('click', function(e) {
                     e.preventDefault();
@@ -752,7 +969,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                 });
             }
             
-            // Overlay click
             if (overlay) {
                 overlay.addEventListener('click', function(e) {
                     if (e.target === overlay) {
@@ -761,14 +977,12 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                 });
             }
             
-            // ESC key
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape' && sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
             });
             
-            // Auto-close on resize (desktop)
             window.addEventListener('resize', function() {
                 if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
                     closeSidebar();
@@ -782,6 +996,36 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             initSidebar();
         }
     })();
+
+    // ============================================================
+    // ✅ UPDATE USER ONLINE/OFFLINE STATUS (FIXED)
+    // ============================================================
+    function updateUserStatus(data) {
+        if (!data) return;
+        
+        // ✅ Kama is_online haipo kwenye data, TUSIBADILISHE
+        if (data.is_online === undefined && data.online_status === undefined) {
+            return;
+        }
+        
+        var statusDot = document.getElementById('sidebarStatusDot');
+        var statusText = document.getElementById('sidebarStatusText');
+        
+        var isOnline = false;
+        if (data.is_online !== undefined) {
+            isOnline = (data.is_online == 1);
+        } else if (data.online_status !== undefined) {
+            isOnline = (data.online_status === 'online');
+        }
+        
+        if (statusDot) {
+            statusDot.className = 'status-dot ' + (isOnline ? 'online' : 'offline');
+        }
+        if (statusText) {
+            statusText.className = 'status-text ' + (isOnline ? 'online' : 'offline');
+            statusText.textContent = isOnline ? 'Online' : 'Offline';
+        }
+    }
 
     // ============================================================
     // UPDATE BADGES
@@ -847,6 +1091,39 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             }
         }
         
+        // ✅ Daily Activities Badge
+        var daBadge = document.getElementById('cashierDailyActivitiesBadge');
+        if (daBadge && data.daily_activities !== undefined) {
+            var oldVal = daBadge.textContent;
+            var newVal = data.daily_activities;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                daBadge.textContent = newVal;
+                daBadge.className = parseInt(newVal) > 0 ? 'badge success badge-update' : 'badge badge-update';
+                daBadge.classList.remove('badge-update');
+                void daBadge.offsetWidth;
+                daBadge.classList.add('badge-update');
+            }
+        }
+        
+        // ✅ Today Daily Activities Badge
+        var daTodayBadge = document.getElementById('cashierDailyActivitiesTodayBadge');
+        if (daTodayBadge && data.today_daily_activities !== undefined) {
+            var oldVal = daTodayBadge.textContent;
+            var newVal = data.today_daily_activities;
+            if (oldVal !== '+' + newVal) {
+                hasChanges = true;
+                daTodayBadge.textContent = '+' + newVal;
+                daTodayBadge.style.display = newVal > 0 ? 'inline-block' : 'none';
+                daTodayBadge.classList.remove('badge-update');
+                void daTodayBadge.offsetWidth;
+                daTodayBadge.classList.add('badge-update');
+            }
+        }
+        
+        // ✅ UPDATE ONLINE/OFFLINE STATUS
+        updateUserStatus(data);
+        
         var timeEl = document.getElementById('sidebarUpdateTime');
         if (timeEl) {
             var now = new Date();
@@ -881,7 +1158,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         sidebarState.isUpdating = true;
         
         var formData = new FormData();
+        formData.append('action', 'get_cashier_sidebar_data');  // ✅ Action key
         formData.append('branch_id', SIDEBAR_CONFIG.BRANCH_ID);
+        formData.append('user_id', SIDEBAR_CONFIG.USER_ID);
         formData.append('hash', sidebarState.dataHash);
         if (forceUpdate) formData.append('force_update', '1');
         
@@ -925,10 +1204,10 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                     sidebarState.hasInitialData = true;
                 }
                 
-                var statusDot = document.getElementById('sidebarStatusDot');
-                if (statusDot) statusDot.className = 'status-dot online';
-                var statusText = document.getElementById('sidebarStatusText');
-                if (statusText) statusText.textContent = 'Online';
+                // ✅ Update status - LAKINI tu kama AJAX imetuma is_online
+                if (data.data && data.data.is_online !== undefined) {
+                    updateUserStatus(data.data);
+                }
                 
             } else {
                 if (data.message && data.message.includes('Unauthorized')) {
@@ -938,10 +1217,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         })
         .catch(function(error) {
             sidebarState.isUpdating = false;
-            var statusDot = document.getElementById('sidebarStatusDot');
-            if (statusDot) statusDot.className = 'status-dot offline';
-            var statusText = document.getElementById('sidebarStatusText');
-            if (statusText) statusText.textContent = 'Offline';
+            // ✅ HATUBADILISHI STATUS KWA KOSA LA NETWORK
+            // Status inabaki kama ilivyo (Online au Offline)
+            console.warn('❌ Sidebar AJAX error (status unchanged):', error.message);
         });
     }
 
@@ -998,8 +1276,17 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         setTimeout(function() { startSidebarAutoUpdate(); }, 500);
     });
 
-    console.log('%c💰 Braick - Cashier Sidebar V9', 'font-size:16px; font-weight:bold; color:#059669;');
-    console.log('%c✅ Toggle button MOBILE ONLY', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Desktop = sidebar always visible', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💰 Braick - Cashier Sidebar V11', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#34D399;');
+    console.log('%c🟢 Status: <?= $user_is_online ? "ONLINE" : "OFFLINE" ?>', 
+        'font-size:13px; color:<?= $user_is_online ? "#34D399" : "#94A3B8" ?>; font-weight:bold;');
+    console.log('%c📅 Daily Activities: <?= $daily_activities_count ?> (Today: <?= $today_daily_activities ?>)', 
+        'font-size:13px; color:#10B981;');
+    console.log('%c✅ NEW: Daily Activities below Expenses', 
+        'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ FIXED: Heartbeat keeps status online', 
+        'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ FIXED: Status unchanged on network errors', 
+        'font-size:13px; color:#34D399; font-weight:bold;');
     console.log('%c✅ Paid Bills: <?= $total_paid ?> (matches page)', 'font-size:13px; color:#34D399;');
 </script>
