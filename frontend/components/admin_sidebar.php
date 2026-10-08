@@ -1078,7 +1078,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <div class="nav-label"><span class="label-icon">👤</span> Account</div>
         
         <a href="/dispensary_system/frontend/pages/admin/profile.php" 
-           class="sidebar-link <?= isActive('profile.php') ?>" active' : '' ?>">
+           class="sidebar-link <?= isActive('profile.php') ?>" active' : '' ?>
             <i class="fas fa-user-circle"></i>
             <span class="link-text">Profile</span>
         </a>
