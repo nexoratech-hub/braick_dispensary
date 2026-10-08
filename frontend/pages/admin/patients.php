@@ -1,14 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/patients.php
-// SUPER ADMIN - MANAGE PATIENTS (V6 - DATE/TIME OWN COLUMN)
+// SUPER ADMIN - MANAGE PATIENTS (V7 - COMPACT DATE/TIME)
 // ✅ Inatumia SHARED HEADER & SIDEBAR pekee
 // ✅ ASSIGN DOCTOR + VISITS buttons kwenye card header
 // ✅ VIEW, EDIT, DELETE buttons kwenye table
 // ✅ BLUE THEME
 // ✅ REGISTERED BY column
-// ✅ FIXED: Delete modal - scrollable, smaller, delete button visible
-// ✅ V6: Tarehe & Saa ya Registration kwenye column YAKE PEKE YAKE
+// ✅ V7: Date/Time column COMPACT (same as reception)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -758,7 +757,7 @@ select.filter-input {
 
 .patient-table {
     width: 100%;
-    min-width: 1700px;   /* ✅ V6: Imeongezwa (column mpya ya Date/Time) */
+    min-width: 1600px;
     border-collapse: collapse;
     font-size: 0.85rem;
 }
@@ -833,50 +832,79 @@ select.filter-input {
 }
 
 /* ================================================================
-   ✅ V6: DATE/TIME CELL - Column yake peke yake
+   ✅ V7: DATE/TIME CELL - COMPACT & CENTERED (same as reception)
    ================================================================ */
-.datetime-cell-standalone {
+.datetime-cell-compact {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    min-width: 130px;
+    gap: 4px;
+    min-width: 105px;
+    max-width: 120px;
+    align-items: center;
+    text-align: center;
 }
 
-.datetime-cell-standalone .dt-date,
-.datetime-cell-standalone .dt-time {
+.datetime-cell-compact .dt-date,
+.datetime-cell-compact .dt-time {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    font-size: 0.72rem;
+    justify-content: center;
+    gap: 4px;
+    font-size: 0.68rem;
     font-weight: 700;
     font-family: var(--font-mono);
     white-space: nowrap;
     line-height: 1.3;
+    width: 100%;
 }
 
-.datetime-cell-standalone .dt-date {
+.datetime-cell-compact .dt-date {
     color: var(--text-primary);
 }
 
-.datetime-cell-standalone .dt-time {
+.datetime-cell-compact .dt-time {
     color: var(--primary);
     font-weight: 800;
     background: var(--primary-bg);
-    padding: 3px 9px;
+    padding: 2px 7px;
     border-radius: 6px;
     border: 1px solid rgba(11, 94, 215, 0.15);
     width: fit-content;
+    font-size: 0.65rem;
 }
 
-.datetime-cell-standalone i {
-    font-size: 0.62rem;
+.datetime-cell-compact i {
+    font-size: 0.58rem;
     opacity: 0.85;
 }
 
-[data-theme="dark"] .datetime-cell-standalone .dt-time {
+[data-theme="dark"] .datetime-cell-compact .dt-time {
     color: #93C5FD;
     background: rgba(59, 130, 246, 0.15);
     border-color: rgba(59, 130, 246, 0.3);
+}
+
+/* Days Badge - Compact & Centered */
+.days-badge-compact {
+    display: inline-block;
+    background: var(--primary) !important;
+    color: #ffffff !important;
+    padding: 2px 10px !important;
+    border-radius: 10px !important;
+    font-size: 0.58rem !important;
+    font-weight: 700 !important;
+    border: none !important;
+    box-shadow: 0 2px 6px rgba(11, 94, 215, 0.25);
+    font-family: var(--font-mono);
+    letter-spacing: 0.02em;
+    margin-top: 2px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.days-badge-compact.new {
+    background: var(--success) !important;
+    box-shadow: 0 2px 6px rgba(5, 150, 105, 0.25);
 }
 
 /* BADGES */
@@ -903,20 +931,6 @@ select.filter-input {
 .status-badge.existing       { background: var(--primary-bg); color: var(--primary); }
 .status-badge.with_doctor    { background: var(--success-bg); color: var(--success); }
 .status-badge.without_doctor { background: var(--warning-bg); color: var(--warning); }
-
-.days-badge-blue {
-    display: inline-block;
-    background: var(--primary) !important;
-    color: #ffffff !important;
-    padding: 3px 10px !important;
-    border-radius: 10px !important;
-    font-size: 0.65rem !important;
-    font-weight: 700 !important;
-    margin-top: 3px;
-    font-family: var(--font-mono);
-}
-
-.days-badge-blue.new { background: var(--success) !important; }
 
 .registered-by-badge {
     display: inline-flex;
@@ -1390,8 +1404,7 @@ select.filter-input {
                             <th><i class="fas fa-id-card"></i> Patient ID</th>
                             <th><i class="fas fa-phone"></i> Contact</th>
                             <th><i class="fas fa-store-alt"></i> Branch</th>
-                            <!-- ✅ V6: Date/Time column YAKE PEKE YAKE -->
-                            <th><i class="fas fa-calendar-alt"></i> Registered Date & Time</th>
+                            <th><i class="fas fa-calendar-alt"></i> Registered</th>
                             <th><i class="fas fa-user-md"></i> Doctor</th>
                             <th><i class="fas fa-notes-medical"></i> Visits</th>
                             <th><i class="fas fa-user-plus"></i> Registered By</th>
@@ -1404,8 +1417,8 @@ select.filter-input {
                         <?php foreach ($patients as $patient):
                             $patient_days = isset($patient['patient_days']) ? (int)$patient['patient_days'] : 0;
                             $days_text = $patient_days > 0
-                                ? '<span class="days-badge-blue">📅 ' . $patient_days . ' days</span>'
-                                : '<span class="days-badge-blue new">📅 New</span>';
+                                ? '<span class="days-badge-compact">' . $patient_days . 'd</span>'
+                                : '<span class="days-badge-compact new">New</span>';
 
                             $status_class = $patient['patient_status'] ?? 'existing';
                             $status_text  = $status_class === 'new' ? 'New' : 'Existing';
@@ -1433,7 +1446,7 @@ select.filter-input {
                                 $reg_icon = 'fa-user-md';
                             }
 
-                            // ✅ V6: Registration date/time
+                            // V7: Registration date/time
                             $reg_date = !empty($patient['created_at']) ? date('d/m/Y', strtotime($patient['created_at'])) : '—';
                             $reg_time = !empty($patient['created_at']) ? date('h:i A', strtotime($patient['created_at'])) : '—';
                         ?>
@@ -1472,9 +1485,9 @@ select.filter-input {
                                     </span>
                                 </td>
 
-                                <!-- ✅ V6: Date/Time column YAKE PEKE YAKE -->
+                                <!-- V7: Compact Date/Time column -->
                                 <td>
-                                    <div class="datetime-cell-standalone">
+                                    <div class="datetime-cell-compact">
                                         <span class="dt-date">
                                             <i class="fas fa-calendar-day"></i> <?= $reg_date ?>
                                         </span>
@@ -1857,10 +1870,9 @@ function showToast(title, message, type) {
     showToast('🗑️ Deleted', 'Patient and all related data have been deleted', 'success');
 <?php endif; ?>
 
-console.log('%c👑 Braick - Admin Patients V6 (DATE/TIME OWN COLUMN)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+console.log('%c👑 Braick - Admin Patients V7 (COMPACT DATE/TIME)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
 console.log('%c✅ SHARED HEADER & SIDEBAR', 'font-size:12px;color:#34D399;');
-console.log('%c✅ Delete modal - scrollable + smaller + button visible', 'font-size:12px;color:#7C3AED;font-weight:bold;');
-console.log('%c✅ V6: Date/Time column YAKE PEKE YAKE', 'font-size:12px;color:#059669;font-weight:bold;');
+console.log('%c✅ V7: Date/Time column COMPACT (same as reception)', 'font-size:12px;color:#059669;font-weight:bold;');
 console.log('%c📊 Total Patients: <?= $stats['total'] ?? 0 ?>', 'font-size:12px;color:#059669;');
 </script>
 

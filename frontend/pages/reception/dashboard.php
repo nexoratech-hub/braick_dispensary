@@ -227,120 +227,263 @@ include_once '../../components/reception_sidebar.php';
            (Shared base styles are in reception_header.php)
            ================================================================ */
 
-        /* ---------- PAGE HEADER ---------- */
+        /* ================================================================
+           MODERN PAGE HEADER - PROFESSIONAL DESIGN
+           ================================================================ */
         .page-header {
-            background: linear-gradient(135deg, var(--primary, #0B5ED7) 0%, var(--primary-dark, #0A4CA8) 100%);
+            background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #083D87 100%);
             border-radius: 20px;
-            padding: 26px 32px;
+            padding: 28px 32px;
             margin-bottom: 28px;
             display: flex;
             flex-wrap: wrap;
             justify-content: space-between;
             align-items: center;
-            gap: 16px;
-            box-shadow: 0 10px 30px rgba(11, 94, 215, 0.25);
+            gap: 24px;
+            box-shadow: 
+                0 10px 30px rgba(11, 94, 215, 0.28),
+                0 1px 0 rgba(255,255,255,0.1) inset;
             position: relative;
             overflow: hidden;
             isolation: isolate;
         }
-        .page-header::before,
+
+        .page-header::before {
+            content: '';
+            position: absolute;
+            width: 380px;
+            height: 380px;
+            top: -200px;
+            right: -100px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0) 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
         .page-header::after {
             content: '';
             position: absolute;
+            width: 240px;
+            height: 240px;
+            bottom: -140px;
+            left: -60px;
             border-radius: 50%;
+            background: radial-gradient(circle, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0) 70%);
             pointer-events: none;
+            z-index: 0;
         }
-        .page-header::before {
-            width: 340px; height: 340px;
-            top: -180px; right: -80px;
-            background: rgba(255,255,255,0.06);
-        }
-        .page-header::after {
-            width: 200px; height: 200px;
-            bottom: -120px; left: -40px;
-            background: rgba(255,255,255,0.04);
-        }
-        .page-header .page-title {
-            color: #fff;
-            font-size: 1.75rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
+
+        .page-header-left {
+            flex: 1;
+            min-width: 280px;
             position: relative;
             z-index: 1;
-            letter-spacing: -0.02em;
         }
-        .page-header .page-title i { font-size: 1.9rem; opacity: 0.95; }
 
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.9);
-            font-size: 0.9rem;
+        .page-header-title-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
+            margin-bottom: 14px;
+        }
+
+        .page-header-icon {
+            width: 52px;
+            height: 52px;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.18);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.25);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 1.4rem;
+            flex-shrink: 0;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+        }
+
+        .page-header-title-text h1 {
+            font-size: 1.55rem;
+            font-weight: 700;
+            color: #fff;
+            margin: 0;
+            letter-spacing: -0.02em;
+            line-height: 1.15;
+        }
+
+        .page-header-title-text .sub {
+            font-size: 0.8rem;
+            color: rgba(255,255,255,0.75);
+            margin: 3px 0 0 0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 400;
+        }
+
+        .page-header-title-text .sub strong {
+            color: #fff;
+            font-weight: 600;
+        }
+
+        .header-pills {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            flex-wrap: wrap;
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+            white-space: nowrap;
+            line-height: 1;
+            border: 1px solid transparent;
+        }
+
+        .pill-role {
+            background: rgba(255,255,255,0.22);
+            color: #fff;
+            border-color: rgba(255,255,255,0.25);
+            backdrop-filter: blur(6px);
+        }
+
+        .pill-live {
+            background: rgba(52, 211, 153, 0.18);
+            color: #6EE7B7;
+            border-color: rgba(52, 211, 153, 0.35);
+        }
+
+        .pill-live .live-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #34D399;
+            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.25);
+            animation: pulse-dot 1.8s infinite;
+        }
+
+        .page-header-badges {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .info-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 7px 13px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.10);
+            border: 1px solid rgba(255,255,255,0.15);
+            backdrop-filter: blur(8px);
+            color: rgba(255,255,255,0.95);
+            font-size: 0.72rem;
+            font-weight: 500;
+            transition: all 0.25s ease;
+            line-height: 1;
+        }
+
+        .info-badge:hover {
+            background: rgba(255,255,255,0.18);
+            border-color: rgba(255,255,255,0.28);
+            transform: translateY(-1px);
+        }
+
+        .info-badge i {
+            font-size: 0.72rem;
+            opacity: 0.9;
+        }
+
+        .info-badge .badge-value {
+            color: #fff;
+            font-weight: 700;
+        }
+
+        .info-badge .badge-value.online {
+            color: #6EE7B7;
+        }
+
+        .page-header-actions {
             display: flex;
             align-items: center;
             gap: 10px;
             flex-wrap: wrap;
-            margin-top: 6px;
             position: relative;
             z-index: 1;
         }
-        .page-header .page-subtitle strong { color: #fff; font-weight: 600; }
 
-        .page-header .header-badge {
-            background: rgba(255,255,255,0.15);
-            color: #fff;
-            padding: 5px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(6px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.15);
-        }
-        .page-header .header-badge .online-count {
-            color: #34D399;
-            font-weight: 700;
-        }
-
-        .btn-outline-light {
-            background: rgba(255,255,255,0.15);
-            color: #fff;
-            border: 1px solid rgba(255,255,255,0.25);
-            padding: 9px 18px;
-            border-radius: 11px;
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.25s ease;
-            text-decoration: none;
+        .action-btn {
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            backdrop-filter: blur(6px);
-            position: relative;
-            z-index: 1;
+            padding: 10px 18px;
+            border-radius: 11px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-decoration: none;
             cursor: pointer;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            border: 1px solid transparent;
+            line-height: 1;
+            white-space: nowrap;
         }
-        .btn-outline-light:hover {
-            background: rgba(255,255,255,0.28);
+
+        .action-btn i {
+            font-size: 0.85rem;
+        }
+
+        .action-btn.primary {
+            background: #fff;
+            color: #0A4CA8;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+        }
+        .action-btn.primary:hover {
+            background: #F8FAFC;
             transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+            box-shadow: 0 8px 22px rgba(0,0,0,0.18);
+            color: #083D87;
+        }
+
+        .action-btn.glass {
+            background: rgba(255,255,255,0.13);
+            color: #fff;
+            border-color: rgba(255,255,255,0.22);
+            backdrop-filter: blur(8px);
+        }
+        .action-btn.glass:hover {
+            background: rgba(255,255,255,0.24);
+            border-color: rgba(255,255,255,0.35);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.15);
             color: #fff;
         }
 
-        .update-badge-light {
-            background: rgba(255,255,255,0.12);
-            color: rgba(255,255,255,0.85);
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            backdrop-filter: blur(6px);
-            font-weight: 500;
+        .action-btn.ghost {
+            background: rgba(255,255,255,0.10);
+            color: #fff;
+            border-color: rgba(255,255,255,0.18);
+            width: 42px;
+            height: 42px;
+            padding: 0;
+            justify-content: center;
+            backdrop-filter: blur(8px);
+        }
+        .action-btn.ghost:hover {
+            background: rgba(255,255,255,0.22);
+            transform: rotate(180deg);
+            color: #fff;
         }
 
         /* ================================================================
@@ -566,7 +709,7 @@ include_once '../../components/reception_sidebar.php';
         [data-theme="dark"] .appointment-status.pending    { background: #3D2E0A; color: #FBBF24; }
 
         /* ================================================================
-           LIST ROWS (Doctors & Patients)
+           LIST ROWS
            ================================================================ */
         .list-row {
             display: flex;
@@ -749,6 +892,187 @@ include_once '../../components/reception_sidebar.php';
         .empty-state p { font-size: 0.8rem; }
 
         /* ================================================================
+           ENHANCED FOOTER
+           ================================================================ */
+        .footer-modern {
+            margin-top: 40px;
+            padding: 28px 0 16px 0;
+            border-top: 2px solid var(--border-color, #E2E8F0);
+            position: relative;
+        }
+        
+        .footer-modern::before {
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: 0;
+            width: 80px;
+            height: 2px;
+            background: linear-gradient(90deg, var(--primary, #0B5ED7), var(--success, #059669));
+            border-radius: 2px;
+        }
+        
+        .footer-content {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .footer-brand-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .footer-logo {
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, var(--primary, #0B5ED7), var(--primary-dark, #0A4CA8));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 1.1rem;
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+            flex-shrink: 0;
+        }
+        
+        .footer-brand-text h4 {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: var(--text-primary, #1E293B);
+            margin: 0;
+            letter-spacing: -0.01em;
+        }
+        
+        .footer-brand-text p {
+            font-size: 0.68rem;
+            color: var(--text-secondary, #64748B);
+            margin: 2px 0 0 0;
+        }
+        
+        .footer-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+        
+        .footer-link {
+            font-size: 0.72rem;
+            color: var(--text-secondary, #64748B);
+            text-decoration: none;
+            padding: 6px 12px;
+            border-radius: 8px;
+            transition: all 0.25s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-weight: 500;
+        }
+        
+        .footer-link:hover {
+            color: var(--primary, #0B5ED7);
+            background: var(--primary-bg, #E8F0FE);
+            transform: translateY(-1px);
+        }
+        
+        .footer-link i {
+            font-size: 0.65rem;
+            opacity: 0.75;
+        }
+        
+        .footer-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            background: var(--success-bg, #D1FAE5);
+            color: var(--success, #059669);
+            border: 1px solid rgba(5, 150, 105, 0.15);
+        }
+        
+        [data-theme="dark"] .status-badge {
+            background: #1A3A2A;
+            color: #34D399;
+            border-color: rgba(52, 211, 153, 0.2);
+        }
+        
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #059669;
+            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.2);
+            animation: pulse-dot 1.8s infinite;
+            flex-shrink: 0;
+        }
+        
+        .footer-bottom {
+            padding-top: 16px;
+            border-top: 1px dashed var(--border-color, #E2E8F0);
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .footer-copyright {
+            font-size: 0.68rem;
+            color: var(--text-secondary, #64748B);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin: 0;
+        }
+        
+        .footer-copyright strong {
+            color: var(--primary, #0B5ED7);
+            font-weight: 600;
+        }
+        
+        .footer-meta {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.65rem;
+            color: var(--text-secondary, #64748B);
+        }
+        
+        .footer-meta-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .footer-meta-item i {
+            font-size: 0.6rem;
+            color: var(--primary, #0B5ED7);
+            opacity: 0.7;
+        }
+        
+        .footer-meta-divider {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: var(--border-color, #E2E8F0);
+        }
+
+        /* ================================================================
            ANIMATIONS
            ================================================================ */
         @keyframes pulse-dot {
@@ -786,20 +1110,60 @@ include_once '../../components/reception_sidebar.php';
         /* ================================================================
            RESPONSIVE
            ================================================================ */
+        @media (max-width: 1024px) {
+            .page-header { padding: 24px 26px; gap: 20px; }
+            .page-header-title-text h1 { font-size: 1.35rem; }
+            .page-header-icon { width: 46px; height: 46px; font-size: 1.2rem; }
+        }
+
         @media (max-width: 768px) {
-            .page-header { padding: 18px 20px; border-radius: 16px; }
-            .page-header .page-title { font-size: 1.3rem; }
+            .page-header {
+                padding: 20px 22px;
+                border-radius: 16px;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 18px;
+            }
+            .page-header-left { min-width: 0; }
+            .page-header-actions {
+                justify-content: flex-start;
+                padding-top: 4px;
+            }
+            .action-btn { flex: 1; justify-content: center; min-width: 120px; }
+            .action-btn.ghost { flex: 0 0 42px; }
+            
+            .footer-modern { margin-top: 30px; padding: 20px 0 12px 0; }
+            .footer-content { flex-direction: column; align-items: flex-start; gap: 16px; }
+            .footer-links { width: 100%; justify-content: flex-start; }
+            .footer-bottom { flex-direction: column; align-items: flex-start; gap: 10px; }
+            .footer-meta { width: 100%; flex-wrap: wrap; }
+            
             .stat-card { padding: 16px 18px; min-height: 115px; }
             .stat-card .stat-number { font-size: 1.7rem; }
             .stat-card .stat-icon { width: 40px; height: 40px; font-size: 1.4rem; }
             .scroll-container { max-height: 220px; }
         }
-        @media (max-width: 640px) {
+
+        @media (max-width: 480px) {
+            .page-header { padding: 18px 18px; }
+            .page-header-title-text h1 { font-size: 1.15rem; }
+            .page-header-title-text .sub { font-size: 0.72rem; }
+            .page-header-icon { width: 40px; height: 40px; font-size: 1.05rem; border-radius: 11px; }
+            .info-badge { font-size: 0.66rem; padding: 6px 10px; }
+            .info-badge i { font-size: 0.65rem; }
+            .action-btn { font-size: 0.75rem; padding: 9px 14px; }
+            
             .stat-card { padding: 14px 16px; min-height: 105px; border-radius: 14px; }
             .stat-card .stat-number { font-size: 1.45rem; }
             .stat-card .stat-icon { width: 36px; height: 36px; font-size: 1.25rem; margin-bottom: 6px; }
             .stat-card .stat-label { font-size: 0.68rem; }
-            .page-header .page-title { font-size: 1.15rem; }
+            
+            .footer-brand-text h4 { font-size: 0.82rem; }
+            .footer-brand-text p  { font-size: 0.62rem; }
+            .footer-logo { width: 36px; height: 36px; font-size: 0.95rem; }
+            .footer-link { font-size: 0.68rem; padding: 5px 10px; }
+            .footer-meta { font-size: 0.6rem; gap: 8px; }
+            .footer-meta-divider { display: none; }
         }
     </style>
 </head>
@@ -811,44 +1175,74 @@ include_once '../../components/reception_sidebar.php';
 <main class="main-content">
 
     <!-- ============================================================ -->
-    <!-- PAGE HEADER -->
+    <!-- MODERN PAGE HEADER -->
     <!-- ============================================================ -->
     <div class="page-header animate-fade-in-up">
-        <div>
-            <h1 class="page-title">
-                <i class="fas fa-home"></i>
-                Reception Dashboard
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.22);color:#fff;">RECEPTION</span>
-                <span class="update-badge-light" id="updateBadge">
-                    <i class="fas fa-sync-alt fa-spin"></i> Live
+        
+        <!-- LEFT SIDE -->
+        <div class="page-header-left">
+            
+            <!-- Title Row -->
+            <div class="page-header-title-row">
+                <div class="page-header-icon">
+                    <i class="fas fa-hospital-user"></i>
+                </div>
+                <div class="page-header-title-text">
+                    <h1>Reception Dashboard</h1>
+                    <p class="sub">
+                        Welcome back, <strong><?= htmlspecialchars($full_name) ?></strong>
+                    </p>
+                </div>
+                <div class="header-pills">
+                    <span class="pill pill-role">
+                        <i class="fas fa-user-tie" style="font-size:0.6rem;"></i>
+                        Reception
+                    </span>
+                    <span class="pill pill-live">
+                        <span class="live-dot"></span>
+                        Live
+                    </span>
+                </div>
+            </div>
+            
+            <!-- Info Badges Row -->
+            <div class="page-header-badges">
+                <span class="info-badge">
+                    <i class="fas fa-store-alt"></i>
+                    <span><?= htmlspecialchars($branch_name) ?></span>
                 </span>
-            </h1>
-            <p class="page-subtitle">
-                <i class="fas fa-user"></i>
-                Welcome back, <strong><?= htmlspecialchars($full_name) ?></strong>!
-                <span class="header-badge">
-                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name) ?>
+                <span class="info-badge">
+                    <i class="fas fa-calendar-day"></i>
+                    <span><?= date('F d, Y') ?></span>
                 </span>
-                <span class="header-badge">
-                    <i class="fas fa-calendar-day"></i> <?= date('F d, Y') ?>
-                </span>
-                <span class="header-badge" id="onlineDoctorBadge">
+                <span class="info-badge">
                     <i class="fas fa-user-md"></i>
-                    <span class="online-count" id="onlineDoctorCount"><?= $online_doctors_count ?></span> Online
+                    <span>
+                        <span class="badge-value online"><?= $online_doctors_count ?></span>
+                        <span style="opacity:0.7;">/</span>
+                        <span class="badge-value"><?= $total_doctors ?></span>
+                        <span style="opacity:0.85;margin-left:2px;">Doctors</span>
+                    </span>
                 </span>
-            </p>
+            </div>
+            
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="new_patient.php" class="btn-outline-light">
-                <i class="fas fa-user-plus"></i> Register Patient
+        
+        <!-- RIGHT SIDE: ACTIONS -->
+        <div class="page-header-actions">
+            <a href="new_patient.php" class="action-btn primary">
+                <i class="fas fa-user-plus"></i>
+                Register Patient
             </a>
-            <a href="new_appointment.php" class="btn-outline-light">
-                <i class="fas fa-calendar-plus"></i> New Appointment
+            <a href="new_appointment.php" class="action-btn glass">
+                <i class="fas fa-calendar-plus"></i>
+                New Appointment
             </a>
-            <button onclick="location.reload()" class="btn-outline-light">
-                <i class="fas fa-sync-alt"></i> Refresh
+            <button onclick="location.reload()" class="action-btn ghost" title="Refresh">
+                <i class="fas fa-sync-alt"></i>
             </button>
         </div>
+        
     </div>
 
     <!-- ============================================================ -->
@@ -1106,18 +1500,81 @@ include_once '../../components/reception_sidebar.php';
     </div>
 
     <!-- ============================================================ -->
-    <!-- FOOTER -->
+    <!-- MODERN FOOTER -->
     <!-- ============================================================ -->
-    <footer class="footer">
-        <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span style="color:var(--gray-300);margin:0 8px;">|</span>
-            Reception Dashboard
-            <span style="color:var(--gray-300);margin:0 8px;">|</span>
-            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
-            <span style="color:var(--gray-300);margin:0 8px;">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
-        </p>
+    <footer class="footer-modern">
+        
+        <!-- Top Section: Brand + Links + Status -->
+        <div class="footer-content">
+            
+            <!-- Brand -->
+            <div class="footer-brand-section">
+                <div class="footer-logo">
+                    <i class="fas fa-clinic-medical"></i>
+                </div>
+                <div class="footer-brand-text">
+                    <h4>Braick Dispensary</h4>
+                    <p>Management System</p>
+                </div>
+            </div>
+            
+            <!-- Quick Links -->
+            <div class="footer-links">
+                <a href="dashboard.php" class="footer-link">
+                    <i class="fas fa-home"></i> Dashboard
+                </a>
+                <a href="patients.php" class="footer-link">
+                    <i class="fas fa-users"></i> Patients
+                </a>
+                <a href="appointments.php" class="footer-link">
+                    <i class="fas fa-calendar-check"></i> Appointments
+                </a>
+                <a href="profile.php" class="footer-link">
+                    <i class="fas fa-user-circle"></i> Profile
+                </a>
+            </div>
+            
+            <!-- System Status -->
+            <div class="footer-status">
+                <span class="status-badge">
+                    <span class="status-dot"></span>
+                    System Online
+                </span>
+            </div>
+            
+        </div>
+        
+        <!-- Bottom Section: Copyright + Meta -->
+        <div class="footer-bottom">
+            
+            <p class="footer-copyright">
+                &copy; <?= date('Y') ?> <strong>Braick Dispensary</strong> — All rights reserved.
+            </p>
+            
+            <div class="footer-meta">
+                <span class="footer-meta-item">
+                    <i class="fas fa-user"></i>
+                    <?= htmlspecialchars($full_name) ?>
+                </span>
+                <span class="footer-meta-divider"></span>
+                <span class="footer-meta-item">
+                    <i class="fas fa-store-alt"></i>
+                    <?= htmlspecialchars($branch_name) ?>
+                </span>
+                <span class="footer-meta-divider"></span>
+                <span class="footer-meta-item">
+                    <i class="fas fa-clock"></i>
+                    <span id="footerTimestamp"><?= date('H:i:s') ?></span>
+                </span>
+                <span class="footer-meta-divider"></span>
+                <span class="footer-meta-item">
+                    <i class="fas fa-code-branch"></i>
+                    v1.0.0
+                </span>
+            </div>
+            
+        </div>
+        
     </footer>
 
 </main>
@@ -1135,18 +1592,18 @@ include_once '../../components/reception_sidebar.php';
 
 <script>
     // ================================================================
-    // DATE & TIME UPDATER
+    // DATE & TIME UPDATER (footer timestamp)
     // ================================================================
-    function updateDateTime() {
+    function updateFooterTime() {
         const now = new Date();
         const timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
         const footer = document.getElementById('footerTimestamp');
-        if (footer) footer.textContent = 'Last updated: ' + timeStr;
+        if (footer) footer.textContent = timeStr;
     }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    updateFooterTime();
+    setInterval(updateFooterTime, 1000);
 
     // ================================================================
     // TOAST

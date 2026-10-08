@@ -6,18 +6,13 @@
 // WITH AUTO-UPDATE (3 SECONDS) - FULL TABLE UPDATE
 // USING SHARED HEADER & SIDEBAR
 // BRAICK DISPENSARY
+// V2: Modern header + footer + quick stat cards
 // ================================================================
 
-// ================================================================
-// SESSION START
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// CHECK SESSION - REDIRECT TO LOGIN IF NOT RECEPTION/ADMIN
-// ================================================================
 if (!isset($_SESSION['user_id']) || !in_array($_SESSION['role'] ?? '', ['reception', 'admin'])) {
     header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
@@ -80,7 +75,6 @@ $unread_notifications = 0;
 try {
     $db = Database::getInstance()->getConnection();
 
-    // ---------- APPOINTMENTS ----------
     $query = "
         SELECT a.*, 
                p.full_name as patient_name, 
@@ -121,7 +115,7 @@ try {
     $appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
     $total_records = count($appointments);
 
-    // ---------- STATUS COUNTS ----------
+    // STATUS COUNTS
     $statuses = ['scheduled', 'confirmed', 'in-progress', 'completed', 'cancelled'];
     foreach ($statuses as $status) {
         $sql = "SELECT COUNT(*) as total FROM appointments WHERE status = ? AND branch_id = ?";
@@ -135,7 +129,7 @@ try {
         $status_counts[$status] = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     }
 
-    // ---------- TOTAL ALL ----------
+    // TOTAL ALL
     $sql_total = "SELECT COUNT(*) as total FROM appointments WHERE branch_id = ?";
     $params_total = [$selected_branch_id];
     if (!empty($date_filter) && $period_filter !== 'all') {
@@ -146,17 +140,17 @@ try {
     $stmt->execute($params_total);
     $total_appointments_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-    // ---------- ONLINE DOCTORS ----------
+    // ONLINE DOCTORS
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM users WHERE role = 'doctor' AND is_online = 1 AND status = 'active' AND branch_id = ?");
     $stmt->execute([$selected_branch_id]);
     $online_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-    // ---------- TOTAL DOCTORS ----------
+    // TOTAL DOCTORS
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ?");
     $stmt->execute([$selected_branch_id]);
     $total_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-    // ---------- UNREAD NOTIFICATIONS ----------
+    // UNREAD NOTIFICATIONS
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
     $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -205,139 +199,256 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
 
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 
     <style>
         /* ================================================================
-           APPOINTMENTS - PAGE-SPECIFIC STYLES ONLY
-           (Shared styles are in reception_header.php)
+           APPOINTMENTS - PAGE-SPECIFIC STYLES
+           (Shared styles from reception_header.php)
            ================================================================ */
 
-        /* ---------- PAGE HEADER ---------- */
+        :root {
+            --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+        }
+
+        /* ================================================================
+           MODERN PAGE HEADER
+           ================================================================ */
         .page-header {
-            background: linear-gradient(135deg, var(--primary, #0B5ED7) 0%, var(--primary-dark, #0A4CA8) 100%);
+            background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #083D87 100%);
             border-radius: 20px;
-            padding: 26px 32px;
-            margin-bottom: 24px;
+            padding: 28px 32px;
+            margin-bottom: 28px;
             display: flex;
             flex-wrap: wrap;
             justify-content: space-between;
             align-items: center;
-            gap: 16px;
-            box-shadow: 0 10px 30px rgba(11, 94, 215, 0.25);
+            gap: 24px;
+            box-shadow: 
+                0 10px 30px rgba(11, 94, 215, 0.28),
+                0 1px 0 rgba(255,255,255,0.1) inset;
             position: relative;
             overflow: hidden;
             isolation: isolate;
         }
-        .page-header::before,
+
+        .page-header::before {
+            content: '';
+            position: absolute;
+            width: 380px;
+            height: 380px;
+            top: -200px;
+            right: -100px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0) 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
         .page-header::after {
             content: '';
             position: absolute;
+            width: 240px;
+            height: 240px;
+            bottom: -140px;
+            left: -60px;
             border-radius: 50%;
+            background: radial-gradient(circle, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0) 70%);
             pointer-events: none;
-        }
-        .page-header::before {
-            width: 340px; height: 340px;
-            top: -180px; right: -80px;
-            background: rgba(255,255,255,0.06);
-        }
-        .page-header::after {
-            width: 200px; height: 200px;
-            bottom: -120px; left: -40px;
-            background: rgba(255,255,255,0.04);
+            z-index: 0;
         }
 
-        .page-header .page-title {
-            color: #fff;
-            font-size: 1.6rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
+        .page-header-left {
+            flex: 1;
+            min-width: 280px;
             position: relative;
             z-index: 1;
-            letter-spacing: -0.02em;
-            margin: 0;
         }
-        .page-header .page-title i { font-size: 1.85rem; opacity: 0.95; }
 
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.9);
-            font-size: 0.9rem;
+        .page-header-title-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
+            margin-bottom: 14px;
+        }
+
+        .page-header-icon {
+            width: 52px;
+            height: 52px;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.18);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.25);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 1.4rem;
+            flex-shrink: 0;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+        }
+
+        .page-header-title-text h1 {
+            font-size: 1.55rem;
+            font-weight: 700;
+            color: #fff;
+            margin: 0;
+            letter-spacing: -0.02em;
+            line-height: 1.15;
+        }
+
+        .page-header-title-text .sub {
+            font-size: 0.8rem;
+            color: rgba(255,255,255,0.75);
+            margin: 3px 0 0 0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 400;
+        }
+
+        .page-header-title-text .sub strong {
+            color: #fff;
+            font-weight: 600;
+        }
+
+        .header-pills {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            flex-wrap: wrap;
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+            white-space: nowrap;
+            line-height: 1;
+            border: 1px solid transparent;
+        }
+
+        .pill-role {
+            background: rgba(255,255,255,0.22);
+            color: #fff;
+            border-color: rgba(255,255,255,0.25);
+            backdrop-filter: blur(6px);
+        }
+
+        .pill-live {
+            background: rgba(52, 211, 153, 0.18);
+            color: #6EE7B7;
+            border-color: rgba(52, 211, 153, 0.35);
+        }
+
+        .pill-live .live-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #34D399;
+            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.25);
+            animation: pulse-dot 1.8s infinite;
+        }
+
+        .page-header-badges {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .info-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 7px 13px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.10);
+            border: 1px solid rgba(255,255,255,0.15);
+            backdrop-filter: blur(8px);
+            color: rgba(255,255,255,0.95);
+            font-size: 0.72rem;
+            font-weight: 500;
+            transition: all 0.25s ease;
+            line-height: 1;
+        }
+
+        .info-badge:hover {
+            background: rgba(255,255,255,0.18);
+            border-color: rgba(255,255,255,0.28);
+            transform: translateY(-1px);
+        }
+
+        .info-badge i {
+            font-size: 0.72rem;
+            opacity: 0.9;
+        }
+
+        .info-badge .badge-value {
+            color: #fff;
+            font-weight: 700;
+        }
+
+        .info-badge .badge-value.online { color: #6EE7B7; }
+        .info-badge .badge-value.gold   { color: #FCD34D; }
+
+        .page-header-actions {
             display: flex;
             align-items: center;
             gap: 10px;
             flex-wrap: wrap;
-            margin-top: 6px;
             position: relative;
             z-index: 1;
         }
-        .page-header .page-subtitle strong { color: #fff; font-weight: 600; }
 
-        .role-badge-display {
-            background: rgba(255,255,255,0.22);
-            color: #fff;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(6px);
-        }
-
-        .header-badge {
-            background: rgba(255,255,255,0.15);
-            color: #fff;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(6px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.15);
-        }
-        .header-badge .online-count { color: #34D399; font-weight: 700; }
-        .header-badge .period-badge { color: #FCD34D; font-weight: 600; }
-
-        .btn-outline-light {
-            background: rgba(255,255,255,0.15);
-            color: #fff;
-            border: 1px solid rgba(255,255,255,0.25);
-            padding: 9px 18px;
-            border-radius: 11px;
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.25s ease;
-            text-decoration: none;
+        .action-btn-header {
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            backdrop-filter: blur(6px);
-            position: relative;
-            z-index: 1;
+            padding: 10px 18px;
+            border-radius: 11px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-decoration: none;
             cursor: pointer;
-        }
-        .btn-outline-light:hover {
-            background: rgba(255,255,255,0.28);
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0,0,0,0.18);
-            color: #fff;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            border: 1px solid transparent;
+            line-height: 1;
+            white-space: nowrap;
         }
 
-        .update-badge-light {
-            background: rgba(255,255,255,0.12);
-            color: rgba(255,255,255,0.85);
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            backdrop-filter: blur(6px);
-            font-weight: 500;
+        .action-btn-header i { font-size: 0.85rem; }
+
+        .action-btn-header.primary {
+            background: #fff;
+            color: #0A4CA8;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+        }
+        .action-btn-header.primary:hover {
+            background: #F8FAFC;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 22px rgba(0,0,0,0.18);
+            color: #083D87;
+        }
+
+        .action-btn-header.glass {
+            background: rgba(255,255,255,0.13);
+            color: #fff;
+            border-color: rgba(255,255,255,0.22);
+            backdrop-filter: blur(8px);
+        }
+        .action-btn-header.glass:hover {
+            background: rgba(255,255,255,0.24);
+            border-color: rgba(255,255,255,0.35);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+            color: #fff;
         }
 
         /* ================================================================
@@ -495,12 +606,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: var(--text-primary, #1E293B);
             vertical-align: middle;
         }
-        .data-table tbody tr {
-            transition: all 0.2s ease;
-        }
-        .data-table tbody tr:hover td {
-            background: var(--primary-bg, #E8F0FE);
-        }
+        .data-table tbody tr { transition: all 0.2s ease; }
+        .data-table tbody tr:hover td { background: var(--primary-bg, #E8F0FE); }
         .data-table tbody tr:last-child td { border-bottom: none; }
 
         /* ================================================================
@@ -571,15 +678,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             box-shadow: 0 6px 16px rgba(11, 94, 215, 0.3);
             color: #fff;
         }
-        .btn-green {
-            background: linear-gradient(135deg, #059669, #047857);
-            color: #fff;
-        }
-        .btn-green:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 16px rgba(5, 150, 105, 0.3);
-            color: #fff;
-        }
         .btn-outline {
             background: transparent;
             color: var(--text-secondary, #64748B);
@@ -597,67 +695,76 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
 
         /* ================================================================
-           STAT CARDS (quick stats)
+           QUICK STAT CARDS - MODERN GRADIENT
            ================================================================ */
-        .quick-stat-card {
-            background: var(--bg-card, #fff);
-            border-radius: 14px;
-            padding: 16px 18px;
-            border: 1px solid var(--border-color, #E2E8F0);
+        .quick-stat-card-modern {
+            border-radius: 16px;
+            padding: 20px 18px;
             text-align: center;
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm, 0 1px 3px rgba(0,0,0,0.06));
+            transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
             position: relative;
             overflow: hidden;
+            color: #fff;
+            isolation: isolate;
+            border: 1px solid rgba(255,255,255,0.1);
+            min-height: 110px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
-        .quick-stat-card::before {
+        .quick-stat-card-modern::before {
             content: '';
             position: absolute;
-            top: 0; left: 0; right: 0;
-            height: 4px;
-            background: var(--primary, #0B5ED7);
-            transition: all 0.3s;
+            top: -30px;
+            right: -30px;
+            width: 110px;
+            height: 110px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.10);
+            pointer-events: none;
+            transition: all 0.4s ease;
         }
-        .quick-stat-card[data-status="completed"]::before { background: #059669; }
-        .quick-stat-card[data-status="cancelled"]::before { background: #DC2626; }
-        .quick-stat-card[data-status="scheduled"]::before { background: #0B5ED7; }
-        .quick-stat-card[data-status="confirmed"]::before { background: #059669; }
-        .quick-stat-card[data-status="in-progress"]::before { background: #7C3AED; }
+        .quick-stat-card-modern:hover {
+            transform: translateY(-6px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.18);
+        }
+        .quick-stat-card-modern:hover::before {
+            transform: scale(1.25);
+            background: rgba(255,255,255,0.15);
+        }
 
-        .quick-stat-card:hover {
-            border-color: var(--primary, #0B5ED7);
-            transform: translateY(-4px);
-            box-shadow: 0 12px 28px rgba(11, 94, 215, 0.15);
-        }
+        .quick-stat-card-modern.scheduled    { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+        .quick-stat-card-modern.confirmed    { background: linear-gradient(135deg, #059669, #047857); }
+        .quick-stat-card-modern.in-progress  { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+        .quick-stat-card-modern.completed    { background: linear-gradient(135deg, #059669, #047857); }
+        .quick-stat-card-modern.cancelled    { background: linear-gradient(135deg, #DC2626, #B91C1C); }
 
-        .quick-stat-card .stat-number {
-            font-size: 1.7rem;
-            font-weight: 700;
-            line-height: 1.2;
-            margin: 4px 0;
+        .quick-stat-card-modern .stat-icon {
+            font-size: 1.5rem;
+            opacity: 0.9;
+            margin-bottom: 8px;
+            position: relative;
+            z-index: 1;
         }
-        .quick-stat-card .stat-label {
-            font-size: 0.7rem;
-            color: var(--text-secondary, #64748B);
+        .quick-stat-card-modern .stat-number {
+            font-size: 1.9rem;
+            font-weight: 800;
+            line-height: 1;
+            letter-spacing: -1px;
+            position: relative;
+            z-index: 1;
+        }
+        .quick-stat-card-modern .stat-label {
+            font-size: 0.68rem;
             font-weight: 600;
-            text-transform: capitalize;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            opacity: 0.9;
+            margin-top: 6px;
+            position: relative;
+            z-index: 1;
         }
-        .quick-stat-card .stat-icon {
-            font-size: 1.2rem;
-            margin-bottom: 4px;
-            display: inline-block;
-        }
-        .quick-stat-card[data-status="completed"] .stat-icon { color: #059669; }
-        .quick-stat-card[data-status="cancelled"] .stat-icon { color: #DC2626; }
-        .quick-stat-card[data-status="scheduled"] .stat-icon { color: #0B5ED7; }
-        .quick-stat-card[data-status="confirmed"] .stat-icon { color: #059669; }
-        .quick-stat-card[data-status="in-progress"] .stat-icon { color: #7C3AED; }
-
-        .quick-stat-card[data-status="completed"] .stat-number { color: #059669; }
-        .quick-stat-card[data-status="cancelled"] .stat-number { color: #DC2626; }
-        .quick-stat-card[data-status="scheduled"] .stat-number { color: #0B5ED7; }
-        .quick-stat-card[data-status="confirmed"] .stat-number { color: #059669; }
-        .quick-stat-card[data-status="in-progress"] .stat-number { color: #7C3AED; }
 
         /* ================================================================
            TABLE FOOTER
@@ -677,11 +784,210 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .table-footer strong { color: var(--text-primary, #1E293B); font-weight: 600; }
 
         /* ================================================================
+           MODERN FOOTER
+           ================================================================ */
+        .footer-modern {
+            margin-top: 40px;
+            padding: 28px 0 16px 0;
+            border-top: 2px solid var(--border-color, #E2E8F0);
+            position: relative;
+        }
+        
+        .footer-modern::before {
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: 0;
+            width: 80px;
+            height: 2px;
+            background: linear-gradient(90deg, var(--primary, #0B5ED7), var(--success, #059669));
+            border-radius: 2px;
+        }
+        
+        .footer-content {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .footer-brand-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .footer-logo {
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, var(--primary, #0B5ED7), var(--primary-dark, #0A4CA8));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 1.1rem;
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+            flex-shrink: 0;
+        }
+        
+        .footer-brand-text h4 {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: var(--text-primary, #1E293B);
+            margin: 0;
+            letter-spacing: -0.01em;
+        }
+        
+        .footer-brand-text p {
+            font-size: 0.68rem;
+            color: var(--text-secondary, #64748B);
+            margin: 2px 0 0 0;
+        }
+        
+        .footer-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+        
+        .footer-link {
+            font-size: 0.72rem;
+            color: var(--text-secondary, #64748B);
+            text-decoration: none;
+            padding: 6px 12px;
+            border-radius: 8px;
+            transition: all 0.25s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-weight: 500;
+        }
+        
+        .footer-link:hover {
+            color: var(--primary, #0B5ED7);
+            background: var(--primary-bg, #E8F0FE);
+            transform: translateY(-1px);
+        }
+        
+        .footer-link i {
+            font-size: 0.65rem;
+            opacity: 0.75;
+        }
+        
+        .footer-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .status-badge-footer {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            background: var(--success-bg, #D1FAE5);
+            color: var(--success, #059669);
+            border: 1px solid rgba(5, 150, 105, 0.15);
+        }
+        
+        [data-theme="dark"] .status-badge-footer {
+            background: #1A3A2A;
+            color: #34D399;
+            border-color: rgba(52, 211, 153, 0.2);
+        }
+        
+        .status-dot-footer {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #059669;
+            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.2);
+            animation: pulse-dot 1.8s infinite;
+            flex-shrink: 0;
+        }
+        
+        .footer-bottom {
+            padding-top: 16px;
+            border-top: 1px dashed var(--border-color, #E2E8F0);
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .footer-copyright {
+            font-size: 0.68rem;
+            color: var(--text-secondary, #64748B);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin: 0;
+        }
+        
+        .footer-copyright strong {
+            color: var(--primary, #0B5ED7);
+            font-weight: 600;
+        }
+        
+        .footer-meta {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.65rem;
+            color: var(--text-secondary, #64748B);
+        }
+        
+        .footer-meta-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .footer-meta-item i {
+            font-size: 0.6rem;
+            color: var(--primary, #0B5ED7);
+            opacity: 0.7;
+        }
+        
+        .footer-meta-divider {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: var(--border-color, #E2E8F0);
+        }
+
+        /* ================================================================
            RESPONSIVE
            ================================================================ */
+        @media (max-width: 1024px) {
+            .page-header { padding: 24px 26px; gap: 20px; }
+            .page-header-title-text h1 { font-size: 1.35rem; }
+            .page-header-icon { width: 46px; height: 46px; font-size: 1.2rem; }
+        }
+
         @media (max-width: 768px) {
-            .page-header { padding: 18px 20px; border-radius: 16px; }
-            .page-header .page-title { font-size: 1.3rem; }
+            .page-header {
+                padding: 20px 22px;
+                border-radius: 16px;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 18px;
+            }
+            .page-header-left { min-width: 0; }
+            .page-header-actions {
+                justify-content: flex-start;
+                padding-top: 4px;
+            }
+            .action-btn-header { flex: 1; justify-content: center; min-width: 120px; }
+            
             .data-table { font-size: 0.72rem; min-width: 780px; }
             .data-table th, .data-table td { padding: 8px 10px; }
             .filter-group { flex-direction: column; align-items: stretch; }
@@ -689,17 +995,43 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             .filter-group-item .form-control { flex: 1; }
             .table-card .table-header { flex-direction: column; align-items: stretch; text-align: center; }
             .table-footer { flex-direction: column; text-align: center; }
+            
+            .footer-modern { margin-top: 30px; padding: 20px 0 12px 0; }
+            .footer-content { flex-direction: column; align-items: flex-start; gap: 16px; }
+            .footer-links { width: 100%; justify-content: flex-start; }
+            .footer-bottom { flex-direction: column; align-items: flex-start; gap: 10px; }
+            .footer-meta { width: 100%; flex-wrap: wrap; }
         }
+
         @media (max-width: 640px) {
+            .page-header { padding: 18px 18px; }
+            .page-header-title-text h1 { font-size: 1.15rem; }
+            .page-header-title-text .sub { font-size: 0.72rem; }
+            .page-header-icon { width: 40px; height: 40px; font-size: 1.05rem; border-radius: 11px; }
+            .info-badge { font-size: 0.66rem; padding: 6px 10px; }
+            .info-badge i { font-size: 0.65rem; }
+            .action-btn-header { font-size: 0.75rem; padding: 9px 14px; }
+            
             .data-table { font-size: 0.65rem; min-width: 700px; }
             .data-table th, .data-table td { padding: 6px 8px; }
             .btn-sm { padding: 4px 8px; font-size: 0.65rem; }
-            .quick-stat-card .stat-number { font-size: 1.4rem; }
+            .quick-stat-card-modern .stat-number { font-size: 1.5rem; }
+            
+            .footer-brand-text h4 { font-size: 0.82rem; }
+            .footer-brand-text p  { font-size: 0.62rem; }
+            .footer-logo { width: 36px; height: 36px; font-size: 0.95rem; }
+            .footer-link { font-size: 0.68rem; padding: 5px 10px; }
+            .footer-meta { font-size: 0.6rem; gap: 8px; }
+            .footer-meta-divider { display: none; }
         }
 
         /* ================================================================
            ANIMATIONS
            ================================================================ */
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.25); opacity: 0.75; }
+        }
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(15px); }
             to   { opacity: 1; transform: translateY(0); }
@@ -723,56 +1055,67 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
 </head>
 <body>
 
-<!-- ================================================================ -->
-<!-- MAIN CONTENT (Header & Sidebar already included above) -->
-<!-- ================================================================ -->
 <main class="main-content">
 
     <!-- ============================================================ -->
-    <!-- PAGE HEADER -->
+    <!-- MODERN PAGE HEADER -->
     <!-- ============================================================ -->
     <div class="page-header animate-fade-in-up">
-        <div>
-            <h1 class="page-title">
-                <i class="fas fa-calendar-check"></i>
-                Appointments
-                <span class="role-badge-display">RECEPTION</span>
-                <span class="update-badge-light" id="updateBadge">
-                    <i class="fas fa-sync-alt fa-spin"></i> Live
-                </span>
-            </h1>
-            <p class="page-subtitle">
-                <i class="fas fa-hospital"></i>
-                Manage all patient appointments in <strong><?= htmlspecialchars($branch_name) ?></strong>
-
-                <span class="header-badge" id="onlineDoctorBadge">
+        
+        <div class="page-header-left">
+            
+            <div class="page-header-title-row">
+                <div class="page-header-icon">
+                    <i class="fas fa-calendar-check"></i>
+                </div>
+                <div class="page-header-title-text">
+                    <h1>Appointments</h1>
+                    <p class="sub">
+                        Manage all patient appointments in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                    </p>
+                </div>
+                <div class="header-pills">
+                    <span class="pill pill-role">
+                        <i class="fas fa-user-tie" style="font-size:0.6rem;"></i>
+                        Reception
+                    </span>
+                    <span class="pill pill-live">
+                        <span class="live-dot"></span>
+                        Live
+                    </span>
+                </div>
+            </div>
+            
+            <div class="page-header-badges">
+                <span class="info-badge">
                     <i class="fas fa-user-md"></i>
-                    <span class="online-count" id="onlineDoctorCount"><?= (int)$online_doctors ?></span> Online
+                    <span><span class="badge-value online" id="onlineDoctorCount"><?= (int)$online_doctors ?></span> Online</span>
                 </span>
-
-                <span class="header-badge">
+                <span class="info-badge">
                     <i class="fas fa-list"></i>
-                    <span id="totalRecordsCount"><?= (int)$total_records ?></span> records
+                    <span><span class="badge-value" id="totalRecordsCount"><?= (int)$total_records ?></span> Records</span>
                 </span>
-
                 <?php if (!empty($period_filter) && $period_filter !== 'all'): ?>
-                    <span class="header-badge">
+                    <span class="info-badge">
                         <i class="fas fa-calendar-alt"></i>
-                        <span class="period-badge">
-                            <?= htmlspecialchars($period_labels[$period_filter] ?? ucfirst($period_filter)) ?>
-                        </span>
+                        <span><span class="badge-value gold"><?= htmlspecialchars($period_labels[$period_filter] ?? ucfirst($period_filter)) ?></span></span>
                     </span>
                 <?php endif; ?>
-            </p>
+            </div>
+            
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="new_appointment.php" class="btn-outline-light">
-                <i class="fas fa-plus-circle"></i> New Appointment
+        
+        <div class="page-header-actions">
+            <a href="new_appointment.php" class="action-btn-header primary">
+                <i class="fas fa-plus-circle"></i>
+                New Appointment
             </a>
-            <button onclick="manualRefresh()" class="btn-outline-light" id="refreshBtn">
-                <i class="fas fa-sync-alt"></i> Refresh
+            <button onclick="manualRefresh()" class="action-btn-header glass" id="refreshBtn">
+                <i class="fas fa-sync-alt"></i>
+                Refresh
             </button>
         </div>
+        
     </div>
 
     <!-- ============================================================ -->
@@ -924,11 +1267,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     </div>
 
     <!-- ============================================================ -->
-    <!-- QUICK STATS -->
+    <!-- QUICK STATS - MODERN GRADIENT -->
     <!-- ============================================================ -->
     <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mt-5" id="statsContainer">
         <?php foreach ($status_counts as $status => $count): ?>
-            <div class="quick-stat-card animate-fade-in-up" data-status="<?= htmlspecialchars($status) ?>"
+            <div class="quick-stat-card-modern <?= htmlspecialchars($status) ?> animate-fade-in-up"
                  style="animation-delay:0.<?= 15 + (array_search($status, array_keys($status_counts)) * 5) ?>s;">
                 <div class="stat-icon">
                     <?php if ($status === 'completed'): ?>
@@ -954,20 +1297,79 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     </div>
 
     <!-- ============================================================ -->
-    <!-- FOOTER -->
+    <!-- MODERN FOOTER -->
     <!-- ============================================================ -->
-    <footer class="footer">
-        <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span style="color:var(--gray-300);margin:0 8px;">|</span>
-            Appointments
-            <span style="color:var(--gray-300);margin:0 8px;">|</span>
-            Logged in as: <strong><?= htmlspecialchars($full_name) ?></strong>
-            <span style="color:var(--gray-300);margin:0 8px;">|</span>
-            Branch: <strong><?= htmlspecialchars($branch_name) ?></strong>
-            <span style="color:var(--gray-300);margin:0 8px;">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
-        </p>
+    <footer class="footer-modern">
+        
+        <div class="footer-content">
+            
+            <div class="footer-brand-section">
+                <div class="footer-logo">
+                    <i class="fas fa-clinic-medical"></i>
+                </div>
+                <div class="footer-brand-text">
+                    <h4>Braick Dispensary</h4>
+                    <p>Management System</p>
+                </div>
+            </div>
+            
+            <div class="footer-links">
+                <a href="dashboard.php" class="footer-link">
+                    <i class="fas fa-home"></i> Dashboard
+                </a>
+                <a href="patients.php" class="footer-link">
+                    <i class="fas fa-users"></i> Patients
+                </a>
+                <a href="visits.php" class="footer-link">
+                    <i class="fas fa-clinic-medical"></i> Visits
+                </a>
+                <a href="appointments.php" class="footer-link">
+                    <i class="fas fa-calendar-check"></i> Appointments
+                </a>
+                <a href="profile.php" class="footer-link">
+                    <i class="fas fa-user-circle"></i> Profile
+                </a>
+            </div>
+            
+            <div class="footer-status">
+                <span class="status-badge-footer">
+                    <span class="status-dot-footer"></span>
+                    System Online
+                </span>
+            </div>
+            
+        </div>
+        
+        <div class="footer-bottom">
+            
+            <p class="footer-copyright">
+                &copy; <?= date('Y') ?> <strong>Braick Dispensary</strong> — All rights reserved.
+            </p>
+            
+            <div class="footer-meta">
+                <span class="footer-meta-item">
+                    <i class="fas fa-user"></i>
+                    <?= htmlspecialchars($full_name) ?>
+                </span>
+                <span class="footer-meta-divider"></span>
+                <span class="footer-meta-item">
+                    <i class="fas fa-store-alt"></i>
+                    <?= htmlspecialchars($branch_name) ?>
+                </span>
+                <span class="footer-meta-divider"></span>
+                <span class="footer-meta-item">
+                    <i class="fas fa-clock"></i>
+                    <span id="footerTimestampBottom"><?= date('h:i:s A') ?></span>
+                </span>
+                <span class="footer-meta-divider"></span>
+                <span class="footer-meta-item">
+                    <i class="fas fa-code-branch"></i>
+                    v1.0.0
+                </span>
+            </div>
+            
+        </div>
+        
     </footer>
 
 </main>
@@ -997,6 +1399,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         });
         const ft = document.getElementById('footerTimestamp');
         if (ft) ft.textContent = 'Last updated: ' + timeStr;
+        const ftb = document.getElementById('footerTimestampBottom');
+        if (ftb) ftb.textContent = timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
@@ -1222,12 +1626,10 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     // KEYBOARD SHORTCUTS
     // ================================================================
     document.addEventListener('keydown', function(e) {
-        // Alt+N -> New appointment
         if (e.altKey && e.key === 'n') {
             e.preventDefault();
             window.location.href = 'new_appointment.php';
         }
-        // Ctrl/Cmd+R -> Manual refresh (custom)
         if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
             e.preventDefault();
             manualRefresh();
@@ -1241,13 +1643,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         setTimeout(startAutoUpdate, 1500);
     });
 
-    console.log('%c📅 Braick - Appointments List', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ USING NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
+    console.log('%c📅 Braick - Appointments (V2 Modern)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c📊 Total Appointments: <?= (int)$total_appointments_all ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🔄 Full auto-update: Every 3 seconds', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Using shared header & sidebar', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Modern header + footer + quick stats', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

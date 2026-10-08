@@ -1,13 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/patients.php
-// RECEPTION - PATIENT MANAGEMENT (V6 - DATE/TIME COLUMN)
+// RECEPTION - PATIENT MANAGEMENT (V7 - MODERN HEADER + FOOTER)
 // ✅ Using shared reception_header.php & reception_sidebar.php
 // ✅ 3 BUTTONS TU: View, Edit, Assign/Reassign
 // ✅ Assign inaunda NEW VISIT kila click
 // ✅ AUTO-FILTER: Search & Filter work automatically
-// ✅ Doctor status = VISIT ACTIVE
-// ✅ V6: Tarehe & Saa ya Registration kwenye column YAKE PEKE YAKE
+// ✅ V7: Modern page header + footer, compact datetime column
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -55,7 +54,6 @@ $stats          = ['total' => 0, 'with_doctor' => 0, 'without_doctor' => 0, 'new
 try {
     $db = Database::getInstance()->getConnection();
 
-    // Ensure registered_by columns exist
     try {
         $stmt = $db->query("SHOW COLUMNS FROM patients LIKE 'registered_by'");
         if ($stmt->rowCount() == 0) {
@@ -64,7 +62,6 @@ try {
         }
     } catch (Exception $e) {}
 
-    // CLEANUP
     try {
         $db->exec("
             UPDATE patients p
@@ -78,7 +75,6 @@ try {
         ");
     } catch (Exception $e) {}
 
-    // MAIN QUERY
     $sql = "
         SELECT DISTINCT p.*,
                u.full_name as assigned_doctor_name,
@@ -123,7 +119,6 @@ try {
     $stmt->execute($params);
     $patients_raw = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Remove duplicates
     $unique_patients = [];
     $seen_ids = [];
     foreach ($patients_raw as $p) {
@@ -134,7 +129,6 @@ try {
     }
     $patients = $unique_patients;
 
-    // ENRICH
     foreach ($patients as $key => $patient) {
         $stmt = $db->prepare("SELECT COUNT(*) FROM visits WHERE patient_id = ?");
         $stmt->execute([$patient['id']]);
@@ -173,7 +167,6 @@ try {
 
     $total_patients = count($patients);
 
-    // STATS
     $stmt = $db->prepare("
         SELECT
             COUNT(DISTINCT p.id) as total,
@@ -244,169 +237,261 @@ include_once '../../components/reception_sidebar.php';
 
     <style>
         /* ================================================================
-           PATIENTS PAGE - SPECIFIC STYLES ONLY
-           (Base styles, variables, .card, .footer, .toast-custom,
-            .main-content are provided by reception_header.php)
+           PATIENTS PAGE - SPECIFIC STYLES
+           (Base styles from reception_header.php)
            ================================================================ */
 
         :root {
             --font-mono: 'JetBrains Mono', 'Courier New', monospace;
         }
 
-        /* ---------- PAGE HEADER ---------- */
+        /* ================================================================
+           MODERN PAGE HEADER - SAME AS DASHBOARD
+           ================================================================ */
         .page-header {
-            background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 50%, #1E40AF 100%);
+            background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 50%, #083D87 100%);
             border-radius: 20px;
-            padding: 28px 36px;
+            padding: 28px 32px;
             margin-bottom: 28px;
             display: flex;
             flex-wrap: wrap;
             justify-content: space-between;
             align-items: center;
-            gap: 16px;
-            box-shadow: 0 10px 40px rgba(37, 99, 235, 0.3);
+            gap: 24px;
+            box-shadow: 
+                0 10px 30px rgba(11, 94, 215, 0.28),
+                0 1px 0 rgba(255,255,255,0.1) inset;
             position: relative;
             overflow: hidden;
+            isolation: isolate;
         }
 
         .page-header::before {
             content: '';
             position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 400px;
-            height: 400px;
-            background: radial-gradient(circle, rgba(255,255,255,0.12) 0%, transparent 70%);
+            width: 380px;
+            height: 380px;
+            top: -200px;
+            right: -100px;
             border-radius: 50%;
+            background: radial-gradient(circle, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0) 70%);
             pointer-events: none;
+            z-index: 0;
         }
-
         .page-header::after {
             content: '';
             position: absolute;
-            bottom: -80%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%);
+            width: 240px;
+            height: 240px;
+            bottom: -140px;
+            left: -60px;
             border-radius: 50%;
+            background: radial-gradient(circle, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0) 70%);
             pointer-events: none;
+            z-index: 0;
         }
 
-        .page-header .page-title {
-            color: white;
-            font-size: 1.75rem;
-            font-weight: 800;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
+        .page-header-left {
+            flex: 1;
+            min-width: 280px;
             position: relative;
             z-index: 1;
-            letter-spacing: -0.5px;
         }
 
-        .page-header .page-title i { font-size: 1.9rem; opacity: 0.95; }
+        .page-header-title-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
+            margin-bottom: 14px;
+        }
 
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.9);
-            font-size: 0.9rem;
+        .page-header-icon {
+            width: 52px;
+            height: 52px;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.18);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.25);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 1.4rem;
+            flex-shrink: 0;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+        }
+
+        .page-header-title-text h1 {
+            font-size: 1.55rem;
+            font-weight: 700;
+            color: #fff;
+            margin: 0;
+            letter-spacing: -0.02em;
+            line-height: 1.15;
+        }
+
+        .page-header-title-text .sub {
+            font-size: 0.8rem;
+            color: rgba(255,255,255,0.75);
+            margin: 3px 0 0 0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 400;
+        }
+
+        .page-header-title-text .sub strong {
+            color: #fff;
+            font-weight: 600;
+        }
+
+        .header-pills {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            flex-wrap: wrap;
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+            white-space: nowrap;
+            line-height: 1;
+            border: 1px solid transparent;
+        }
+
+        .pill-role {
+            background: rgba(255,255,255,0.22);
+            color: #fff;
+            border-color: rgba(255,255,255,0.25);
+            backdrop-filter: blur(6px);
+        }
+
+        .pill-live {
+            background: rgba(52, 211, 153, 0.18);
+            color: #6EE7B7;
+            border-color: rgba(52, 211, 153, 0.35);
+        }
+
+        .pill-live .live-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #34D399;
+            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.25);
+            animation: pulse-dot 1.8s infinite;
+        }
+
+        .page-header-badges {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .info-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 7px 13px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.10);
+            border: 1px solid rgba(255,255,255,0.15);
+            backdrop-filter: blur(8px);
+            color: rgba(255,255,255,0.95);
+            font-size: 0.72rem;
+            font-weight: 500;
+            transition: all 0.25s ease;
+            line-height: 1;
+        }
+
+        .info-badge:hover {
+            background: rgba(255,255,255,0.18);
+            border-color: rgba(255,255,255,0.28);
+            transform: translateY(-1px);
+        }
+
+        .info-badge i {
+            font-size: 0.72rem;
+            opacity: 0.9;
+        }
+
+        .info-badge .badge-value {
+            color: #fff;
+            font-weight: 700;
+        }
+
+        .info-badge .badge-value.green { color: #6EE7B7; }
+        .info-badge .badge-value.amber { color: #FCD34D; }
+        .info-badge .badge-value.purple { color: #C4B5FD; }
+
+        .page-header-actions {
             display: flex;
             align-items: center;
             gap: 10px;
             flex-wrap: wrap;
             position: relative;
             z-index: 1;
-            margin-top: 6px;
         }
 
-        .page-header .page-subtitle strong { color: white; font-weight: 700; }
-
-        .page-header .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(8px);
-            border: 1px solid rgba(255,255,255,0.15);
-        }
-
-        .page-header .header-badge {
-            background: rgba(255,255,255,0.15);
-            color: white;
-            padding: 5px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            backdrop-filter: blur(8px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.15);
-            transition: all 0.3s ease;
-        }
-
-        .page-header .header-badge:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-1px);
-        }
-
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.15);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.25);
-            padding: 9px 18px;
-            border-radius: 12px;
-            font-weight: 600;
-            font-size: 0.8rem;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            text-decoration: none;
+        .action-btn-header {
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            backdrop-filter: blur(8px);
-            position: relative;
-            z-index: 1;
-            cursor: pointer;
-        }
-
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.28);
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(0,0,0,0.2);
-        }
-
-        .update-badge-light {
-            background: rgba(255,255,255,0.15);
-            color: rgba(255,255,255,0.9);
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            backdrop-filter: blur(8px);
+            padding: 10px 18px;
+            border-radius: 11px;
+            font-size: 0.8rem;
             font-weight: 600;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            border: 1px solid transparent;
+            line-height: 1;
+            white-space: nowrap;
         }
 
-        .live-indicator-modern {
-            display: inline-block;
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: #34D399;
-            animation: pulse-dot 1.5s infinite;
-            margin-right: 4px;
+        .action-btn-header i { font-size: 0.85rem; }
+
+        .action-btn-header.primary {
+            background: #fff;
+            color: #0A4CA8;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+        }
+        .action-btn-header.primary:hover {
+            background: #F8FAFC;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 22px rgba(0,0,0,0.18);
+            color: #083D87;
         }
 
-        /* ---------- STATS CARDS ---------- */
+        .action-btn-header.glass {
+            background: rgba(255,255,255,0.13);
+            color: #fff;
+            border-color: rgba(255,255,255,0.22);
+            backdrop-filter: blur(8px);
+        }
+        .action-btn-header.glass:hover {
+            background: rgba(255,255,255,0.24);
+            border-color: rgba(255,255,255,0.35);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+            color: #fff;
+        }
+
+        /* ================================================================
+           STATS CARDS
+           ================================================================ */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
             gap: 16px;
             margin-bottom: 24px;
         }
@@ -421,7 +506,7 @@ include_once '../../components/reception_sidebar.php';
             display: flex;
             flex-direction: column;
             justify-content: center;
-            min-height: 110px;
+            min-height: 115px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.08);
             border: 1px solid rgba(255,255,255,0.1);
         }
@@ -449,7 +534,7 @@ include_once '../../components/reception_sidebar.php';
             background: rgba(255,255,255,0.15);
         }
 
-        .stat-card-modern.blue   { background: linear-gradient(135deg, #2563EB, #1D4ED8); color: white; }
+        .stat-card-modern.blue   { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); color: white; }
         .stat-card-modern.green  { background: linear-gradient(135deg, #059669, #047857); color: white; }
         .stat-card-modern.orange { background: linear-gradient(135deg, #D97706, #B45309); color: white; }
         .stat-card-modern.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); color: white; }
@@ -482,7 +567,9 @@ include_once '../../components/reception_sidebar.php';
             z-index: 1;
         }
 
-        /* ---------- TABLE CARD ---------- */
+        /* ================================================================
+           TABLE CARD
+           ================================================================ */
         .table-card {
             background: var(--bg-card);
             border-radius: 18px;
@@ -514,7 +601,9 @@ include_once '../../components/reception_sidebar.php';
 
         .table-card .card-title i { color: var(--primary); }
 
-        /* ---------- SCROLL BUTTONS ---------- */
+        /* ================================================================
+           SCROLL BUTTONS
+           ================================================================ */
         .table-scroll-controls {
             display: flex;
             gap: 4px;
@@ -544,16 +633,18 @@ include_once '../../components/reception_sidebar.php';
             box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
         }
 
-        /* ---------- PATIENT TABLE ---------- */
+        /* ================================================================
+           PATIENT TABLE
+           ================================================================ */
         .patient-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 0.85rem;
-            min-width: 1600px;
+            min-width: 1400px;
         }
 
         .patient-table thead {
-            background: linear-gradient(135deg, #2563EB, #1D4ED8);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             color: white;
         }
 
@@ -631,68 +722,77 @@ include_once '../../components/reception_sidebar.php';
         [data-theme="dark"] .patient-table .status-badge.without_doctor { background: #3D2E0A; color: #FBBF24; }
 
         /* ================================================================
-           ✅ V6: DATE/TIME CELL - Column yake peke yake
+           ✅ V7: COMPACT DATE/TIME CELL - width pungufu, days katikati
            ================================================================ */
-        .datetime-cell-standalone {
+        .datetime-cell-compact {
             display: flex;
             flex-direction: column;
             gap: 4px;
-            min-width: 130px;
+            min-width: 105px;
+            max-width: 120px;
+            align-items: center;
+            text-align: center;
         }
 
-        .datetime-cell-standalone .dt-date,
-        .datetime-cell-standalone .dt-time {
+        .datetime-cell-compact .dt-date,
+        .datetime-cell-compact .dt-time {
             display: inline-flex;
             align-items: center;
-            gap: 5px;
-            font-size: 0.72rem;
+            justify-content: center;
+            gap: 4px;
+            font-size: 0.68rem;
             font-weight: 700;
             font-family: var(--font-mono);
             white-space: nowrap;
             line-height: 1.3;
+            width: 100%;
         }
 
-        .datetime-cell-standalone .dt-date {
+        .datetime-cell-compact .dt-date {
             color: var(--text-primary);
         }
 
-        .datetime-cell-standalone .dt-time {
+        .datetime-cell-compact .dt-time {
             color: var(--primary);
             font-weight: 800;
             background: var(--primary-bg);
-            padding: 3px 9px;
+            padding: 2px 7px;
             border-radius: 6px;
             border: 1px solid rgba(37, 99, 235, 0.15);
             width: fit-content;
+            font-size: 0.65rem;
         }
 
-        .datetime-cell-standalone i {
-            font-size: 0.62rem;
+        .datetime-cell-compact i {
+            font-size: 0.58rem;
             opacity: 0.85;
         }
 
-        [data-theme="dark"] .datetime-cell-standalone .dt-time {
+        [data-theme="dark"] .datetime-cell-compact .dt-time {
             color: #93C5FD;
             background: rgba(59, 130, 246, 0.15);
             border-color: rgba(59, 130, 246, 0.3);
         }
 
-        /* Days Badge */
-        .days-badge-blue {
+        /* Days Badge - centered, compact */
+        .days-badge-compact {
             display: inline-block;
             background: var(--primary) !important;
             color: #ffffff !important;
-            padding: 3px 12px !important;
-            border-radius: 12px !important;
-            font-size: 0.62rem !important;
+            padding: 2px 10px !important;
+            border-radius: 10px !important;
+            font-size: 0.58rem !important;
             font-weight: 700 !important;
             border: none !important;
             box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
-            margin-top: 3px;
             font-family: var(--font-mono);
+            letter-spacing: 0.02em;
+            margin-top: 2px;
+            text-align: center;
+            white-space: nowrap;
         }
 
-        .days-badge-blue.new {
+        .days-badge-compact.new {
             background: var(--success) !important;
             box-shadow: 0 2px 6px rgba(5, 150, 105, 0.25);
         }
@@ -716,7 +816,9 @@ include_once '../../components/reception_sidebar.php';
             color: #C4B5FD;
         }
 
-        /* ---------- ACTION BUTTONS ---------- */
+        /* ================================================================
+           ACTION BUTTONS
+           ================================================================ */
         .action-buttons-group {
             display: flex;
             gap: 5px;
@@ -743,11 +845,11 @@ include_once '../../components/reception_sidebar.php';
         .action-btn:hover { transform: translateY(-2px) scale(1.08); }
 
         .action-btn.view {
-            background: linear-gradient(135deg, #2563EB, #1D4ED8);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             color: white;
-            box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
+            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.3);
         }
-        .action-btn.view:hover { box-shadow: 0 4px 14px rgba(37, 99, 235, 0.5); }
+        .action-btn.view:hover { box-shadow: 0 4px 14px rgba(11, 94, 215, 0.5); }
 
         .action-btn.edit {
             background: linear-gradient(135deg, #7C3AED, #5B21B6);
@@ -794,16 +896,18 @@ include_once '../../components/reception_sidebar.php';
             bottom: -25px;
         }
 
-        /* ---------- SEARCH & FILTER ---------- */
+        /* ================================================================
+           SEARCH & FILTER
+           ================================================================ */
         .search-filter-wrapper {
             display: flex;
             align-items: center;
             gap: 8px;
             flex-wrap: wrap;
-            background: linear-gradient(135deg, #2563EB, #1D4ED8);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             padding: 10px 14px;
             border-radius: 14px;
-            box-shadow: 0 4px 16px rgba(37, 99, 235, 0.2);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.2);
             border: 1px solid rgba(255,255,255,0.1);
         }
 
@@ -921,7 +1025,9 @@ include_once '../../components/reception_sidebar.php';
             font-weight: 600;
         }
 
-        /* ---------- TABLE SCROLL ---------- */
+        /* ================================================================
+           TABLE SCROLL
+           ================================================================ */
         .table-scroll-container {
             overflow-x: auto;
             overflow-y: visible;
@@ -938,7 +1044,9 @@ include_once '../../components/reception_sidebar.php';
         }
         .table-scroll-container::-webkit-scrollbar-thumb:hover { background: var(--primary-dark); }
 
-        /* ---------- BUTTONS ---------- */
+        /* ================================================================
+           BUTTONS
+           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -954,18 +1062,219 @@ include_once '../../components/reception_sidebar.php';
         }
 
         .btn-primary {
-            background: linear-gradient(135deg, #2563EB, #1D4ED8);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             color: white;
         }
         .btn-primary:hover {
             transform: translateY(-2px);
-            box-shadow: 0 6px 18px rgba(37, 99, 235, 0.4);
+            box-shadow: 0 6px 18px rgba(11, 94, 215, 0.4);
         }
 
-        /* ---------- RESPONSIVE ---------- */
+        /* ================================================================
+           MODERN FOOTER
+           ================================================================ */
+        .footer-modern {
+            margin-top: 40px;
+            padding: 28px 0 16px 0;
+            border-top: 2px solid var(--border-color, #E2E8F0);
+            position: relative;
+        }
+        
+        .footer-modern::before {
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: 0;
+            width: 80px;
+            height: 2px;
+            background: linear-gradient(90deg, var(--primary, #0B5ED7), var(--success, #059669));
+            border-radius: 2px;
+        }
+        
+        .footer-content {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .footer-brand-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .footer-logo {
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, var(--primary, #0B5ED7), var(--primary-dark, #0A4CA8));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 1.1rem;
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+            flex-shrink: 0;
+        }
+        
+        .footer-brand-text h4 {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: var(--text-primary, #1E293B);
+            margin: 0;
+            letter-spacing: -0.01em;
+        }
+        
+        .footer-brand-text p {
+            font-size: 0.68rem;
+            color: var(--text-secondary, #64748B);
+            margin: 2px 0 0 0;
+        }
+        
+        .footer-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+        
+        .footer-link {
+            font-size: 0.72rem;
+            color: var(--text-secondary, #64748B);
+            text-decoration: none;
+            padding: 6px 12px;
+            border-radius: 8px;
+            transition: all 0.25s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-weight: 500;
+        }
+        
+        .footer-link:hover {
+            color: var(--primary, #0B5ED7);
+            background: var(--primary-bg, #E8F0FE);
+            transform: translateY(-1px);
+        }
+        
+        .footer-link i {
+            font-size: 0.65rem;
+            opacity: 0.75;
+        }
+        
+        .footer-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .status-badge-footer {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            background: var(--success-bg, #D1FAE5);
+            color: var(--success, #059669);
+            border: 1px solid rgba(5, 150, 105, 0.15);
+        }
+        
+        [data-theme="dark"] .status-badge-footer {
+            background: #1A3A2A;
+            color: #34D399;
+            border-color: rgba(52, 211, 153, 0.2);
+        }
+        
+        .status-dot-footer {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #059669;
+            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.2);
+            animation: pulse-dot 1.8s infinite;
+            flex-shrink: 0;
+        }
+        
+        .footer-bottom {
+            padding-top: 16px;
+            border-top: 1px dashed var(--border-color, #E2E8F0);
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .footer-copyright {
+            font-size: 0.68rem;
+            color: var(--text-secondary, #64748B);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin: 0;
+        }
+        
+        .footer-copyright strong {
+            color: var(--primary, #0B5ED7);
+            font-weight: 600;
+        }
+        
+        .footer-meta {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.65rem;
+            color: var(--text-secondary, #64748B);
+        }
+        
+        .footer-meta-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .footer-meta-item i {
+            font-size: 0.6rem;
+            color: var(--primary, #0B5ED7);
+            opacity: 0.7;
+        }
+        
+        .footer-meta-divider {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: var(--border-color, #E2E8F0);
+        }
+
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 1024px) {
+            .page-header { padding: 24px 26px; gap: 20px; }
+            .page-header-title-text h1 { font-size: 1.35rem; }
+            .page-header-icon { width: 46px; height: 46px; font-size: 1.2rem; }
+        }
+
         @media (max-width: 768px) {
-            .page-header { padding: 20px 22px; }
-            .page-header .page-title { font-size: 1.3rem; }
+            .page-header {
+                padding: 20px 22px;
+                border-radius: 16px;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 18px;
+            }
+            .page-header-left { min-width: 0; }
+            .page-header-actions {
+                justify-content: flex-start;
+                padding-top: 4px;
+            }
+            .action-btn-header { flex: 1; justify-content: center; min-width: 120px; }
+            
             .table-card { padding: 16px; }
             .patient-table { font-size: 0.75rem; }
             .patient-table thead th,
@@ -980,17 +1289,36 @@ include_once '../../components/reception_sidebar.php';
             .search-input-wrapper input { min-width: unset; width: 100%; }
             .card-header-left, .card-header-right { width: 100%; }
             .action-btn { width: 30px; height: 30px; font-size: 0.7rem; }
+            
+            .footer-modern { margin-top: 30px; padding: 20px 0 12px 0; }
+            .footer-content { flex-direction: column; align-items: flex-start; gap: 16px; }
+            .footer-links { width: 100%; justify-content: flex-start; }
+            .footer-bottom { flex-direction: column; align-items: flex-start; gap: 10px; }
+            .footer-meta { width: 100%; flex-wrap: wrap; }
         }
 
         @media (max-width: 640px) {
-            .page-header { padding: 16px 18px; border-radius: 16px; }
-            .page-header .page-title { font-size: 1.15rem; }
+            .page-header { padding: 18px 18px; }
+            .page-header-title-text h1 { font-size: 1.15rem; }
+            .page-header-title-text .sub { font-size: 0.72rem; }
+            .page-header-icon { width: 40px; height: 40px; font-size: 1.05rem; border-radius: 11px; }
+            .info-badge { font-size: 0.66rem; padding: 6px 10px; }
+            .info-badge i { font-size: 0.65rem; }
+            .action-btn-header { font-size: 0.75rem; padding: 9px 14px; }
+            
             .stat-card-modern .stat-number { font-size: 1.5rem; }
+            
+            .footer-brand-text h4 { font-size: 0.82rem; }
+            .footer-brand-text p  { font-size: 0.62rem; }
+            .footer-logo { width: 36px; height: 36px; font-size: 0.95rem; }
+            .footer-link { font-size: 0.68rem; padding: 5px 10px; }
+            .footer-meta { font-size: 0.6rem; gap: 8px; }
+            .footer-meta-divider { display: none; }
         }
 
         @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.25); opacity: 0.75; }
         }
 
         @keyframes fadeInUp {
@@ -1008,50 +1336,75 @@ include_once '../../components/reception_sidebar.php';
 
 <main class="main-content">
 
-    <!-- PAGE HEADER -->
-    <div class="page-header">
-        <div>
-            <h1 class="page-title">
-                <i class="fas fa-users"></i>
-                Patients
-                <span class="role-badge-display">RECEPTION</span>
-                <span class="update-badge-light">
-                    <span class="live-indicator-modern"></span> Live
-                </span>
-            </h1>
-            <p class="page-subtitle">
-                <i class="fas fa-hospital"></i>
-                Manage patients in <strong><?= htmlspecialchars($branch_name) ?></strong>
-                <span class="header-badge">
+    <!-- ============================================================ -->
+    <!-- MODERN PAGE HEADER -->
+    <!-- ============================================================ -->
+    <div class="page-header animate-fade-in-up">
+        
+        <!-- LEFT SIDE -->
+        <div class="page-header-left">
+            
+            <div class="page-header-title-row">
+                <div class="page-header-icon">
                     <i class="fas fa-users"></i>
-                    <span id="totalPatients"><?= $stats['total'] ?? 0 ?></span> Total
+                </div>
+                <div class="page-header-title-text">
+                    <h1>Patients</h1>
+                    <p class="sub">
+                        Manage patients in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                    </p>
+                </div>
+                <div class="header-pills">
+                    <span class="pill pill-role">
+                        <i class="fas fa-user-tie" style="font-size:0.6rem;"></i>
+                        Reception
+                    </span>
+                    <span class="pill pill-live">
+                        <span class="live-dot"></span>
+                        Live
+                    </span>
+                </div>
+            </div>
+            
+            <div class="page-header-badges">
+                <span class="info-badge">
+                    <i class="fas fa-users"></i>
+                    <span><span class="badge-value"><?= $stats['total'] ?? 0 ?></span> Total</span>
                 </span>
-                <span class="header-badge">
+                <span class="info-badge">
                     <i class="fas fa-user-md"></i>
-                    <span style="color:#34D399;font-weight:700;"><?= $stats['with_doctor'] ?? 0 ?></span> With Doctor
+                    <span><span class="badge-value green"><?= $stats['with_doctor'] ?? 0 ?></span> With Doctor</span>
                 </span>
-                <span class="header-badge">
-                    <i class="fas fa-user"></i>
-                    <span style="color:#FBBF24;font-weight:700;"><?= $stats['without_doctor'] ?? 0 ?></span> No Doctor
+                <span class="info-badge">
+                    <i class="fas fa-user-slash"></i>
+                    <span><span class="badge-value amber"><?= $stats['without_doctor'] ?? 0 ?></span> No Doctor</span>
                 </span>
-                <span class="header-badge">
+                <span class="info-badge">
                     <i class="fas fa-bolt"></i>
-                    <span style="color:#A78BFA;font-weight:700;"><?= $stats['new_patients'] ?? 0 ?></span> New (7d)
+                    <span><span class="badge-value purple"><?= $stats['new_patients'] ?? 0 ?></span> New (7d)</span>
                 </span>
-            </p>
+            </div>
+            
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="new_patient.php" class="btn-outline-light">
-                <i class="fas fa-plus"></i> New Patient
+        
+        <!-- RIGHT SIDE: ACTIONS -->
+        <div class="page-header-actions">
+            <a href="new_patient.php" class="action-btn-header primary">
+                <i class="fas fa-plus"></i>
+                New Patient
             </a>
-            <a href="appointments.php" class="btn-outline-light">
-                <i class="fas fa-calendar-alt"></i> Appointments
+            <a href="appointments.php" class="action-btn-header glass">
+                <i class="fas fa-calendar-alt"></i>
+                Appointments
             </a>
         </div>
+        
     </div>
 
+    <!-- ============================================================ -->
     <!-- STATS CARDS -->
-    <div class="stats-grid animate-fade-in-up">
+    <!-- ============================================================ -->
+    <div class="stats-grid animate-fade-in-up" style="animation-delay:0.05s;">
         <div class="stat-card-modern blue">
             <div class="stat-icon"><i class="fas fa-users"></i></div>
             <div class="stat-number"><?= $stats['total'] ?? 0 ?></div>
@@ -1074,7 +1427,9 @@ include_once '../../components/reception_sidebar.php';
         </div>
     </div>
 
+    <!-- ============================================================ -->
     <!-- TABLE CARD -->
+    <!-- ============================================================ -->
     <div class="table-card animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="card-header">
             <div class="card-header-left">
@@ -1145,8 +1500,7 @@ include_once '../../components/reception_sidebar.php';
                         <th><i class="fas fa-user mr-1"></i> Patient</th>
                         <th><i class="fas fa-id-card mr-1"></i> Patient ID</th>
                         <th><i class="fas fa-phone mr-1"></i> Contact</th>
-                        <!-- ✅ V6: Date/Time column YAKE PEKE YAKE -->
-                        <th><i class="fas fa-calendar-alt mr-1"></i> Registered Date & Time</th>
+                        <th><i class="fas fa-calendar-alt mr-1"></i> Registered</th>
                         <th><i class="fas fa-user-md mr-1"></i> Doctor</th>
                         <th><i class="fas fa-notes-medical mr-1"></i> Visits</th>
                         <th><i class="fas fa-user-plus mr-1"></i> Registered By</th>
@@ -1159,8 +1513,8 @@ include_once '../../components/reception_sidebar.php';
                     <?php foreach ($patients as $patient):
                         $patient_days = isset($patient['patient_days']) ? (int)$patient['patient_days'] : 0;
                         $days_text = $patient_days > 0
-                            ? '<span class="days-badge-blue">📅 ' . $patient_days . ' days</span>'
-                            : '<span class="days-badge-blue new">📅 New</span>';
+                            ? '<span class="days-badge-compact">' . $patient_days . 'd</span>'
+                            : '<span class="days-badge-compact new">New</span>';
 
                         $status_class = $patient['patient_status'] ?? 'existing';
                         $status_text  = $status_class === 'new' ? 'New' : 'Existing';
@@ -1176,7 +1530,6 @@ include_once '../../components/reception_sidebar.php';
                         $appointment_count = $patient['active_appointments'] ?? 0;
                         $registered_by     = $patient['registered_by_display'] ?? 'System';
 
-                        // ✅ V6: Registration date/time
                         $reg_date = !empty($patient['created_at']) ? date('d/m/Y', strtotime($patient['created_at'])) : '—';
                         $reg_time = !empty($patient['created_at']) ? date('h:i A', strtotime($patient['created_at'])) : '—';
                     ?>
@@ -1207,9 +1560,9 @@ include_once '../../components/reception_sidebar.php';
                                 <?php endif; ?>
                             </td>
 
-                            <!-- ✅ V6: Date/Time column YAKE PEKE YAKE -->
+                            <!-- ✅ V7: COMPACT DATE/TIME CELL -->
                             <td>
-                                <div class="datetime-cell-standalone">
+                                <div class="datetime-cell-compact">
                                     <span class="dt-date">
                                         <i class="fas fa-calendar-day"></i> <?= $reg_date ?>
                                     </span>
@@ -1243,7 +1596,6 @@ include_once '../../components/reception_sidebar.php';
                                     </span>
                                 <?php endif; ?>
                             </td>
-                            <!-- 3 BUTTONS: View, Edit, Assign/Reassign -->
                             <td class="col-actions">
                                 <div class="action-buttons-group">
                                     <a href="view_patient.php?id=<?= (int)$patient['id'] ?>"
@@ -1263,14 +1615,14 @@ include_once '../../components/reception_sidebar.php';
                                     <?php if ($is_assigned): ?>
                                         <a href="assign_doctor.php?patient_id=<?= (int)$patient['id'] ?>&reassign=1"
                                            class="action-btn reassign"
-                                           data-tooltip="Reassign Doctor (New Visit)"
+                                           data-tooltip="Reassign Doctor"
                                            title="Reassign Doctor - Itaunda Visit Mpya">
                                             <i class="fas fa-user-plus"></i>
                                         </a>
                                     <?php else: ?>
                                         <a href="assign_doctor.php?patient_id=<?= (int)$patient['id'] ?>"
                                            class="action-btn assign"
-                                           data-tooltip="Assign Doctor (New Visit)"
+                                           data-tooltip="Assign Doctor"
                                            title="Assign Doctor - Itaunda Visit Mpya">
                                             <i class="fas fa-user-md"></i>
                                         </a>
@@ -1306,17 +1658,77 @@ include_once '../../components/reception_sidebar.php';
         </div>
     </div>
 
-    <!-- FOOTER -->
-    <footer class="footer">
-        <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
-            Patients
-            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
-            <span id="footerTimestamp"><?= date('h:i:s A') ?></span>
-            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
-        </p>
+    <!-- ============================================================ -->
+    <!-- MODERN FOOTER -->
+    <!-- ============================================================ -->
+    <footer class="footer-modern">
+        
+        <div class="footer-content">
+            
+            <div class="footer-brand-section">
+                <div class="footer-logo">
+                    <i class="fas fa-clinic-medical"></i>
+                </div>
+                <div class="footer-brand-text">
+                    <h4>Braick Dispensary</h4>
+                    <p>Management System</p>
+                </div>
+            </div>
+            
+            <div class="footer-links">
+                <a href="dashboard.php" class="footer-link">
+                    <i class="fas fa-home"></i> Dashboard
+                </a>
+                <a href="patients.php" class="footer-link">
+                    <i class="fas fa-users"></i> Patients
+                </a>
+                <a href="appointments.php" class="footer-link">
+                    <i class="fas fa-calendar-check"></i> Appointments
+                </a>
+                <a href="profile.php" class="footer-link">
+                    <i class="fas fa-user-circle"></i> Profile
+                </a>
+            </div>
+            
+            <div class="footer-status">
+                <span class="status-badge-footer">
+                    <span class="status-dot-footer"></span>
+                    System Online
+                </span>
+            </div>
+            
+        </div>
+        
+        <div class="footer-bottom">
+            
+            <p class="footer-copyright">
+                &copy; <?= date('Y') ?> <strong>Braick Dispensary</strong> — All rights reserved.
+            </p>
+            
+            <div class="footer-meta">
+                <span class="footer-meta-item">
+                    <i class="fas fa-user"></i>
+                    <?= htmlspecialchars($full_name) ?>
+                </span>
+                <span class="footer-meta-divider"></span>
+                <span class="footer-meta-item">
+                    <i class="fas fa-store-alt"></i>
+                    <?= htmlspecialchars($branch_name) ?>
+                </span>
+                <span class="footer-meta-divider"></span>
+                <span class="footer-meta-item">
+                    <i class="fas fa-clock"></i>
+                    <span id="footerTimestamp"><?= date('h:i:s A') ?></span>
+                </span>
+                <span class="footer-meta-divider"></span>
+                <span class="footer-meta-item">
+                    <i class="fas fa-code-branch"></i>
+                    v1.0.0
+                </span>
+            </div>
+            
+        </div>
+        
     </footer>
 
 </main>
@@ -1485,8 +1897,8 @@ include_once '../../components/reception_sidebar.php';
         }
     });
 
-    // CLOCK
-    function updateClock() {
+    // FOOTER CLOCK
+    function updateFooterClock() {
         var now = new Date();
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
@@ -1494,8 +1906,8 @@ include_once '../../components/reception_sidebar.php';
         var footerTimestamp = document.getElementById('footerTimestamp');
         if (footerTimestamp) footerTimestamp.textContent = timeStr;
     }
-    setInterval(updateClock, 1000);
-    updateClock();
+    setInterval(updateFooterClock, 1000);
+    updateFooterClock();
 
     // TOAST (fallback)
     if (typeof window.showToast !== 'function') {
@@ -1517,10 +1929,10 @@ include_once '../../components/reception_sidebar.php';
         };
     }
 
-    console.log('%c👤 Braick - Patients V6 (DATE/TIME COLUMN)', 'font-size:18px; font-weight:bold; color:#2563EB;');
-    console.log('%c✅ 3 BUTTONS: View, Edit, Assign/Reassign', 'font-size:13px; color:#34D399; font-weight:bold;');
-    console.log('%c✅ V6: Date/Time column YAKE PEKE YAKE', 'font-size:13px; color:#7C3AED; font-weight:bold;');
-    console.log('%c✅ Doctor status = VISIT ACTIVE', 'font-size:13px; color:#F59E0B;');
+    console.log('%c👤 Braick - Patients V7 (Modern Header + Footer)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ 3 BUTTONS: View, Edit, Assign/Reassign', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ V7: Compact datetime column + Modern header/footer', 'font-size:13px; color:#7C3AED; font-weight:bold;');
+    console.log('%c✅ Doctor status = VISIT ACTIVE', 'font-size:13px; color:#D97706;');
 </script>
 
 </body>
