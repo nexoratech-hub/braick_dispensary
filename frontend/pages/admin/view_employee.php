@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/view_employee.php
-// SUPER ADMIN - VIEW EMPLOYEE DETAILS
+// SUPER ADMIN - VIEW EMPLOYEE DETAILS (V2)
+// ✅ V2: Profile picture inaonekana + full-size view modal
 // ✅ Uses SHARED header & sidebar (NO DUPLICATES)
 // ✅ Blue theme + full dark mode support via --page-* variables
 // ================================================================
@@ -129,17 +130,42 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
+// EMPLOYEE PROFILE PICTURE URL
+// ================================================================
+$employee_pic_url = '';
+$employee_pic_full_url = '';
+$has_employee_pic = false;
+
+if (!empty($employee['profile_pic'])) {
+    $pic_path = '/dispensary_system/frontend/assets/uploads/profiles/' . $employee['profile_pic'];
+    $pic_full = $_SERVER['DOCUMENT_ROOT'] . $pic_path;
+    
+    if (file_exists($pic_full)) {
+        $employee_pic_url = $pic_path;
+        $employee_pic_full_url = $pic_path;
+        $has_employee_pic = true;
+    }
+}
+
+// Fallback - use default avatar path
+if (!$has_employee_pic) {
+    $employee_pic_url = '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+}
+
+// ================================================================
 // TIME AGO HELPER
 // ================================================================
-function time_ago($timestamp) {
-    if (empty($timestamp)) return 'Just now';
-    $time = strtotime($timestamp);
-    $diff = time() - $time;
-    if ($diff < 60) return 'Just now';
-    if ($diff < 3600) return floor($diff / 60) . 'm ago';
-    if ($diff < 86400) return floor($diff / 3600) . 'h ago';
-    if ($diff < 604800) return floor($diff / 86400) . 'd ago';
-    return date('M d, Y', $time);
+if (!function_exists('time_ago')) {
+    function time_ago($timestamp) {
+        if (empty($timestamp)) return 'Just now';
+        $time = strtotime($timestamp);
+        $diff = time() - $time;
+        if ($diff < 60) return 'Just now';
+        if ($diff < 3600) return floor($diff / 60) . 'm ago';
+        if ($diff < 86400) return floor($diff / 3600) . 'h ago';
+        if ($diff < 604800) return floor($diff / 86400) . 'd ago';
+        return date('M d, Y', $time);
+    }
 }
 
 // ================================================================
@@ -150,7 +176,7 @@ include_once '../../components/admin_sidebar.php';
 ?>
 
 <!-- ================================================================
-     PAGE-SPECIFIC CSS - TUMIA VARIABLES ZA HEADER (--page-*)
+     PAGE-SPECIFIC CSS
      ================================================================ -->
 <style>
     /* PAGE HEADER */
@@ -285,6 +311,21 @@ include_once '../../components/admin_sidebar.php';
 
     .profile-avatar-emp { flex-shrink: 0; }
 
+    /* ✅ CLICKABLE PROFILE IMAGE */
+    .profile-img-wrapper-emp {
+        position: relative;
+        display: inline-block;
+        cursor: pointer;
+        border-radius: 50%;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .profile-img-wrapper-emp:hover {
+        transform: scale(1.05);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    }
+
     .profile-img-emp {
         width: 100px;
         height: 100px;
@@ -292,6 +333,42 @@ include_once '../../components/admin_sidebar.php';
         object-fit: cover;
         border: 4px solid rgba(255,255,255,0.3);
         background: white;
+        display: block;
+    }
+    
+    /* Hover overlay - shows zoom icon */
+    .profile-img-wrapper-emp .zoom-overlay-emp {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(11, 94, 215, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 1.8rem;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        border-radius: 50%;
+        border: 4px solid rgba(255,255,255,0.3);
+    }
+    
+    .profile-img-wrapper-emp:hover .zoom-overlay-emp {
+        opacity: 1;
+    }
+    
+    .profile-img-wrapper-emp .zoom-hint-emp {
+        position: absolute;
+        bottom: -30px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(255,255,255,0.2);
+        color: white;
+        font-size: 0.6rem;
+        padding: 3px 10px;
+        border-radius: 12px;
+        white-space: nowrap;
+        backdrop-filter: blur(4px);
+        font-weight: 600;
     }
 
     .profile-img-placeholder-emp {
@@ -518,7 +595,93 @@ include_once '../../components/admin_sidebar.php';
     }
     .btn-reactivate-emp:hover { background: linear-gradient(135deg, #047857, #065F46); color: white; }
 
-    /* MODAL */
+    /* ✅ FULL-SIZE IMAGE MODAL */
+    .image-modal-emp {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 99999;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+    }
+    
+    .image-modal-emp.show {
+        display: flex;
+    }
+    
+    .image-modal-overlay-emp {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.9);
+        backdrop-filter: blur(8px);
+        cursor: zoom-out;
+    }
+    
+    .image-modal-content-emp {
+        position: relative;
+        z-index: 100000;
+        max-width: 90vw;
+        max-height: 90vh;
+        animation: imageZoomIn 0.3s ease;
+    }
+    
+    @keyframes imageZoomIn {
+        from { transform: scale(0.7); opacity: 0; }
+        to { transform: scale(1); opacity: 1; }
+    }
+    
+    .image-modal-content-emp img {
+        max-width: 90vw;
+        max-height: 85vh;
+        border-radius: 16px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+        border: 4px solid white;
+        display: block;
+    }
+    
+    .image-modal-close-emp {
+        position: absolute;
+        top: -50px;
+        right: 0;
+        background: rgba(255,255,255,0.15);
+        border: 1px solid rgba(255,255,255,0.3);
+        color: white;
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        font-size: 1.2rem;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.3s ease;
+        backdrop-filter: blur(8px);
+    }
+    
+    .image-modal-close-emp:hover {
+        background: rgba(220, 38, 38, 0.8);
+        transform: rotate(90deg) scale(1.1);
+    }
+    
+    .image-modal-caption-emp {
+        position: absolute;
+        bottom: -50px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: white;
+        font-size: 0.9rem;
+        font-weight: 600;
+        text-align: center;
+        background: rgba(255,255,255,0.15);
+        padding: 8px 20px;
+        border-radius: 20px;
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255,255,255,0.2);
+        white-space: nowrap;
+    }
+
+    /* MODAL (delete/reactivate) */
     .modal-emp {
         position: fixed;
         top: 0; left: 0; right: 0; bottom: 0;
@@ -626,6 +789,7 @@ include_once '../../components/admin_sidebar.php';
         .profile-img-emp, .profile-img-placeholder-emp { width: 80px; height: 80px; font-size: 2rem; }
         .profile-badges-emp { justify-content: center; }
         .detail-item-emp { flex-direction: column; align-items: flex-start; gap: 2px; }
+        .image-modal-close-emp { top: -45px; }
     }
 
     @media (max-width: 480px) {
@@ -675,11 +839,22 @@ include_once '../../components/admin_sidebar.php';
     <div class="profile-card-emp">
         <div class="profile-header-emp">
             <div class="profile-avatar-emp">
-                <?php 
-                $profile_img = !empty($employee['profile_pic']) ? '/dispensary_system/frontend/assets/uploads/profiles/' . $employee['profile_pic'] : '';
-                if (!empty($profile_img) && file_exists($_SERVER['DOCUMENT_ROOT'] . $profile_img)): 
-                ?>
-                    <img src="<?= $profile_img ?>" alt="<?= htmlspecialchars($employee['full_name']) ?>" class="profile-img-emp">
+                <?php if ($has_employee_pic): ?>
+                    <!-- ✅ CLICKABLE PROFILE IMAGE -->
+                    <div class="profile-img-wrapper-emp" 
+                         onclick="openImageModal('<?= htmlspecialchars($employee_pic_full_url) ?>', '<?= htmlspecialchars(addslashes($employee['full_name'])) ?>')"
+                         title="Bofya kuona picha kamili">
+                        <img src="<?= htmlspecialchars($employee_pic_url) ?>" 
+                             alt="<?= htmlspecialchars($employee['full_name']) ?>" 
+                             class="profile-img-emp"
+                             onerror="this.style.display='none'; this.parentElement.innerHTML='<div class=\'profile-img-placeholder-emp\'><?= strtoupper(substr($employee['full_name'], 0, 1)) ?></div>';">
+                        <div class="zoom-overlay-emp">
+                            <i class="fas fa-search-plus"></i>
+                        </div>
+                        <div class="zoom-hint-emp">
+                            <i class="fas fa-mouse-pointer"></i> Bofya kuona
+                        </div>
+                    </div>
                 <?php else: ?>
                     <div class="profile-img-placeholder-emp">
                         <?= strtoupper(substr($employee['full_name'], 0, 1)) ?>
@@ -909,6 +1084,22 @@ include_once '../../components/admin_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
+<!-- ✅ FULL-SIZE IMAGE MODAL -->
+<!-- ================================================================ -->
+<?php if ($has_employee_pic): ?>
+<div id="imageModalEmp" class="image-modal-emp">
+    <div class="image-modal-overlay-emp" onclick="closeImageModal()"></div>
+    <div class="image-modal-content-emp">
+        <button class="image-modal-close-emp" onclick="closeImageModal()" title="Close (Esc)">
+            <i class="fas fa-times"></i>
+        </button>
+        <img id="imageModalImg" src="" alt="Full Size">
+        <div class="image-modal-caption-emp" id="imageModalCaption"></div>
+    </div>
+</div>
+<?php endif; ?>
+
+<!-- ================================================================ -->
 <!-- DELETE MODAL -->
 <!-- ================================================================ -->
 <div id="deleteModalEmp" class="modal-emp">
@@ -977,7 +1168,40 @@ include_once '../../components/admin_sidebar.php';
     }, 1000);
 
     // ================================================================
-    // MODAL FUNCTIONS
+    // ✅ FULL-SIZE IMAGE MODAL
+    // ================================================================
+    function openImageModal(imageSrc, employeeName) {
+        var modal = document.getElementById('imageModalEmp');
+        var img = document.getElementById('imageModalImg');
+        var caption = document.getElementById('imageModalCaption');
+        
+        if (!modal) return;
+        
+        img.src = imageSrc;
+        if (caption) caption.textContent = employeeName;
+        
+        modal.classList.add('show');
+        document.body.style.overflow = 'hidden';
+        
+        console.log('%c🖼️ Full image opened: ' + employeeName, 'font-size:12px; color:#0B5ED7;');
+    }
+    
+    function closeImageModal() {
+        var modal = document.getElementById('imageModalEmp');
+        if (!modal) return;
+        
+        modal.classList.remove('show');
+        document.body.style.overflow = '';
+        
+        // Clear image src after closing (for performance)
+        setTimeout(function() {
+            var img = document.getElementById('imageModalImg');
+            if (img) img.src = '';
+        }, 300);
+    }
+
+    // ================================================================
+    // DELETE MODAL FUNCTIONS
     // ================================================================
     function confirmDeleteEmp(id, name) {
         document.getElementById('deleteNameEmp').textContent = name;
@@ -989,6 +1213,9 @@ include_once '../../components/admin_sidebar.php';
         document.getElementById('deleteModalEmp').classList.remove('show');
     }
 
+    // ================================================================
+    // REACTIVATE MODAL FUNCTIONS
+    // ================================================================
     function confirmReactivateEmp(id, name) {
         document.getElementById('reactivateNameEmp').textContent = name;
         document.getElementById('reactivateLinkEmp').href = 'employees.php?reactivate=' + id + '&branch=<?= $selected_branch_id ?>';
@@ -999,19 +1226,27 @@ include_once '../../components/admin_sidebar.php';
         document.getElementById('reactivateModalEmp').classList.remove('show');
     }
 
+    // ================================================================
+    // ESC KEY - Close All Modals
+    // ================================================================
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
+            closeImageModal();
             closeModalEmp();
             closeReactivateModalEmp();
         }
     });
 
-    console.log('%c👤 Braick - Employee Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Braick - Employee Details (V2)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ NO duplicate header JavaScript', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Profile picture: <?= $has_employee_pic ? "AVAILABLE" : "PLACEHOLDER" ?>', 'font-size:13px; color:#<?= $has_employee_pic ? "34D399" : "F59E0B" ?>; font-weight:bold;');
+    console.log('%c✅ Full-size image viewer: CLICKABLE', 'font-size:13px; color:#34D399;');
     console.log('%c🌙 Dark mode: Handled by header', 'font-size:13px; color:#7C3AED;');
     console.log('%c👤 Employee: <?= htmlspecialchars($employee['full_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🎭 Role: <?= $role_display ?>', 'font-size:13px; color:#7B2FBE;');
+    <?php if ($has_employee_pic): ?>
+    console.log('%c🖼️ Picture: <?= htmlspecialchars($employee['profile_pic']) ?>', 'font-size:13px; color:#0B5ED7;');
+    <?php endif; ?>
 </script>
 
 </body>

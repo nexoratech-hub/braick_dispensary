@@ -2,12 +2,12 @@
 // ================================================================
 // FILE: frontend/components/reception_sidebar.php
 // RECEPTION - SHARED SIDEBAR (BLUE BACKGROUND)
+// ✅ V11: Services badge inaonyesha BRANCH PEKEE (7 badala ya 19)
 // ✅ V10: TOGGLE BUTTON (HAMBURGER) - MOBILE ONLY
 // ✅ NEW: Daily Activities menu (below Appointments)
 // ✅ NEW: Online/Offline status from DB (FIXED - inabaki online)
 // ✅ FIXED: Heartbeat update last_online kila page load
 // ✅ FIXED: AJAX handler ina-update last_online kila request
-// ✅ FIXED: is_online = 1 inatumwa kila mara
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -207,10 +207,19 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id, $user_branch_id]);
         $lab_test_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 7. Services count
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM services WHERE branch_id = ? OR branch_id IS NULL");
+        // ============================================================
+        // ✅ 7. SERVICES COUNT — BRANCH PEKEE, CONSULTATION PEKEE
+        // Inalingana na services.php page
+        // ============================================================
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM services s
+            INNER JOIN service_categories c ON s.category_id = c.id
+            WHERE (s.branch_id = ? OR s.branch_id IS NULL)
+            AND c.category_name = 'Consultation'
+        ");
         $stmt->execute([$user_branch_id]);
-        $services_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $services_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
         // 8. Daily Activities kwa receptionist huyu
         try {
@@ -354,8 +363,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([$branch_id, $branch_id]);
             $data['lab_test_count'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // 7. Services
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM services WHERE branch_id = ? OR branch_id IS NULL");
+            // ============================================================
+            // ✅ 7. SERVICES COUNT — BRANCH PEKEE, CONSULTATION PEKEE
+            // ============================================================
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count 
+                FROM services s
+                INNER JOIN service_categories c ON s.category_id = c.id
+                WHERE (s.branch_id = ? OR s.branch_id IS NULL)
+                AND c.category_name = 'Consultation'
+            ");
             $stmt->execute([$branch_id]);
             $data['services_count'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
@@ -1222,7 +1239,7 @@ $initial_data = [
         </a>
         
         <!-- ============================================================ -->
-        <!-- ✅ NEW: DAILY ACTIVITIES - CHINI YA APPOINTMENTS -->
+        <!-- ✅ DAILY ACTIVITIES - CHINI YA APPOINTMENTS -->
         <!-- ============================================================ -->
         <a href="/dispensary_system/frontend/pages/reception/daily_activities.php" class="sidebar-link <?= isActive('daily_activities.php') ?>">
             <i class="fas fa-tasks"></i>
@@ -1244,7 +1261,7 @@ $initial_data = [
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Services & Finance</div>
         
-        <!-- 7. Services -->
+        <!-- 7. Services — ✅ INAONYESHA BRANCH PEKEE -->
         <a href="/dispensary_system/frontend/pages/reception/services.php" class="sidebar-link <?= isActive('services.php') ?>">
             <i class="fas fa-cog"></i>
             <span class="link-text">Services</span>
@@ -1303,7 +1320,7 @@ $initial_data = [
     // CONFIGURATION
     // ================================================================
     var SIDEBAR_CONFIG = {
-        AJAX_URL: window.location.pathname,  // ✅ Same page - AJAX inatumia PHP handler ya juu
+        AJAX_URL: window.location.pathname,
         CHECK_INTERVAL: 2000,
         FORCE_INTERVAL: 5000,
         BRANCH_ID: <?= json_encode($user_branch_id) ?>,
@@ -1417,13 +1434,11 @@ $initial_data = [
     })();
 
     // ================================================================
-    // ✅ UPDATE USER ONLINE/OFFLINE STATUS (FIXED)
+    // UPDATE USER ONLINE/OFFLINE STATUS
     // ================================================================
     function updateUserStatus(data) {
-        // ✅ Kama hakuna data, usibadilishe
         if (!data) return;
         
-        // ✅ Kama is_online haipo kwenye data, TUSIBADILISHE
         if (data.is_online === undefined && data.online_status === undefined) {
             return;
         }
@@ -1535,7 +1550,7 @@ $initial_data = [
             }
         }
         
-        // 6. Services
+        // 6. Services — ✅ SASA INAONYESHA BRANCH PEKEE
         var servicesEl = document.getElementById('receptionServicesCount');
         if (servicesEl && data.services_count !== undefined) {
             var oldVal = servicesEl.textContent;
@@ -1672,7 +1687,6 @@ $initial_data = [
                     sidebarState.hasInitialData = true;
                 }
                 
-                // ✅ Update status - LAKINI tu kama AJAX imetuma is_online
                 if (data.data && data.data.is_online !== undefined) {
                     updateUserStatus(data.data);
                 }
@@ -1686,8 +1700,6 @@ $initial_data = [
         })
         .catch(function(error) {
             sidebarState.isUpdating = false;
-            // ✅ HATUBADILISHI STATUS KWA KOSA LA NETWORK
-            // Status inabaki kama ilivyo (Online au Offline)
             console.warn('❌ Sidebar AJAX error (status unchanged):', error.message);
         });
     }
@@ -1768,10 +1780,12 @@ $initial_data = [
         'font-size:13px; color:<?= $user_is_online ? "#34D399" : "#94A3B8" ?>; font-weight:bold;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 
         'font-size:13px; color:#6EA8FE;');
-    console.log('%c📊 Patients: <?= $patient_count ?>, Appointments: <?= $appointment_count ?>', 
+    console.log('%c📊 Patients: <?= $patient_count ?>, Appointments: <?= $appointment_count ?>, Services: <?= $services_count ?>', 
         'font-size:12px; color:#34D399;');
     console.log('%c📅 Daily Activities: <?= $daily_activities_count ?> (Today: <?= $today_daily_activities ?>)', 
         'font-size:13px; color:#10B981;');
+    console.log('%c✅ V11: Services badge inaonyesha BRANCH PEKEE (<?= $services_count ?>)', 
+        'font-size:13px; color:#7C3AED; font-weight:bold;');
     console.log('%c✅ FIXED: Heartbeat keeps status online', 
         'font-size:13px; color:#34D399; font-weight:bold;');
     console.log('%c✅ FIXED: Status unchanged on network errors', 

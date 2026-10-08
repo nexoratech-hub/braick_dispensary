@@ -1,9 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/services.php
-// SERVICES MANAGEMENT (V2 - SHARED HEADER/SIDEBAR)
+// SERVICES MANAGEMENT (V3 - ROW NUMBER FIXED)
 // ✅ Using shared reception_header.php & reception_sidebar.php
-// ✅ ADD ONLY WITH VIEW BUTTON
+// ✅ Sequential row numbers (1, 2, 3...) instead of database ID
 // ✅ Only CONSULTATION category for reception
 // ✅ Money format (1,000,000,000)
 // ✅ Newest first
@@ -207,11 +207,6 @@ try {
     $user_branch_name = 'Branch';
 }
 
-// ================================================================
-// NOTE: time_ago() is provided by reception_header.php
-// DO NOT redeclare here.
-// ================================================================
-
 include_once __DIR__ . '/../../components/reception_header.php';
 include_once __DIR__ . '/../../components/reception_sidebar.php';
 ?>
@@ -227,13 +222,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
 
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 
     <style>
         /* ================================================================
            SERVICES PAGE - SPECIFIC STYLES ONLY
-           (Base styles, variables, .card, .footer, .toast-custom,
-            .main-content are provided by reception_header.php)
            ================================================================ */
 
         /* ---------- PAGE HEADER ---------- */
@@ -722,6 +715,35 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: var(--text-primary);
         }
 
+        /* ✅ ROW NUMBER — CIRCLE BADGE */
+        .row-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #E8F0FE, #DBEAFE);
+            color: #0B5ED7;
+            font-weight: 800;
+            font-size: 0.85rem;
+            font-family: 'JetBrains Mono', monospace;
+            border: 2px solid #6EA8FE;
+            box-shadow: 0 2px 6px rgba(11, 94, 215, 0.15);
+            transition: all 0.25s ease;
+        }
+
+        .row-number:hover {
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+
+        [data-theme="dark"] .row-number {
+            background: linear-gradient(135deg, #1E3A5F, #1E40AF);
+            color: #93C5FD;
+            border-color: #3B82F6;
+        }
+
         .table-container .status-badge {
             display: inline-flex;
             align-items: center;
@@ -997,10 +1019,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
 </head>
 <body>
 
-<!-- ================================================================ -->
-<!-- SHARED HEADER & SIDEBAR (INCLUDED ABOVE) -->
-<!-- ================================================================ -->
-
 <main class="main-content">
 
     <!-- ================================================================ -->
@@ -1182,7 +1200,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             <table id="servicesTable">
                 <thead>
                     <tr>
-                        <th><i class="fas fa-hashtag"></i> ID</th>
+                        <th style="width:60px;"><i class="fas fa-hashtag"></i> #</th>
                         <th><i class="fas fa-tag"></i> Service Name</th>
                         <th><i class="fas fa-folder"></i> Category</th>
                         <th><i class="fas fa-money-bill"></i> Price</th>
@@ -1193,11 +1211,14 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 </thead>
                 <tbody>
                     <?php if (count($services) > 0): ?>
+                        <?php $row_num = 1; ?>
                         <?php foreach ($services as $service):
                             $is_new = (strtotime($service['created_at']) > strtotime('-7 days'));
                         ?>
                             <tr>
-                                <td><span style="font-family:monospace;font-size:0.78rem;font-weight:700;color:var(--text-secondary);">#<?= $service['id'] ?></span></td>
+                                <td>
+                                    <span class="row-number"><?= $row_num ?></span>
+                                </td>
                                 <td>
                                     <strong style="font-size:0.9rem;color:var(--text-primary);"><?= htmlspecialchars($service['service_name']) ?></strong>
                                     <?php if ($is_new): ?>
@@ -1236,6 +1257,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                     </a>
                                 </td>
                             </tr>
+                        <?php $row_num++; ?>
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
@@ -1433,7 +1455,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         var rows = table.getElementsByTagName('tr');
         var csv = [];
 
-        var headers = ['ID', 'Service Name', 'Category', 'Price (TSh)', 'Date Added', 'Status'];
+        var headers = ['No', 'Service Name', 'Category', 'Price (TSh)', 'Date Added', 'Status'];
         csv.push(headers.join(','));
 
         for (var i = 1; i < rows.length; i++) {
@@ -1495,10 +1517,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         if (e.key === 'Escape') closeModal();
     });
 
-    console.log('%c🛠️ Braick - Consultation Services (V2)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🛠️ Braick - Consultation Services (V3)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Total Services: <?= count($services) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Row numbers 1, 2, 3... (sequential) — SI database ID', 'font-size:13px; color:#7C3AED; font-weight:bold;');
     console.log('%c✅ Using shared reception_header.php & reception_sidebar.php', 'font-size:13px; color:#34D399; font-weight:bold;');
 </script>
 

@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/components/admin_sidebar.php
-// SUPER ADMIN - SHARED SIDEBAR
+// SUPER ADMIN - SHARED SIDEBAR (V11)
+// ✅ V11: Services badge = Services + Procedures + Equipment + Lab Tests
 // ✅ FIXED: Online/Offline status from DB (login/logout aware)
 // ✅ FIXED: Heartbeat update last_online kila page load
 // ✅ NEW: Daily Activities menu - CHINI YA AUDIT
@@ -171,22 +172,66 @@ if ($db !== null) {
         }
         $today_patients = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // SERVICES
-        if ($selected_branch_id === 'all') {
-            $stmt = $db->query("SELECT COUNT(*) as count FROM bill_items WHERE status != 'cancelled'");
-        } else {
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM bill_items WHERE branch_id = ? AND status != 'cancelled'");
-            $stmt->execute([(int)$selected_branch_id]);
-        }
-        $total_services = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        // ============================================================
+        // ✅ SERVICES — Jumla ya Services + Procedures + Equipment + Lab Tests
+        // Inahesabu kutoka catalog tables (sio transactions)
+        // ============================================================
+        $total_services = 0;
+
+        // 1. Services
+        try {
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("SELECT COUNT(*) as count FROM services WHERE is_active = 1");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM services WHERE is_active = 1 AND (branch_id = ? OR branch_id IS NULL)");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $total_services += (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) {}
+
+        // 2. Procedures Catalog
+        try {
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("SELECT COUNT(*) as count FROM procedures_catalog WHERE is_active = 1");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM procedures_catalog WHERE is_active = 1 AND (branch_id = ? OR branch_id IS NULL)");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $total_services += (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) {}
+
+        // 3. Medical Equipment
+        try {
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("SELECT COUNT(*) as count FROM medical_equipment WHERE status = 'active'");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM medical_equipment WHERE status = 'active' AND branch_id = ?");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $total_services += (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) {}
+
+        // 4. Lab Tests Catalog
+        try {
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests_catalog WHERE is_active = 1");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests_catalog WHERE is_active = 1 AND (branch_id = ? OR branch_id IS NULL)");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $total_services += (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) {}
         
-        if ($selected_branch_id === 'all') {
-            $stmt = $db->query("SELECT COUNT(*) as count FROM bill_items WHERE status != 'cancelled' AND DATE(created_at) = CURDATE()");
-        } else {
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM bill_items WHERE branch_id = ? AND status != 'cancelled' AND DATE(created_at) = CURDATE()");
-            $stmt->execute([(int)$selected_branch_id]);
-        }
-        $today_services = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        // TODAY'S SERVICES (transactions za leo kutoka bill_items)
+        try {
+            if ($selected_branch_id === 'all') {
+                $stmt = $db->query("SELECT COUNT(*) as count FROM bill_items WHERE status != 'cancelled' AND DATE(created_at) = CURDATE()");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM bill_items WHERE branch_id = ? AND status != 'cancelled' AND DATE(created_at) = CURDATE()");
+                $stmt->execute([(int)$selected_branch_id]);
+            }
+            $today_services = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        } catch (Exception $e) {}
         
         // PRESCRIPTIONS & LAB
         if ($selected_branch_id === 'all') {
@@ -856,9 +901,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     
     <nav class="sidebar-nav">
         
-        <!-- ============================================================ -->
         <!-- MAIN MENU -->
-        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">📋</span> Main Menu</div>
         
         <a href="/dispensary_system/frontend/pages/admin/dashboard.php?branch=<?= $selected_branch_id ?>" 
@@ -886,9 +929,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <?php endif; ?>
         </a>
         
-        <!-- ============================================================ -->
         <!-- MODULES -->
-        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">⚙️</span> Modules</div>
         
         <a href="/dispensary_system/frontend/pages/admin/doctors_list.php?branch=<?= $selected_branch_id ?>" 
@@ -957,9 +998,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <?php endif; ?>
         </a>
         
-        <!-- ============================================================ -->
         <!-- SERVICES -->
-        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">💼</span> Services</div>
         
         <a href="/dispensary_system/frontend/pages/admin/services.php?branch=<?= $selected_branch_id ?>" 
@@ -974,9 +1013,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <?php endif; ?>
         </a>
         
-        <!-- ============================================================ -->
-        <!-- OTHERS SECTION -->
-        <!-- ============================================================ -->
+        <!-- OTHERS -->
         <div class="nav-label"><span class="label-icon">📁</span> Others</div>
         
         <a href="/dispensary_system/frontend/pages/admin/referrals.php?branch=<?= $selected_branch_id ?>" 
@@ -1012,9 +1049,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <?php endif; ?>
         </a>
         
-        <!-- ============================================================ -->
         <!-- MANAGEMENT -->
-        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">🏢</span> Management</div>
         
         <a href="/dispensary_system/frontend/pages/admin/branches.php?branch=<?= $selected_branch_id ?>" 
@@ -1030,9 +1065,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <span class="link-text">Departments</span>
         </a>
         
-        <!-- ============================================================ -->
         <!-- SYSTEM -->
-        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">🔧</span> System</div>
         
         <a href="/dispensary_system/frontend/pages/admin/settings.php?branch=<?= $selected_branch_id ?>" 
@@ -1041,13 +1074,11 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <span class="link-text">Settings</span>
         </a>
         
-        <!-- ============================================================ -->
         <!-- ACCOUNT -->
-        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">👤</span> Account</div>
         
         <a href="/dispensary_system/frontend/pages/admin/profile.php" 
-           class="sidebar-link <?= isActive('profile.php') ?>">
+           class="sidebar-link <?= isActive('profile.php') ?>" active' : '' ?>">
             <i class="fas fa-user-circle"></i>
             <span class="link-text">Profile</span>
         </a>
@@ -1060,9 +1091,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         
     </nav>
     
-    <!-- ================================================================ -->
-    <!-- ✅ STATUS FOOTER - ONLINE/OFFLINE FROM DB -->
-    <!-- ================================================================ -->
+    <!-- STATUS FOOTER -->
     <div class="sidebar-status" id="sidebarStatusFooter">
         <span class="status-dot <?= $user_is_online ? 'online' : 'offline' ?>" id="sidebarFooterDot"></span>
         <span class="status-text <?= $user_is_online ? 'online' : 'offline' ?>" id="sidebarFooterText">
@@ -1221,12 +1250,11 @@ function switchBranch(branchId) {
 })();
 
 // ================================================================
-// ✅ UPDATE USER ONLINE/OFFLINE STATUS (FIXED)
+// UPDATE USER ONLINE/OFFLINE STATUS
 // ================================================================
 function updateUserStatus(data) {
     if (!data) return;
     
-    // ✅ Kama AJAX haikutuma is_online, TUSIBADILISHE
     if (data.is_online === undefined && data.online_status === undefined) {
         return;
     }
@@ -1251,7 +1279,7 @@ function updateUserStatus(data) {
 }
 
 // ================================================================
-// AUTO-UPDATE BADGE DATA + HEARTBEAT
+// AUTO-UPDATE BADGE DATA
 // ================================================================
 function refreshSidebarBadges() {
     if (sidebarState.isUpdating) return;
@@ -1346,7 +1374,6 @@ function refreshSidebarBadges() {
                 else { daEl.style.display = 'none'; }
             }
             
-            // ✅ UPDATE ONLINE/OFFLINE STATUS
             if (data.data.is_online !== undefined) {
                 updateUserStatus(data.data);
             }
@@ -1354,7 +1381,6 @@ function refreshSidebarBadges() {
     })
     .catch(function(error) {
         sidebarState.isUpdating = false;
-        // ✅ HATUBADILISHI STATUS KWA KOSA LA NETWORK
     });
 }
 
@@ -1380,10 +1406,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
 window.refreshSidebarData = refreshSidebarBadges;
 
-console.log('%c🏥 Braick - Admin Sidebar', 'font-size:16px; font-weight:bold; color:#0AA84F;');
+console.log('%c🏥 Braick - Admin Sidebar (V11)', 'font-size:16px; font-weight:bold; color:#0AA84F;');
 console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#34D399;');
 console.log('%c🟢 Status: <?= $user_is_online ? "ONLINE" : "OFFLINE" ?>', 'font-size:13px; color:<?= $user_is_online ? "#34D399" : "#94A3B8" ?>; font-weight:bold;');
-console.log('%c✅ Online/Offline from DB (login/logout aware)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Heartbeat keeps status online', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Daily Activities badge + today count', 'font-size:13px; color:#34D399;');
+console.log('%c✅ V11: Services badge = Services + Procedures + Equipment + Lab Tests', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Services total: <?= $total_services ?>', 'font-size:13px; color:#7C3AED; font-weight:bold;');
 </script>
