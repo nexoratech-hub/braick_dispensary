@@ -1,12 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/patients.php
-// RECEPTION - PATIENT MANAGEMENT (V5 - SHARED HEADER/SIDEBAR)
+// RECEPTION - PATIENT MANAGEMENT (V6 - DATE/TIME COLUMN)
 // ✅ Using shared reception_header.php & reception_sidebar.php
 // ✅ 3 BUTTONS TU: View, Edit, Assign/Reassign
 // ✅ Assign inaunda NEW VISIT kila click
 // ✅ AUTO-FILTER: Search & Filter work automatically
 // ✅ Doctor status = VISIT ACTIVE
+// ✅ V6: Tarehe & Saa ya Registration kwenye column YAKE PEKE YAKE
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -63,7 +64,7 @@ try {
         }
     } catch (Exception $e) {}
 
-    // CLEANUP: Safisha patients.assigned_doctor_id kama hakuna visit active
+    // CLEANUP
     try {
         $db->exec("
             UPDATE patients p
@@ -207,7 +208,6 @@ try {
     $total_patients = 0;
 }
 
-// Unread notifications
 $unread_notifications = 0;
 try {
     if (isset($_SESSION['user_id']) && isset($db)) {
@@ -225,11 +225,6 @@ $profile_pic_url = !empty($profile_pic)
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// NOTE: time_ago() is provided by reception_header.php
-// DO NOT redeclare here.
-// ================================================================
-
 include_once '../../components/reception_header.php';
 include_once '../../components/reception_sidebar.php';
 ?>
@@ -245,7 +240,7 @@ include_once '../../components/reception_sidebar.php';
 
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 
     <style>
         /* ================================================================
@@ -253,6 +248,10 @@ include_once '../../components/reception_sidebar.php';
            (Base styles, variables, .card, .footer, .toast-custom,
             .main-content are provided by reception_header.php)
            ================================================================ */
+
+        :root {
+            --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+        }
 
         /* ---------- PAGE HEADER ---------- */
         .page-header {
@@ -550,7 +549,7 @@ include_once '../../components/reception_sidebar.php';
             width: 100%;
             border-collapse: collapse;
             font-size: 0.85rem;
-            min-width: 1500px;
+            min-width: 1600px;
         }
 
         .patient-table thead {
@@ -631,6 +630,53 @@ include_once '../../components/reception_sidebar.php';
         [data-theme="dark"] .patient-table .status-badge.with_doctor    { background: #1A3A2A; color: #34D399; }
         [data-theme="dark"] .patient-table .status-badge.without_doctor { background: #3D2E0A; color: #FBBF24; }
 
+        /* ================================================================
+           ✅ V6: DATE/TIME CELL - Column yake peke yake
+           ================================================================ */
+        .datetime-cell-standalone {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 130px;
+        }
+
+        .datetime-cell-standalone .dt-date,
+        .datetime-cell-standalone .dt-time {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            font-family: var(--font-mono);
+            white-space: nowrap;
+            line-height: 1.3;
+        }
+
+        .datetime-cell-standalone .dt-date {
+            color: var(--text-primary);
+        }
+
+        .datetime-cell-standalone .dt-time {
+            color: var(--primary);
+            font-weight: 800;
+            background: var(--primary-bg);
+            padding: 3px 9px;
+            border-radius: 6px;
+            border: 1px solid rgba(37, 99, 235, 0.15);
+            width: fit-content;
+        }
+
+        .datetime-cell-standalone i {
+            font-size: 0.62rem;
+            opacity: 0.85;
+        }
+
+        [data-theme="dark"] .datetime-cell-standalone .dt-time {
+            color: #93C5FD;
+            background: rgba(59, 130, 246, 0.15);
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+
         /* Days Badge */
         .days-badge-blue {
             display: inline-block;
@@ -642,6 +688,8 @@ include_once '../../components/reception_sidebar.php';
             font-weight: 700 !important;
             border: none !important;
             box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
+            margin-top: 3px;
+            font-family: var(--font-mono);
         }
 
         .days-badge-blue.new {
@@ -958,15 +1006,9 @@ include_once '../../components/reception_sidebar.php';
 </head>
 <body>
 
-<!-- ================================================================ -->
-<!-- SHARED HEADER & SIDEBAR (INCLUDED ABOVE) -->
-<!-- ================================================================ -->
-
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1008,9 +1050,7 @@ include_once '../../components/reception_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- STATS CARDS -->
-    <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
         <div class="stat-card-modern blue">
             <div class="stat-icon"><i class="fas fa-users"></i></div>
@@ -1034,9 +1074,7 @@ include_once '../../components/reception_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- TABLE CARD -->
-    <!-- ================================================================ -->
     <div class="table-card animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="card-header">
             <div class="card-header-left">
@@ -1107,7 +1145,8 @@ include_once '../../components/reception_sidebar.php';
                         <th><i class="fas fa-user mr-1"></i> Patient</th>
                         <th><i class="fas fa-id-card mr-1"></i> Patient ID</th>
                         <th><i class="fas fa-phone mr-1"></i> Contact</th>
-                        <th><i class="fas fa-calendar mr-1"></i> Days</th>
+                        <!-- ✅ V6: Date/Time column YAKE PEKE YAKE -->
+                        <th><i class="fas fa-calendar-alt mr-1"></i> Registered Date & Time</th>
                         <th><i class="fas fa-user-md mr-1"></i> Doctor</th>
                         <th><i class="fas fa-notes-medical mr-1"></i> Visits</th>
                         <th><i class="fas fa-user-plus mr-1"></i> Registered By</th>
@@ -1136,6 +1175,10 @@ include_once '../../components/reception_sidebar.php';
 
                         $appointment_count = $patient['active_appointments'] ?? 0;
                         $registered_by     = $patient['registered_by_display'] ?? 'System';
+
+                        // ✅ V6: Registration date/time
+                        $reg_date = !empty($patient['created_at']) ? date('d/m/Y', strtotime($patient['created_at'])) : '—';
+                        $reg_time = !empty($patient['created_at']) ? date('h:i A', strtotime($patient['created_at'])) : '—';
                     ?>
                         <tr class="patient-row"
                             data-name="<?= strtolower(htmlspecialchars($patient['full_name'] ?? '')) ?>"
@@ -1151,7 +1194,7 @@ include_once '../../components/reception_sidebar.php';
                                     <?= htmlspecialchars($patient['full_name'] ?? 'Unknown') ?>
                                 </a>
                             </td>
-                            <td style="font-family:monospace;font-size:0.8rem;">
+                            <td style="font-family:var(--font-mono);font-size:0.8rem;">
                                 <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>
                             </td>
                             <td>
@@ -1163,7 +1206,20 @@ include_once '../../components/reception_sidebar.php';
                                     <span style="color:var(--text-secondary);opacity:0.6;">N/A</span>
                                 <?php endif; ?>
                             </td>
-                            <td><?= $days_text ?></td>
+
+                            <!-- ✅ V6: Date/Time column YAKE PEKE YAKE -->
+                            <td>
+                                <div class="datetime-cell-standalone">
+                                    <span class="dt-date">
+                                        <i class="fas fa-calendar-day"></i> <?= $reg_date ?>
+                                    </span>
+                                    <span class="dt-time">
+                                        <i class="fas fa-clock"></i> <?= $reg_time ?>
+                                    </span>
+                                    <?= $days_text ?>
+                                </div>
+                            </td>
+
                             <td><?= $doctor_status ?></td>
                             <td>
                                 <span style="font-weight:700;color:var(--text-primary);"><?= $patient['total_visits'] ?? 0 ?></span>
@@ -1190,7 +1246,6 @@ include_once '../../components/reception_sidebar.php';
                             <!-- 3 BUTTONS: View, Edit, Assign/Reassign -->
                             <td class="col-actions">
                                 <div class="action-buttons-group">
-                                    <!-- 1. VIEW -->
                                     <a href="view_patient.php?id=<?= (int)$patient['id'] ?>"
                                        class="action-btn view"
                                        data-tooltip="View Patient"
@@ -1198,7 +1253,6 @@ include_once '../../components/reception_sidebar.php';
                                         <i class="fas fa-eye"></i>
                                     </a>
 
-                                    <!-- 2. EDIT -->
                                     <a href="edit_patient.php?id=<?= (int)$patient['id'] ?>"
                                        class="action-btn edit"
                                        data-tooltip="Edit Patient"
@@ -1206,7 +1260,6 @@ include_once '../../components/reception_sidebar.php';
                                         <i class="fas fa-edit"></i>
                                     </a>
 
-                                    <!-- 3. ASSIGN / REASSIGN -->
                                     <?php if ($is_assigned): ?>
                                         <a href="assign_doctor.php?patient_id=<?= (int)$patient['id'] ?>&reassign=1"
                                            class="action-btn reassign"
@@ -1253,9 +1306,7 @@ include_once '../../components/reception_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1270,9 +1321,7 @@ include_once '../../components/reception_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1282,9 +1331,7 @@ include_once '../../components/reception_sidebar.php';
 </div>
 
 <script>
-    // ================================================================
     // AUTO-FILTER
-    // ================================================================
     var filterTimeout = null;
 
     function autoFilter() {
@@ -1412,9 +1459,7 @@ include_once '../../components/reception_sidebar.php';
         showToast('🔄 Cleared', 'Filters have been cleared', 'info');
     }
 
-    // ================================================================
     // KEYBOARD SHORTCUTS
-    // ================================================================
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             var searchInput = document.getElementById('searchFilter');
@@ -1440,9 +1485,7 @@ include_once '../../components/reception_sidebar.php';
         }
     });
 
-    // ================================================================
     // CLOCK
-    // ================================================================
     function updateClock() {
         var now = new Date();
         var timeStr = now.toLocaleTimeString('en-US', {
@@ -1454,9 +1497,7 @@ include_once '../../components/reception_sidebar.php';
     setInterval(updateClock, 1000);
     updateClock();
 
-    // ================================================================
-    // TOAST (fallback if not defined by header)
-    // ================================================================
+    // TOAST (fallback)
     if (typeof window.showToast !== 'function') {
         window.showToast = function(title, message, type) {
             var toast = document.getElementById('toast');
@@ -1476,9 +1517,9 @@ include_once '../../components/reception_sidebar.php';
         };
     }
 
-    console.log('%c👤 Braick - Patients (Shared Header/Sidebar)', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c👤 Braick - Patients V6 (DATE/TIME COLUMN)', 'font-size:18px; font-weight:bold; color:#2563EB;');
     console.log('%c✅ 3 BUTTONS: View, Edit, Assign/Reassign', 'font-size:13px; color:#34D399; font-weight:bold;');
-    console.log('%c✅ Assign inaunda NEW VISIT kila click', 'font-size:13px; color:#7C3AED;');
+    console.log('%c✅ V6: Date/Time column YAKE PEKE YAKE', 'font-size:13px; color:#7C3AED; font-weight:bold;');
     console.log('%c✅ Doctor status = VISIT ACTIVE', 'font-size:13px; color:#F59E0B;');
 </script>
 
