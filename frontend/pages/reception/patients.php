@@ -1,14 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/patients.php
-// RECEPTION - PATIENT MANAGEMENT (V4 - 3 BUTTONS ONLY)
-// ✅ Doctor status inatokana na VISIT ACTIVE (sio patients.assigned_doctor_id)
-// ✅ Auto-sync: patients.assigned_doctor_id inasafishwa kama hakuna visit active
-// ✅ 3 BUTTONS TU: View, Edit, Assign (HAKUNA Change Doctor)
+// RECEPTION - PATIENT MANAGEMENT (V5 - SHARED HEADER/SIDEBAR)
+// ✅ Using shared reception_header.php & reception_sidebar.php
+// ✅ 3 BUTTONS TU: View, Edit, Assign/Reassign
 // ✅ Assign inaunda NEW VISIT kila click
 // ✅ AUTO-FILTER: Search & Filter work automatically
-// ✅ Scroll < > buttons on table header
-// ✅ Registered By column
+// ✅ Doctor status = VISIT ACTIVE
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -24,36 +22,39 @@ $allowed_roles = ['reception', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
     switch ($role) {
-        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
-        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'doctor':     header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy':   header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
-        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
-        default: header('Location: ../login.php'); break;
+        case 'cashier':    header('Location: ../cashier/dashboard.php'); break;
+        default:           header('Location: ../login.php'); break;
     }
     exit;
 }
 
-$user_id = $_SESSION['user_id'] ?? 0;
-$full_name = $_SESSION['full_name'] ?? 'User';
-$role = $_SESSION['role'] ?? 'reception';
-$branch_id = $_SESSION['branch_id'] ?? 1;
+$user_id     = $_SESSION['user_id']     ?? 0;
+$full_name   = $_SESSION['full_name']   ?? 'User';
+$role        = $_SESSION['role']        ?? 'reception';
+$branch_id   = $_SESSION['branch_id']   ?? 1;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$username = $_SESSION['username'] ?? '';
+$username    = $_SESSION['username']    ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$search = isset($_GET['search']) ? trim($_GET['search']) : '';
-$filter = isset($_GET['filter']) ? $_GET['filter'] : 'all';
+$search              = isset($_GET['search'])     ? trim($_GET['search']) : '';
+$filter              = isset($_GET['filter'])     ? $_GET['filter']       : 'all';
 $selected_patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
+$error               = $_GET['error']   ?? '';
+$success             = $_GET['success'] ?? '';
 
-$error = isset($_GET['error']) ? $_GET['error'] : '';
-$success = isset($_GET['success']) ? $_GET['success'] : '';
+$patients       = [];
+$total_patients = 0;
+$stats          = ['total' => 0, 'with_doctor' => 0, 'without_doctor' => 0, 'new_patients' => 0];
 
 try {
     $db = Database::getInstance()->getConnection();
-    
-    // ✅ Ensure registered_by columns exist
+
+    // Ensure registered_by columns exist
     try {
         $stmt = $db->query("SHOW COLUMNS FROM patients LIKE 'registered_by'");
         if ($stmt->rowCount() == 0) {
@@ -61,29 +62,24 @@ try {
             $db->exec("ALTER TABLE `patients` ADD COLUMN `registered_by_name` VARCHAR(150) NULL AFTER `registered_by`");
         }
     } catch (Exception $e) {}
-    
-    // ============================================================
-    // ✅ CLEANUP: Safisha patients.assigned_doctor_id kama hakuna
-    //    visit active (inafanya kazi kila page load)
-    // ============================================================
+
+    // CLEANUP: Safisha patients.assigned_doctor_id kama hakuna visit active
     try {
         $db->exec("
             UPDATE patients p
             SET p.assigned_doctor_id = NULL
             WHERE p.assigned_doctor_id IS NOT NULL
               AND NOT EXISTS (
-                  SELECT 1 FROM visits v 
-                  WHERE v.patient_id = p.id 
+                  SELECT 1 FROM visits v
+                  WHERE v.patient_id = p.id
                     AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test', 'waiting', 'prescribed')
               )
         ");
     } catch (Exception $e) {}
-    
-    // ============================================================
-    // ✅ MAIN QUERY: Doctor status inatokana na VISIT ACTIVE
-    // ============================================================
+
+    // MAIN QUERY
     $sql = "
-        SELECT DISTINCT p.*, 
+        SELECT DISTINCT p.*,
                u.full_name as assigned_doctor_name,
                COALESCE(p.registered_by_name, ru.full_name, 'System') as registered_by_display,
                v.id as active_visit_id,
@@ -94,14 +90,14 @@ try {
         FROM patients p
         LEFT JOIN users u ON p.assigned_doctor_id = u.id
         LEFT JOIN users ru ON p.registered_by = ru.id
-        LEFT JOIN visits v ON v.patient_id = p.id 
+        LEFT JOIN visits v ON v.patient_id = p.id
             AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test', 'waiting', 'prescribed')
             AND v.branch_id = p.branch_id
         LEFT JOIN users vu ON v.doctor_id = vu.id
         WHERE p.branch_id = ?
     ";
     $params = [$branch_id];
-    
+
     if (!empty($search)) {
         $sql .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR p.phone LIKE ?)";
         $search_param = "%$search%";
@@ -109,7 +105,7 @@ try {
         $params[] = $search_param;
         $params[] = $search_param;
     }
-    
+
     if ($filter === 'with_doctor') {
         $sql .= " AND v.doctor_id IS NOT NULL";
     } elseif ($filter === 'without_doctor') {
@@ -119,91 +115,79 @@ try {
     } elseif ($filter === 'no_visit') {
         $sql .= " AND NOT EXISTS (SELECT 1 FROM visits WHERE patient_id = p.id)";
     }
-    
+
     $sql .= " ORDER BY p.created_at DESC";
-    
+
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
-    $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // ✅ Remove duplicates (kwa sababu ya LEFT JOIN na visits nyingi)
+    $patients_raw = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Remove duplicates
     $unique_patients = [];
     $seen_ids = [];
-    foreach ($patients as $patient) {
-        $id = $patient['id'];
-        if (!in_array($id, $seen_ids)) {
-            $seen_ids[] = $id;
-            $unique_patients[] = $patient;
+    foreach ($patients_raw as $p) {
+        if (!in_array($p['id'], $seen_ids)) {
+            $seen_ids[] = $p['id'];
+            $unique_patients[] = $p;
         }
     }
     $patients = $unique_patients;
-    
-    // ============================================================
-    // ✅ ENRICH: Hesabu visits, appointments, determine doctor
-    // ============================================================
+
+    // ENRICH
     foreach ($patients as $key => $patient) {
-        // Total visits
         $stmt = $db->prepare("SELECT COUNT(*) FROM visits WHERE patient_id = ?");
         $stmt->execute([$patient['id']]);
         $patients[$key]['total_visits'] = (int)$stmt->fetchColumn();
-        
-        // Active appointments
+
         $stmt = $db->prepare("SELECT COUNT(*) FROM appointments WHERE patient_id = ? AND status IN ('scheduled', 'confirmed')");
         $stmt->execute([$patient['id']]);
         $patients[$key]['active_appointments'] = (int)$stmt->fetchColumn();
-        
-        // Patient days
+
         $stmt = $db->prepare("SELECT DATEDIFF(NOW(), created_at) FROM patients WHERE id = ?");
         $stmt->execute([$patient['id']]);
         $patients[$key]['patient_days'] = (int)$stmt->fetchColumn();
-        
-        // Patient status (new/existing)
+
         $patients[$key]['patient_status'] = ($patients[$key]['patient_days'] <= 7) ? 'new' : 'existing';
-        
-        // Latest visit
+
         $stmt = $db->prepare("SELECT id, visit_number, status, created_at FROM visits WHERE patient_id = ? ORDER BY created_at DESC LIMIT 1");
         $stmt->execute([$patient['id']]);
         $patients[$key]['latest_visit'] = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        // ✅ MUHIMU: Doctor status inatokana na ACTIVE VISIT
-        $has_active_visit = !empty($patient['active_visit_id']);
+
+        $has_active_visit   = !empty($patient['active_visit_id']);
         $active_doctor_name = $patient['active_visit_doctor_name'] ?? null;
-        
-        $patients[$key]['has_active_visit'] = $has_active_visit;
+
+        $patients[$key]['has_active_visit']    = $has_active_visit;
         $patients[$key]['display_doctor_name'] = $active_doctor_name;
-        $patients[$key]['is_with_doctor'] = !empty($active_doctor_name);
-        
-        // ✅ Sync: kama hakuna visit active, ondoa assigned_doctor_id
+        $patients[$key]['is_with_doctor']      = !empty($active_doctor_name);
+
         if (!$has_active_visit && !empty($patient['assigned_doctor_id'])) {
             try {
                 $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = NULL WHERE id = ?");
                 $stmt->execute([$patient['id']]);
             } catch (Exception $e) {}
-            $patients[$key]['assigned_doctor_id'] = null;
+            $patients[$key]['assigned_doctor_id']   = null;
             $patients[$key]['assigned_doctor_name'] = null;
         }
     }
-    
+
     $total_patients = count($patients);
-    
-    // ============================================================
-    // ✅ STATS: With Doctor inatokana na VISIT ACTIVE
-    // ============================================================
+
+    // STATS
     $stmt = $db->prepare("
-        SELECT 
+        SELECT
             COUNT(DISTINCT p.id) as total,
-            SUM(CASE 
+            SUM(CASE
                 WHEN EXISTS (
-                    SELECT 1 FROM visits v 
-                    WHERE v.patient_id = p.id 
+                    SELECT 1 FROM visits v
+                    WHERE v.patient_id = p.id
                       AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test', 'waiting', 'prescribed')
                       AND v.doctor_id IS NOT NULL
                 ) THEN 1 ELSE 0 END
             ) as with_doctor,
-            SUM(CASE 
+            SUM(CASE
                 WHEN NOT EXISTS (
-                    SELECT 1 FROM visits v 
-                    WHERE v.patient_id = p.id 
+                    SELECT 1 FROM visits v
+                    WHERE v.patient_id = p.id
                       AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test', 'waiting', 'prescribed')
                       AND v.doctor_id IS NOT NULL
                 ) THEN 1 ELSE 0 END
@@ -213,13 +197,9 @@ try {
         WHERE p.branch_id = ?
     ");
     $stmt->execute([$branch_id]);
-    $stats = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    // Fallback kama stats haipatikani
-    if (!$stats) {
-        $stats = ['total' => 0, 'with_doctor' => 0, 'without_doctor' => 0, 'new_patients' => 0];
-    }
-    
+    $stats_row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($stats_row) $stats = $stats_row;
+
 } catch (Exception $e) {
     $error_message = "Database error: " . $e->getMessage();
     $patients = [];
@@ -227,293 +207,57 @@ try {
     $total_patients = 0;
 }
 
+// Unread notifications
 $unread_notifications = 0;
 try {
-    if (isset($_SESSION['user_id'])) {
+    if (isset($_SESSION['user_id']) && isset($db)) {
         $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
         $stmt->execute([$_SESSION['user_id']]);
-        $unread_notifications = $stmt->fetch()['total'] ?? 0;
+        $unread_notifications = (int)($stmt->fetch()['total'] ?? 0);
     }
 } catch (Exception $e) {
     $unread_notifications = 0;
 }
 
-$profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+$profile_pic_url = !empty($profile_pic)
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
+// ================================================================
+// NOTE: time_ago() is provided by reception_header.php
+// DO NOT redeclare here.
+// ================================================================
+
 include_once '../../components/reception_header.php';
 include_once '../../components/reception_sidebar.php';
 ?>
-
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Patients - Braick Dispensary</title>
-    
+
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
-    
+
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
     <style>
-        :root {
-            --primary: #2563EB;
-            --primary-dark: #1D4ED8;
-            --primary-light: #60A5FA;
-            --primary-bg: #EFF6FF;
-            --primary-gradient: linear-gradient(135deg, #2563EB, #1D4ED8);
-            
-            --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
-            --success-bg: #D1FAE5;
-            
-            --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
-            --danger-bg: #FEE2E2;
-            
-            --warning: #D97706;
-            --warning-dark: #B45309;
-            --warning-bg: #FEF3C7;
-            
-            --purple: #7C3AED;
-            --purple-dark: #5B21B6;
-            --purple-light: #A78BFA;
-            --purple-bg: #EDE9FE;
-            
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 30px rgba(0,0,0,0.12);
-            
-            --bg-body: #F0F4F8;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
-            --radius: 12px;
-            --radius-lg: 18px;
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-bg: #1E3A5F;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --purple-bg: #2D1B5F;
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* TOP NAV */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 280px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
-        }
-        
-        .top-nav .search-wrapper i {
-            color: var(--text-secondary) !important;
-            font-size: 0.75rem;
-            margin-left: 10px;
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 6px 10px;
-            width: 100%;
-            font-size: 0.78rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-            font-size: 0.75rem;
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 6px 12px;
-            border-radius: 0 var(--radius) var(--radius) 0;
-            cursor: pointer;
-            font-size: 0.72rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-            font-weight: 600;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .datetime i { color: var(--primary-light); }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-        }
-        
-        /* Page Header */
+        /* ================================================================
+           PATIENTS PAGE - SPECIFIC STYLES ONLY
+           (Base styles, variables, .card, .footer, .toast-custom,
+            .main-content are provided by reception_header.php)
+           ================================================================ */
+
+        /* ---------- PAGE HEADER ---------- */
         .page-header {
-            background: var(--primary-gradient);
-            border-radius: var(--radius-lg);
+            background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 50%, #1E40AF 100%);
+            border-radius: 20px;
             padding: 28px 36px;
             margin-bottom: 28px;
             display: flex;
@@ -521,11 +265,11 @@ include_once '../../components/reception_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 8px 32px rgba(37, 99, 235, 0.25);
+            box-shadow: 0 10px 40px rgba(37, 99, 235, 0.3);
             position: relative;
             overflow: hidden;
         }
-        
+
         .page-header::before {
             content: '';
             position: absolute;
@@ -533,144 +277,222 @@ include_once '../../components/reception_sidebar.php';
             right: -10%;
             width: 400px;
             height: 400px;
-            background: rgba(255,255,255,0.05);
+            background: radial-gradient(circle, rgba(255,255,255,0.12) 0%, transparent 70%);
             border-radius: 50%;
             pointer-events: none;
         }
-        
+
+        .page-header::after {
+            content: '';
+            position: absolute;
+            bottom: -80%;
+            left: -5%;
+            width: 300px;
+            height: 300px;
+            background: radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+
         .page-header .page-title {
             color: white;
-            font-size: 1.8rem;
-            font-weight: 700;
+            font-size: 1.75rem;
+            font-weight: 800;
             display: flex;
             align-items: center;
             gap: 12px;
             flex-wrap: wrap;
             position: relative;
             z-index: 1;
+            letter-spacing: -0.5px;
         }
-        
-        .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
-        
+
+        .page-header .page-title i { font-size: 1.9rem; opacity: 0.95; }
+
         .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.95rem;
+            color: rgba(255,255,255,0.9);
+            font-size: 0.9rem;
             display: flex;
             align-items: center;
             gap: 10px;
             flex-wrap: wrap;
             position: relative;
             z-index: 1;
+            margin-top: 6px;
         }
-        
-        .page-header .page-subtitle strong { color: white; font-weight: 600; }
-        
+
+        .page-header .page-subtitle strong { color: white; font-weight: 700; }
+
         .page-header .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
             padding: 4px 14px;
             border-radius: 20px;
             font-size: 0.65rem;
-            font-weight: 600;
+            font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.15);
         }
-        
+
         .page-header .header-badge {
-            background: rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.15);
             color: white;
-            padding: 4px 14px;
+            padding: 5px 14px;
             border-radius: 20px;
             font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
+            font-weight: 600;
+            backdrop-filter: blur(8px);
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.15);
             transition: all 0.3s ease;
         }
-        
+
         .page-header .header-badge:hover {
-            background: rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.25);
             transform: translateY(-1px);
         }
-        
+
         .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.15);
             color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: var(--radius);
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
+            border: 1px solid rgba(255,255,255,0.25);
+            padding: 9px 18px;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 0.8rem;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             text-decoration: none;
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            backdrop-filter: blur(4px);
+            backdrop-filter: blur(8px);
+            position: relative;
+            z-index: 1;
+            cursor: pointer;
+        }
+
+        .page-header .btn-outline-light:hover {
+            background: rgba(255,255,255,0.28);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+        }
+
+        .update-badge-light {
+            background: rgba(255,255,255,0.15);
+            color: rgba(255,255,255,0.9);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            backdrop-filter: blur(8px);
+            font-weight: 600;
+        }
+
+        .live-indicator-modern {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #34D399;
+            animation: pulse-dot 1.5s infinite;
+            margin-right: 4px;
+        }
+
+        /* ---------- STATS CARDS ---------- */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card-modern {
+            border-radius: 16px;
+            padding: 20px 22px;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+            text-decoration: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-height: 110px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .stat-card-modern::before {
+            content: '';
+            position: absolute;
+            top: -30px;
+            right: -30px;
+            width: 110px;
+            height: 110px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.1);
+            pointer-events: none;
+            transition: all 0.4s ease;
+        }
+
+        .stat-card-modern:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+        }
+
+        .stat-card-modern:hover::before {
+            transform: scale(1.25);
+            background: rgba(255,255,255,0.15);
+        }
+
+        .stat-card-modern.blue   { background: linear-gradient(135deg, #2563EB, #1D4ED8); color: white; }
+        .stat-card-modern.green  { background: linear-gradient(135deg, #059669, #047857); color: white; }
+        .stat-card-modern.orange { background: linear-gradient(135deg, #D97706, #B45309); color: white; }
+        .stat-card-modern.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); color: white; }
+
+        .stat-card-modern .stat-icon {
+            font-size: 1.3rem;
+            opacity: 0.9;
+            margin-bottom: 8px;
             position: relative;
             z-index: 1;
         }
-        
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+
+        .stat-card-modern .stat-number {
+            font-size: 1.9rem;
+            font-weight: 800;
+            line-height: 1;
+            letter-spacing: -1px;
+            position: relative;
+            z-index: 1;
         }
-        
-        /* Stats Cards */
-        .stat-card {
-            background: var(--bg-card);
-            border-radius: var(--radius);
-            padding: 16px 20px;
-            border: 2px solid var(--border-color);
-            text-align: center;
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .stat-card:hover {
-            border-color: var(--primary);
-            transform: translateY(-3px);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .stat-card .stat-number {
-            font-size: 1.8rem;
-            font-weight: 700;
-            color: var(--primary);
-        }
-        
-        .stat-card .stat-number.green { color: var(--success); }
-        .stat-card .stat-number.orange { color: var(--warning); }
-        .stat-card .stat-number.purple { color: var(--purple); }
-        
-        .stat-card .stat-label {
+
+        .stat-card-modern .stat-label {
             font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
+            font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.03em;
+            letter-spacing: 0.5px;
+            opacity: 0.9;
+            margin-top: 6px;
+            position: relative;
+            z-index: 1;
         }
-        
-        /* Table Card */
+
+        /* ---------- TABLE CARD ---------- */
         .table-card {
             background: var(--bg-card);
-            border-radius: var(--radius-lg);
+            border-radius: 18px;
             padding: 24px 28px;
-            border: 2px solid var(--border-color);
+            border: 1px solid var(--border-color);
             transition: all 0.3s ease;
-            box-shadow: var(--shadow-md);
+            box-shadow: 0 2px 12px rgba(0,0,0,0.04);
         }
-        
-        .table-card:hover {
-            border-color: var(--primary-light);
-            box-shadow: var(--shadow-lg);
-        }
-        
+
         .table-card .card-header {
             display: flex;
             justify-content: space-between;
@@ -678,33 +500,32 @@ include_once '../../components/reception_sidebar.php';
             flex-wrap: wrap;
             gap: 12px;
             margin-bottom: 16px;
-            padding-bottom: 14px;
-            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border-color);
         }
-        
+
         .table-card .card-title {
-            font-size: 1rem;
-            font-weight: 600;
+            font-size: 0.95rem;
+            font-weight: 700;
             color: var(--text-primary);
             display: flex;
             align-items: center;
             gap: 10px;
         }
-        
+
         .table-card .card-title i { color: var(--primary); }
-        
-        /* Scroll Buttons */
+
+        /* ---------- SCROLL BUTTONS ---------- */
         .table-scroll-controls {
             display: flex;
             gap: 4px;
             align-items: center;
-            margin-left: 10px;
         }
-        
+
         .scroll-btn {
-            width: 28px;
-            height: 28px;
-            border-radius: 6px;
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
             border: 2px solid var(--primary);
             background: var(--bg-card);
             color: var(--primary);
@@ -716,42 +537,41 @@ include_once '../../components/reception_sidebar.php';
             transition: all 0.3s;
             font-weight: 700;
         }
-        
+
         .scroll-btn:hover {
             background: var(--primary);
             color: white;
             transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
         }
-        
-        /* Patient Table */
+
+        /* ---------- PATIENT TABLE ---------- */
         .patient-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 0.85rem;
             min-width: 1500px;
         }
-        
+
         .patient-table thead {
-            background: var(--primary-gradient);
+            background: linear-gradient(135deg, #2563EB, #1D4ED8);
             color: white;
         }
-        
+
         .patient-table thead th {
-            padding: 12px 12px;
+            padding: 12px;
             text-align: left;
-            font-weight: 600;
+            font-weight: 700;
             font-size: 0.7rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             color: white;
-            border-bottom: none;
             white-space: nowrap;
         }
-        
-        .patient-table thead th:first-child { border-radius: 8px 0 0 0; }
-        .patient-table thead th:last-child { border-radius: 0 8px 0 0; }
-        
+
+        .patient-table thead th:first-child { border-radius: 10px 0 0 0; }
+        .patient-table thead th:last-child  { border-radius: 0 10px 0 0; }
+
         .patient-table .col-sno {
             width: 50px;
             text-align: center;
@@ -759,112 +579,96 @@ include_once '../../components/reception_sidebar.php';
             color: var(--primary);
             font-size: 0.8rem;
         }
-        
+
         .patient-table .col-actions {
-            width: 140px;
+            width: 150px;
             text-align: center;
         }
-        
+
         .patient-table tbody td {
             padding: 10px 12px;
             border-bottom: 1px solid var(--border-color);
-            color: #000000 !important;
+            color: var(--text-primary) !important;
         }
-        
+
         .patient-table tbody td a.patient-name-link {
-            color: #000000 !important;
+            color: var(--text-primary) !important;
             font-weight: 600;
             text-decoration: none;
             transition: color 0.3s;
         }
-        
+
         .patient-table tbody td a.patient-name-link:hover {
             color: var(--primary) !important;
             text-decoration: underline;
         }
-        
-        [data-theme="dark"] .patient-table tbody td {
-            color: #F1F5F9 !important;
-        }
-        
-        [data-theme="dark"] .patient-table tbody td a.patient-name-link {
-            color: #F1F5F9 !important;
-        }
-        
+
         .patient-table tbody tr:hover td {
             background: var(--primary-bg);
         }
-        
+
         .patient-table tbody tr:last-child td {
             border-bottom: none;
         }
-        
+
         .patient-table .status-badge {
             display: inline-block;
             font-size: 0.6rem;
-            font-weight: 500;
-            padding: 2px 10px;
+            font-weight: 700;
+            padding: 3px 10px;
             border-radius: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
         }
-        
-        .patient-table .status-badge.new {
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        .patient-table .status-badge.existing {
-            background: var(--primary-bg);
-            color: var(--primary);
-        }
-        
-        .patient-table .status-badge.with_doctor {
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        .patient-table .status-badge.without_doctor {
-            background: var(--warning-bg);
-            color: var(--warning);
-        }
-        
+
+        .patient-table .status-badge.new            { background: #D1FAE5; color: #059669; }
+        .patient-table .status-badge.existing       { background: #E8F0FE; color: #0B5ED7; }
+        .patient-table .status-badge.with_doctor    { background: #D1FAE5; color: #059669; }
+        .patient-table .status-badge.without_doctor { background: #FEF3C7; color: #D97706; }
+
+        [data-theme="dark"] .patient-table .status-badge.new            { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .patient-table .status-badge.existing       { background: #1E3A5F; color: #6EA8FE; }
+        [data-theme="dark"] .patient-table .status-badge.with_doctor    { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .patient-table .status-badge.without_doctor { background: #3D2E0A; color: #FBBF24; }
+
         /* Days Badge */
         .days-badge-blue {
             display: inline-block;
             background: var(--primary) !important;
             color: #ffffff !important;
-            padding: 2px 12px !important;
+            padding: 3px 12px !important;
             border-radius: 12px !important;
-            font-size: 0.6rem !important;
-            font-weight: 600 !important;
+            font-size: 0.62rem !important;
+            font-weight: 700 !important;
             border: none !important;
-            box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
+            box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
         }
-        
+
         .days-badge-blue.new {
             background: var(--success) !important;
-            box-shadow: 0 2px 4px rgba(5, 150, 105, 0.2);
+            box-shadow: 0 2px 6px rgba(5, 150, 105, 0.25);
         }
-        
+
         /* Registered By Badge */
         .registered-by-badge {
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            background: var(--purple-bg);
-            color: var(--purple);
-            padding: 3px 10px;
+            background: #EDE9FE;
+            color: #7C3AED;
+            padding: 4px 10px;
             border-radius: 12px;
             font-size: 0.62rem;
-            font-weight: 600;
+            font-weight: 700;
             white-space: nowrap;
         }
-        
+
         [data-theme="dark"] .registered-by-badge {
             background: #2D1B5F;
             color: #C4B5FD;
         }
-        
-        /* ACTION BUTTONS - 3 BUTTONS (View, Edit, Assign) */
+
+        /* ---------- ACTION BUTTONS ---------- */
         .action-buttons-group {
             display: flex;
             gap: 5px;
@@ -872,11 +676,11 @@ include_once '../../components/reception_sidebar.php';
             align-items: center;
             flex-wrap: nowrap;
         }
-        
+
         .action-btn {
-            width: 32px;
-            height: 32px;
-            border-radius: 8px;
+            width: 34px;
+            height: 34px;
+            border-radius: 9px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
@@ -887,67 +691,47 @@ include_once '../../components/reception_sidebar.php';
             text-decoration: none;
             position: relative;
         }
-        
-        .action-btn:hover {
-            transform: translateY(-2px) scale(1.08);
-        }
-        
+
+        .action-btn:hover { transform: translateY(-2px) scale(1.08); }
+
         .action-btn.view {
             background: linear-gradient(135deg, #2563EB, #1D4ED8);
             color: white;
             box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
         }
-        
-        .action-btn.view:hover {
-            background: linear-gradient(135deg, #1D4ED8, #1E40AF);
-            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.5);
-        }
-        
+        .action-btn.view:hover { box-shadow: 0 4px 14px rgba(37, 99, 235, 0.5); }
+
         .action-btn.edit {
             background: linear-gradient(135deg, #7C3AED, #5B21B6);
             color: white;
             box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3);
         }
-        
-        .action-btn.edit:hover {
-            background: linear-gradient(135deg, #5B21B6, #4C1D95);
-            box-shadow: 0 4px 12px rgba(124, 58, 237, 0.5);
-        }
-        
-        /* ✅ ASSIGN button - kijani kila wakati */
+        .action-btn.edit:hover { box-shadow: 0 4px 14px rgba(124, 58, 237, 0.5); }
+
         .action-btn.assign {
             background: linear-gradient(135deg, #059669, #047857);
             color: white;
             box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
         }
-        
-        .action-btn.assign:hover {
-            background: linear-gradient(135deg, #047857, #065F46);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.5);
-        }
-        
-        /* ✅ NEW - Reassign button (kama ana doctor tayari) */
+        .action-btn.assign:hover { box-shadow: 0 4px 14px rgba(5, 150, 105, 0.5); }
+
         .action-btn.reassign {
             background: linear-gradient(135deg, #D97706, #B45309);
             color: white;
             box-shadow: 0 2px 8px rgba(217, 119, 6, 0.3);
         }
-        
-        .action-btn.reassign:hover {
-            background: linear-gradient(135deg, #B45309, #92400E);
-            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.5);
-        }
-        
+        .action-btn.reassign:hover { box-shadow: 0 4px 14px rgba(217, 119, 6, 0.5); }
+
         .action-btn::after {
             content: attr(data-tooltip);
             position: absolute;
             bottom: -28px;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(0, 0, 0, 0.85);
+            background: rgba(0, 0, 0, 0.9);
             color: white;
-            padding: 3px 8px;
-            border-radius: 5px;
+            padding: 4px 10px;
+            border-radius: 6px;
             font-size: 0.6rem;
             font-weight: 600;
             white-space: nowrap;
@@ -955,46 +739,33 @@ include_once '../../components/reception_sidebar.php';
             pointer-events: none;
             transition: all 0.2s ease;
             z-index: 100;
-            letter-spacing: 0.02em;
         }
-        
+
         .action-btn:hover::after {
             opacity: 1;
             bottom: -25px;
         }
-        
-        /* Search & Filter Section */
+
+        /* ---------- SEARCH & FILTER ---------- */
         .search-filter-wrapper {
             display: flex;
             align-items: center;
             gap: 8px;
             flex-wrap: wrap;
-            background: var(--primary-gradient);
+            background: linear-gradient(135deg, #2563EB, #1D4ED8);
             padding: 10px 14px;
-            border-radius: var(--radius);
+            border-radius: 14px;
             box-shadow: 0 4px 16px rgba(37, 99, 235, 0.2);
-            border: 2px solid var(--primary-dark);
-            margin-left: 0;
+            border: 1px solid rgba(255,255,255,0.1);
         }
-        
-        .card-header-left {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
-        
-        .card-header-right {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        
+
+        .card-header-left  { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .card-header-right { display: flex; align-items: center; gap: 8px;  flex-wrap: wrap; }
+
         .filter-input {
             padding: 8px 14px;
             border: 2px solid rgba(255,255,255,0.3);
-            border-radius: var(--radius);
+            border-radius: 10px;
             font-size: 0.75rem;
             background: rgba(255,255,255,0.95);
             color: #1E293B;
@@ -1003,27 +774,26 @@ include_once '../../components/reception_sidebar.php';
             min-width: 150px;
             font-weight: 500;
         }
-        
+
         .filter-input:focus {
             border-color: white;
             background: #FFFFFF;
             box-shadow: 0 0 0 3px rgba(255,255,255,0.3);
-            transform: translateY(-1px);
         }
-        
+
         .filter-input::placeholder {
             color: #64748B;
             opacity: 0.7;
             font-weight: 400;
             font-size: 0.72rem;
         }
-        
+
         .filter-input option {
             background: white;
             color: #1E293B;
             padding: 8px;
         }
-        
+
         .auto-filter-loading {
             display: none;
             align-items: center;
@@ -1034,11 +804,10 @@ include_once '../../components/reception_sidebar.php';
             border-radius: 20px;
             background: rgba(255,255,255,0.2);
             border: 1px solid rgba(255,255,255,0.3);
-            backdrop-filter: blur(4px);
         }
-        
+
         .auto-filter-loading.show { display: inline-flex; }
-        
+
         .auto-filter-loading .spinner-small {
             width: 10px;
             height: 10px;
@@ -1047,17 +816,17 @@ include_once '../../components/reception_sidebar.php';
             border-radius: 50%;
             animation: spin 0.6s linear infinite;
         }
-        
+
         @keyframes spin { to { transform: rotate(360deg); } }
-        
+
         .clear-filter-btn {
             display: none;
             align-items: center;
             gap: 4px;
             padding: 7px 14px;
-            border-radius: var(--radius);
+            border-radius: 10px;
             font-size: 0.7rem;
-            font-weight: 600;
+            font-weight: 700;
             background: rgba(255,255,255,0.95);
             color: var(--danger);
             border: 2px solid white;
@@ -1065,22 +834,21 @@ include_once '../../components/reception_sidebar.php';
             transition: all 0.3s;
             text-decoration: none;
         }
-        
+
         .clear-filter-btn.show { display: inline-flex; }
-        
+
         .clear-filter-btn:hover {
             background: var(--danger);
             color: white;
-            transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
         }
-        
+
         .search-input-wrapper {
             position: relative;
             display: flex;
             align-items: center;
         }
-        
+
         .search-input-wrapper i {
             position: absolute;
             left: 12px;
@@ -1089,12 +857,9 @@ include_once '../../components/reception_sidebar.php';
             pointer-events: none;
             z-index: 1;
         }
-        
-        .search-input-wrapper input {
-            padding-left: 34px;
-            min-width: 220px;
-        }
-        
+
+        .search-input-wrapper input { padding-left: 34px; min-width: 220px; }
+
         .filter-status {
             display: inline-flex;
             align-items: center;
@@ -1105,10 +870,10 @@ include_once '../../components/reception_sidebar.php';
             background: rgba(255,255,255,0.15);
             border-radius: 20px;
             border: 1px solid rgba(255,255,255,0.2);
-            backdrop-filter: blur(4px);
-            font-weight: 500;
+            font-weight: 600;
         }
-        
+
+        /* ---------- TABLE SCROLL ---------- */
         .table-scroll-container {
             overflow-x: auto;
             overflow-y: visible;
@@ -1116,194 +881,92 @@ include_once '../../components/reception_sidebar.php';
             border-radius: 8px;
             padding-bottom: 6px;
         }
-        
+
         .table-scroll-container::-webkit-scrollbar { height: 8px; }
         .table-scroll-container::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 10px; }
-        .table-scroll-container::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+        .table-scroll-container::-webkit-scrollbar-thumb {
+            background: var(--primary);
+            border-radius: 10px;
+        }
         .table-scroll-container::-webkit-scrollbar-thumb:hover { background: var(--primary-dark); }
-        
-        /* Toast */
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 14px 20px;
-            border-radius: var(--radius);
-            z-index: 999;
-            max-width: 400px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: white;
-            box-shadow: var(--shadow-lg);
-        }
-        .toast-custom.show { transform: translateY(0); opacity: 1; }
-        .toast-custom.success { background: var(--success); }
-        .toast-custom.error { background: var(--danger); }
-        .toast-custom.info { background: var(--primary); }
-        
-        /* Footer */
-        .footer-modern {
-            padding: 14px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        .footer-modern .footer-brand { color: var(--primary); font-weight: 500; }
-        
-        .branch-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge-display {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
-        .live-indicator-modern {
-            display: inline-block;
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: #34D399;
-            animation: pulse-dot 1.5s infinite;
-            margin-right: 4px;
-        }
-        
-        .update-badge-light {
-            background: rgba(255,255,255,0.12);
-            color: rgba(255,255,255,0.8);
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            backdrop-filter: blur(4px);
-        }
-        
+
+        /* ---------- BUTTONS ---------- */
         .btn {
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            padding: 7px 16px;
-            border-radius: 8px;
-            font-weight: 600;
+            padding: 8px 18px;
+            border-radius: 10px;
+            font-weight: 700;
             font-size: 0.78rem;
             transition: all 0.3s;
             cursor: pointer;
             border: none;
             text-decoration: none;
         }
-        .btn-primary { background: var(--primary); color: white; }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #2563EB, #1D4ED8);
+            color: white;
+        }
         .btn-primary:hover {
-            background: var(--primary-dark);
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+            box-shadow: 0 6px 18px rgba(37, 99, 235, 0.4);
         }
-        
-        /* Responsive */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 220px; }
-        }
-        
+
+        /* ---------- RESPONSIVE ---------- */
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 160px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
+            .page-header { padding: 20px 22px; }
             .page-header .page-title { font-size: 1.3rem; }
             .table-card { padding: 16px; }
             .patient-table { font-size: 0.75rem; }
-            .patient-table thead th, 
-            .patient-table tbody td { padding: 6px 8px; }
+            .patient-table thead th,
+            .patient-table tbody td { padding: 8px; }
             .card-header { flex-direction: column; align-items: stretch; }
-            .search-filter-wrapper { 
-                flex-direction: column; 
-                width: 100%; 
+            .search-filter-wrapper {
+                flex-direction: column;
+                width: 100%;
                 align-items: stretch;
             }
             .search-filter-wrapper .filter-input { width: 100%; min-width: unset; }
             .search-input-wrapper input { min-width: unset; width: 100%; }
             .card-header-left, .card-header-right { width: 100%; }
-            
-            .action-buttons-group { gap: 3px; }
-            .action-btn { width: 28px; height: 28px; font-size: 0.68rem; }
+            .action-btn { width: 30px; height: 30px; font-size: 0.7rem; }
         }
-        
+
         @media (max-width: 640px) {
-            .main-content { padding: 10px; }
-            .top-nav .search-wrapper .search-btn { padding: 6px 8px; font-size: 0.65rem; }
-            .page-header .header-badge { font-size: 0.6rem; padding: 2px 10px; }
+            .page-header { padding: 16px 18px; border-radius: 16px; }
+            .page-header .page-title { font-size: 1.15rem; }
+            .stat-card-modern .stat-number { font-size: 1.5rem; }
         }
-        
+
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
         }
-        .animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
+
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
     </style>
 </head>
 <body>
 
-<!-- TOP NAV -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search"></i>
-            <input type="text" id="searchInput" placeholder="Search..." value="<?= htmlspecialchars($search) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search"></i>
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime">
-            <i class="fas fa-clock"></i>
-            <span id="clockDisplay"><?= date('d M Y • h:i:s A') ?></span>
-        </span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+<!-- ================================================================ -->
+<!-- SHARED HEADER & SIDEBAR (INCLUDED ABOVE) -->
+<!-- ================================================================ -->
 
 <main class="main-content">
 
+    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
+    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1323,15 +986,15 @@ include_once '../../components/reception_sidebar.php';
                 </span>
                 <span class="header-badge">
                     <i class="fas fa-user-md"></i>
-                    <span style="color:#34D399;"><?= $stats['with_doctor'] ?? 0 ?></span> With Doctor
+                    <span style="color:#34D399;font-weight:700;"><?= $stats['with_doctor'] ?? 0 ?></span> With Doctor
                 </span>
                 <span class="header-badge">
                     <i class="fas fa-user"></i>
-                    <span style="color:#F87171;"><?= $stats['without_doctor'] ?? 0 ?></span> No Doctor
+                    <span style="color:#FBBF24;font-weight:700;"><?= $stats['without_doctor'] ?? 0 ?></span> No Doctor
                 </span>
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                <span class="header-badge">
                     <i class="fas fa-bolt"></i>
-                    <?= $stats['new_patients'] ?? 0 ?> New (7 days)
+                    <span style="color:#A78BFA;font-weight:700;"><?= $stats['new_patients'] ?? 0 ?></span> New (7d)
                 </span>
             </p>
         </div>
@@ -1345,27 +1008,35 @@ include_once '../../components/reception_sidebar.php';
         </div>
     </div>
 
+    <!-- ================================================================ -->
     <!-- STATS CARDS -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5 animate-fade-in-up">
-        <div class="stat-card">
-            <p class="stat-number"><?= $stats['total'] ?? 0 ?></p>
-            <p class="stat-label">Total Patients</p>
+    <!-- ================================================================ -->
+    <div class="stats-grid animate-fade-in-up">
+        <div class="stat-card-modern blue">
+            <div class="stat-icon"><i class="fas fa-users"></i></div>
+            <div class="stat-number"><?= $stats['total'] ?? 0 ?></div>
+            <div class="stat-label">Total Patients</div>
         </div>
-        <div class="stat-card">
-            <p class="stat-number green"><?= $stats['with_doctor'] ?? 0 ?></p>
-            <p class="stat-label">With Doctor</p>
+        <div class="stat-card-modern green">
+            <div class="stat-icon"><i class="fas fa-user-md"></i></div>
+            <div class="stat-number"><?= $stats['with_doctor'] ?? 0 ?></div>
+            <div class="stat-label">With Doctor</div>
         </div>
-        <div class="stat-card">
-            <p class="stat-number orange"><?= $stats['without_doctor'] ?? 0 ?></p>
-            <p class="stat-label">No Doctor</p>
+        <div class="stat-card-modern orange">
+            <div class="stat-icon"><i class="fas fa-user-slash"></i></div>
+            <div class="stat-number"><?= $stats['without_doctor'] ?? 0 ?></div>
+            <div class="stat-label">No Doctor</div>
         </div>
-        <div class="stat-card">
-            <p class="stat-number purple"><?= $stats['new_patients'] ?? 0 ?></p>
-            <p class="stat-label">New (7 days)</p>
+        <div class="stat-card-modern purple">
+            <div class="stat-icon"><i class="fas fa-bolt"></i></div>
+            <div class="stat-number"><?= $stats['new_patients'] ?? 0 ?></div>
+            <div class="stat-label">New (7 days)</div>
         </div>
     </div>
 
+    <!-- ================================================================ -->
     <!-- TABLE CARD -->
+    <!-- ================================================================ -->
     <div class="table-card animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="card-header">
             <div class="card-header-left">
@@ -1374,44 +1045,47 @@ include_once '../../components/reception_sidebar.php';
                         <div class="spinner-small"></div>
                         <span>Filtering...</span>
                     </div>
-                    
+
                     <div class="search-input-wrapper">
                         <i class="fas fa-search"></i>
-                        <input type="text" 
-                               id="searchFilter" 
-                               class="filter-input" 
-                               placeholder="Search name, ID, phone..." 
+                        <input type="text"
+                               id="searchFilter"
+                               class="filter-input"
+                               placeholder="Search name, ID, phone..."
                                value="<?= htmlspecialchars($search) ?>"
                                oninput="autoFilter()">
                     </div>
-                    
+
                     <select id="filterSelect" class="filter-input" style="min-width:150px;" onchange="autoFilter()">
-                        <option value="all" <?= $filter === 'all' ? 'selected' : '' ?>>👥 All</option>
-                        <option value="new" <?= $filter === 'new' ? 'selected' : '' ?>>🆕 New (7d)</option>
-                        <option value="with_doctor" <?= $filter === 'with_doctor' ? 'selected' : '' ?>>✅ With Doctor</option>
+                        <option value="all"            <?= $filter === 'all'            ? 'selected' : '' ?>>👥 All</option>
+                        <option value="new"            <?= $filter === 'new'            ? 'selected' : '' ?>>🆕 New (7d)</option>
+                        <option value="with_doctor"    <?= $filter === 'with_doctor'    ? 'selected' : '' ?>>✅ With Doctor</option>
                         <option value="without_doctor" <?= $filter === 'without_doctor' ? 'selected' : '' ?>>⚠️ No Doctor</option>
-                        <option value="no_visit" <?= $filter === 'no_visit' ? 'selected' : '' ?>>📋 No Visit</option>
+                        <option value="no_visit"       <?= $filter === 'no_visit'       ? 'selected' : '' ?>>📋 No Visit</option>
                     </select>
-                    
-                    <a href="patients.php" class="clear-filter-btn <?= (!empty($search) || $filter !== 'all') ? 'show' : '' ?>" id="clearFilterBtn">
+
+                    <a href="patients.php"
+                       class="clear-filter-btn <?= (!empty($search) || $filter !== 'all') ? 'show' : '' ?>"
+                       id="clearFilterBtn">
                         <i class="fas fa-times"></i> Clear
                     </a>
-                    
+
                     <span class="filter-status" id="filterStatus">
                         <i class="fas fa-bolt"></i>
                         <span id="filterStatusText">Auto-filter</span>
                     </span>
                 </div>
             </div>
-            
+
             <div class="card-header-right">
                 <div class="card-title" style="margin:0;">
                     <i class="fas fa-list"></i> Patient List
-                    <span id="patientCountBadge" style="background:var(--primary-bg);color:var(--primary);padding:2px 12px;border-radius:20px;font-size:0.7rem;font-weight:500;">
+                    <span id="patientCountBadge"
+                          style="background:var(--primary-bg);color:var(--primary);padding:3px 12px;border-radius:20px;font-size:0.7rem;font-weight:700;">
                         <?= $total_patients ?> patients
                     </span>
                 </div>
-                
+
                 <div class="table-scroll-controls">
                     <button type="button" class="scroll-btn" onclick="scrollTableLeft()" title="Scroll Left">
                         <i class="fas fa-chevron-left"></i>
@@ -1443,14 +1117,15 @@ include_once '../../components/reception_sidebar.php';
                 </thead>
                 <tbody id="patientTableBody">
                     <?php $counter = 1; ?>
-                    <?php foreach ($patients as $patient): 
+                    <?php foreach ($patients as $patient):
                         $patient_days = isset($patient['patient_days']) ? (int)$patient['patient_days'] : 0;
-                        $days_text = $patient_days > 0 ? '<span class="days-badge-blue">📅 ' . $patient_days . ' days</span>' : '<span class="days-badge-blue new">📅 New</span>';
-                        
+                        $days_text = $patient_days > 0
+                            ? '<span class="days-badge-blue">📅 ' . $patient_days . ' days</span>'
+                            : '<span class="days-badge-blue new">📅 New</span>';
+
                         $status_class = $patient['patient_status'] ?? 'existing';
-                        $status_text = $status_class === 'new' ? 'New' : 'Existing';
-                        
-                        // ✅ MUHIMU: Doctor status inatokana na VISIT ACTIVE
+                        $status_text  = $status_class === 'new' ? 'New' : 'Existing';
+
                         if (!empty($patient['display_doctor_name'])) {
                             $doctor_status = '<span class="status-badge with_doctor">✅ Dr. ' . htmlspecialchars($patient['display_doctor_name']) . '</span>';
                             $is_assigned = true;
@@ -1458,11 +1133,11 @@ include_once '../../components/reception_sidebar.php';
                             $doctor_status = '<span class="status-badge without_doctor">⚠️ No Doctor</span>';
                             $is_assigned = false;
                         }
-                        
+
                         $appointment_count = $patient['active_appointments'] ?? 0;
-                        $registered_by = $patient['registered_by_display'] ?? 'System';
+                        $registered_by     = $patient['registered_by_display'] ?? 'System';
                     ?>
-                        <tr class="patient-row" 
+                        <tr class="patient-row"
                             data-name="<?= strtolower(htmlspecialchars($patient['full_name'] ?? '')) ?>"
                             data-id="<?= strtolower(htmlspecialchars($patient['patient_id'] ?? '')) ?>"
                             data-phone="<?= strtolower(htmlspecialchars($patient['phone'] ?? '')) ?>"
@@ -1476,20 +1151,26 @@ include_once '../../components/reception_sidebar.php';
                                     <?= htmlspecialchars($patient['full_name'] ?? 'Unknown') ?>
                                 </a>
                             </td>
-                            <td style="font-family:monospace;font-size:0.8rem;color:#000000 !important;"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></td>
+                            <td style="font-family:monospace;font-size:0.8rem;">
+                                <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>
+                            </td>
                             <td>
                                 <?php if (!empty($patient['phone'])): ?>
-                                    <a href="tel:<?= htmlspecialchars($patient['phone']) ?>" style="color:#000000 !important;text-decoration:none;"><?= htmlspecialchars($patient['phone']) ?></a>
+                                    <a href="tel:<?= htmlspecialchars($patient['phone']) ?>" style="color:var(--text-primary);text-decoration:none;">
+                                        <?= htmlspecialchars($patient['phone']) ?>
+                                    </a>
                                 <?php else: ?>
-                                    <span style="color:#94A3B8;">N/A</span>
+                                    <span style="color:var(--text-secondary);opacity:0.6;">N/A</span>
                                 <?php endif; ?>
                             </td>
                             <td><?= $days_text ?></td>
                             <td><?= $doctor_status ?></td>
                             <td>
-                                <span style="font-weight:600;color:#000000 !important;"><?= $patient['total_visits'] ?? 0 ?></span>
+                                <span style="font-weight:700;color:var(--text-primary);"><?= $patient['total_visits'] ?? 0 ?></span>
                                 <?php if (!empty($patient['latest_visit']['status'])): ?>
-                                    <span style="font-size:0.65rem;color:#64748B;display:block;"><?= ucfirst($patient['latest_visit']['status']) ?></span>
+                                    <span style="font-size:0.65rem;color:var(--text-secondary);display:block;">
+                                        <?= ucfirst($patient['latest_visit']['status']) ?>
+                                    </span>
                                 <?php endif; ?>
                             </td>
                             <td>
@@ -1501,42 +1182,41 @@ include_once '../../components/reception_sidebar.php';
                             <td>
                                 <span class="status-badge <?= $status_class ?>"><?= $status_text ?></span>
                                 <?php if ($appointment_count > 0): ?>
-                                    <span style="font-size:0.65rem;color:#7C3AED;display:block;">📅 <?= $appointment_count ?> appt(s)</span>
+                                    <span style="font-size:0.65rem;color:#7C3AED;display:block;font-weight:600;">
+                                        📅 <?= $appointment_count ?> appt(s)
+                                    </span>
                                 <?php endif; ?>
                             </td>
-                            <!-- ✅ ACTION BUTTONS - 3 BUTTONS TU (View, Edit, Assign) -->
+                            <!-- 3 BUTTONS: View, Edit, Assign/Reassign -->
                             <td class="col-actions">
                                 <div class="action-buttons-group">
                                     <!-- 1. VIEW -->
-                                    <a href="view_patient.php?id=<?= (int)$patient['id'] ?>" 
-                                       class="action-btn view" 
+                                    <a href="view_patient.php?id=<?= (int)$patient['id'] ?>"
+                                       class="action-btn view"
                                        data-tooltip="View Patient"
                                        title="View Patient">
                                         <i class="fas fa-eye"></i>
                                     </a>
-                                    
+
                                     <!-- 2. EDIT -->
-                                    <a href="edit_patient.php?id=<?= (int)$patient['id'] ?>" 
-                                       class="action-btn edit" 
+                                    <a href="edit_patient.php?id=<?= (int)$patient['id'] ?>"
+                                       class="action-btn edit"
                                        data-tooltip="Edit Patient"
                                        title="Edit Patient">
                                         <i class="fas fa-edit"></i>
                                     </a>
-                                    
-                                    <!-- 3. ASSIGN DOCTOR (kila click = NEW VISIT) -->
-                                    <!-- ✅ V4: HAKUNA Change Doctor button - Assign kila wakati -->
+
+                                    <!-- 3. ASSIGN / REASSIGN -->
                                     <?php if ($is_assigned): ?>
-                                        <!-- Kama ana doctor, Assign = Reassign (new visit kwa doctor mwingine) -->
-                                        <a href="assign_doctor.php?patient_id=<?= (int)$patient['id'] ?>&reassign=1" 
-                                           class="action-btn reassign" 
+                                        <a href="assign_doctor.php?patient_id=<?= (int)$patient['id'] ?>&reassign=1"
+                                           class="action-btn reassign"
                                            data-tooltip="Reassign Doctor (New Visit)"
                                            title="Reassign Doctor - Itaunda Visit Mpya">
                                             <i class="fas fa-user-plus"></i>
                                         </a>
                                     <?php else: ?>
-                                        <!-- Kama hana doctor, Assign = New Visit -->
-                                        <a href="assign_doctor.php?patient_id=<?= (int)$patient['id'] ?>" 
-                                           class="action-btn assign" 
+                                        <a href="assign_doctor.php?patient_id=<?= (int)$patient['id'] ?>"
+                                           class="action-btn assign"
                                            data-tooltip="Assign Doctor (New Visit)"
                                            title="Assign Doctor - Itaunda Visit Mpya">
                                             <i class="fas fa-user-md"></i>
@@ -1548,45 +1228,51 @@ include_once '../../components/reception_sidebar.php';
                     <?php endforeach; ?>
                 </tbody>
             </table>
-            
+
             <div id="noResultsMessage" style="display:none;text-align:center;padding:40px 20px;">
                 <i class="fas fa-search text-4xl text-gray-300 block mb-3"></i>
-                <p class="text-gray-500" style="font-size:0.9rem;">No patients match your search</p>
+                <p class="text-gray-500" style="font-size:0.9rem;font-weight:600;">No patients match your search</p>
                 <p class="text-gray-400" style="font-size:0.75rem;">Try adjusting your filter criteria</p>
                 <button onclick="clearFilter()" class="btn btn-primary mt-3">
                     <i class="fas fa-times"></i> Clear Filter
                 </button>
             </div>
-            
+
             <?php else: ?>
             <div class="text-center py-8">
                 <i class="fas fa-users text-4xl text-gray-300 block mb-2"></i>
-                <p class="text-gray-500">No patients found</p>
+                <p class="text-gray-500" style="font-weight:600;">No patients found</p>
                 <?php if (!empty($search)): ?>
                     <p class="text-sm text-gray-400">Try adjusting your search criteria</p>
                 <?php endif; ?>
-                <a href="patients.php" class="btn btn-primary mt-3">Clear Filters</a>
+                <a href="patients.php" class="btn btn-primary mt-3">
+                    <i class="fas fa-sync-alt"></i> Clear Filters
+                </a>
             </div>
             <?php endif; ?>
         </div>
     </div>
 
+    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <footer class="footer-modern">
+    <!-- ================================================================ -->
+    <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
             Patients
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
             <span id="footerTimestamp"><?= date('h:i:s A') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
 
 </main>
 
+<!-- ================================================================ -->
 <!-- TOAST -->
+<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1596,16 +1282,18 @@ include_once '../../components/reception_sidebar.php';
 </div>
 
 <script>
+    // ================================================================
     // AUTO-FILTER
+    // ================================================================
     var filterTimeout = null;
 
     function autoFilter() {
         var searchValue = document.getElementById('searchFilter').value;
         var filterValue = document.getElementById('filterSelect').value;
-        
+
         var loading = document.getElementById('filterLoading');
         if (loading) loading.classList.add('show');
-        
+
         var clearBtn = document.getElementById('clearFilterBtn');
         if (clearBtn) {
             if (searchValue.trim() !== '' || filterValue !== 'all') {
@@ -1614,9 +1302,9 @@ include_once '../../components/reception_sidebar.php';
                 clearBtn.classList.remove('show');
             }
         }
-        
+
         if (filterTimeout) clearTimeout(filterTimeout);
-        
+
         filterTimeout = setTimeout(function() {
             filterTableRows(searchValue, filterValue);
             setTimeout(function() {
@@ -1629,30 +1317,30 @@ include_once '../../components/reception_sidebar.php';
         var rows = document.querySelectorAll('.patient-row');
         var visibleCount = 0;
         var searchLower = searchValue.toLowerCase().trim();
-        
+
         rows.forEach(function(row) {
-            var name = row.getAttribute('data-name') || '';
-            var id = row.getAttribute('data-id') || '';
-            var phone = row.getAttribute('data-phone') || '';
-            var days = parseInt(row.getAttribute('data-days')) || 0;
+            var name      = row.getAttribute('data-name') || '';
+            var id        = row.getAttribute('data-id') || '';
+            var phone     = row.getAttribute('data-phone') || '';
+            var days      = parseInt(row.getAttribute('data-days')) || 0;
             var hasDoctor = row.getAttribute('data-has-doctor') === '1';
-            var visits = parseInt(row.getAttribute('data-visits')) || 0;
-            
+            var visits    = parseInt(row.getAttribute('data-visits')) || 0;
+
             var show = true;
-            
+
             if (searchLower !== '') {
-                var matchesSearch = 
+                var matchesSearch =
                     name.includes(searchLower) ||
                     id.includes(searchLower) ||
                     phone.includes(searchLower);
                 if (!matchesSearch) show = false;
             }
-            
-            if (filterValue === 'new' && days > 7) show = false;
-            if (filterValue === 'with_doctor' && !hasDoctor) show = false;
-            if (filterValue === 'without_doctor' && hasDoctor) show = false;
-            if (filterValue === 'no_visit' && visits > 0) show = false;
-            
+
+            if (filterValue === 'new'            && days > 7)     show = false;
+            if (filterValue === 'with_doctor'    && !hasDoctor)   show = false;
+            if (filterValue === 'without_doctor' && hasDoctor)    show = false;
+            if (filterValue === 'no_visit'       && visits > 0)   show = false;
+
             if (show) {
                 row.style.display = '';
                 visibleCount++;
@@ -1660,14 +1348,14 @@ include_once '../../components/reception_sidebar.php';
                 row.style.display = 'none';
             }
         });
-        
+
         updateRowNumbers();
-        
+
         var countBadge = document.getElementById('patientCountBadge');
         if (countBadge) {
             countBadge.textContent = visibleCount + ' patient' + (visibleCount !== 1 ? 's' : '');
         }
-        
+
         var statusText = document.getElementById('filterStatusText');
         if (statusText) {
             if (searchLower !== '' || filterValue !== 'all') {
@@ -1676,10 +1364,10 @@ include_once '../../components/reception_sidebar.php';
                 statusText.textContent = 'Auto-filter';
             }
         }
-        
+
         var noResults = document.getElementById('noResultsMessage');
         var table = document.querySelector('.patient-table');
-        
+
         if (visibleCount === 0 && rows.length > 0) {
             if (noResults) noResults.style.display = 'block';
             if (table) table.style.display = 'none';
@@ -1705,7 +1393,7 @@ include_once '../../components/reception_sidebar.php';
         var container = document.getElementById('tableContainer');
         if (container) container.scrollBy({ left: -300, behavior: 'smooth' });
     }
-    
+
     function scrollTableRight() {
         var container = document.getElementById('tableContainer');
         if (container) container.scrollBy({ left: 300, behavior: 'smooth' });
@@ -1715,15 +1403,18 @@ include_once '../../components/reception_sidebar.php';
         document.getElementById('searchFilter').value = '';
         document.getElementById('filterSelect').value = 'all';
         autoFilter();
-        
+
         var url = new URL(window.location.href);
         url.searchParams.delete('search');
         url.searchParams.delete('filter');
         window.history.replaceState({}, '', url.toString());
-        
+
         showToast('🔄 Cleared', 'Filters have been cleared', 'info');
     }
 
+    // ================================================================
+    // KEYBOARD SHORTCUTS
+    // ================================================================
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             var searchInput = document.getElementById('searchFilter');
@@ -1740,117 +1431,55 @@ include_once '../../components/reception_sidebar.php';
     document.addEventListener('DOMContentLoaded', function() {
         var searchValue = document.getElementById('searchFilter').value;
         var filterValue = document.getElementById('filterSelect').value;
-        
+
         if (searchValue !== '' || filterValue !== 'all') {
             filterTableRows(searchValue, filterValue);
         }
-        
         if (searchValue !== '') {
             document.getElementById('searchFilter').focus();
         }
     });
 
+    // ================================================================
+    // CLOCK
+    // ================================================================
     function updateClock() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var el = document.getElementById('clockDisplay');
-        if (el) el.textContent = dateStr + ' • ' + timeStr;
         var footerTimestamp = document.getElementById('footerTimestamp');
         if (footerTimestamp) footerTimestamp.textContent = timeStr;
     }
     setInterval(updateClock, 1000);
     updateClock();
 
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-        }
-    });
-
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performTopSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            document.getElementById('searchFilter').value = query;
-            autoFilter();
-            var url = new URL(window.location.href);
-            url.searchParams.set('search', query);
-            window.history.replaceState({}, '', url.toString());
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performTopSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performTopSearch();
-    });
-
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
+    // ================================================================
+    // TOAST (fallback if not defined by header)
+    // ================================================================
+    if (typeof window.showToast !== 'function') {
+        window.showToast = function(title, message, type) {
+            var toast = document.getElementById('toast');
+            if (!toast) return;
+            var toastTitle = document.getElementById('toastTitle');
+            var toastMessage = document.getElementById('toastMessage');
+            toast.className = 'toast-custom ' + (type || 'info');
+            toastTitle.textContent = title;
+            toastMessage.textContent = message;
+            toast.style.display = 'flex';
+            toast.classList.add('show');
+            clearTimeout(toast.timeout);
+            toast.timeout = setTimeout(function() {
+                toast.classList.remove('show');
+                setTimeout(function() { toast.style.display = 'none'; }, 400);
+            }, 3500);
+        };
     }
 
-    console.log('%c👤 Braick - Patients V4 (3 BUTTONS: View, Edit, Assign)', 'font-size:18px; font-weight:bold; color:#2563EB;');
-    console.log('%c✅ Assign inaunda NEW VISIT kila click', 'font-size:13px; color:#34D399; font-weight:bold;');
-    console.log('%c✅ HAKUNA Change Doctor button', 'font-size:13px; color:#F59E0B;');
-    console.log('%c✅ Doctor status = VISIT ACTIVE', 'font-size:13px; color:#7C3AED;');
+    console.log('%c👤 Braick - Patients (Shared Header/Sidebar)', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c✅ 3 BUTTONS: View, Edit, Assign/Reassign', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ Assign inaunda NEW VISIT kila click', 'font-size:13px; color:#7C3AED;');
+    console.log('%c✅ Doctor status = VISIT ACTIVE', 'font-size:13px; color:#F59E0B;');
 </script>
 
 </body>

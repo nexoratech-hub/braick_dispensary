@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/pending_bills.php
-// CASHIER - PENDING BILLS LIST v2.1
+// CASHIER - PENDING BILLS LIST v2.2
+// ✅ Tarehe & Saa kwenye Patient Card Header (kabla ya toggle)
 // ✅ REMOVED: Overall Summary (green bar)
 // ✅ FIXED: Summary cards - COMPACT, 2 ROWS ONLY
 // ✅ NEW: Pharmacy vs Cashier kivyake
@@ -60,6 +61,7 @@ $total_pending_amount = 0;
 $total_bills_count = 0;
 $currency = 'TSh';
 $all_bills = [];
+$patient_bills = [];
 
 try {
     if (isset($_SESSION['flash_message'])) {
@@ -68,32 +70,20 @@ try {
         unset($_SESSION['flash_message']);
         unset($_SESSION['flash_type']);
     }
-    
+
     // ================================================================
     // BUILD FILTERS
     // ================================================================
     $date_condition = "";
     $params = [];
-    
+
     switch ($filter) {
-        case 'today':
-            $date_condition = "AND DATE(b.created_at) = CURDATE()";
-            break;
-        case 'week':
-            $date_condition = "AND b.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
-            break;
-        case 'month':
-            $date_condition = "AND b.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
-            break;
-        case '3months':
-            $date_condition = "AND b.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
-            break;
-        case '6months':
-            $date_condition = "AND b.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
-            break;
-        case 'year':
-            $date_condition = "AND b.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
-            break;
+        case 'today':    $date_condition = "AND DATE(b.created_at) = CURDATE()"; break;
+        case 'week':     $date_condition = "AND b.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)"; break;
+        case 'month':    $date_condition = "AND b.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)"; break;
+        case '3months':  $date_condition = "AND b.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)"; break;
+        case '6months':  $date_condition = "AND b.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)"; break;
+        case 'year':     $date_condition = "AND b.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)"; break;
         case 'custom':
             if (!empty($start_date) && !empty($end_date)) {
                 $date_condition = "AND DATE(b.created_at) BETWEEN ? AND ?";
@@ -101,11 +91,9 @@ try {
                 $params[] = $end_date;
             }
             break;
-        default:
-            $date_condition = "";
-            break;
+        default: $date_condition = ""; break;
     }
-    
+
     $search_condition = "";
     if (!empty($search)) {
         $search_condition = "AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR b.bill_number LIKE ? OR p.phone LIKE ?)";
@@ -114,36 +102,23 @@ try {
         $params[] = "%$search%";
         $params[] = "%$search%";
     }
-    
+
     // ================================================================
     // GET PENDING BILLS
     // ================================================================
     $sql = "
-        SELECT 
+        SELECT
             b.*,
-            b.subtotal,
-            b.total_amount,
-            b.paid_amount,
-            b.balance,
-            b.total_discount,
-            b.discount_amount,
-            b.pharmacy_discount,
-            b.cashier_discount,
-            b.premium_amount,
-            b.pharmacy_premium,
-            b.cashier_premium,
-            b.premium_note,
-            b.pharmacy_premium_note,
-            b.cashier_premium_note,
+            b.subtotal, b.total_amount, b.paid_amount, b.balance,
+            b.total_discount, b.discount_amount,
+            b.pharmacy_discount, b.cashier_discount,
+            b.premium_amount, b.pharmacy_premium, b.cashier_premium,
+            b.premium_note, b.pharmacy_premium_note, b.cashier_premium_note,
             p.full_name as patient_name,
             p.patient_id as patient_id_number,
-            p.phone,
-            p.gender,
-            p.date_of_birth,
+            p.phone, p.gender, p.date_of_birth,
             u.full_name as created_by_name,
-            v.visit_number,
-            v.visit_type,
-            v.status as visit_status,
+            v.visit_number, v.visit_type, v.status as visit_status,
             'regular' as bill_type,
             NULL as customer_name,
             NULL as otc_sale_id,
@@ -151,19 +126,19 @@ try {
             (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND status != 'cancelled') as item_count,
             (SELECT COUNT(*) FROM payments WHERE bill_id = b.id) as payment_count,
             (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE bill_id = b.id) as total_paid,
-            (SELECT COUNT(*) 
-             FROM bill_items bi2 
-             JOIN prescriptions pr ON bi2.reference_id = pr.id 
-             WHERE bi2.bill_id = b.id 
-             AND bi2.item_type = 'medication' 
+            (SELECT COUNT(*)
+             FROM bill_items bi2
+             JOIN prescriptions pr ON bi2.reference_id = pr.id
+             WHERE bi2.bill_id = b.id
+             AND bi2.item_type = 'medication'
              AND bi2.reference_type = 'prescription'
              AND pr.status IN ('confirmed', 'dispensed')
             ) as confirmed_prescriptions,
-            (SELECT COUNT(*) 
-             FROM bill_items bi2 
-             JOIN prescriptions pr ON bi2.reference_id = pr.id 
-             WHERE bi2.bill_id = b.id 
-             AND bi2.item_type = 'medication' 
+            (SELECT COUNT(*)
+             FROM bill_items bi2
+             JOIN prescriptions pr ON bi2.reference_id = pr.id
+             WHERE bi2.bill_id = b.id
+             AND bi2.item_type = 'medication'
              AND bi2.reference_type = 'prescription'
              AND pr.status NOT IN ('confirmed', 'dispensed')
             ) as pending_prescriptions
@@ -171,7 +146,7 @@ try {
         LEFT JOIN patients p ON b.patient_id = p.id
         LEFT JOIN users u ON b.created_by = u.id
         LEFT JOIN visits v ON b.visit_id = v.id
-        WHERE b.branch_id = ? 
+        WHERE b.branch_id = ?
         AND b.status = 'pending'
         AND b.balance > 0
         AND b.visit_id IS NOT NULL
@@ -179,7 +154,7 @@ try {
         $search_condition
         ORDER BY b.created_at DESC
     ";
-    
+
     $stmt = $db->prepare($sql);
     $exec_params = [$user_branch_id];
     foreach ($params as $param) {
@@ -187,40 +162,24 @@ try {
     }
     $stmt->execute($exec_params);
     $regular_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
+
     // ================================================================
     // GET OTC SALES WITH PENDING PAYMENT
     // ================================================================
     $otc_sql = "
-        SELECT 
-            o.id,
-            o.sale_number,
-            o.customer_name,
-            o.customer_phone,
-            o.patient_id,
-            o.subtotal,
-            o.discount_amount as otc_discount,
-            o.total_amount,
-            o.bill_id,
-            o.payment_method,
-            o.payment_status,
-            o.sold_by,
-            o.branch_id,
-            o.notes,
-            o.created_at,
-            o.updated_at,
-            o.premium_amount,
-            o.premium_note,
+        SELECT
+            o.id, o.sale_number, o.customer_name, o.customer_phone, o.patient_id,
+            o.subtotal, o.discount_amount as otc_discount, o.total_amount, o.bill_id,
+            o.payment_method, o.payment_status, o.sold_by, o.branch_id, o.notes,
+            o.created_at, o.updated_at,
+            o.premium_amount, o.premium_note,
             'otc' as bill_type,
             o.customer_name as patient_name,
             CONCAT('OTC-', o.id) as patient_id_number,
             o.customer_phone as phone,
-            NULL as gender,
-            NULL as date_of_birth,
+            NULL as gender, NULL as date_of_birth,
             u.full_name as created_by_name,
-            NULL as visit_number,
-            NULL as visit_type,
-            NULL as visit_status,
+            NULL as visit_number, NULL as visit_type, NULL as visit_status,
             (SELECT COUNT(*) FROM otc_sale_items WHERE sale_id = o.id) as item_count,
             0 as payment_count,
             0 as total_paid,
@@ -235,119 +194,96 @@ try {
             o.discount_amount as discount_amount
         FROM otc_sales o
         LEFT JOIN users u ON o.sold_by = u.id
-        WHERE o.branch_id = ? 
+        WHERE o.branch_id = ?
         AND o.payment_status = 'pending'
         AND o.total_amount > 0
     ";
-    
+
     $otc_params = [$user_branch_id];
-    
     $otc_date_condition = "";
+
     if ($filter === 'custom' && !empty($start_date) && !empty($end_date)) {
         $otc_date_condition = "AND DATE(o.created_at) BETWEEN ? AND ?";
         $otc_params[] = $start_date;
         $otc_params[] = $end_date;
     } elseif ($filter !== 'all' && $filter !== 'custom') {
         switch ($filter) {
-            case 'today':
-                $otc_date_condition = "AND DATE(o.created_at) = CURDATE()";
-                break;
-            case 'week':
-                $otc_date_condition = "AND o.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
-                break;
-            case 'month':
-                $otc_date_condition = "AND o.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
-                break;
-            case '3months':
-                $otc_date_condition = "AND o.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
-                break;
-            case '6months':
-                $otc_date_condition = "AND o.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
-                break;
-            case 'year':
-                $otc_date_condition = "AND o.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
-                break;
+            case 'today':    $otc_date_condition = "AND DATE(o.created_at) = CURDATE()"; break;
+            case 'week':     $otc_date_condition = "AND o.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)"; break;
+            case 'month':    $otc_date_condition = "AND o.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)"; break;
+            case '3months':  $otc_date_condition = "AND o.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)"; break;
+            case '6months':  $otc_date_condition = "AND o.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)"; break;
+            case 'year':     $otc_date_condition = "AND o.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)"; break;
         }
     }
-    
+
     if (!empty($otc_date_condition)) {
         $otc_sql .= " $otc_date_condition";
     }
-    
+
     if (!empty($search)) {
         $otc_sql .= " AND (o.customer_name LIKE ? OR o.sale_number LIKE ? OR o.customer_phone LIKE ?)";
         $otc_params[] = "%$search%";
         $otc_params[] = "%$search%";
         $otc_params[] = "%$search%";
     }
-    
+
     $otc_sql .= " ORDER BY o.created_at DESC";
-    
+
     $stmt = $db->prepare($otc_sql);
     $stmt->execute($otc_params);
     $otc_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
+
     // ================================================================
-    // GET OTC ITEMS FOR EACH OTC SALE
+    // GET OTC ITEMS
     // ================================================================
     foreach ($otc_bills as &$otc) {
         $stmt = $db->prepare("
-            SELECT 
-                id,
-                sale_id,
-                patient_id,
-                inventory_id,
-                medicine_name,
-                item_name,
-                quantity,
-                unit_price,
-                total_price,
-                instructions,
-                branch_id,
-                created_at
-            FROM otc_sale_items 
+            SELECT id, sale_id, patient_id, inventory_id, medicine_name, item_name,
+                   quantity, unit_price, total_price, instructions, branch_id, created_at
+            FROM otc_sale_items
             WHERE sale_id = ?
         ");
         $stmt->execute([$otc['id']]);
         $otc['otc_items'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
+
         $item_names = [];
         foreach ($otc['otc_items'] as $item) {
             $item_names[] = $item['item_name'] ?? $item['medicine_name'] ?? 'Unknown';
         }
         $otc['item_names'] = implode(', ', $item_names);
     }
-    
+    unset($otc);
+
     // ================================================================
     // COMBINE BOTH BILLS
     // ================================================================
     $all_bills = array_merge($regular_bills, $otc_bills);
-    
+
     // ================================================================
     // GROUP BILLS BY PATIENT/CUSTOMER
+    // ✅ V2.2: Track latest_created_at kwa patient card header
     // ================================================================
     $patient_bills = [];
     foreach ($all_bills as $bill) {
         if ($bill['bill_type'] !== 'otc') {
             $balance = ($bill['total_amount'] ?? 0) - ($bill['total_paid'] ?? 0);
-            if ($balance <= 0) {
-                continue;
-            }
+            if ($balance <= 0) continue;
         }
-        
-        $patient_key = $bill['bill_type'] === 'otc' 
-            ? 'otc_' . $bill['id'] 
+
+        $patient_key = $bill['bill_type'] === 'otc'
+            ? 'otc_' . $bill['id']
             : $bill['patient_id'];
-        
-        $patient_name = $bill['bill_type'] === 'otc' 
+
+        $patient_name = $bill['bill_type'] === 'otc'
             ? ($bill['customer_name'] ?? 'OTC Customer')
             : ($bill['patient_name'] ?? 'Unknown Patient');
-        
+
         if (!isset($patient_bills[$patient_key])) {
             $patient_bills[$patient_key] = [
                 'patient_id' => $patient_key,
                 'patient_name' => $patient_name,
-                'patient_id_number' => $bill['bill_type'] === 'otc' 
+                'patient_id_number' => $bill['bill_type'] === 'otc'
                     ? ($bill['sale_number'] ?? 'OTC-' . $bill['id'])
                     : ($bill['patient_id_number'] ?? 'N/A'),
                 'phone' => $bill['phone'] ?? 'N/A',
@@ -367,16 +303,28 @@ try {
                 'total_premium' => 0,
                 'bill_count' => 0,
                 'total_pending_prescriptions' => 0,
-                'total_confirmed_prescriptions' => 0
+                'total_confirmed_prescriptions' => 0,
+                'latest_created_at' => $bill['created_at'],  // ✅ NEW: Latest bill date
+                'oldest_created_at' => $bill['created_at'],  // ✅ NEW: Oldest bill date
             ];
         }
-        
+
+        // ✅ Track latest na oldest bill dates
+        if (!empty($bill['created_at'])) {
+            if (strtotime($bill['created_at']) > strtotime($patient_bills[$patient_key]['latest_created_at'])) {
+                $patient_bills[$patient_key]['latest_created_at'] = $bill['created_at'];
+            }
+            if (strtotime($bill['created_at']) < strtotime($patient_bills[$patient_key]['oldest_created_at'])) {
+                $patient_bills[$patient_key]['oldest_created_at'] = $bill['created_at'];
+            }
+        }
+
         $patient_bills[$patient_key]['bills'][] = $bill;
         $patient_bills[$patient_key]['total_amount'] += $bill['total_amount'];
         $patient_bills[$patient_key]['total_subtotal'] += ($bill['subtotal'] ?? $bill['total_amount'] ?? 0);
         $patient_bills[$patient_key]['total_balance'] += ($bill['total_amount'] - ($bill['total_paid'] ?? 0));
         $patient_bills[$patient_key]['total_paid'] += ($bill['total_paid'] ?? 0);
-        
+
         // PHARMACY DISCOUNT
         $pharmacy_disc = (float)($bill['pharmacy_discount'] ?? 0);
         if ($pharmacy_disc == 0 && $bill['bill_type'] !== 'otc' && (float)($bill['discount_amount'] ?? 0) > 0) {
@@ -384,18 +332,18 @@ try {
         }
         if ($bill['bill_type'] === 'otc') $pharmacy_disc = 0;
         $patient_bills[$patient_key]['total_pharmacy_discount'] += $pharmacy_disc;
-        
+
         // CASHIER DISCOUNT
         $cashier_disc = (float)($bill['cashier_discount'] ?? 0);
         if ($bill['bill_type'] === 'otc') {
             $cashier_disc = (float)($bill['otc_discount'] ?? $bill['discount_amount'] ?? 0);
         }
         $patient_bills[$patient_key]['total_cashier_discount'] += $cashier_disc;
-        
+
         $total_disc = (float)($bill['total_discount'] ?? 0);
         if ($total_disc == 0) $total_disc = $pharmacy_disc + $cashier_disc;
         $patient_bills[$patient_key]['total_discount'] += $total_disc;
-        
+
         // PHARMACY PREMIUM
         $pharmacy_prem = (float)($bill['pharmacy_premium'] ?? 0);
         if ($pharmacy_prem == 0 && $bill['bill_type'] !== 'otc' && (float)($bill['premium_amount'] ?? 0) > 0) {
@@ -403,29 +351,29 @@ try {
         }
         if ($bill['bill_type'] === 'otc') $pharmacy_prem = 0;
         $patient_bills[$patient_key]['total_pharmacy_premium'] += $pharmacy_prem;
-        
+
         // CASHIER PREMIUM
         $cashier_prem = (float)($bill['cashier_premium'] ?? 0);
         if ($bill['bill_type'] === 'otc') {
             $cashier_prem = (float)($bill['premium_amount'] ?? 0);
         }
         $patient_bills[$patient_key]['total_cashier_premium'] += $cashier_prem;
-        
+
         $total_prem = (float)($bill['premium_amount'] ?? 0);
         if ($total_prem == 0) $total_prem = $pharmacy_prem + $cashier_prem;
         $patient_bills[$patient_key]['total_premium'] += $total_prem;
-        
+
         $patient_bills[$patient_key]['bill_count']++;
         $patient_bills[$patient_key]['total_pending_prescriptions'] += ($bill['pending_prescriptions'] ?? 0);
         $patient_bills[$patient_key]['total_confirmed_prescriptions'] += ($bill['confirmed_prescriptions'] ?? 0);
     }
-    
+
     $total_bills_count = count($all_bills);
     $total_pending_amount = 0;
     foreach ($patient_bills as $patient) {
         $total_pending_amount += $patient['total_balance'];
     }
-    
+
     // ================================================================
     // GLOBAL SUMMARY TOTALS
     // ================================================================
@@ -439,7 +387,7 @@ try {
     $summary_balance = 0;
     $summary_subtotal = 0;
     $summary_total_amount = 0;
-    
+
     foreach ($patient_bills as $patient) {
         $summary_pharmacy_discount += $patient['total_pharmacy_discount'] ?? 0;
         $summary_cashier_discount += $patient['total_cashier_discount'] ?? 0;
@@ -452,9 +400,9 @@ try {
         $summary_subtotal += $patient['total_subtotal'] ?? 0;
         $summary_total_amount += $patient['total_amount'] ?? 0;
     }
-    
+
     // ================================================================
-    // GET SYSTEM SETTINGS
+    // SYSTEM SETTINGS
     // ================================================================
     $settings = [];
     $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
@@ -462,16 +410,16 @@ try {
         $settings[$row['setting_key']] = $row['setting_value'];
     }
     $currency = $settings['currency'] ?? 'TSh';
-    
+
     // ================================================================
-    // GET STATS
+    // STATS
     // ================================================================
     $today = date('Y-m-d');
-    
+
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total
-        FROM bills 
-        WHERE branch_id = ? 
+        FROM bills
+        WHERE branch_id = ?
         AND DATE(updated_at) = ?
         AND paid_amount > 0
         AND status = 'paid'
@@ -483,8 +431,7 @@ try {
 
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total
-        FROM bills 
-        WHERE branch_id = ? AND status = 'paid'
+        FROM bills WHERE branch_id = ? AND status = 'paid'
     ");
     $stmt->execute([$user_branch_id]);
     $paid_bills = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -493,8 +440,7 @@ try {
 
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
-        FROM bills 
-        WHERE branch_id = ? AND status = 'cancelled'
+        FROM bills WHERE branch_id = ? AND status = 'cancelled'
     ");
     $stmt->execute([$user_branch_id]);
     $cancelled_stats = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -512,8 +458,7 @@ try {
 
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total_paid, COALESCE(SUM(balance), 0) as total_balance
-        FROM bills 
-        WHERE branch_id = ? AND status = 'partial' AND balance > 0
+        FROM bills WHERE branch_id = ? AND status = 'partial' AND balance > 0
     ");
     $stmt->execute([$user_branch_id]);
     $partial_bills = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -523,14 +468,13 @@ try {
 
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
-        FROM otc_sales 
-        WHERE branch_id = ? AND payment_status = 'pending'
+        FROM otc_sales WHERE branch_id = ? AND payment_status = 'pending'
     ");
     $stmt->execute([$user_branch_id]);
     $otc_pending = $stmt->fetch(PDO::FETCH_ASSOC);
     $otc_pending_count = $otc_pending['count'] ?? 0;
     $otc_pending_total = $otc_pending['total'] ?? 0;
-    
+
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
@@ -541,8 +485,8 @@ try {
     error_log("Pending bills error: " . $e->getMessage());
 }
 
-$profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+$profile_pic_url = !empty($profile_pic)
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
@@ -556,14 +500,14 @@ include_once '../../components/cashier_sidebar.php';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pending Bills - Braick Dispensary</title>
-    
+
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
-    
+
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    
+
     <style>
         :root {
             --primary: #0B5ED7;
@@ -625,7 +569,7 @@ include_once '../../components/cashier_sidebar.php';
             --radius-xs: 6px;
             --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
-        
+
         [data-theme="dark"] {
             --bg-body: #0F172A;
             --bg-card: #1E293B;
@@ -653,27 +597,27 @@ include_once '../../components/cashier_sidebar.php';
             --deep-green-dark: #0F766E;
             --deep-green-light: #14B8A6;
         }
-        
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        
+
         body {
             font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
             background: var(--bg-body);
             color: var(--text-primary);
             transition: var(--transition);
         }
-        
+
         .mono {
             font-family: var(--font-mono) !important;
             font-feature-settings: 'tnum';
             font-variant-numeric: tabular-nums;
             letter-spacing: -0.02em;
         }
-        
+
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
-        
+
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -681,7 +625,7 @@ include_once '../../components/cashier_sidebar.php';
             min-height: calc(100vh - 68px);
             transition: var(--transition);
         }
-        
+
         .page-header {
             background: linear-gradient(135deg, #059669 0%, #0B5ED7 50%, #7C3AED 100%);
             border-radius: var(--radius);
@@ -696,7 +640,7 @@ include_once '../../components/cashier_sidebar.php';
             position: relative;
             overflow: hidden;
         }
-        
+
         .page-header .header-content { position: relative; z-index: 1; flex: 1; min-width: 250px; }
         .page-header .page-title {
             color: white;
@@ -778,7 +722,7 @@ include_once '../../components/cashier_sidebar.php';
             transform: translateY(-2px);
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
-        
+
         .filter-section {
             background: var(--bg-card);
             border-radius: var(--radius-sm);
@@ -835,7 +779,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         .filter-btn i { margin-right: 3px; font-size: 0.55rem; }
         .filter-divider { width: 1px; height: 20px; background: var(--border-color); margin: 0 4px; }
-        
+
         .date-picker-group {
             display: flex;
             align-items: center;
@@ -872,17 +816,15 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--success-dark);
             transform: translateY(-1px);
         }
-        
-        /* ================================================================
-           ✅ SUMMARY CARDS - COMPACT, 2 COLUMNS (PHARMACY + CASHIER)
-           ================================================================ */
+
+        /* SUMMARY CARDS */
         .summary-section {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 12px;
             margin-bottom: 16px;
         }
-        
+
         .summary-card {
             background: var(--bg-card);
             border-radius: var(--radius-sm);
@@ -893,22 +835,22 @@ include_once '../../components/cashier_sidebar.php';
             position: relative;
             overflow: hidden;
         }
-        
+
         .summary-card:hover {
             box-shadow: var(--shadow-md);
             transform: translateY(-2px);
         }
-        
+
         .summary-card.pharmacy-card {
             border-color: #D97706;
             background: linear-gradient(135deg, var(--bg-card) 0%, rgba(217, 119, 6, 0.04) 100%);
         }
-        
+
         .summary-card.cashier-card {
             border-color: #7C3AED;
             background: linear-gradient(135deg, var(--bg-card) 0%, rgba(124, 58, 237, 0.04) 100%);
         }
-        
+
         .summary-card .summary-header {
             display: flex;
             align-items: center;
@@ -917,7 +859,7 @@ include_once '../../components/cashier_sidebar.php';
             margin-bottom: 8px;
             border-bottom: 1.5px solid var(--border-color);
         }
-        
+
         .summary-card .summary-header .summary-icon {
             width: 30px;
             height: 30px;
@@ -928,40 +870,39 @@ include_once '../../components/cashier_sidebar.php';
             font-size: 0.9rem;
             flex-shrink: 0;
         }
-        
+
         .summary-card.pharmacy-card .summary-header .summary-icon {
             background: linear-gradient(135deg, #F59E0B, #D97706);
             color: white;
             box-shadow: 0 2px 6px rgba(217, 119, 6, 0.3);
         }
-        
+
         .summary-card.cashier-card .summary-header .summary-icon {
             background: linear-gradient(135deg, #8B5CF6, #7C3AED);
             color: white;
             box-shadow: 0 2px 6px rgba(124, 58, 237, 0.3);
         }
-        
+
         .summary-card .summary-header .summary-title {
             font-size: 0.75rem;
             font-weight: 800;
             color: var(--text-primary);
             line-height: 1.1;
         }
-        
+
         .summary-card .summary-header .summary-subtitle {
             font-size: 0.55rem;
             color: var(--text-secondary);
             font-weight: 500;
             margin-top: 1px;
         }
-        
-        /* ✅ 2 COLUMNS LAYOUT (2 rows total) */
+
         .summary-card .summary-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 6px;
         }
-        
+
         .summary-card .summary-item {
             background: var(--bg-body);
             border-radius: var(--radius-xs);
@@ -969,28 +910,28 @@ include_once '../../components/cashier_sidebar.php';
             border: 1px solid var(--border-color);
             transition: var(--transition);
         }
-        
+
         .summary-card .summary-item:hover {
             transform: translateY(-1px);
             box-shadow: var(--shadow-sm);
         }
-        
+
         .summary-card.pharmacy-card .summary-item.discount-item {
             border-left: 3px solid #D97706;
         }
-        
+
         .summary-card.pharmacy-card .summary-item.premium-item {
             border-left: 3px solid #F59E0B;
         }
-        
+
         .summary-card.cashier-card .summary-item.discount-item {
             border-left: 3px solid #2563EB;
         }
-        
+
         .summary-card.cashier-card .summary-item.premium-item {
             border-left: 3px solid #7C3AED;
         }
-        
+
         .summary-card .summary-item .item-label {
             font-size: 0.5rem;
             font-weight: 700;
@@ -1002,7 +943,7 @@ include_once '../../components/cashier_sidebar.php';
             gap: 3px;
             margin-bottom: 2px;
         }
-        
+
         .summary-card .summary-item .item-value {
             font-size: 0.82rem;
             font-weight: 800;
@@ -1010,19 +951,19 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--text-primary);
             line-height: 1.1;
         }
-        
+
         .summary-card .summary-item .item-value.pharm-discount { color: #D97706; }
         .summary-card .summary-item .item-value.pharm-premium { color: #F59E0B; }
         .summary-card .summary-item .item-value.cashier-discount { color: #2563EB; }
         .summary-card .summary-item .item-value.cashier-premium { color: #7C3AED; }
-        
+
         .summary-card .summary-item .item-count {
             font-size: 0.48rem;
             color: var(--text-secondary);
             margin-top: 1px;
             font-weight: 500;
         }
-        
+
         .summary-card .summary-footer {
             margin-top: 8px;
             padding-top: 6px;
@@ -1033,7 +974,7 @@ include_once '../../components/cashier_sidebar.php';
             flex-wrap: wrap;
             gap: 4px;
         }
-        
+
         .summary-card .summary-footer .footer-label {
             font-size: 0.52rem;
             font-weight: 700;
@@ -1041,31 +982,29 @@ include_once '../../components/cashier_sidebar.php';
             text-transform: uppercase;
             letter-spacing: 0.04em;
         }
-        
+
         .summary-card .summary-footer .footer-value {
             font-size: 0.85rem;
             font-weight: 900;
             font-family: var(--font-mono);
         }
-        
+
         .summary-card.pharmacy-card .summary-footer .footer-value {
             color: #D97706;
         }
-        
+
         .summary-card.cashier-card .summary-footer .footer-value {
             color: #7C3AED;
         }
-        
-        /* ================================================================
-           ✅ STATS GRID - COMPACT, 2 ROWS (4 COLUMNS EACH)
-           ================================================================ */
+
+        /* STATS GRID */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 10px;
             margin-bottom: 16px;
         }
-        
+
         .stat-card {
             background: var(--bg-card);
             border-radius: var(--radius-sm);
@@ -1076,7 +1015,7 @@ include_once '../../components/cashier_sidebar.php';
             position: relative;
             overflow: hidden;
         }
-        
+
         .stat-card::before {
             content: '';
             position: absolute;
@@ -1086,7 +1025,7 @@ include_once '../../components/cashier_sidebar.php';
             height: 3px;
             border-radius: var(--radius-sm) var(--radius-sm) 0 0;
         }
-        
+
         .stat-card.orange::before { background: var(--warning); }
         .stat-card.blue::before { background: var(--primary); }
         .stat-card.purple::before { background: var(--purple); }
@@ -1095,19 +1034,19 @@ include_once '../../components/cashier_sidebar.php';
         .stat-card.cashier-discount::before { background: #2563EB; }
         .stat-card.pharm-premium::before { background: #F59E0B; }
         .stat-card.cashier-premium::before { background: #7C3AED; }
-        
+
         .stat-card:hover {
             transform: translateY(-2px);
             box-shadow: var(--shadow-md);
             border-color: var(--success);
         }
-        
+
         .stat-card .stat-icon {
             font-size: 0.85rem;
             margin-bottom: 1px;
             display: inline-block;
         }
-        
+
         .stat-card .stat-number {
             font-size: 0.95rem;
             font-weight: 800;
@@ -1115,7 +1054,7 @@ include_once '../../components/cashier_sidebar.php';
             font-family: var(--font-mono);
             line-height: 1.1;
         }
-        
+
         .stat-card .stat-number.orange { color: var(--warning); }
         .stat-card .stat-number.blue { color: var(--primary); }
         .stat-card .stat-number.purple { color: var(--purple); }
@@ -1124,7 +1063,7 @@ include_once '../../components/cashier_sidebar.php';
         .stat-card .stat-number.cashier-discount { color: #2563EB; }
         .stat-card .stat-number.pharm-premium { color: #F59E0B; }
         .stat-card .stat-number.cashier-premium { color: #7C3AED; }
-        
+
         .stat-card .stat-label {
             font-size: 0.55rem;
             color: var(--text-primary);
@@ -1132,10 +1071,8 @@ include_once '../../components/cashier_sidebar.php';
             margin-top: 1px;
             line-height: 1.15;
         }
-        
-        /* ================================================================
-           PATIENT CARDS
-           ================================================================ */
+
+        /* PATIENT CARDS */
         .patient-card {
             background: var(--bg-card);
             border-radius: var(--radius);
@@ -1207,7 +1144,56 @@ include_once '../../components/cashier_sidebar.php';
         }
         .patient-card-header .patient-name { font-weight: 600; font-size: 0.92rem; color: var(--text-primary); }
         .patient-card-header .patient-id { font-size: 0.65rem; color: var(--text-secondary); font-family: var(--font-mono); }
-        .patient-card-header .patient-meta { font-size: 0.65rem; color: var(--text-secondary); display: flex; gap: 10px; flex-wrap: wrap; }
+        .patient-card-header .patient-meta {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-top: 4px;
+        }
+
+        /* ✅ DATE-TIME BADGE - Kwenye patient card header */
+        .patient-card-header .datetime-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            color: white;
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            box-shadow: 0 2px 6px rgba(11, 94, 215, 0.3);
+            white-space: nowrap;
+            font-family: var(--font-mono);
+            letter-spacing: -0.02em;
+        }
+
+        .patient-card-header .datetime-badge .separator {
+            opacity: 0.5;
+            margin: 0 2px;
+        }
+
+        .patient-card-header .datetime-badge i {
+            font-size: 0.62rem;
+        }
+
+        /* OTC tofauti (purple) */
+        .patient-card.otc-card .patient-card-header .datetime-badge {
+            background: linear-gradient(135deg, #8B5CF6, #6D28D9);
+            box-shadow: 0 2px 6px rgba(139, 92, 246, 0.3);
+        }
+
+        [data-theme="dark"] .patient-card-header .datetime-badge {
+            background: linear-gradient(135deg, #1E3A5F, #0A4CA8);
+        }
+
+        [data-theme="dark"] .patient-card.otc-card .patient-card-header .datetime-badge {
+            background: linear-gradient(135deg, #4C1D95, #6D28D9);
+        }
+
         .patient-card-header .patient-totals {
             display: flex;
             gap: 6px;
@@ -1279,7 +1265,7 @@ include_once '../../components/cashier_sidebar.php';
             max-height: 5000px;
             padding: 14px 20px 20px;
         }
-        
+
         .table-header-actions {
             display: flex;
             justify-content: flex-end;
@@ -1288,7 +1274,7 @@ include_once '../../components/cashier_sidebar.php';
             margin-bottom: 6px;
             padding: 0 4px;
         }
-        
+
         .table-scroll-btn {
             width: 28px;
             height: 28px;
@@ -1305,7 +1291,7 @@ include_once '../../components/cashier_sidebar.php';
             padding: 0;
             flex-shrink: 0;
         }
-        
+
         .table-scroll-btn:hover {
             background: var(--success);
             color: white;
@@ -1313,11 +1299,11 @@ include_once '../../components/cashier_sidebar.php';
             transform: scale(1.1);
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
-        
+
         .table-scroll-btn:active {
             transform: scale(0.9);
         }
-        
+
         .table-scroll-hint {
             font-size: 0.55rem;
             color: var(--text-secondary);
@@ -1328,16 +1314,16 @@ include_once '../../components/cashier_sidebar.php';
             padding-left: 6px;
             opacity: 0.7;
         }
-        
+
         .table-scroll-hint i {
             font-size: 0.6rem;
         }
-        
+
         [data-theme="dark"] .table-scroll-btn:hover {
             background: #0D9488;
             border-color: #0D9488;
         }
-        
+
         .table-wrap {
             overflow-x: auto;
             border-radius: var(--radius-sm);
@@ -1349,14 +1335,14 @@ include_once '../../components/cashier_sidebar.php';
         .table-wrap::-webkit-scrollbar-track { background: var(--gray-100); border-radius: 10px; }
         .table-wrap::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         .table-wrap::-webkit-scrollbar-thumb:hover { background: var(--success-dark); }
-        
+
         .data-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 0.7rem;
             min-width: 1100px;
         }
-        
+
         .data-table thead th {
             text-align: left;
             padding: 10px 12px;
@@ -1374,12 +1360,12 @@ include_once '../../components/cashier_sidebar.php';
         }
         .data-table thead th:first-child { border-radius: var(--radius-xs) 0 0 0; }
         .data-table thead th:last-child { border-radius: 0 var(--radius-xs) 0 0; }
-        
+
         .data-table.otc-table thead th {
             background: linear-gradient(135deg, #4C1D95, #6D28D9, #8B5CF6);
             border-bottom: 3px solid #A78BFA;
         }
-        
+
         .data-table td {
             padding: 8px 12px;
             border-bottom: 1px solid var(--border-color);
@@ -1392,7 +1378,7 @@ include_once '../../components/cashier_sidebar.php';
         .data-table tbody tr:hover td { background: var(--primary-bg); }
         .data-table tbody tr:last-child td { border-bottom: none; }
         .data-table .bill-number { font-weight: 600; font-size: 0.65rem; font-family: var(--font-mono); color: var(--text-primary); }
-        
+
         .locked-row td {
             background: var(--locked-bg) !important;
             opacity: 0.7;
@@ -1400,7 +1386,7 @@ include_once '../../components/cashier_sidebar.php';
         [data-theme="dark"] .locked-row td {
             background: #3A1A1A !important;
         }
-        
+
         .otc-item-list { font-size: 0.6rem; color: var(--text-secondary); max-width: 200px; }
         .otc-item-list .item-tag {
             display: inline-block;
@@ -1411,7 +1397,7 @@ include_once '../../components/cashier_sidebar.php';
             margin: 1px 2px;
             font-size: 0.55rem;
         }
-        
+
         .status-badge {
             display: inline-block;
             padding: 3px 10px;
@@ -1427,7 +1413,7 @@ include_once '../../components/cashier_sidebar.php';
         .status-badge.cancelled { background: var(--danger-bg); color: var(--danger); }
         .status-badge.otc-pending { background: var(--purple-bg); color: var(--purple); }
         .status-badge.locked { background: var(--locked-bg); color: var(--locked-color); border: 1px solid var(--locked-color); }
-        
+
         .discount-badge {
             display: inline-block;
             padding: 1px 6px;
@@ -1443,7 +1429,7 @@ include_once '../../components/cashier_sidebar.php';
             color: #F59E0B;
             border-color: #D97706;
         }
-        
+
         .cashier-discount-badge {
             display: inline-block;
             padding: 1px 6px;
@@ -1459,7 +1445,7 @@ include_once '../../components/cashier_sidebar.php';
             color: #93C5FD;
             border-color: #2563EB;
         }
-        
+
         .premium-badge {
             display: inline-block;
             padding: 1px 6px;
@@ -1475,7 +1461,7 @@ include_once '../../components/cashier_sidebar.php';
             color: #F59E0B;
             border-color: #D97706;
         }
-        
+
         .cashier-premium-badge {
             display: inline-block;
             padding: 1px 6px;
@@ -1491,7 +1477,7 @@ include_once '../../components/cashier_sidebar.php';
             color: #C4B5FD;
             border-color: #7C3AED;
         }
-        
+
         .action-buttons {
             display: flex;
             flex-direction: column;
@@ -1547,7 +1533,7 @@ include_once '../../components/cashier_sidebar.php';
             font-size: 0.68rem;
         }
         .patient-total-row.otc-total { background: var(--purple-bg); }
-        
+
         .message-box {
             padding: 10px 16px;
             border-radius: var(--radius-sm);
@@ -1562,7 +1548,7 @@ include_once '../../components/cashier_sidebar.php';
         .message-box.error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
         .message-box.warning { background: var(--warning-bg); color: var(--warning); border-color: var(--warning); }
         .message-box i { font-size: 1rem; }
-        
+
         .empty-state {
             text-align: center;
             padding: 50px 20px;
@@ -1573,7 +1559,7 @@ include_once '../../components/cashier_sidebar.php';
         .empty-state i { font-size: 2.5rem; color: var(--border-color); display: block; margin-bottom: 14px; }
         .empty-state h3 { font-size: 1.1rem; color: var(--text-primary); margin-bottom: 6px; }
         .empty-state p { color: var(--text-secondary); font-size: 0.85rem; }
-        
+
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -1583,7 +1569,7 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--text-secondary);
         }
         .footer .brand { color: var(--success); font-weight: 600; }
-        
+
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -1592,14 +1578,14 @@ include_once '../../components/cashier_sidebar.php';
             animation: fadeInUp 0.4s ease forwards;
             opacity: 0;
         }
-        
+
         @keyframes fadeInOut {
             0% { opacity: 0; transform: translateY(20px) scale(0.9); }
             30% { opacity: 1; transform: translateY(0) scale(1); }
             80% { opacity: 1; transform: translateY(0) scale(1); }
             100% { opacity: 0; transform: translateY(-15px) scale(0.9); }
         }
-        
+
         .scroll-toast {
             position: fixed;
             bottom: 30px;
@@ -1619,7 +1605,7 @@ include_once '../../components/cashier_sidebar.php';
             pointer-events: none;
         }
         .scroll-toast i { font-size: 1rem; }
-        
+
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
             .summary-section { grid-template-columns: 1fr; }
@@ -1717,7 +1703,7 @@ include_once '../../components/cashier_sidebar.php';
     <div class="filter-section">
         <div class="filter-row">
             <span class="filter-label"><i class="fas fa-calendar-alt"></i> Filter:</span>
-            
+
             <a href="?filter=all&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'all' ? 'active' : '' ?>">
                 <i class="fas fa-globe"></i> All
             </a>
@@ -1739,17 +1725,17 @@ include_once '../../components/cashier_sidebar.php';
             <a href="?filter=year&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'year' ? 'active' : '' ?>">
                 <i class="fas fa-calendar-alt"></i> 1Y
             </a>
-            
+
             <span class="filter-divider"></span>
-            
+
             <form method="GET" action="" class="date-picker-group" style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">
                 <input type="hidden" name="filter" value="custom">
                 <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
-                
-                <input type="date" name="start_date" class="form-control" 
+
+                <input type="date" name="start_date" class="form-control"
                        value="<?= $start_date ?>" placeholder="Start">
                 <span style="color:var(--text-secondary);font-size:0.6rem;">→</span>
-                <input type="date" name="end_date" class="form-control" 
+                <input type="date" name="end_date" class="form-control"
                        value="<?= $end_date ?>" placeholder="End">
                 <button type="submit" class="btn-apply">
                     <i class="fas fa-check"></i> Apply
@@ -1763,12 +1749,10 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================
-         ✅ SUMMARY CARDS - COMPACT, 2 COLUMNS
-         ================================================================ -->
+    <!-- SUMMARY CARDS -->
     <div class="summary-section">
-        
-        <!-- PHARMACY SUMMARY CARD -->
+
+        <!-- PHARMACY SUMMARY -->
         <div class="summary-card pharmacy-card">
             <div class="summary-header">
                 <div class="summary-icon">
@@ -1779,7 +1763,7 @@ include_once '../../components/cashier_sidebar.php';
                     <div class="summary-subtitle">Discount & Premium</div>
                 </div>
             </div>
-            
+
             <div class="summary-grid">
                 <div class="summary-item discount-item">
                     <div class="item-label">
@@ -1789,7 +1773,7 @@ include_once '../../components/cashier_sidebar.php';
                         <?= $currency ?> <?= number_format($summary_pharmacy_discount, 0) ?>
                     </div>
                     <div class="item-count">
-                        <?php 
+                        <?php
                             $pharm_disc_count = 0;
                             foreach ($patient_bills as $p) {
                                 foreach ($p['bills'] as $b) {
@@ -1800,7 +1784,7 @@ include_once '../../components/cashier_sidebar.php';
                         ?>
                     </div>
                 </div>
-                
+
                 <div class="summary-item premium-item">
                     <div class="item-label">
                         <i class="fas fa-crown"></i> Premium
@@ -1809,7 +1793,7 @@ include_once '../../components/cashier_sidebar.php';
                         <?= $currency ?> <?= number_format($summary_pharmacy_premium, 0) ?>
                     </div>
                     <div class="item-count">
-                        <?php 
+                        <?php
                             $pharm_prem_count = 0;
                             foreach ($patient_bills as $p) {
                                 foreach ($p['bills'] as $b) {
@@ -1821,7 +1805,7 @@ include_once '../../components/cashier_sidebar.php';
                     </div>
                 </div>
             </div>
-            
+
             <div class="summary-footer">
                 <span class="footer-label">
                     <i class="fas fa-calculator"></i> Net Impact
@@ -1831,8 +1815,8 @@ include_once '../../components/cashier_sidebar.php';
                 </span>
             </div>
         </div>
-        
-        <!-- CASHIER SUMMARY CARD -->
+
+        <!-- CASHIER SUMMARY -->
         <div class="summary-card cashier-card">
             <div class="summary-header">
                 <div class="summary-icon">
@@ -1843,7 +1827,7 @@ include_once '../../components/cashier_sidebar.php';
                     <div class="summary-subtitle">Discount & Premium</div>
                 </div>
             </div>
-            
+
             <div class="summary-grid">
                 <div class="summary-item discount-item">
                     <div class="item-label">
@@ -1853,7 +1837,7 @@ include_once '../../components/cashier_sidebar.php';
                         <?= $currency ?> <?= number_format($summary_cashier_discount, 0) ?>
                     </div>
                     <div class="item-count">
-                        <?php 
+                        <?php
                             $cashier_disc_count = 0;
                             foreach ($patient_bills as $p) {
                                 foreach ($p['bills'] as $b) {
@@ -1864,7 +1848,7 @@ include_once '../../components/cashier_sidebar.php';
                         ?>
                     </div>
                 </div>
-                
+
                 <div class="summary-item premium-item">
                     <div class="item-label">
                         <i class="fas fa-crown"></i> Premium
@@ -1873,7 +1857,7 @@ include_once '../../components/cashier_sidebar.php';
                         <?= $currency ?> <?= number_format($summary_cashier_premium, 0) ?>
                     </div>
                     <div class="item-count">
-                        <?php 
+                        <?php
                             $cashier_prem_count = 0;
                             foreach ($patient_bills as $p) {
                                 foreach ($p['bills'] as $b) {
@@ -1885,7 +1869,7 @@ include_once '../../components/cashier_sidebar.php';
                     </div>
                 </div>
             </div>
-            
+
             <div class="summary-footer">
                 <span class="footer-label">
                     <i class="fas fa-calculator"></i> Net Impact
@@ -1895,14 +1879,11 @@ include_once '../../components/cashier_sidebar.php';
                 </span>
             </div>
         </div>
-        
+
     </div>
 
-    <!-- ================================================================
-         ✅ STATS GRID - COMPACT, 2 ROWS x 4 COLUMNS
-         ================================================================ -->
+    <!-- STATS GRID -->
     <div class="stats-grid">
-        <!-- ROW 1 -->
         <div class="stat-card orange">
             <div class="stat-icon">📋</div>
             <p class="stat-number orange mono"><?= $total_bills_count ?></p>
@@ -1916,7 +1897,7 @@ include_once '../../components/cashier_sidebar.php';
         <div class="stat-card locked">
             <div class="stat-icon">🔒</div>
             <p class="stat-number red mono">
-                <?php 
+                <?php
                     $total_locked = 0;
                     foreach ($patient_bills as $patient) {
                         $total_locked += $patient['total_pending_prescriptions'] ?? 0;
@@ -1931,8 +1912,7 @@ include_once '../../components/cashier_sidebar.php';
             <p class="stat-number purple mono"><?= $otc_pending_count ?? 0 ?></p>
             <p class="stat-label">OTC Sales Pending</p>
         </div>
-        
-        <!-- ROW 2 -->
+
         <div class="stat-card pharm-discount">
             <div class="stat-icon">🏷️</div>
             <p class="stat-number pharm-discount mono"><?= number_format($summary_pharmacy_discount, 0) ?></p>
@@ -1957,7 +1937,7 @@ include_once '../../components/cashier_sidebar.php';
 
     <!-- PATIENT BILLS LIST -->
     <?php if (count($patient_bills) > 0): ?>
-        <?php foreach ($patient_bills as $patient): 
+        <?php foreach ($patient_bills as $patient):
             $is_otc = $patient['is_otc'] ?? false;
             $card_class = $is_otc ? 'otc-card' : '';
             $has_pending_prescriptions = ($patient['total_pending_prescriptions'] ?? 0) > 0;
@@ -1994,6 +1974,23 @@ include_once '../../components/cashier_sidebar.php';
                                 <?php if ($patient['date_of_birth'] && !$is_otc): ?>
                                     <span><i class="fas fa-birthday-cake"></i> <?= date('d/m/Y', strtotime($patient['date_of_birth'])) ?></span>
                                 <?php endif; ?>
+
+                                <!-- ✅ DATE-TIME BADGE (kabla ya kufungua toggle) -->
+                                <?php if (!empty($patient['latest_created_at'])):
+                                    $latest_date = date('d/m/Y', strtotime($patient['latest_created_at']));
+                                    $latest_time = date('h:i A', strtotime($patient['latest_created_at']));
+                                    $has_multiple_dates = ($patient['oldest_created_at'] !== $patient['latest_created_at']) && $patient['bill_count'] > 1;
+                                ?>
+                                    <span class="datetime-badge" title="Latest bill: <?= $latest_date ?> <?= $latest_time ?>">
+                                        <i class="fas fa-calendar-alt"></i> <?= $latest_date ?>
+                                        <span class="separator">|</span>
+                                        <i class="fas fa-clock"></i> <?= $latest_time ?>
+                                        <?php if ($has_multiple_dates): ?>
+                                            <span class="separator">|</span>
+                                            <i class="fas fa-layer-group"></i> <?= $patient['bill_count'] ?>
+                                        <?php endif; ?>
+                                    </span>
+                                <?php endif; ?>
                             </div>
                         </div>
                     </div>
@@ -2001,64 +1998,64 @@ include_once '../../components/cashier_sidebar.php';
                         <span class="total-badge orange">
                             <i class="fas fa-file-invoice"></i> <?= $patient['bill_count'] ?> Bills
                         </span>
-                        
+
                         <?php if ($has_pharm_discount): ?>
                             <span class="total-badge discount">
                                 <i class="fas fa-tag"></i> Pharm Disc: <?= $currency ?> <?= number_format($patient['total_pharmacy_discount'], 0) ?>
                             </span>
                         <?php endif; ?>
-                        
+
                         <?php if ($has_cashier_discount): ?>
                             <span class="total-badge cashier-discount">
                                 <i class="fas fa-tag"></i> Cashier Disc: <?= $currency ?> <?= number_format($patient['total_cashier_discount'], 0) ?>
                             </span>
                         <?php endif; ?>
-                        
+
                         <?php if ($has_pharm_premium): ?>
                             <span class="total-badge premium">
                                 <i class="fas fa-crown"></i> Pharm Prem: <?= $currency ?> <?= number_format($patient['total_pharmacy_premium'], 0) ?>
                             </span>
                         <?php endif; ?>
-                        
+
                         <?php if ($has_cashier_premium): ?>
                             <span class="total-badge cashier-premium">
                                 <i class="fas fa-crown"></i> Cashier Prem: <?= $currency ?> <?= number_format($patient['total_cashier_premium'], 0) ?>
                             </span>
                         <?php endif; ?>
-                        
+
                         <?php if ($patient['total_paid'] > 0): ?>
                             <span class="total-badge green">
                                 <i class="fas fa-check-circle"></i> Paid: <?= $currency ?> <?= number_format($patient['total_paid'], 0) ?>
                             </span>
                         <?php endif; ?>
-                        
+
                         <span class="total-amount">
                             <?= $currency ?> <?= number_format($patient['total_amount'], 0) ?>
                         </span>
                         <i class="fas fa-chevron-down chevron-icon" id="chevron_<?= $patient['patient_id'] ?>"></i>
                     </div>
                 </div>
-                
+
                 <!-- Patient Bills Table -->
                 <div class="patient-card-body" id="patient_<?= $patient['patient_id'] ?>">
-                    
+
                     <div class="table-header-actions">
                         <span class="table-scroll-hint">
                             <i class="fas fa-arrows-alt-h"></i>
                             Scroll table:
                         </span>
-                        <button class="table-scroll-btn" 
-                                onclick="scrollTableById('<?= $table_id ?>', 'left')" 
+                        <button class="table-scroll-btn"
+                                onclick="scrollTableById('<?= $table_id ?>', 'left')"
                                 title="Scroll Left">
                             <i class="fas fa-chevron-left"></i>
                         </button>
-                        <button class="table-scroll-btn" 
-                                onclick="scrollTableById('<?= $table_id ?>', 'right')" 
+                        <button class="table-scroll-btn"
+                                onclick="scrollTableById('<?= $table_id ?>', 'right')"
                                 title="Scroll Right">
                             <i class="fas fa-chevron-right"></i>
                         </button>
                     </div>
-                    
+
                     <div class="table-wrap" id="<?= $table_id ?>">
                         <table class="data-table <?= $is_otc ? 'otc-table' : '' ?>">
                             <thead>
@@ -2084,40 +2081,40 @@ include_once '../../components/cashier_sidebar.php';
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php $i = 1; foreach ($patient['bills'] as $bill): 
+                                <?php $i = 1; foreach ($patient['bills'] as $bill):
                                     $is_otc_bill = ($bill['bill_type'] ?? '') === 'otc';
                                     $has_payments = ($bill['payment_count'] ?? 0) > 0;
-                                    
+
                                     $pharm_disc = (float)($bill['pharmacy_discount'] ?? 0);
                                     if ($pharm_disc == 0 && !$is_otc_bill && (float)($bill['discount_amount'] ?? 0) > 0) {
                                         $pharm_disc = (float)$bill['discount_amount'];
                                     }
                                     if ($is_otc_bill) $pharm_disc = 0;
-                                    
+
                                     $cashier_disc = (float)($bill['cashier_discount'] ?? 0);
                                     if ($is_otc_bill) {
                                         $cashier_disc = (float)($bill['otc_discount'] ?? $bill['discount_amount'] ?? 0);
                                     }
-                                    
+
                                     $pharm_prem = (float)($bill['pharmacy_premium'] ?? 0);
                                     if ($pharm_prem == 0 && !$is_otc_bill && (float)($bill['premium_amount'] ?? 0) > 0) {
                                         $pharm_prem = (float)$bill['premium_amount'];
                                     }
                                     if ($is_otc_bill) $pharm_prem = 0;
-                                    
+
                                     $cashier_prem = (float)($bill['cashier_premium'] ?? 0);
                                     if ($is_otc_bill) {
                                         $cashier_prem = (float)($bill['premium_amount'] ?? 0);
                                     }
-                                    
+
                                     $status = $bill['status'] ?? ($is_otc_bill ? 'pending' : 'pending');
                                     $status_class = $is_otc_bill ? 'otc-pending' : $status;
                                     $bill_balance = ($bill['total_amount'] ?? 0) - ($bill['total_paid'] ?? 0);
                                     $subtotal = $bill['subtotal'] ?? $bill['total_amount'] ?? 0;
-                                    
-                                    $has_pending_prescriptions = ($bill['pending_prescriptions'] ?? 0) > 0;
-                                    $has_confirmed_prescriptions = ($bill['confirmed_prescriptions'] ?? 0) > 0;
-                                    $is_locked = $has_pending_prescriptions;
+
+                                    $has_pending_prescriptions_bill = ($bill['pending_prescriptions'] ?? 0) > 0;
+                                    $has_confirmed_prescriptions_bill = ($bill['confirmed_prescriptions'] ?? 0) > 0;
+                                    $is_locked = $has_pending_prescriptions_bill;
                                     $row_class = $is_locked ? 'locked-row' : '';
                                 ?>
                                     <tr class="<?= $row_class ?>">
@@ -2131,7 +2128,7 @@ include_once '../../components/cashier_sidebar.php';
                                                     <i class="fas fa-lock"></i> <?= $bill['pending_prescriptions'] ?> Pending
                                                 </span>
                                             <?php endif; ?>
-                                            <?php if ($has_confirmed_prescriptions): ?>
+                                            <?php if ($has_confirmed_prescriptions_bill): ?>
                                                 <span style="font-size:0.4rem;color:var(--success);display:block;margin-top:2px;">
                                                     <i class="fas fa-check-circle"></i> <?= $bill['confirmed_prescriptions'] ?> Confirmed
                                                 </span>
@@ -2140,7 +2137,7 @@ include_once '../../components/cashier_sidebar.php';
                                         <?php if ($is_otc_bill): ?>
                                             <td>
                                                 <div class="otc-item-list">
-                                                    <?php 
+                                                    <?php
                                                         $items = $bill['otc_items'] ?? [];
                                                         if (count($items) > 0):
                                                             foreach ($items as $item):
@@ -2164,11 +2161,11 @@ include_once '../../components/cashier_sidebar.php';
                                                 <?php endif; ?>
                                             </td>
                                         <?php endif; ?>
-                                        
+
                                         <td style="text-align:right;">
                                             <span class="font-semibold"><?= $currency ?> <?= number_format($subtotal, 0) ?></span>
                                         </td>
-                                        
+
                                         <td style="text-align:right;">
                                             <?php if ($pharm_disc > 0): ?>
                                                 <span style="color:#D97706;font-weight:600;">
@@ -2181,7 +2178,7 @@ include_once '../../components/cashier_sidebar.php';
                                                 <span class="text-xs text-gray-400">-</span>
                                             <?php endif; ?>
                                         </td>
-                                        
+
                                         <td style="text-align:right;">
                                             <?php if ($cashier_disc > 0): ?>
                                                 <span style="color:#2563EB;font-weight:600;">
@@ -2194,7 +2191,7 @@ include_once '../../components/cashier_sidebar.php';
                                                 <span class="text-xs text-gray-400">-</span>
                                             <?php endif; ?>
                                         </td>
-                                        
+
                                         <td style="text-align:right;">
                                             <?php if ($pharm_prem > 0): ?>
                                                 <span style="color:#D97706;font-weight:600;">
@@ -2207,7 +2204,7 @@ include_once '../../components/cashier_sidebar.php';
                                                 <span class="text-xs text-gray-400">-</span>
                                             <?php endif; ?>
                                         </td>
-                                        
+
                                         <td style="text-align:right;">
                                             <?php if ($cashier_prem > 0): ?>
                                                 <span style="color:#7C3AED;font-weight:600;">
@@ -2220,19 +2217,19 @@ include_once '../../components/cashier_sidebar.php';
                                                 <span class="text-xs text-gray-400">-</span>
                                             <?php endif; ?>
                                         </td>
-                                        
+
                                         <td style="text-align:right;">
                                             <span style="color:var(--success);">
                                                 <?= $currency ?> <?= number_format($bill['total_paid'] ?? 0, 0) ?>
                                             </span>
                                         </td>
-                                        
+
                                         <td style="text-align:right;">
                                             <span class="font-semibold" style="color:var(--danger);">
                                                 <?= $currency ?> <?= number_format($bill_balance, 0) ?>
                                             </span>
                                         </td>
-                                        
+
                                         <td style="text-align:center;">
                                             <?php if ($is_locked): ?>
                                                 <span class="status-badge locked">
@@ -2244,11 +2241,11 @@ include_once '../../components/cashier_sidebar.php';
                                                 </span>
                                             <?php endif; ?>
                                         </td>
-                                        
+
                                         <td class="text-center">
                                             <span class="text-sm font-semibold"><?= $bill['item_count'] ?? 0 ?></span>
                                         </td>
-                                        
+
                                         <td>
                                             <span class="text-xs"><?= isset($bill['created_at']) ? date('d/m/Y', strtotime($bill['created_at'])) : 'N/A' ?></span>
                                             <br>
@@ -2256,7 +2253,7 @@ include_once '../../components/cashier_sidebar.php';
                                                 <?= isset($bill['created_at']) ? date('h:i A', strtotime($bill['created_at'])) : '' ?>
                                             </span>
                                         </td>
-                                        
+
                                         <td style="text-align:center;">
                                             <div class="action-buttons">
                                                 <?php if ($is_otc_bill): ?>
@@ -2272,7 +2269,7 @@ include_once '../../components/cashier_sidebar.php';
                                                     <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-view" title="View Details">
                                                         <i class="fas fa-eye"></i> View
                                                     </a>
-                                                    
+
                                                     <?php if (!$is_locked && ($bill['total_amount'] ?? 0) > 0 && $bill_balance > 0): ?>
                                                         <a href="process_payment.php?bill_id=<?= $bill['id'] ?>" class="btn btn-process" title="Process Payment">
                                                             <i class="fas fa-money-bill-wave"></i> Pay
@@ -2291,7 +2288,7 @@ include_once '../../components/cashier_sidebar.php';
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
-                                
+
                                 <!-- Patient Total -->
                                 <tr class="patient-total-row <?= $is_otc ? 'otc-total' : '' ?>">
                                     <td colspan="2" style="text-align:right;font-size:0.68rem;">
@@ -2344,7 +2341,7 @@ include_once '../../components/cashier_sidebar.php';
                             </tbody>
                         </table>
                     </div>
-                    
+
                     <!-- Patient Actions -->
                     <div style="padding-top:10px;display:flex;gap:6px;flex-wrap:wrap;border-top:1px solid var(--border-color);margin-top:10px;">
                         <?php if ($is_otc): ?>
@@ -2355,7 +2352,7 @@ include_once '../../components/cashier_sidebar.php';
                             <a href="patient_bills.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-view" style="width:auto;padding:5px 14px;">
                                 <i class="fas fa-file-invoice"></i> All Bills
                             </a>
-                            <?php 
+                            <?php
                                 $has_locked = false;
                                 $has_unpaid = false;
                                 foreach ($patient['bills'] as $bill) {
@@ -2434,7 +2431,7 @@ include_once '../../components/cashier_sidebar.php';
         var msg = direction === 'left' ? '⬅️ Scrolled Left' : '➡️ Scrolled Right';
         showScrollToast(msg);
     }
-    
+
     function showScrollToast(message) {
         var existing = document.querySelector('.scroll-toast');
         if (existing) existing.remove();
@@ -2446,7 +2443,7 @@ include_once '../../components/cashier_sidebar.php';
             if (toast.parentNode) toast.remove();
         }, 1200);
     }
-    
+
     (function() {
         var html = document.documentElement;
         function syncDark() {
@@ -2504,8 +2501,8 @@ include_once '../../components/cashier_sidebar.php';
     updateFooterTime();
     setInterval(updateFooterTime, 1000);
 
-    console.log('%c🏥 Braick - Pending Bills v2.1', 'font-size:16px;font-weight:bold;color:#059669;');
-    console.log('%c✅ REMOVED: Overall Summary (green bar)', 'font-size:12px;color:#DC2626;');
+    console.log('%c🏥 Braick - Pending Bills v2.2', 'font-size:16px;font-weight:bold;color:#059669;');
+    console.log('%c✅ Tarehe & Saa kwenye Patient Header (kabla ya toggle)', 'font-size:12px;color:#0B5ED7;font-weight:bold;');
     console.log('%c✅ Summary Cards: COMPACT, 2 COLUMNS', 'font-size:12px;color:#34D399;');
     console.log('%c✅ Stats Grid: 2 ROWS x 4 COLUMNS', 'font-size:12px;color:#34D399;');
 </script>

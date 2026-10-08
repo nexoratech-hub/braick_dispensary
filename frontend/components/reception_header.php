@@ -1,208 +1,150 @@
 <?php
 // ================================================================
 // FILE: frontend/components/reception_header.php
-// SHARED HEADER - RECEPTION & CASHIER
-// ✅ USING NEW DATABASE: dispensary_db
-// WITH SEARCH BAR, CLOCK, DARK MODE, PROFILE
-// ✅ NOTIFICATIONS COMPLETELY REMOVED - NO ICON
-// BRAICK DISPENSARY
+// SHARED HEADER - BRAICK DISPENSARY
+// Top navigation + global CSS + helpers + favicon
 // ================================================================
 
 // ================================================================
-// START SESSION (if not already started)
+// SESSION
 // ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
 // ================================================================
-// ✅ CHECK IF USER IS LOGGED IN - NO DEFAULT USER
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
-    // Redirect to login page
-    header('Location: /dispensary_system/frontend/pages/login.php');
+    header('Location: ../login.php');
     exit;
 }
 
 // ================================================================
-// CHECK IF USER HAS ACCESS (Reception, Cashier or Admin)
+// ACCESS CONTROL
 // ================================================================
-$allowed_roles = ['reception', 'cashier', 'admin'];
+$allowed_roles = ['reception', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
-    $role = $_SESSION['role'];
-    switch ($role) {
-        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
-        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
-        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
-        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    switch ($_SESSION['role']) {
+        case 'doctor':     header('Location: ../doctor/dashboard.php');     break;
+        case 'pharmacy':   header('Location: ../pharmacy/dashboard.php');   break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier':    header('Location: ../cashier/dashboard.php');    break;
+        default:           header('Location: ../login.php');                break;
     }
     exit;
 }
 
 // ================================================================
-// GET USER DATA FROM SESSION
+// SESSION DATA
 // ================================================================
-$user_id = $_SESSION['user_id'] ?? 0;
-$user_full_name = $_SESSION['full_name'] ?? 'Staff';
-$user_role = $_SESSION['role'] ?? 'reception';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_username = $_SESSION['username'] ?? '';
-$profile_pic = $_SESSION['profile_pic'] ?? '';
+$user_id     = $user_id     ?? ($_SESSION['user_id']     ?? 0);
+$full_name   = $full_name   ?? ($_SESSION['full_name']   ?? 'User');
+$role        = $role        ?? ($_SESSION['role']        ?? 'reception');
+$branch_id   = $branch_id   ?? ($_SESSION['branch_id']   ?? 1);
+$branch_name = $branch_name ?? ($_SESSION['branch_name'] ?? 'Dodoma');
+$username    = $username    ?? ($_SESSION['username']    ?? '');
+$profile_pic = $profile_pic ?? ($_SESSION['profile_pic'] ?? '');
 
 // ================================================================
-// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
+// DATABASE — PATH SAHIHI
 // ================================================================
-if ($user_id <= 0) {
-    if (isset($user_username) && !empty($user_username)) {
-        require_once __DIR__ . '/../../backend/config/database.php';
-        try {
-            $db = Database::getInstance()->getConnection();
-            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, email, phone, profile_pic FROM users WHERE username = ? AND status = 'active'");
-            $stmt->execute([$user_username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['branch_id'] = $user['branch_id'];
-                $_SESSION['email'] = $user['email'] ?? '';
-                $_SESSION['phone'] = $user['phone'] ?? '';
-                $_SESSION['profile_pic'] = $user['profile_pic'] ?? '';
-                $user_id = $user['id'];
-                $user_full_name = $user['full_name'];
-                $user_role = $user['role'];
-                $user_branch_id = $user['branch_id'];
-                $profile_pic = $user['profile_pic'] ?? '';
-                
-                // Get branch name
-                $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
-                $stmt->execute([$user_branch_id]);
-                $branch = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($branch) {
-                    $_SESSION['branch_name'] = $branch['name'];
-                    $user_branch_name = $branch['name'];
-                }
-            }
-        } catch (Exception $e) {
-            // Fallback to session values
-        }
+if (!class_exists('Database')) {
+    require_once __DIR__ . '/../../backend/config/database.php';
+}
+
+// ================================================================
+// UNREAD NOTIFICATIONS
+// ================================================================
+if (!isset($unread_notifications)) {
+    $unread_notifications = 0;
+    try {
+        $db = $db ?? Database::getInstance()->getConnection();
+        $stmt = $db->prepare("SELECT COUNT(*) AS total FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$user_id]);
+        $unread_notifications = (int)($stmt->fetch()['total'] ?? 0);
+    } catch (Exception $e) {
+        $unread_notifications = 0;
     }
 }
 
-// If still no user_id, redirect to login
-if ($user_id <= 0) {
-    header('Location: /dispensary_system/frontend/pages/login.php');
-    exit;
-}
+// ================================================================
+// HELPER: time_ago() — GUARDED
+// ================================================================
+if (!function_exists('time_ago')) {
+    function time_ago($timestamp) {
+        if (empty($timestamp)) return 'Just now';
+        $time = strtotime($timestamp);
+        $diff = time() - $time;
 
-// ================================================================
-// CHECK IF USER IS ADMIN
-// ================================================================
-$is_admin = ($user_role === 'admin');
-
-// ================================================================
-// GET USER BRANCH
-// ================================================================
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Staff';
-
-// ================================================================
-// BRANCH FILTER - Admin sees all, others see only their branch
-// ================================================================
-$selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
-
-if (!$is_admin) {
-    $selected_branch_id = $user_branch_id;
-}
-
-$branch_name = 'All Branches';
-if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    // Get branch name from database if available
-    if (isset($db) && $db !== null) {
-        try {
-            $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
-            $stmt->execute([$selected_branch_id]);
-            $branch = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($branch) {
-                $branch_name = $branch['name'];
-            }
-        } catch (Exception $e) {
-            $branch_name = 'Branch ' . $selected_branch_id;
-        }
-    } else {
-        $branch_name = 'Branch ' . $selected_branch_id;
+        if ($diff < 60)     return 'Just now';
+        if ($diff < 3600)   return floor($diff / 60)    . 'm ago';
+        if ($diff < 86400)  return floor($diff / 3600)  . 'h ago';
+        if ($diff < 604800) return floor($diff / 86400) . 'd ago';
+        return date('M d, Y', $time);
     }
-} else {
-    $selected_branch_id = 'all';
 }
 
 // ================================================================
-// GET PROFILE PICTURE FROM SESSION
+// PROFILE PICTURE URL
 // ================================================================
-$profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
-    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
-
-// Logo path
-$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-
-// Get current page name
-$current_page = basename($_SERVER['PHP_SELF']);
-$page_title = ucfirst(str_replace('.php', '', $current_page));
-if (empty($page_title) || $page_title == '') {
-    $page_title = 'Dashboard';
+if (!isset($profile_pic_url)) {
+    $profile_pic_url = !empty($profile_pic)
+        ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic
+        : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 }
 
 // ================================================================
-// DEFAULT LETTER FOR AVATAR
+// ✅ FAVICON / LOGO PATH
 // ================================================================
-$default_letter = strtoupper(substr($user_full_name, 0, 1));
+if (!isset($logo_path)) {
+    $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+}
 ?>
 <!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Braick Dispensary - <?= $page_title ?></title>
-    
-    <!-- Favicon -->
-    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
-    
-    <!-- Tailwind CSS CDN -->
+
+    <!-- ============================================================
+         ✅ FAVICON — Icon ya Braick kwenye browser tab
+         ============================================================ -->
+    <link rel="icon" type="image/png" href="<?= htmlspecialchars($logo_path) ?>">
+    <link rel="shortcut icon" type="image/png" href="<?= htmlspecialchars($logo_path) ?>">
+    <link rel="apple-touch-icon" href="<?= htmlspecialchars($logo_path) ?>">
+
+    <!-- ============================================================
+         TITLE (kama dashboard haijaset title)
+         ============================================================ -->
+    <?php if (!isset($page_title)): ?>
+        <title>Reception - Braick Dispensary</title>
+    <?php endif; ?>
+
+    <!-- Tailwind + Font Awesome -->
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- Font Awesome 6 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    
+
     <style>
         /* ================================================================
-           BRAICK DISPENSARY - SHARED STYLES
+           ROOT VARIABLES
            ================================================================ */
-        
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
             --primary-light: #6EA8FE;
             --primary-bg: #E8F0FE;
-            
             --success: #059669;
             --success-dark: #047857;
             --success-light: #34D399;
             --success-bg: #D1FAE5;
-            
             --danger: #DC2626;
             --danger-dark: #B91C1C;
             --danger-light: #F87171;
             --danger-bg: #FEE2E2;
-            
             --warning: #D97706;
             --warning-bg: #FEF3C7;
-            
+
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -214,23 +156,21 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
             --gray-700: #334155;
             --gray-800: #1E293B;
             --gray-900: #0F172A;
-            
+
             --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
             --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
             --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
-            
+
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
             --text-primary: #1E293B;
             --text-secondary: #64748B;
             --border-color: #E2E8F0;
-            --table-stripe: #E8F0FE;
-            --table-hover: #D1FAE5;
         }
-        
+
         [data-theme="dark"] {
             --bg-body: #0F172A;
             --bg-card: #1E293B;
@@ -238,26 +178,25 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
             --border-color: #334155;
+            --primary-bg: #1E3A5F;
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-stripe: #1E293B;
-            --table-hover: #1A3A2A;
         }
-        
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        
+
         body {
-            font-family: 'Inter', 'Segoe UI', sans-serif;
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
             background: var(--bg-body);
             color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
+            transition: background .3s ease, color .3s ease;
         }
-        
+
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
+
         /* ================================================================
            TOP NAV
            ================================================================ */
@@ -272,421 +211,263 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 24px;
+            padding: 0 20px;
             border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
+            transition: all .3s ease;
+            gap: 12px;
         }
-        
+
+        .top-nav .nav-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex: 0 1 auto;
+            min-width: 0;
+        }
+
+        .top-nav .nav-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+
+        /* ============================================================
+           SEARCH BAR — width ndogo
+           ============================================================ */
         .top-nav .search-wrapper {
             display: flex;
             align-items: center;
             background: var(--bg-body);
             border-radius: 10px;
             border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 350px;
+            transition: all .3s;
+            width: 320px;
+            max-width: 100%;
         }
-        
+
         .top-nav .search-wrapper:focus-within {
             border-color: var(--primary);
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
         }
-        
+
+        .top-nav .search-wrapper .search-icon {
+            color: var(--text-secondary);
+            padding-left: 12px;
+            font-size: 0.8rem;
+        }
+
         .top-nav .search-wrapper input {
             border: none;
             background: transparent;
-            padding: 8px 14px;
+            padding: 7px 10px;
             width: 100%;
             font-size: 0.82rem;
             outline: none;
             color: var(--text-primary);
         }
-        
+
         .top-nav .search-wrapper input::placeholder {
             color: var(--text-secondary);
             font-size: 0.78rem;
         }
-        
+
         .top-nav .search-wrapper .search-btn {
             background: var(--primary);
             color: white;
             border: none;
-            padding: 6px 14px;
-            border-radius: 0 10px 10px 0;
+            padding: 7px 14px;
+            border-radius: 0 8px 8px 0;
             cursor: pointer;
             font-size: 0.78rem;
-            transition: all 0.3s;
+            transition: all .3s;
             white-space: nowrap;
+            font-weight: 500;
         }
-        
+
         .top-nav .search-wrapper .search-btn:hover {
             background: var(--primary-dark);
         }
-        
-        .top-nav .branch-selector {
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            background: var(--bg-card);
-            font-size: 0.78rem;
-            font-weight: 500;
-            cursor: pointer;
-            outline: none;
-            min-width: 140px;
-            color: var(--text-primary);
-            transition: all 0.3s;
-        }
-        
-        .top-nav .branch-selector:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .branch-selector:disabled {
-            opacity: 0.7;
-            cursor: not-allowed;
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            font-weight: 500;
+
+        /* ============================================================
+           DATE & TIME BOX — BLUE GRADIENT BOX
+           ============================================================ */
+        .datetime-box {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
+            padding: 7px 14px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            transition: all .3s ease;
+            white-space: nowrap;
         }
-        
-        .top-nav .datetime .clock-icon {
-            color: var(--primary-light);
-            font-size: 0.75rem;
+
+        .datetime-box:hover {
+            box-shadow: 0 6px 18px rgba(11, 94, 215, 0.35);
+            transform: translateY(-1px);
         }
-        
-        .top-nav .avatar {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
+
+        .datetime-box .dt-icon {
+            font-size: 0.95rem;
+            opacity: 0.9;
+            color: #fff;
         }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
+
+        .datetime-box .dt-content {
+            display: flex;
+            flex-direction: column;
+            line-height: 1.15;
         }
-        
+
+        .datetime-box .dt-date {
+            font-size: 0.62rem;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.85);
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+
+        .datetime-box .dt-time {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #fff;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 0.3px;
+        }
+
+        [data-theme="dark"] .datetime-box {
+            background: linear-gradient(135deg, #1E40AF 0%, #1E3A8A 100%);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        /* ============================================================
+           BRANCH BADGE
+           ============================================================ */
+        .branch-badge-display {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 10px;
+            background: var(--success-bg);
+            color: var(--success);
+            border: 1px solid rgba(5, 150, 105, 0.15);
+            white-space: nowrap;
+        }
+
+        [data-theme="dark"] .branch-badge-display {
+            background: #1A3A2A;
+            color: #34D399;
+            border-color: rgba(52, 211, 153, 0.15);
+        }
+
+        /* ============================================================
+           DARK MODE TOGGLE
+           ============================================================ */
         .dark-toggle-btn {
             background: var(--bg-body);
             border: 2px solid var(--border-color);
             border-radius: 10px;
-            padding: 5px 10px;
+            padding: 6px 10px;
             cursor: pointer;
             font-size: 0.78rem;
             color: var(--text-primary);
-            transition: all 0.3s;
+            transition: all .3s;
             display: flex;
             align-items: center;
-            gap: 5px;
+            gap: 6px;
+            font-weight: 500;
         }
-        
+
         .dark-toggle-btn:hover {
             border-color: var(--primary);
             background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i {
-            font-size: 0.85rem;
-        }
-        
-        .role-badge {
-            font-size: 0.55rem;
-            font-weight: 600;
-            padding: 2px 8px;
-            border-radius: 20px;
-            background: var(--primary-bg);
             color: var(--primary);
-            text-transform: uppercase;
         }
-        
-        [data-theme="dark"] .role-badge {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        .branch-badge {
-            font-size: 0.55rem;
-            font-weight: 600;
-            padding: 2px 8px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
-        .avatar-default {
+
+        .dark-toggle-btn i { font-size: 0.85rem; }
+
+        /* ============================================================
+           ICON BUTTON
+           ============================================================ */
+        .top-nav .icon-btn {
             width: 38px;
             height: 38px;
-            border-radius: 50%;
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-weight: 700;
-            font-size: 0.9rem;
-            color: white;
-            background: var(--primary);
+            color: var(--text-secondary);
+            transition: all .3s;
+            background: var(--bg-body);
             border: 2px solid var(--border-color);
             cursor: pointer;
-            transition: all 0.3s ease;
+            position: relative;
         }
-        
-        .avatar-default:hover {
+
+        .top-nav .icon-btn:hover {
+            background: var(--bg-card);
+            color: var(--primary);
+            border-color: var(--primary);
+        }
+
+        /* ============================================================
+           NOTIFICATION DOT
+           ============================================================ */
+        .notif-dot {
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            border: 2px solid var(--bg-nav);
+            animation: pulse-dot 2s infinite;
+        }
+
+        .notif-dot.has-notif { background: var(--danger); }
+        .notif-dot.no-notif  { background: var(--gray-400); animation: none; }
+
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50%      { transform: scale(1.2); }
+        }
+
+        /* ============================================================
+           AVATAR
+           ============================================================ */
+        .top-nav .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--border-color);
+            cursor: pointer;
+            transition: all .3s;
+        }
+
+        .top-nav .avatar:hover {
             border-color: var(--primary);
             transform: scale(1.05);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.2);
         }
-        
+
         /* ================================================================
            MAIN CONTENT
            ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
-            padding: 24px 28px;
+            padding: 28px 32px;
             min-height: calc(100vh - 68px);
-            transition: background 0.3s ease;
         }
-        
-        /* ================================================================
-           STAT CARDS
-           ================================================================ */
-        .stat-card {
-            border-radius: 16px;
-            padding: 18px 20px;
-            border: none;
-            transition: all 0.3s;
-            color: white;
-        }
-        
-        .stat-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-        }
-        
-        .stat-card.blue { background: var(--primary); }
-        .stat-card.blue-dark { background: var(--primary-dark); }
-        .stat-card.green { background: var(--success); }
-        .stat-card.green-dark { background: var(--success-dark); }
-        .stat-card.purple { background: #7C3AED; }
-        .stat-card.orange { background: #D97706; }
-        .stat-card.red { background: var(--danger); }
-        
-        .stat-card .stat-icon {
-            width: 42px;
-            height: 42px;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.1rem;
-            background: rgba(255,255,255,0.15);
-            color: white;
-        }
-        
-        .stat-card .stat-number {
-            font-size: 1.8rem;
-            font-weight: 700;
-            color: white;
-        }
-        
-        .stat-card .stat-label {
-            font-size: 0.75rem;
-            color: rgba(255,255,255,0.8);
-            font-weight: 500;
-        }
-        
-        .stat-card .stat-trend {
-            font-size: 0.65rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: rgba(255,255,255,0.15);
-            color: white;
-        }
-        
-        /* ================================================================
-           CARDS
-           ================================================================ */
-        .card {
-            background: var(--bg-card);
-            border-radius: 16px;
-            padding: 18px 20px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-        }
-        
-        .card:hover {
-            border-color: var(--primary);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
-        }
-        
-        .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        
-        .card-title {
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-        
-        .card-title .title-blue { color: var(--primary); }
-        .card-title .title-green { color: var(--success); }
-        
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 7px 16px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 0.78rem;
-            transition: all 0.3s;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-        }
-        
-        .btn-blue {
-            background: var(--primary);
-            color: white;
-        }
-        .btn-blue:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-green {
-            background: var(--success);
-            color: white;
-        }
-        .btn-green:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .btn-sm { padding: 3px 10px; font-size: 0.7rem; border-radius: 6px; }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
-        .badge {
-            padding: 3px 10px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            color: white;
-            border: none;
-        }
-        
-        .badge-blue { background: var(--primary); }
-        .badge-green { background: var(--success); }
-        .badge-gray { background: var(--gray-500); }
-        .badge-yellow { background: var(--warning); }
-        .badge-red { background: var(--danger); }
-        
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
-        .page-header {
-            border-bottom: 3px solid var(--primary);
-            padding-bottom: 12px;
-        }
-        
-        .page-header .page-title {
-            color: var(--primary-dark);
-            font-size: 1.8rem;
-            font-weight: 700;
-        }
-        
-        [data-theme="dark"] .page-header .page-title {
-            color: var(--primary-light);
-        }
-        
-        .page-header .page-subtitle {
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-        }
-        
-        .page-header .branch-tag {
-            background: var(--success);
-            color: white;
-            padding: 3px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
-        
-        /* ================================================================
-           TABLES
-           ================================================================ */
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.8rem;
-        }
-        
-        .data-table th {
-            text-align: left;
-            padding: 8px 12px;
-            font-weight: 600;
-            color: var(--text-secondary);
-            font-size: 0.6rem;
-            text-transform: uppercase;
-            border-bottom: 2px solid var(--border-color);
-        }
-        
-        .data-table td {
-            padding: 8px 12px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-        }
-        
-        .data-table tr:hover td {
-            background: var(--table-hover);
-        }
-        
+
         /* ================================================================
            TOAST
            ================================================================ */
@@ -694,167 +475,238 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
             position: fixed;
             bottom: 24px;
             right: 24px;
-            padding: 12px 18px;
+            padding: 14px 20px;
             border-radius: 12px;
             z-index: 999;
-            max-width: 360px;
+            max-width: 400px;
             transform: translateY(100px);
             opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: all .4s cubic-bezier(.4, 0, .2, 1);
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
             color: white;
+            box-shadow: var(--shadow-lg);
         }
-        
+
         .toast-custom.show {
             transform: translateY(0);
             opacity: 1;
         }
+
         .toast-custom.success { background: var(--success); }
-        .toast-custom.error { background: var(--danger); }
-        .toast-custom.info { background: var(--primary); }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 20px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            transition: all 0.3s ease;
-        }
-        
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
+        .toast-custom.error   { background: var(--danger); }
+        .toast-custom.info    { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
+
         /* ================================================================
            RESPONSIVE
            ================================================================ */
+        @media (max-width: 1400px) {
+            .top-nav .search-wrapper { width: 260px; }
+        }
+
+        @media (max-width: 1200px) {
+            .top-nav .search-wrapper { width: 220px; }
+            .datetime-box .dt-date { display: none; }
+        }
+
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
+            .top-nav { left: 0; padding: 0 14px; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 280px; }
+            .top-nav .search-wrapper { width: 240px; }
         }
-        
+
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .branch-selector { min-width: 100px; font-size: 0.7rem; padding: 4px 8px; }
-            .top-nav .datetime { display: none; }
-            .top-nav .dark-toggle-btn span { display: none; }
+            .top-nav .search-wrapper { width: 160px; }
+            .datetime-box { display: none; }
+            .branch-badge-display { display: none; }
         }
-        
+
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
-            .stat-card .stat-number { font-size: 1.4rem; }
-            .top-nav .search-wrapper { max-width: 120px; }
-            .top-nav .search-wrapper .search-btn { padding: 6px 8px; font-size: 0.65rem; }
-            .top-nav .search-wrapper input { font-size: 0.7rem; padding: 6px 8px; }
-            .top-nav .branch-selector { min-width: 80px; font-size: 0.6rem; }
-        }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(16px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.4s ease forwards;
-            opacity: 0;
-        }
-        
-        .spinner {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        
-        /* ================================================================
-           BRANCH BADGE DISPLAY
-           ================================================================ */
-        .branch-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge-display {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
-        /* ================================================================
-           ROLE BADGE DISPLAY
-           ================================================================ */
-        .role-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--primary-bg);
-            color: var(--primary);
-            text-transform: uppercase;
-        }
-        
-        [data-theme="dark"] .role-badge-display {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        /* ================================================================
-           SIDEBAR TOGGLE BUTTON
-           ================================================================ */
-        .sidebar-toggle-btn {
-            display: none;
-            background: transparent;
-            border: none;
-            color: var(--text-secondary);
-            font-size: 1.2rem;
-            cursor: pointer;
-            padding: 4px 8px;
-            transition: all 0.3s;
-        }
-        
-        .sidebar-toggle-btn:hover {
-            color: var(--primary);
-        }
-        
-        @media (max-width: 1024px) {
-            .sidebar-toggle-btn {
-                display: block;
-            }
-        }
-        
-        /* ================================================================
-           HEADER RIGHT - FLEX WRAP
-           ================================================================ */
-        .header-right {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        
-        @media (max-width: 768px) {
-            .header-right {
-                gap: 6px;
-            }
+            .top-nav .search-wrapper { width: 120px; }
+            .top-nav .search-wrapper .search-btn { padding: 7px 10px; font-size: 0.7rem; }
+            .top-nav .search-wrapper .search-btn span { display: none; }
         }
     </style>
 </head>
 <body>
+
+<!-- ================================================================ -->
+<!-- TOP NAVIGATION -->
+<!-- ================================================================ -->
+<nav class="top-nav">
+
+    <!-- LEFT: Hamburger + Search -->
+    <div class="nav-left">
+        <button id="sidebarToggle" class="lg:hidden icon-btn">
+            <i class="fas fa-bars"></i>
+        </button>
+
+        <div class="search-wrapper">
+            <i class="fas fa-search search-icon"></i>
+            <input type="text" id="searchInput" placeholder="Search patients...">
+            <button id="searchBtn" class="search-btn">
+                <i class="fas fa-search mr-1"></i> <span>Search</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- RIGHT: Branch + DateTime + Dark + Bell + Avatar -->
+    <div class="nav-right">
+
+        <span class="branch-badge-display">
+            <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name) ?>
+        </span>
+
+        <!-- DATE & TIME — BLUE BOX -->
+        <div class="datetime-box" id="datetimeBox">
+            <i class="fas fa-calendar-day dt-icon"></i>
+            <div class="dt-content">
+                <span class="dt-date" id="dtDate"><?= date('D, M d, Y') ?></span>
+                <span class="dt-time" id="dtTime"><?= date('h:i:s A') ?></span>
+            </div>
+        </div>
+
+        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle dark mode">
+            <i id="darkIcon" class="fas fa-moon"></i>
+            <span id="darkText">Dark</span>
+        </button>
+
+        <button class="icon-btn" onclick="window.location.href='notifications.php'" title="Notifications">
+            <i class="fas fa-bell"></i>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
+        </button>
+
+        <a href="profile.php" title="Profile">
+            <img src="<?= htmlspecialchars($profile_pic_url) ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
+        </a>
+    </div>
+</nav>
+
+<script>
+    // ================================================================
+    // DARK MODE
+    // ================================================================
+    (function () {
+        var html = document.documentElement;
+        var darkToggle = document.getElementById('darkModeToggle');
+        var darkIcon = document.getElementById('darkIcon');
+        var darkText = document.getElementById('darkText');
+
+        if (localStorage.getItem('darkMode') === 'true') {
+            html.setAttribute('data-theme', 'dark');
+            if (darkIcon) darkIcon.className = 'fas fa-sun';
+            if (darkText) darkText.textContent = 'Light';
+        }
+
+        if (darkToggle) {
+            darkToggle.addEventListener('click', function () {
+                if (html.getAttribute('data-theme') === 'dark') {
+                    html.removeAttribute('data-theme');
+                    if (darkIcon) darkIcon.className = 'fas fa-moon';
+                    if (darkText) darkText.textContent = 'Dark';
+                    localStorage.setItem('darkMode', 'false');
+                    document.cookie = 'dark_mode=false; path=/';
+                } else {
+                    html.setAttribute('data-theme', 'dark');
+                    if (darkIcon) darkIcon.className = 'fas fa-sun';
+                    if (darkText) darkText.textContent = 'Light';
+                    localStorage.setItem('darkMode', 'true');
+                    document.cookie = 'dark_mode=true; path=/';
+                }
+            });
+        }
+    })();
+
+    // ================================================================
+    // LIVE DATE & TIME
+    // ================================================================
+    (function () {
+        var dtDate = document.getElementById('dtDate');
+        var dtTime = document.getElementById('dtTime');
+
+        function updateDateTime() {
+            if (!dtDate || !dtTime) return;
+            var now = new Date();
+
+            dtDate.textContent = now.toLocaleDateString('en-US', {
+                weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+            });
+
+            dtTime.textContent = now.toLocaleTimeString('en-US', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+            });
+        }
+
+        updateDateTime();
+        setInterval(updateDateTime, 1000);
+    })();
+
+    // ================================================================
+    // SEARCH
+    // ================================================================
+    (function () {
+        var btn = document.getElementById('searchBtn');
+        var input = document.getElementById('searchInput');
+        if (btn && input) {
+            btn.addEventListener('click', function () {
+                var q = input.value.trim();
+                if (q.length > 0) {
+                    window.location.href = 'search.php?q=' + encodeURIComponent(q);
+                }
+            });
+            input.addEventListener('keypress', function (e) {
+                if (e.key === 'Enter') btn.click();
+            });
+        }
+    })();
+
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
+    (function () {
+        var toggleBtn = document.getElementById('sidebarToggle');
+        if (!toggleBtn) return;
+
+        toggleBtn.addEventListener('click', function () {
+            var sidebar = document.getElementById('sidebar');
+            if (sidebar) sidebar.classList.toggle('open');
+        });
+
+        document.addEventListener('click', function (e) {
+            var sidebar = document.getElementById('sidebar');
+            if (!sidebar) return;
+            if (window.innerWidth <= 1024) {
+                if (!sidebar.contains(e.target) && e.target !== toggleBtn) {
+                    sidebar.classList.remove('open');
+                }
+            }
+        });
+    })();
+
+    // ================================================================
+    // TOAST
+    // ================================================================
+    function showToast(title, message, type) {
+        var toast = document.getElementById('toast');
+        if (!toast) return;
+        var toastTitle = document.getElementById('toastTitle');
+        var toastMessage = document.getElementById('toastMessage');
+
+        toast.className = 'toast-custom ' + (type || 'info');
+        if (toastTitle)   toastTitle.textContent = title;
+        if (toastMessage) toastMessage.textContent = message;
+        toast.style.display = 'flex';
+
+        setTimeout(function () { toast.classList.add('show'); }, 10);
+
+        clearTimeout(toast.timeout);
+        toast.timeout = setTimeout(function () {
+            toast.classList.remove('show');
+            setTimeout(function () { toast.style.display = 'none'; }, 400);
+        }, 3500);
+    }
+</script>

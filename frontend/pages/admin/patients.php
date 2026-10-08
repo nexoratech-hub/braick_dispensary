@@ -1,12 +1,14 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/patients.php
-// SUPER ADMIN - MANAGE PATIENTS (V2)
+// SUPER ADMIN - MANAGE PATIENTS (V6 - DATE/TIME OWN COLUMN)
 // ✅ Inatumia SHARED HEADER & SIDEBAR pekee
 // ✅ ASSIGN DOCTOR + VISITS buttons kwenye card header
 // ✅ VIEW, EDIT, DELETE buttons kwenye table
 // ✅ BLUE THEME
 // ✅ REGISTERED BY column
+// ✅ FIXED: Delete modal - scrollable, smaller, delete button visible
+// ✅ V6: Tarehe & Saa ya Registration kwenye column YAKE PEKE YAKE
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -22,23 +24,23 @@ $allowed_roles = ['admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
     switch ($role) {
-        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
-        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'doctor':     header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy':   header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
-        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
-        case 'reception': header('Location: ../reception/dashboard.php'); break;
-        default: header('Location: ../login.php'); break;
+        case 'cashier':    header('Location: ../cashier/dashboard.php'); break;
+        case 'reception':  header('Location: ../reception/dashboard.php'); break;
+        default:           header('Location: ../login.php'); break;
     }
     exit;
 }
 
-$user_id = $_SESSION['user_id'] ?? 0;
-$full_name = $_SESSION['full_name'] ?? 'Admin';
-$role = $_SESSION['role'] ?? 'admin';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$username = $_SESSION['username'] ?? '';
-$profile_pic = $_SESSION['profile_pic'] ?? '';
+$user_id          = $_SESSION['user_id']          ?? 0;
+$full_name        = $_SESSION['full_name']        ?? 'Admin';
+$role             = $_SESSION['role']             ?? 'admin';
+$user_branch_id   = $_SESSION['branch_id']        ?? 1;
+$user_branch_name = $_SESSION['branch_name']      ?? 'Dodoma';
+$username         = $_SESSION['username']         ?? '';
+$profile_pic      = $_SESSION['profile_pic']      ?? '';
 
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -59,8 +61,8 @@ try {
     $branches_list = [];
 }
 
-$filter_by_branch = ($selected_branch_id !== 'all' && is_numeric($selected_branch_id));
-$filter_branch_id = $filter_by_branch ? (int)$selected_branch_id : 0;
+$filter_by_branch  = ($selected_branch_id !== 'all' && is_numeric($selected_branch_id));
+$filter_branch_id  = $filter_by_branch ? (int)$selected_branch_id : 0;
 
 $display_branch_name = 'All Branches';
 if ($filter_by_branch) {
@@ -72,44 +74,43 @@ if ($filter_by_branch) {
     }
 }
 
-$search = isset($_GET['search']) ? trim($_GET['search']) : '';
-$filter = isset($_GET['filter']) ? $_GET['filter'] : 'all';
+$search    = isset($_GET['search']) ? trim($_GET['search']) : '';
+$filter    = isset($_GET['filter']) ? $_GET['filter'] : 'all';
 $delete_id = isset($_GET['delete']) ? (int)$_GET['delete'] : 0;
+$success   = isset($_GET['success']) ? $_GET['success'] : '';
 
-$success = isset($_GET['success']) ? $_GET['success'] : '';
-
-$message = '';
+$message      = '';
 $message_type = '';
 
 // DELETE PATIENT
 if ($delete_id > 0) {
     try {
         $db->beginTransaction();
-        
+
         $stmt = $db->prepare("SELECT full_name, patient_id, branch_id FROM patients WHERE id = ?");
         $stmt->execute([$delete_id]);
         $patient = $stmt->fetch(PDO::FETCH_ASSOC);
-        
+
         if (!$patient) throw new Exception("Patient not found");
-        
-        $patient_name = $patient['full_name'];
+
+        $patient_name   = $patient['full_name'];
         $patient_number = $patient['patient_id'];
         $patient_branch = $patient['branch_id'];
-        
+
         $revenue_to_subtract = 0;
         try {
             $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total_paid FROM payments WHERE patient_id = ?");
             $stmt->execute([$delete_id]);
             $revenue_to_subtract = (float)$stmt->fetch(PDO::FETCH_ASSOC)['total_paid'];
         } catch (Exception $e) {}
-        
+
         $tables_to_delete = [
             'payments', 'bill_items', 'bills', 'prescription_items',
             'prescriptions', 'lab_tests', 'vital_signs', 'appointments',
             'referrals', 'visits', 'otc_sale_items', 'otc_sales',
             'patient_documents', 'stock_movements', 'receipts'
         ];
-        
+
         $items_deleted = 0;
         foreach ($tables_to_delete as $table) {
             try {
@@ -126,18 +127,18 @@ if ($delete_id > 0) {
                 $items_deleted += $stmt->rowCount();
             } catch (Exception $e) {}
         }
-        
+
         try {
             $stmt = $db->prepare("DELETE FROM notifications WHERE patient_id = ?");
             $stmt->execute([$delete_id]);
         } catch (Exception $e) {}
-        
+
         $stmt = $db->prepare("DELETE FROM patients WHERE id = ?");
         $stmt->execute([$delete_id]);
-        
+
         try {
             $log_stmt = $db->prepare("
-                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
                 VALUES (?, ?, 'patient_deleted', ?, NOW())
             ");
             $log_stmt->execute([
@@ -145,18 +146,18 @@ if ($delete_id > 0) {
                 "Patient deleted: $patient_name (ID: $patient_number) | Revenue removed: TSh " . number_format($revenue_to_subtract, 0) . " | By: " . $full_name
             ]);
         } catch (Exception $e) {}
-        
+
         $db->commit();
-        
+
         $_SESSION['flash_message'] = "✅ Patient deleted successfully!<br>" .
                                      "👤 <strong>$patient_name</strong> (ID: $patient_number)<br>" .
                                      "🗑️ <strong>" . number_format($items_deleted) . " records</strong> deleted<br>" .
                                      "💰 Revenue adjusted: <strong>- TSh " . number_format($revenue_to_subtract, 0) . "</strong>";
         $_SESSION['flash_type'] = 'success';
-        
+
         header("Location: patients.php?branch=" . urlencode($selected_branch_id) . "&success=deleted");
         exit();
-        
+
     } catch (Exception $e) {
         $db->rollBack();
         $message = "❌ Error deleting patient: " . $e->getMessage();
@@ -174,8 +175,8 @@ if (isset($_SESSION['flash_message'])) {
 // GET PATIENTS
 try {
     $sql = "
-        SELECT DISTINCT p.*, 
-               u.full_name as assigned_doctor_name, 
+        SELECT DISTINCT p.*,
+               u.full_name as assigned_doctor_name,
                b.name as branch_name,
                COALESCE(
                    NULLIF(p.registered_by_name, ''),
@@ -192,12 +193,12 @@ try {
         WHERE 1=1
     ";
     $params = [];
-    
+
     if ($filter_by_branch) {
         $sql .= " AND p.branch_id = ?";
         $params[] = $filter_branch_id;
     }
-    
+
     if (!empty($search)) {
         $sql .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR p.phone LIKE ?)";
         $search_param = "%$search%";
@@ -205,18 +206,18 @@ try {
         $params[] = $search_param;
         $params[] = $search_param;
     }
-    
-    if ($filter === 'with_doctor') $sql .= " AND p.assigned_doctor_id IS NOT NULL";
+
+    if ($filter === 'with_doctor')        $sql .= " AND p.assigned_doctor_id IS NOT NULL";
     elseif ($filter === 'without_doctor') $sql .= " AND p.assigned_doctor_id IS NULL";
-    elseif ($filter === 'new') $sql .= " AND p.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
-    elseif ($filter === 'no_visit') $sql .= " AND NOT EXISTS (SELECT 1 FROM visits WHERE patient_id = p.id)";
-    
+    elseif ($filter === 'new')            $sql .= " AND p.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+    elseif ($filter === 'no_visit')       $sql .= " AND NOT EXISTS (SELECT 1 FROM visits WHERE patient_id = p.id)";
+
     $sql .= " ORDER BY p.created_at DESC";
-    
+
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
     $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
+
     $unique_patients = [];
     $seen_ids = [];
     foreach ($patients as $patient) {
@@ -226,36 +227,36 @@ try {
         }
     }
     $patients = $unique_patients;
-    
+
     foreach ($patients as $key => $patient) {
         $stmt = $db->prepare("SELECT COUNT(*) FROM visits WHERE patient_id = ?");
         $stmt->execute([$patient['id']]);
         $patients[$key]['total_visits'] = (int)$stmt->fetchColumn();
-        
+
         $stmt = $db->prepare("SELECT COUNT(*) FROM appointments WHERE patient_id = ? AND status IN ('scheduled', 'confirmed')");
         $stmt->execute([$patient['id']]);
         $patients[$key]['active_appointments'] = (int)$stmt->fetchColumn();
-        
+
         $stmt = $db->prepare("SELECT DATEDIFF(NOW(), created_at) FROM patients WHERE id = ?");
         $stmt->execute([$patient['id']]);
         $patients[$key]['patient_days'] = (int)$stmt->fetchColumn();
-        
+
         $patients[$key]['patient_status'] = ($patients[$key]['patient_days'] <= 7) ? 'new' : 'existing';
-        
+
         $stmt = $db->prepare("SELECT id, visit_number, status, created_at FROM visits WHERE patient_id = ? ORDER BY created_at DESC LIMIT 1");
         $stmt->execute([$patient['id']]);
         $patients[$key]['latest_visit'] = $stmt->fetch(PDO::FETCH_ASSOC);
     }
-    
+
     $total_patients = count($patients);
-    
+
     $stats_sql = "
-        SELECT 
+        SELECT
             COUNT(DISTINCT id) as total,
             SUM(CASE WHEN assigned_doctor_id IS NOT NULL THEN 1 ELSE 0 END) as with_doctor,
             SUM(CASE WHEN assigned_doctor_id IS NULL THEN 1 ELSE 0 END) as without_doctor,
             SUM(CASE WHEN created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as new_patients
-        FROM patients 
+        FROM patients
         WHERE 1=1
     ";
     $stats_params = [];
@@ -266,7 +267,7 @@ try {
     $stmt = $db->prepare($stats_sql);
     $stmt->execute($stats_params);
     $stats = $stmt->fetch(PDO::FETCH_ASSOC);
-    
+
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
@@ -282,22 +283,16 @@ try {
     $unread_notifications = $stmt->fetch()['total'] ?? 0;
 } catch (Exception $e) {}
 
-$profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+$profile_pic_url = !empty($profile_pic)
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC CSS -->
-<!-- ================================================================ -->
 <style>
 :root {
     --primary: #0B5ED7;
@@ -327,6 +322,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
     --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
     --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
+    --font-mono: 'JetBrains Mono', 'Courier New', monospace;
 }
 
 [data-theme="dark"] {
@@ -341,9 +337,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     --purple-bg: #2D1B5F;
 }
 
-/* ================================================================
-   PAGE HEADER
-   ================================================================ */
+/* PAGE HEADER */
 .page-header-custom {
     background: var(--primary-gradient);
     border-radius: var(--radius-lg);
@@ -441,9 +435,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     transform: translateY(-2px);
 }
 
-/* ================================================================
-   STATS CARDS
-   ================================================================ */
+/* STATS CARDS */
 .stats-grid-mini {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -485,9 +477,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     margin-top: 4px;
 }
 
-/* ================================================================
-   TABLE CARD
-   ================================================================ */
+/* TABLE CARD */
 .table-card {
     background: var(--bg-card);
     border-radius: var(--radius-lg);
@@ -518,9 +508,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
 .table-card .card-title i { color: var(--primary); }
 
-/* ================================================================
-   ✅ HEADER ACTION BUTTONS - Assign Doctor + Visits
-   ================================================================ */
+/* HEADER ACTION BUTTONS */
 .btn-header-action {
     display: inline-flex;
     align-items: center;
@@ -556,7 +544,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     color: white;
 }
 
-/* ✅ ASSIGN DOCTOR - BLUE GRADIENT */
 .btn-header-assign {
     background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
     color: white;
@@ -568,7 +555,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     box-shadow: 0 8px 24px rgba(11, 94, 215, 0.45);
 }
 
-/* ✅ VISITS - GREEN GRADIENT */
 .btn-header-visits {
     background: linear-gradient(135deg, #059669, #047857);
     color: white;
@@ -580,26 +566,19 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     box-shadow: 0 8px 24px rgba(5, 150, 105, 0.45);
 }
 
-/* ✅ Button shine effect */
 .btn-header-action::before {
     content: '';
     position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
+    top: 0; left: -100%;
+    width: 100%; height: 100%;
     background: linear-gradient(90deg, transparent, rgba(255,255,255,0.25), transparent);
     transition: left 0.6s ease;
     pointer-events: none;
 }
 
-.btn-header-action:hover::before {
-    left: 100%;
-}
+.btn-header-action:hover::before { left: 100%; }
 
-/* ================================================================
-   FILTER BAR
-   ================================================================ */
+/* FILTER BAR */
 .filter-bar {
     display: flex;
     align-items: center;
@@ -729,7 +708,6 @@ select.filter-input {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* SCROLL BUTTONS */
 .scroll-controls {
     display: flex;
     align-items: center;
@@ -780,7 +758,7 @@ select.filter-input {
 
 .patient-table {
     width: 100%;
-    min-width: 1650px;
+    min-width: 1700px;   /* ✅ V6: Imeongezwa (column mpya ya Date/Time) */
     border-collapse: collapse;
     font-size: 0.85rem;
 }
@@ -819,19 +797,10 @@ select.filter-input {
     color: var(--text-primary);
 }
 
-.patient-table tbody tr:nth-child(even) {
-    background: var(--primary-bg);
-}
+.patient-table tbody tr:nth-child(even) { background: var(--primary-bg); }
+.patient-table tbody tr:hover td { background: #D1FAE5; }
+[data-theme="dark"] .patient-table tbody tr:hover td { background: #1A3A2A; }
 
-.patient-table tbody tr:hover td {
-    background: #D1FAE5;
-}
-
-[data-theme="dark"] .patient-table tbody tr:hover td {
-    background: #1A3A2A;
-}
-
-/* PATIENT NAME - BLACK */
 .patient-name-link {
     color: var(--text-black) !important;
     font-weight: 700 !important;
@@ -863,6 +832,53 @@ select.filter-input {
     text-decoration: underline !important;
 }
 
+/* ================================================================
+   ✅ V6: DATE/TIME CELL - Column yake peke yake
+   ================================================================ */
+.datetime-cell-standalone {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 130px;
+}
+
+.datetime-cell-standalone .dt-date,
+.datetime-cell-standalone .dt-time {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    line-height: 1.3;
+}
+
+.datetime-cell-standalone .dt-date {
+    color: var(--text-primary);
+}
+
+.datetime-cell-standalone .dt-time {
+    color: var(--primary);
+    font-weight: 800;
+    background: var(--primary-bg);
+    padding: 3px 9px;
+    border-radius: 6px;
+    border: 1px solid rgba(11, 94, 215, 0.15);
+    width: fit-content;
+}
+
+.datetime-cell-standalone i {
+    font-size: 0.62rem;
+    opacity: 0.85;
+}
+
+[data-theme="dark"] .datetime-cell-standalone .dt-time {
+    color: #93C5FD;
+    background: rgba(59, 130, 246, 0.15);
+    border-color: rgba(59, 130, 246, 0.3);
+}
+
 /* BADGES */
 .branch-badge-display {
     display: inline-block;
@@ -872,6 +888,7 @@ select.filter-input {
     border-radius: 20px;
     background: var(--success-bg);
     color: var(--success);
+    white-space: nowrap;
 }
 
 .status-badge {
@@ -882,24 +899,24 @@ select.filter-input {
     border-radius: 12px;
 }
 
-.status-badge.new { background: var(--success-bg); color: var(--success); }
-.status-badge.existing { background: var(--primary-bg); color: var(--primary); }
-.status-badge.with_doctor { background: var(--success-bg); color: var(--success); }
+.status-badge.new            { background: var(--success-bg); color: var(--success); }
+.status-badge.existing       { background: var(--primary-bg); color: var(--primary); }
+.status-badge.with_doctor    { background: var(--success-bg); color: var(--success); }
 .status-badge.without_doctor { background: var(--warning-bg); color: var(--warning); }
 
 .days-badge-blue {
     display: inline-block;
     background: var(--primary) !important;
     color: #ffffff !important;
-    padding: 4px 12px !important;
-    border-radius: 12px !important;
-    font-size: 0.68rem !important;
-    font-weight: 600 !important;
+    padding: 3px 10px !important;
+    border-radius: 10px !important;
+    font-size: 0.65rem !important;
+    font-weight: 700 !important;
+    margin-top: 3px;
+    font-family: var(--font-mono);
 }
 
-.days-badge-blue.new {
-    background: var(--success) !important;
-}
+.days-badge-blue.new { background: var(--success) !important; }
 
 .registered-by-badge {
     display: inline-flex;
@@ -914,25 +931,11 @@ select.filter-input {
     white-space: nowrap;
 }
 
-.registered-by-badge.role-admin {
-    background: #FEF3C7;
-    color: #B45309;
-}
+.registered-by-badge.role-admin     { background: #FEF3C7; color: #B45309; }
+.registered-by-badge.role-reception { background: var(--purple-bg); color: var(--purple); }
 
-.registered-by-badge.role-reception {
-    background: var(--purple-bg);
-    color: var(--purple);
-}
-
-[data-theme="dark"] .registered-by-badge.role-admin {
-    background: #3D2E0A;
-    color: #FBBF24;
-}
-
-[data-theme="dark"] .registered-by-badge.role-reception {
-    background: #2D1B5F;
-    color: #C4B5FD;
-}
+[data-theme="dark"] .registered-by-badge.role-admin     { background: #3D2E0A; color: #FBBF24; }
+[data-theme="dark"] .registered-by-badge.role-reception { background: #2D1B5F; color: #C4B5FD; }
 
 /* BUTTONS */
 .btn {
@@ -977,7 +980,7 @@ select.filter-input {
 }
 
 .message-box.success { background: var(--success-bg); color: var(--success-dark); border-left: 5px solid var(--success); }
-.message-box.error { background: var(--danger-bg); color: var(--danger-dark); border-left: 5px solid var(--danger); }
+.message-box.error   { background: var(--danger-bg);  color: var(--danger-dark);  border-left: 5px solid var(--danger); }
 .message-box i { font-size: 1.2rem; margin-top: 2px; }
 
 /* FOOTER */
@@ -990,16 +993,12 @@ select.filter-input {
     color: var(--text-secondary);
 }
 
-.footer .footer-brand {
-    color: var(--primary);
-    font-weight: 600;
-}
+.footer .footer-brand { color: var(--primary); font-weight: 600; }
 
 /* TOAST */
 .toast-custom {
     position: fixed;
-    bottom: 24px;
-    right: 24px;
+    bottom: 24px; right: 24px;
     padding: 14px 20px;
     border-radius: var(--radius);
     z-index: 9999;
@@ -1014,51 +1013,180 @@ select.filter-input {
     box-shadow: var(--shadow-lg);
 }
 
-.toast-custom.show { transform: translateY(0); opacity: 1; }
+.toast-custom.show    { transform: translateY(0); opacity: 1; }
 .toast-custom.success { background: var(--success); }
-.toast-custom.error { background: var(--danger); }
-.toast-custom.info { background: var(--primary); }
+.toast-custom.error   { background: var(--danger); }
+.toast-custom.info    { background: var(--primary); }
 
 /* DELETE MODAL */
 .delete-modal-overlay {
     display: none;
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.7);
+    background: rgba(0, 0, 0, 0.75);
     z-index: 10000;
     justify-content: center;
     align-items: center;
     padding: 20px;
+    backdrop-filter: blur(4px);
+    overflow-y: auto;
 }
 
-.delete-modal-overlay.show {
-    display: flex;
-}
+.delete-modal-overlay.show { display: flex; }
 
 .delete-modal-content {
     background: var(--bg-card);
-    border-radius: 16px;
-    max-width: 550px;
+    border-radius: 18px;
+    max-width: 520px;
     width: 100%;
-    padding: 24px;
+    max-height: 90vh;
     border: 2px solid var(--border-color);
-    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: modalPopIn 0.3s ease;
+}
+
+@keyframes modalPopIn {
+    from { opacity: 0; transform: translateY(20px) scale(0.96); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.delete-modal-body {
+    overflow-y: auto;
+    padding: 20px 22px;
+    flex: 1;
+    min-height: 0;
+}
+
+.delete-modal-body::-webkit-scrollbar { width: 6px; }
+.delete-modal-body::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 10px; }
+.delete-modal-body::-webkit-scrollbar-thumb { background: var(--danger); border-radius: 10px; }
+.delete-modal-body::-webkit-scrollbar-thumb:hover { background: var(--danger-dark); }
+
+.delete-modal-footer {
+    padding: 14px 22px;
+    border-top: 2px solid var(--border-color);
+    background: var(--bg-card);
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+.delete-modal-icon {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: var(--danger-bg);
+    color: var(--danger);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 12px;
+    font-size: 1.6rem;
+    animation: pulse-warn 1.5s infinite;
+}
+
+@keyframes pulse-warn {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.4); }
+    50%      { box-shadow: 0 0 0 12px rgba(220,38,38,0); }
+}
+
+.delete-info-box {
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+    font-size: 0.8rem;
+}
+
+.delete-info-box.danger {
+    background: var(--danger-bg);
+    border: 1.5px solid var(--danger);
+    color: var(--danger-dark);
+}
+
+.delete-info-box.warning {
+    background: var(--warning-bg);
+    border: 1.5px solid var(--warning);
+    color: var(--warning);
+}
+
+.delete-info-box.info {
+    background: var(--primary-bg);
+    border: 1.5px solid var(--primary);
+    color: var(--primary);
+}
+
+.delete-info-box ul {
+    margin: 6px 0 0 0;
+    padding-left: 18px;
+    line-height: 1.7;
+    font-size: 0.72rem;
+}
+
+.delete-info-box .box-title {
+    font-weight: 700;
+    margin: 0 0 4px 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+}
+
+.delete-modal-btn {
+    flex: 1;
+    padding: 11px 16px;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: 0.82rem;
+    cursor: pointer;
+    text-align: center;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: all 0.3s;
+    min-height: 42px;
+    border: none;
+    font-family: inherit;
+}
+
+.delete-modal-btn.cancel {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 2px solid var(--border-color);
+}
+
+.delete-modal-btn.cancel:hover {
+    background: var(--bg-body);
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.delete-modal-btn.danger {
+    background: linear-gradient(135deg, #DC2626, #B91C1C);
+    color: white;
+    box-shadow: 0 4px 12px rgba(220,38,38,0.3);
+}
+
+.delete-modal-btn.danger:hover {
+    background: linear-gradient(135deg, #B91C1C, #991B1B);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(220,38,38,0.5);
+    color: white;
 }
 
 /* ANIMATION */
 @keyframes fadeInUp {
     from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
-.animate-fade-in-up {
-    animation: fadeInUp 0.5s ease forwards;
-    opacity: 0;
-}
+.animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
 
-/* ================================================================
-   RESPONSIVE
-   ================================================================ */
+/* RESPONSIVE */
 @media (max-width: 768px) {
     .stats-grid-mini { grid-template-columns: repeat(2, 1fr); }
     .filter-bar { flex-direction: column; align-items: stretch; }
@@ -1066,49 +1194,40 @@ select.filter-input {
     .search-input-wrapper input { width: 100%; min-width: unset; }
     .page-header-custom { padding: 16px 18px; }
     .page-header-custom .page-title { font-size: 1.2rem; }
-    
-    /* ✅ Mobile: Icon-only buttons */
+
     .btn-header-action {
         padding: 0;
         width: 40px;
         height: 40px;
         justify-content: center;
     }
-    
-    .btn-header-action span {
-        display: none;
-    }
-    
-    .btn-header-action i {
-        font-size: 1rem;
-        margin: 0;
-    }
+    .btn-header-action span { display: none; }
+    .btn-header-action i { font-size: 1rem; margin: 0; }
 }
 
 @media (max-width: 480px) {
     .stats-grid-mini { grid-template-columns: 1fr; }
-    
-    /* ✅ Small mobile: Full-width buttons with text */
+
     .table-card .card-header {
         flex-direction: column;
         align-items: stretch;
     }
-    
     .table-card .card-header > div:last-child {
         display: flex;
         width: 100%;
         gap: 8px;
     }
-    
     .btn-header-action {
         flex: 1;
         width: auto;
         height: 38px;
     }
-    
-    .btn-header-action span {
-        display: inline;
-    }
+    .btn-header-action span { display: inline; }
+
+    .delete-modal-content { max-width: 95%; max-height: 92vh; }
+    .delete-modal-body { padding: 16px; }
+    .delete-modal-footer { padding: 12px 16px; flex-direction: column; }
+    .delete-modal-btn { width: 100%; }
 }
 </style>
 
@@ -1183,29 +1302,24 @@ select.filter-input {
 
     <!-- TABLE CARD -->
     <div class="table-card animate-fade-in-up">
-        
-        <!-- ✅ CARD HEADER WITH ASSIGN DOCTOR + VISITS BUTTONS -->
+
         <div class="card-header">
-            <!-- LEFT: Title + Count -->
             <div class="card-title">
                 <i class="fas fa-list"></i> Patient List
                 <span id="patientCountBadge" style="background:var(--primary-bg);color:var(--primary);padding:2px 12px;border-radius:20px;font-size:0.7rem;font-weight:500;">
                     <?= $total_patients ?> patients
                 </span>
             </div>
-            
-            <!-- RIGHT: Action Buttons -->
+
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                <!-- ✅ ASSIGN DOCTOR BUTTON -->
-                <a href="/dispensary_system/frontend/pages/admin/assign_doctor.php?branch=<?= urlencode($selected_branch_id) ?>" 
+                <a href="/dispensary_system/frontend/pages/admin/assign_doctor.php?branch=<?= urlencode($selected_branch_id) ?>"
                    class="btn-header-action btn-header-assign"
                    title="Assign Doctor to Patient">
                     <i class="fas fa-user-md"></i>
                     <span>Assign Doctor</span>
                 </a>
-                
-                <!-- ✅ VISITS BUTTON -->
-                <a href="/dispensary_system/frontend/pages/admin/visits.php?branch=<?= urlencode($selected_branch_id) ?>" 
+
+                <a href="/dispensary_system/frontend/pages/admin/visits.php?branch=<?= urlencode($selected_branch_id) ?>"
                    class="btn-header-action btn-header-visits"
                    title="View All Visits">
                     <i class="fas fa-notes-medical"></i>
@@ -1213,7 +1327,7 @@ select.filter-input {
                 </a>
             </div>
         </div>
-        
+
         <!-- FILTER BAR -->
         <div class="filter-bar">
             <div class="filter-bar-left">
@@ -1221,36 +1335,37 @@ select.filter-input {
                     <div class="spinner-small"></div>
                     <span>Filtering...</span>
                 </div>
-                
+
                 <div class="search-input-wrapper">
                     <i class="fas fa-search"></i>
-                    <input type="text" 
-                           id="searchFilter" 
-                           class="filter-input" 
-                           placeholder="Search patient name, ID, phone..." 
+                    <input type="text"
+                           id="searchFilter"
+                           class="filter-input"
+                           placeholder="Search patient name, ID, phone..."
                            value="<?= htmlspecialchars($search) ?>"
                            oninput="autoFilter()">
                 </div>
-                
+
                 <select id="filterSelect" class="filter-input" onchange="autoFilter()">
-                    <option value="all" <?= $filter === 'all' ? 'selected' : '' ?>>👥 All</option>
-                    <option value="new" <?= $filter === 'new' ? 'selected' : '' ?>>🆕 New (7d)</option>
-                    <option value="with_doctor" <?= $filter === 'with_doctor' ? 'selected' : '' ?>>✅ With Doctor</option>
+                    <option value="all"            <?= $filter === 'all'            ? 'selected' : '' ?>>👥 All</option>
+                    <option value="new"            <?= $filter === 'new'            ? 'selected' : '' ?>>🆕 New (7d)</option>
+                    <option value="with_doctor"    <?= $filter === 'with_doctor'    ? 'selected' : '' ?>>✅ With Doctor</option>
                     <option value="without_doctor" <?= $filter === 'without_doctor' ? 'selected' : '' ?>>⚠️ No Doctor</option>
-                    <option value="no_visit" <?= $filter === 'no_visit' ? 'selected' : '' ?>>📋 No Visit</option>
+                    <option value="no_visit"       <?= $filter === 'no_visit'       ? 'selected' : '' ?>>📋 No Visit</option>
                 </select>
-                
-                <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>" class="clear-filter-btn <?= (!empty($search) || $filter !== 'all') ? 'show' : '' ?>" id="clearFilterBtn">
+
+                <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>"
+                   class="clear-filter-btn <?= (!empty($search) || $filter !== 'all') ? 'show' : '' ?>"
+                   id="clearFilterBtn">
                     <i class="fas fa-times"></i> Clear
                 </a>
-                
+
                 <span class="filter-status" id="filterStatus">
                     <i class="fas fa-bolt"></i>
                     <span id="filterStatusText">Auto-filter</span>
                 </span>
             </div>
-            
-            <!-- SCROLL BUTTONS -->
+
             <div class="filter-bar-right">
                 <div class="scroll-controls">
                     <button type="button" class="scroll-btn-header" id="scrollLeftBtn" onclick="scrollTable('left')" title="Scroll Left">
@@ -1275,7 +1390,8 @@ select.filter-input {
                             <th><i class="fas fa-id-card"></i> Patient ID</th>
                             <th><i class="fas fa-phone"></i> Contact</th>
                             <th><i class="fas fa-store-alt"></i> Branch</th>
-                            <th><i class="fas fa-calendar"></i> Days</th>
+                            <!-- ✅ V6: Date/Time column YAKE PEKE YAKE -->
+                            <th><i class="fas fa-calendar-alt"></i> Registered Date & Time</th>
                             <th><i class="fas fa-user-md"></i> Doctor</th>
                             <th><i class="fas fa-notes-medical"></i> Visits</th>
                             <th><i class="fas fa-user-plus"></i> Registered By</th>
@@ -1285,24 +1401,26 @@ select.filter-input {
                     </thead>
                     <tbody id="patientTableBody">
                         <?php $counter = 1; ?>
-                        <?php foreach ($patients as $patient): 
+                        <?php foreach ($patients as $patient):
                             $patient_days = isset($patient['patient_days']) ? (int)$patient['patient_days'] : 0;
-                            $days_text = $patient_days > 0 ? '<span class="days-badge-blue">📅 ' . $patient_days . ' days</span>' : '<span class="days-badge-blue new">📅 New</span>';
-                            
+                            $days_text = $patient_days > 0
+                                ? '<span class="days-badge-blue">📅 ' . $patient_days . ' days</span>'
+                                : '<span class="days-badge-blue new">📅 New</span>';
+
                             $status_class = $patient['patient_status'] ?? 'existing';
-                            $status_text = $status_class === 'new' ? 'New' : 'Existing';
-                            
+                            $status_text  = $status_class === 'new' ? 'New' : 'Existing';
+
                             if (!empty($patient['assigned_doctor_name'])) {
                                 $doctor_status = '<span class="status-badge with_doctor">✅ Dr. ' . htmlspecialchars($patient['assigned_doctor_name']) . '</span>';
                             } else {
                                 $doctor_status = '<span class="status-badge without_doctor">⚠️ No Doctor</span>';
                             }
-                            
+
                             $appointment_count = $patient['active_appointments'] ?? 0;
-                            
+
                             $reg_by_name = $patient['registered_by_display'] ?? 'System';
                             $reg_by_role = $patient['registered_by_role'] ?? 'reception';
-                            
+
                             $reg_icon = 'fa-user';
                             $reg_class = '';
                             if ($reg_by_role === 'admin') {
@@ -1314,8 +1432,12 @@ select.filter-input {
                             } elseif ($reg_by_role === 'doctor') {
                                 $reg_icon = 'fa-user-md';
                             }
+
+                            // ✅ V6: Registration date/time
+                            $reg_date = !empty($patient['created_at']) ? date('d/m/Y', strtotime($patient['created_at'])) : '—';
+                            $reg_time = !empty($patient['created_at']) ? date('h:i A', strtotime($patient['created_at'])) : '—';
                         ?>
-                            <tr class="patient-row" 
+                            <tr class="patient-row"
                                 data-name="<?= strtolower(htmlspecialchars($patient['full_name'] ?? '')) ?>"
                                 data-id="<?= strtolower(htmlspecialchars($patient['patient_id'] ?? '')) ?>"
                                 data-phone="<?= strtolower(htmlspecialchars($patient['phone'] ?? '')) ?>"
@@ -1325,7 +1447,7 @@ select.filter-input {
                                 data-status="<?= $status_class ?>">
                                 <td class="col-sno"><?= $counter++ ?></td>
                                 <td>
-                                    <a href="patient_details.php?id=<?= (int)$patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
+                                    <a href="patient_details.php?id=<?= (int)$patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>"
                                        class="patient-name-link">
                                         <?= htmlspecialchars($patient['full_name'] ?? 'Unknown') ?>
                                     </a>
@@ -1342,12 +1464,27 @@ select.filter-input {
                                         <span style="color:var(--text-muted);">N/A</span>
                                     <?php endif; ?>
                                 </td>
+
+                                <!-- Branch -->
                                 <td>
                                     <span class="branch-badge-display">
                                         🏥 <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?>
                                     </span>
                                 </td>
-                                <td><?= $days_text ?></td>
+
+                                <!-- ✅ V6: Date/Time column YAKE PEKE YAKE -->
+                                <td>
+                                    <div class="datetime-cell-standalone">
+                                        <span class="dt-date">
+                                            <i class="fas fa-calendar-day"></i> <?= $reg_date ?>
+                                        </span>
+                                        <span class="dt-time">
+                                            <i class="fas fa-clock"></i> <?= $reg_time ?>
+                                        </span>
+                                        <?= $days_text ?>
+                                    </div>
+                                </td>
+
                                 <td><?= $doctor_status ?></td>
                                 <td>
                                     <span style="font-weight:700;color:var(--text-black);font-size:0.9rem;"><?= $patient['total_visits'] ?? 0 ?></span>
@@ -1369,19 +1506,19 @@ select.filter-input {
                                 </td>
                                 <td>
                                     <div class="action-buttons-group">
-                                        <a href="patient_details.php?id=<?= (int)$patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
+                                        <a href="patient_details.php?id=<?= (int)$patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>"
                                            class="btn btn-primary" title="View Patient">
                                             <i class="fas fa-eye"></i> View
                                         </a>
-                                        
-                                        <a href="edit_patient.php?id=<?= (int)$patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
+
+                                        <a href="edit_patient.php?id=<?= (int)$patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>"
                                            class="btn btn-success" title="Edit Patient">
                                             <i class="fas fa-edit"></i> Edit
                                         </a>
-                                        
-                                        <button type="button" 
-                                                class="btn btn-danger" 
-                                                onclick="confirmDelete(<?= (int)$patient['id'] ?>, '<?= htmlspecialchars(addslashes($patient['full_name'])) ?>', '<?= htmlspecialchars($patient['patient_id']) ?>')" 
+
+                                        <button type="button"
+                                                class="btn btn-danger"
+                                                onclick="confirmDelete(<?= (int)$patient['id'] ?>, '<?= htmlspecialchars(addslashes($patient['full_name'])) ?>', '<?= htmlspecialchars($patient['patient_id']) ?>')"
                                                 title="Delete Patient">
                                             <i class="fas fa-trash"></i> Delete
                                         </button>
@@ -1392,8 +1529,7 @@ select.filter-input {
                     </tbody>
                 </table>
             </div>
-            
-            <!-- NO RESULTS -->
+
             <div id="noResultsMessage" style="display:none;text-align:center;padding:40px 20px;">
                 <i class="fas fa-search" style="font-size:2rem;color:var(--border-color);display:block;margin-bottom:12px;"></i>
                 <p style="color:var(--text-secondary);font-size:0.9rem;">No patients match your search</p>
@@ -1402,7 +1538,7 @@ select.filter-input {
                     <i class="fas fa-times"></i> Clear Filter
                 </button>
             </div>
-            
+
             <?php else: ?>
             <div style="text-align:center;padding:40px 20px;">
                 <i class="fas fa-users" style="font-size:2rem;color:var(--border-color);display:block;margin-bottom:8px;"></i>
@@ -1416,7 +1552,6 @@ select.filter-input {
         </div>
     </div>
 
-    <!-- FOOTER -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1431,7 +1566,6 @@ select.filter-input {
 
 </main>
 
-<!-- TOAST -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1440,80 +1574,72 @@ select.filter-input {
     </div>
 </div>
 
-<!-- DELETE MODAL -->
 <div id="deleteModal" class="delete-modal-overlay">
     <div class="delete-modal-content">
-        <div style="text-align:center;margin-bottom:20px;">
-            <div style="width:70px;height:70px;border-radius:50%;background:var(--danger-bg);color:var(--danger);display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:2rem;">
-                <i class="fas fa-exclamation-triangle"></i>
+        <div class="delete-modal-body">
+            <div style="text-align:center;margin-bottom:16px;">
+                <div class="delete-modal-icon">
+                    <i class="fas fa-exclamation-triangle"></i>
+                </div>
+                <h3 style="font-size:1.15rem;font-weight:800;color:var(--danger);margin-bottom:4px;">
+                    DELETE PATIENT?
+                </h3>
+                <p style="font-size:0.78rem;color:var(--text-secondary);margin:0;">
+                    This action <strong style="color:var(--danger);">CANNOT</strong> be undone!
+                </p>
             </div>
-            <h3 style="font-size:1.3rem;font-weight:700;color:var(--danger);margin-bottom:6px;">
-                ⚠️ DELETE PATIENT?
-            </h3>
-            <p style="font-size:0.85rem;color:var(--text-secondary);">
-                This action <strong>CANNOT</strong> be undone!
-            </p>
+
+            <div class="delete-info-box danger">
+                <p class="box-title"><i class="fas fa-user"></i> Patient to delete:</p>
+                <p style="font-size:0.95rem;font-weight:800;margin:0;" id="deletePatientName">-</p>
+                <p style="font-size:0.72rem;font-family:monospace;margin:4px 0 0 0;opacity:0.9;" id="deletePatientId">-</p>
+            </div>
+
+            <div class="delete-info-box warning">
+                <p class="box-title"><i class="fas fa-trash"></i> This will DELETE ALL related data:</p>
+                <ul>
+                    <li>💰 Bills, Payments & Receipts</li>
+                    <li>📋 Visits & Appointments</li>
+                    <li>💊 Prescriptions & Medications</li>
+                    <li>🔬 Lab Tests & Results</li>
+                    <li>📊 Vital Signs</li>
+                    <li>🔄 Referrals</li>
+                    <li>💳 OTC Sales</li>
+                    <li>📝 Patient Documents</li>
+                    <li>📦 Stock Movements</li>
+                    <li>📧 Notifications</li>
+                </ul>
+            </div>
+
+            <div class="delete-info-box info">
+                <p class="box-title"><i class="fas fa-lightbulb"></i> Revenue Adjustment:</p>
+                <p style="font-size:0.72rem;margin:0;">
+                    All payments made by this patient will be <strong>subtracted</strong> from Total Revenue automatically.
+                </p>
+            </div>
         </div>
-        
-        <div style="background:var(--danger-bg);border:2px solid var(--danger);border-radius:12px;padding:14px 18px;margin-bottom:16px;">
-            <p style="font-size:0.85rem;color:var(--danger-dark);margin:0 0 8px 0;font-weight:600;">
-                Patient to delete:
-            </p>
-            <p style="font-size:1rem;color:var(--danger-dark);margin:0;font-weight:700;" id="deletePatientName">-</p>
-            <p style="font-size:0.8rem;color:var(--danger-dark);margin:4px 0 0 0;font-family:monospace;" id="deletePatientId">-</p>
-        </div>
-        
-        <div style="background:var(--warning-bg);border:2px solid var(--warning);border-radius:12px;padding:14px 18px;margin-bottom:16px;">
-            <p style="font-size:0.8rem;color:var(--warning);margin:0 0 8px 0;font-weight:600;">
-                🗑️ This will DELETE ALL related data:
-            </p>
-            <ul style="font-size:0.75rem;color:var(--warning);margin:0;padding-left:20px;line-height:1.8;">
-                <li>💰 Bills, Payments & Receipts</li>
-                <li>📋 Visits & Appointments</li>
-                <li>💊 Prescriptions & Medications</li>
-                <li>🔬 Lab Tests & Results</li>
-                <li>📊 Vital Signs</li>
-                <li>🔄 Referrals</li>
-                <li>💳 OTC Sales</li>
-                <li>📝 Patient Documents</li>
-                <li>📦 Stock Movements</li>
-                <li>📧 Notifications</li>
-            </ul>
-        </div>
-        
-        <div style="background:var(--primary-bg);border:2px solid var(--primary);border-radius:12px;padding:14px 18px;margin-bottom:20px;">
-            <p style="font-size:0.8rem;color:var(--primary);margin:0;font-weight:600;">
-                💡 <strong>Revenue Adjustment:</strong>
-            </p>
-            <p style="font-size:0.75rem;color:var(--primary);margin:4px 0 0 0;">
-                All payments made by this patient will be <strong>subtracted</strong> from Total Revenue automatically.
-            </p>
-        </div>
-        
-        <div style="display:flex;gap:10px;">
-            <button type="button" onclick="closeDeleteModal()" style="flex:1;padding:12px 20px;border-radius:10px;border:2px solid var(--border-color);background:transparent;color:var(--text-secondary);font-weight:600;font-size:0.85rem;cursor:pointer;">
+
+        <div class="delete-modal-footer">
+            <button type="button" onclick="closeDeleteModal()" class="delete-modal-btn cancel">
                 <i class="fas fa-times"></i> Cancel
             </button>
-            <a id="confirmDeleteBtn" href="#" style="flex:1;padding:12px 20px;border-radius:10px;border:none;background:var(--danger);color:white;font-weight:700;font-size:0.85rem;cursor:pointer;text-align:center;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;">
+            <a id="confirmDeleteBtn" href="#" class="delete-modal-btn danger">
                 <i class="fas fa-trash"></i> YES, DELETE
             </a>
         </div>
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- PAGE JAVASCRIPT - PEKEE -->
-<!-- ================================================================ -->
 <script>
 var filterTimeout = null;
 
 function autoFilter() {
     var searchValue = document.getElementById('searchFilter').value;
     var filterValue = document.getElementById('filterSelect').value;
-    
+
     var loading = document.getElementById('filterLoading');
     if (loading) loading.classList.add('show');
-    
+
     var clearBtn = document.getElementById('clearFilterBtn');
     if (clearBtn) {
         if (searchValue.trim() !== '' || filterValue !== 'all') {
@@ -1522,9 +1648,9 @@ function autoFilter() {
             clearBtn.classList.remove('show');
         }
     }
-    
+
     if (filterTimeout) clearTimeout(filterTimeout);
-    
+
     filterTimeout = setTimeout(function() {
         filterTableRows(searchValue, filterValue);
         setTimeout(function() {
@@ -1537,36 +1663,36 @@ function filterTableRows(searchValue, filterValue) {
     var rows = document.querySelectorAll('.patient-row');
     var visibleCount = 0;
     var searchLower = searchValue.toLowerCase().trim();
-    
+
     rows.forEach(function(row) {
-        var name = row.getAttribute('data-name') || '';
-        var id = row.getAttribute('data-id') || '';
-        var phone = row.getAttribute('data-phone') || '';
-        var days = parseInt(row.getAttribute('data-days')) || 0;
+        var name      = row.getAttribute('data-name') || '';
+        var id        = row.getAttribute('data-id') || '';
+        var phone     = row.getAttribute('data-phone') || '';
+        var days      = parseInt(row.getAttribute('data-days')) || 0;
         var hasDoctor = row.getAttribute('data-has-doctor') === '1';
-        var visits = parseInt(row.getAttribute('data-visits')) || 0;
-        
+        var visits    = parseInt(row.getAttribute('data-visits')) || 0;
+
         var show = true;
-        
+
         if (searchLower !== '') {
             var matchesSearch = name.includes(searchLower) || id.includes(searchLower) || phone.includes(searchLower);
             if (!matchesSearch) show = false;
         }
-        
-        if (filterValue === 'new' && days > 7) show = false;
-        if (filterValue === 'with_doctor' && !hasDoctor) show = false;
-        if (filterValue === 'without_doctor' && hasDoctor) show = false;
-        if (filterValue === 'no_visit' && visits > 0) show = false;
-        
+
+        if (filterValue === 'new'            && days > 7)    show = false;
+        if (filterValue === 'with_doctor'    && !hasDoctor)  show = false;
+        if (filterValue === 'without_doctor' && hasDoctor)   show = false;
+        if (filterValue === 'no_visit'       && visits > 0)  show = false;
+
         if (show) { row.style.display = ''; visibleCount++; }
         else { row.style.display = 'none'; }
     });
-    
+
     updateRowNumbers();
-    
+
     var countBadge = document.getElementById('patientCountBadge');
     if (countBadge) countBadge.textContent = visibleCount + ' patient' + (visibleCount !== 1 ? 's' : '');
-    
+
     var statusText = document.getElementById('filterStatusText');
     if (statusText) {
         if (searchLower !== '' || filterValue !== 'all') {
@@ -1575,10 +1701,10 @@ function filterTableRows(searchValue, filterValue) {
             statusText.textContent = 'Auto-filter';
         }
     }
-    
+
     var noResults = document.getElementById('noResultsMessage');
     var tableWrapper = document.getElementById('tableScrollWrapper');
-    
+
     if (visibleCount === 0 && rows.length > 0) {
         if (noResults) noResults.style.display = 'block';
         if (tableWrapper) tableWrapper.style.display = 'none';
@@ -1586,7 +1712,7 @@ function filterTableRows(searchValue, filterValue) {
         if (noResults) noResults.style.display = 'none';
         if (tableWrapper) tableWrapper.style.display = 'block';
     }
-    
+
     setTimeout(updateScrollButtons, 150);
 }
 
@@ -1606,12 +1732,12 @@ function clearFilter() {
     document.getElementById('searchFilter').value = '';
     document.getElementById('filterSelect').value = 'all';
     autoFilter();
-    
+
     var url = new URL(window.location.href);
     url.searchParams.delete('search');
     url.searchParams.delete('filter');
     window.history.replaceState({}, '', url.toString());
-    
+
     showToast('🔄 Cleared', 'Filters have been cleared', 'info');
 }
 
@@ -1619,13 +1745,13 @@ function scrollTable(direction) {
     var wrapper = document.getElementById('tableScrollWrapper');
     if (!wrapper) return;
     var scrollAmount = 400;
-    
+
     if (direction === 'left') {
         wrapper.scrollLeft -= scrollAmount;
     } else {
         wrapper.scrollLeft += scrollAmount;
     }
-    
+
     setTimeout(updateScrollButtons, 350);
 }
 
@@ -1633,11 +1759,11 @@ function updateScrollButtons() {
     var wrapper = document.getElementById('tableScrollWrapper');
     var leftBtn = document.getElementById('scrollLeftBtn');
     var rightBtn = document.getElementById('scrollRightBtn');
-    
+
     if (!wrapper || !leftBtn || !rightBtn) return;
-    
+
     var maxScroll = wrapper.scrollWidth - wrapper.clientWidth;
-    
+
     leftBtn.disabled = wrapper.scrollLeft <= 10;
     rightBtn.disabled = wrapper.scrollLeft >= maxScroll - 10 || maxScroll <= 0;
 }
@@ -1648,7 +1774,7 @@ document.addEventListener('DOMContentLoaded', function() {
         wrapper.addEventListener('scroll', updateScrollButtons);
         setTimeout(updateScrollButtons, 300);
     }
-    
+
     window.addEventListener('resize', function() {
         setTimeout(updateScrollButtons, 200);
     });
@@ -1657,12 +1783,15 @@ document.addEventListener('DOMContentLoaded', function() {
 function confirmDelete(patientId, patientName, patientNumber) {
     document.getElementById('deletePatientName').textContent = patientName;
     document.getElementById('deletePatientId').textContent = 'ID: ' + patientNumber;
-    
+
     var branchParam = '<?= urlencode($selected_branch_id) ?>';
     document.getElementById('confirmDeleteBtn').href = 'patients.php?branch=' + branchParam + '&delete=' + patientId;
-    
+
     document.getElementById('deleteModal').classList.add('show');
     document.body.style.overflow = 'hidden';
+
+    var modalBody = document.querySelector('.delete-modal-body');
+    if (modalBody) modalBody.scrollTop = 0;
 }
 
 function closeDeleteModal() {
@@ -1676,7 +1805,7 @@ document.getElementById('deleteModal')?.addEventListener('click', function(e) {
 
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') closeDeleteModal();
-    
+
     if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault();
         document.getElementById('searchFilter').focus();
@@ -1686,17 +1815,17 @@ document.addEventListener('keydown', function(e) {
 document.addEventListener('DOMContentLoaded', function() {
     var searchValue = document.getElementById('searchFilter').value;
     var filterValue = document.getElementById('filterSelect').value;
-    
+
     if (searchValue !== '' || filterValue !== 'all') {
         filterTableRows(searchValue, filterValue);
     }
-    
+
     if (searchValue !== '') {
         document.getElementById('searchFilter').focus();
     }
 });
 
-// Footer time update only
+// Footer time update
 setInterval(function() {
     var now = new Date();
     var timeStr = now.toLocaleTimeString('en-US', {
@@ -1710,13 +1839,13 @@ function showToast(title, message, type) {
     var toast = document.getElementById('toast');
     var toastTitle = document.getElementById('toastTitle');
     var toastMessage = document.getElementById('toastMessage');
-    
+
     toast.className = 'toast-custom ' + type;
     toastTitle.textContent = title;
     toastMessage.textContent = message;
     toast.style.display = 'flex';
     toast.classList.add('show');
-    
+
     clearTimeout(toast.timeout);
     toast.timeout = setTimeout(function() {
         toast.classList.remove('show');
@@ -1728,11 +1857,10 @@ function showToast(title, message, type) {
     showToast('🗑️ Deleted', 'Patient and all related data have been deleted', 'success');
 <?php endif; ?>
 
-console.log('%c👑 Braick - Admin Patients V2', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+console.log('%c👑 Braick - Admin Patients V6 (DATE/TIME OWN COLUMN)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
 console.log('%c✅ SHARED HEADER & SIDEBAR', 'font-size:12px;color:#34D399;');
-console.log('%c✅ ASSIGN DOCTOR button → /admin/assign_doctor.php', 'font-size:12px;color:#7C3AED;font-weight:bold;');
-console.log('%c✅ VISITS button → /admin/visits.php', 'font-size:12px;color:#059669;font-weight:bold;');
-console.log('%c✅ REGISTERED BY column', 'font-size:12px;color:#D97706;');
+console.log('%c✅ Delete modal - scrollable + smaller + button visible', 'font-size:12px;color:#7C3AED;font-weight:bold;');
+console.log('%c✅ V6: Date/Time column YAKE PEKE YAKE', 'font-size:12px;color:#059669;font-weight:bold;');
 console.log('%c📊 Total Patients: <?= $stats['total'] ?? 0 ?>', 'font-size:12px;color:#059669;');
 </script>
 

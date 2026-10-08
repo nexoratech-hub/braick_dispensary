@@ -2,19 +2,16 @@
 // ================================================================
 // FILE: frontend/pages/reception/new_appointment.php
 // RECEPTION - NEW APPOINTMENT WITH 7 VITAL SIGNS
-// WITH AJAX AUTO-UPDATE FOR DOCTOR STATUS (EVERY 3 SECONDS)
-// BRAICK DISPENSARY - USING NEW DATABASE: dispensary_db
+// ✅ Inatumia shared header + sidebar
+// AJAX auto-update: Doctor status kila sekunde 3
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -22,195 +19,164 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 }
 
 // ================================================================
-// CHECK IF USER HAS ACCESS (Reception or Admin)
+// ACCESS CONTROL
 // ================================================================
 $allowed_roles = ['reception', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
-    $role = $_SESSION['role'];
-    switch ($role) {
-        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
-        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+    switch ($_SESSION['role']) {
+        case 'doctor':     header('Location: ../doctor/dashboard.php');     break;
+        case 'pharmacy':   header('Location: ../pharmacy/dashboard.php');   break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
-        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
-        default: header('Location: ../login.php'); break;
+        case 'cashier':    header('Location: ../cashier/dashboard.php');    break;
+        default:           header('Location: ../login.php');                break;
     }
     exit;
 }
 
 // ================================================================
-// GET USER DATA FROM SESSION
+// SESSION DATA
 // ================================================================
-$user_id = $_SESSION['user_id'] ?? 0;
-$full_name = $_SESSION['full_name'] ?? 'User';
-$role = $_SESSION['role'] ?? 'reception';
-$branch_id = $_SESSION['branch_id'] ?? 1;
+$user_id     = $_SESSION['user_id']     ?? 0;
+$full_name   = $_SESSION['full_name']   ?? 'User';
+$role        = $_SESSION['role']        ?? 'reception';
+$branch_id   = $_SESSION['branch_id']   ?? 1;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$username = $_SESSION['username'] ?? '';
+$username    = $_SESSION['username']    ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// PATH SAHIHI - USING NEW DATABASE
+// DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
-$message = '';
-$message_type = '';
-$patients = [];
-$doctors = [];
-$online_doctors = 0;
-$total_doctors = 0;
-$latest_vital_signs = null;
+$patient_id           = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
+$message              = '';
+$message_type         = '';
+$patients             = [];
+$doctors              = [];
+$online_doctors       = 0;
+$total_doctors        = 0;
+$latest_vital_signs   = null;
 $unread_notifications = 0;
 
 try {
     $db = Database::getInstance()->getConnection();
-    
-    // ================================================================
-    // GET PATIENTS IN THIS BRANCH - USING NEW DATABASE
-    // ================================================================
+
+    // Patients
     $stmt = $db->prepare("SELECT id, full_name, patient_id FROM patients WHERE branch_id = ? ORDER BY full_name");
     $stmt->execute([$branch_id]);
     $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // ================================================================
-    // GET DOCTORS IN THIS BRANCH WITH STATUS - USING NEW DATABASE
-    // ================================================================
+
+    // Doctors
     $stmt = $db->prepare("
-        SELECT id, full_name, specialty, is_online, profile_pic 
-        FROM users 
-        WHERE role = 'doctor' AND status = 'active' AND branch_id = ? 
+        SELECT id, full_name, specialty, is_online, profile_pic
+        FROM users
+        WHERE role = 'doctor' AND status = 'active' AND branch_id = ?
         ORDER BY is_online DESC, full_name
     ");
     $stmt->execute([$branch_id]);
     $doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // ================================================================
-    // CALCULATE ONLINE DOCTORS
-    // ================================================================
+
     $total_doctors = count($doctors);
     $online_doctors = 0;
     foreach ($doctors as $doc) {
-        if ((int)$doc['is_online'] === 1) {
-            $online_doctors++;
-        }
+        if ((int)$doc['is_online'] === 1) $online_doctors++;
     }
-    
-    // ================================================================
-    // GET LATEST VITAL SIGNS FOR SELECTED PATIENT (7 signs only)
-    // ================================================================
+
+    // Latest vitals
     if ($patient_id > 0) {
         $stmt = $db->prepare("
             SELECT temperature, blood_pressure_systolic, blood_pressure_diastolic,
                    pulse_rate, oxygen_saturation, weight, height, bmi, notes, recorded_at
-            FROM vital_signs 
-            WHERE patient_id = ? 
-            ORDER BY recorded_at DESC 
+            FROM vital_signs
+            WHERE patient_id = ?
+            ORDER BY recorded_at DESC
             LIMIT 1
         ");
         $stmt->execute([$patient_id]);
         $latest_vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
     }
-    
-    // ================================================================
-    // GET UNREAD NOTIFICATIONS
-    // ================================================================
+
+    // Unread notifications
     if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
         $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
         $stmt->execute([$_SESSION['user_id']]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        $unread_notifications = $result['total'] ?? 0;
+        $unread_notifications = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
     }
-    
+
     // ================================================================
-    // HANDLE FORM SUBMISSION
+    // HANDLE POST
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        $patient_id = (int)($_POST['patient_id'] ?? 0);
-        $doctor_id = (int)($_POST['doctor_id'] ?? 0);
-        $appointment_date = trim($_POST['appointment_date'] ?? '');
-        $appointment_hour = trim($_POST['appointment_hour'] ?? '09');
+        $patient_id         = (int)($_POST['patient_id'] ?? 0);
+        $doctor_id          = (int)($_POST['doctor_id'] ?? 0);
+        $appointment_date   = trim($_POST['appointment_date'] ?? '');
+        $appointment_hour   = trim($_POST['appointment_hour'] ?? '09');
         $appointment_minute = trim($_POST['appointment_minute'] ?? '00');
-        $appointment_ampm = trim($_POST['appointment_ampm'] ?? 'AM');
-        $purpose = trim($_POST['purpose'] ?? '');
-        $status = trim($_POST['status'] ?? 'scheduled');
-        $visit_type = trim($_POST['visit_type'] ?? 'new');
-        
+        $appointment_ampm   = trim($_POST['appointment_ampm'] ?? 'AM');
+        $purpose            = trim($_POST['purpose'] ?? '');
+        $status             = trim($_POST['status'] ?? 'scheduled');
+        $visit_type         = trim($_POST['visit_type'] ?? 'new');
+
         // 7 Vital Signs
-        $temperature = $_POST['temperature'] ?? null;
-        $bp_systolic = $_POST['bp_systolic'] ?? null;
-        $bp_diastolic = $_POST['bp_diastolic'] ?? null;
-        $pulse_rate = $_POST['pulse_rate'] ?? null;
-        $oxygen_saturation = $_POST['oxygen_saturation'] ?? null;  // MPYA - SpO2
-        $weight = $_POST['weight'] ?? null;
-        $height = $_POST['height'] ?? null;
-        $vital_notes = trim($_POST['vital_notes'] ?? '');
-        
-        // Calculate BMI
+        $temperature       = $_POST['temperature']       ?? null;
+        $bp_systolic       = $_POST['bp_systolic']       ?? null;
+        $bp_diastolic      = $_POST['bp_diastolic']      ?? null;
+        $pulse_rate        = $_POST['pulse_rate']        ?? null;
+        $oxygen_saturation = $_POST['oxygen_saturation'] ?? null;
+        $weight            = $_POST['weight']            ?? null;
+        $height            = $_POST['height']            ?? null;
+        $vital_notes       = trim($_POST['vital_notes']  ?? '');
+
         $bmi = null;
         if (!empty($weight) && !empty($height) && $height > 0) {
             $height_m = $height / 100;
             $bmi = round($weight / ($height_m * $height_m), 1);
         }
-        
+
         $errors = [];
-        if ($patient_id <= 0) $errors[] = 'Please select a patient';
-        if ($doctor_id <= 0) $errors[] = 'Please select a doctor';
-        if (empty($appointment_date)) $errors[] = 'Please select a date';
-        if (empty($appointment_hour)) $errors[] = 'Please select an hour';
-        if (empty($appointment_ampm)) $errors[] = 'Please select AM/PM';
-        
+        if ($patient_id <= 0) throw new Exception('Please select a patient');
+        if ($doctor_id <= 0)  throw new Exception('Please select a doctor');
+        if (empty($appointment_date)) throw new Exception('Please select a date');
+        if (empty($appointment_hour)) throw new Exception('Please select an hour');
+        if (empty($appointment_ampm)) throw new Exception('Please select AM/PM');
+
         if (empty($errors)) {
             try {
                 $db->beginTransaction();
-                
-                // Build time string
+
                 $hour_12 = (int)$appointment_hour;
-                if ($appointment_ampm === 'PM' && $hour_12 != 12) {
-                    $hour_24 = $hour_12 + 12;
-                } elseif ($appointment_ampm === 'AM' && $hour_12 == 12) {
-                    $hour_24 = 0;
-                } else {
-                    $hour_24 = $hour_12;
-                }
-                
+                if ($appointment_ampm === 'PM' && $hour_12 != 12) $hour_24 = $hour_12 + 12;
+                elseif ($appointment_ampm === 'AM' && $hour_12 == 12) $hour_24 = 0;
+                else $hour_24 = $hour_12;
+
                 $time_str = str_pad($hour_24, 2, '0', STR_PAD_LEFT) . ':' . str_pad($appointment_minute, 2, '0', STR_PAD_LEFT) . ':00';
                 $datetime = $appointment_date . ' ' . $time_str;
-                
-                // ================================================================
-                // INSERT APPOINTMENT
-                // ================================================================
+
+                // Insert appointment
                 $stmt = $db->prepare("
                     INSERT INTO appointments (
-                        patient_id, doctor_id, appointment_date, purpose, status, 
+                        patient_id, doctor_id, appointment_date, purpose, status,
                         visit_type, branch_id, created_by, created_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
                 ");
                 $stmt->execute([
-                    $patient_id, 
-                    $doctor_id, 
-                    $datetime, 
-                    $purpose, 
-                    $status,
-                    $visit_type,
-                    $branch_id, 
-                    $_SESSION['user_id']
+                    $patient_id, $doctor_id, $datetime, $purpose, $status,
+                    $visit_type, $branch_id, $_SESSION['user_id']
                 ]);
                 $appointment_id = $db->lastInsertId();
-                
-                // ================================================================
-                // INSERT VITAL SIGNS (7 signs only)
-                // ================================================================
+
+                // Insert vitals
                 $has_vital = (
-                    (!empty($temperature) || $temperature === '0') || 
-                    (!empty($bp_systolic) || $bp_systolic === '0') || 
-                    (!empty($bp_diastolic) || $bp_diastolic === '0') || 
-                    (!empty($pulse_rate) || $pulse_rate === '0') || 
-                    (!empty($oxygen_saturation) || $oxygen_saturation === '0') || 
-                    (!empty($weight) || $weight === '0') || 
+                    (!empty($temperature) || $temperature === '0') ||
+                    (!empty($bp_systolic) || $bp_systolic === '0') ||
+                    (!empty($bp_diastolic) || $bp_diastolic === '0') ||
+                    (!empty($pulse_rate) || $pulse_rate === '0') ||
+                    (!empty($oxygen_saturation) || $oxygen_saturation === '0') ||
+                    (!empty($weight) || $weight === '0') ||
                     (!empty($height) || $height === '0')
                 );
-                
+
                 if ($has_vital) {
                     $stmt = $db->prepare("
                         INSERT INTO vital_signs (
@@ -220,325 +186,97 @@ try {
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                     ");
                     $stmt->execute([
-                        $patient_id,
-                        $appointment_id,
-                        $_SESSION['user_id'],
-                        $branch_id,
-                        !empty($temperature) || $temperature === '0' ? (float)$temperature : null,
-                        !empty($bp_systolic) || $bp_systolic === '0' ? (int)$bp_systolic : null,
-                        !empty($bp_diastolic) || $bp_diastolic === '0' ? (int)$bp_diastolic : null,
-                        !empty($pulse_rate) || $pulse_rate === '0' ? (int)$pulse_rate : null,
-                        !empty($oxygen_saturation) || $oxygen_saturation === '0' ? (int)$oxygen_saturation : null,
-                        !empty($weight) || $weight === '0' ? (float)$weight : null,
-                        !empty($height) || $height === '0' ? (float)$height : null,
+                        $patient_id, $appointment_id, $_SESSION['user_id'], $branch_id,
+                        (!empty($temperature) || $temperature === '0') ? (float)$temperature : null,
+                        (!empty($bp_systolic) || $bp_systolic === '0') ? (int)$bp_systolic : null,
+                        (!empty($bp_diastolic) || $bp_diastolic === '0') ? (int)$bp_diastolic : null,
+                        (!empty($pulse_rate) || $pulse_rate === '0') ? (int)$pulse_rate : null,
+                        (!empty($oxygen_saturation) || $oxygen_saturation === '0') ? (int)$oxygen_saturation : null,
+                        (!empty($weight) || $weight === '0') ? (float)$weight : null,
+                        (!empty($height) || $height === '0') ? (float)$height : null,
                         $bmi,
                         !empty($vital_notes) ? $vital_notes : null
                     ]);
                 }
-                
-                // ================================================================
-                // LOG ACTIVITY
-                // ================================================================
+
+                // Log activity
                 try {
                     $stmt = $db->prepare("
-                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
                         VALUES (?, ?, 'appointment_created', ?, NOW())
                     ");
                     $stmt->execute([
-                        $_SESSION['user_id'], 
-                        $branch_id, 
+                        $_SESSION['user_id'], $branch_id,
                         "New appointment created for patient ID: $patient_id with doctor ID: $doctor_id"
                     ]);
-                } catch (Exception $e) {
-                    // Silent fail for activity log
-                }
-                
+                } catch (Exception $e) {}
+
                 $db->commit();
-                
-                $message = "✅ Appointment scheduled successfully!";
+
+                $message = "Appointment scheduled successfully!";
                 $message_type = 'success';
-                
-                // Redirect after 2 seconds
+
                 echo '<script>
-                    showToast("✅ Success", "Appointment scheduled successfully!", "success");
-                    setTimeout(function(){ 
-                        window.location.href = "appointments.php?date=' . $appointment_date . '"; 
+                    setTimeout(function(){
+                        if (typeof showToast === "function") {
+                            showToast("✅ Success", "Appointment scheduled successfully!", "success");
+                        }
+                    }, 100);
+                    setTimeout(function(){
+                        window.location.href = "appointments.php?date=' . $appointment_date . '";
                     }, 2000);
                 </script>';
-                
             } catch (Exception $e) {
                 $db->rollBack();
-                $message = "❌ Error: " . $e->getMessage();
+                $message = "Error: " . $e->getMessage();
                 $message_type = 'error';
             }
-            
-        } else {
-            $message = implode('<br>', $errors);
-            $message_type = 'error';
         }
     }
-    
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
     $patients = [];
     $doctors = [];
-    $online_doctors = 0;
-    $total_doctors = 0;
-    $latest_vital_signs = null;
-    $unread_notifications = 0;
 }
 
 // ================================================================
-// PROFILE PICTURE URL
+// PROFILE URLS
 // ================================================================
-$profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+$profile_pic_url = !empty($profile_pic)
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// ✅ INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once '../../components/reception_header.php';
-include_once '../../components/reception_sidebar.php';
+include_once __DIR__ . '/../../components/reception_header.php';
+include_once __DIR__ . '/../../components/reception_sidebar.php';
 ?>
-
 <!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<html lang="en" data-theme="<?= (isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true') ? 'dark' : 'light' ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>New Appointment - Braick Dispensary</title>
-    
-    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
-    
+
+    <link rel="icon" href="<?= htmlspecialchars($logo_path) ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= htmlspecialchars($logo_path) ?>" type="image/png">
+
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
+
     <style>
-        :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #E8F0FE;
-            --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
-            --success-bg: #D1FAE5;
-            --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
-            --danger-bg: #FEE2E2;
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
-            --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
-            --bg-body: #F1F5F9;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
-            --table-stripe: #E8F0FE;
-            --table-hover: #D1FAE5;
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-stripe: #1E293B;
-            --table-hover: #1A3A2A;
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-        }
-        
+        /* ================================================================
+           PAGE-SPECIFIC STYLES
+           (Header/Sidebar handled by shared components)
+           ================================================================ */
+
+        /* PAGE HEADER */
         .page-header {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             border-radius: 16px;
             padding: 24px 32px;
             margin-bottom: 28px;
@@ -551,22 +289,18 @@ include_once '../../components/reception_sidebar.php';
             position: relative;
             overflow: hidden;
         }
-        
         .page-header::before {
             content: '';
             position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 300px;
-            height: 300px;
+            top: -50%; right: -20%;
+            width: 300px; height: 300px;
             background: rgba(255,255,255,0.05);
             border-radius: 50%;
             pointer-events: none;
         }
-        
         .page-header .page-title {
-            color: white;
-            font-size: 1.8rem;
+            color: #fff;
+            font-size: 1.7rem;
             font-weight: 700;
             display: flex;
             align-items: center;
@@ -575,111 +309,97 @@ include_once '../../components/reception_sidebar.php';
             position: relative;
             z-index: 1;
         }
-        
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
-        
+        .page-header .page-title i { font-size: 1.9rem; opacity: .9; }
         .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.95rem;
+            color: rgba(255,255,255,0.9);
+            font-size: 0.9rem;
             display: flex;
             align-items: center;
             gap: 10px;
             flex-wrap: wrap;
             position: relative;
             z-index: 1;
+            margin-top: 6px;
         }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
-        .page-header .role-badge-display {
+        .page-header .page-subtitle strong { color: #fff; font-weight: 600; }
+
+        .role-badge-display {
             background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
+            color: #fff;
+            padding: 3px 12px;
+            border-radius: 999px;
+            font-size: 0.6rem;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
+            letter-spacing: .5px;
         }
-        
-        .page-header .header-badge {
+        .header-badge {
             background: rgba(255,255,255,0.15);
-            color: white;
+            color: #fff;
             padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
+            border-radius: 999px;
+            font-size: 0.68rem;
             font-weight: 500;
-            backdrop-filter: blur(4px);
+            backdrop-filter: blur(6px);
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.15);
         }
-        
-        .page-header .header-badge .online-count {
-            color: #34D399;
-            font-weight: 700;
+        .header-badge .online-count { color: #34D399; font-weight: 700; }
+
+        .update-badge-light {
+            background: rgba(255,255,255,0.14);
+            color: rgba(255,255,255,0.92);
+            padding: 4px 12px;
+            border-radius: 999px;
+            font-size: 0.62rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            backdrop-filter: blur(6px);
+            border: 1px solid rgba(255,255,255,0.12);
         }
-        
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.15);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
+
+        .btn-outline-light {
+            background: rgba(255,255,255,0.14);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.22);
+            padding: 9px 18px;
             border-radius: 10px;
             font-weight: 500;
             font-size: 0.82rem;
-            transition: all 0.3s;
+            transition: all .25s ease;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            backdrop-filter: blur(4px);
+            backdrop-filter: blur(6px);
             position: relative;
             z-index: 1;
+            cursor: pointer;
         }
-        
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
+        .btn-outline-light:hover {
+            background: rgba(255,255,255,0.26);
             transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+            box-shadow: 0 6px 18px rgba(0,0,0,0.15);
         }
-        
-        .update-badge-light {
-            background: rgba(255,255,255,0.12);
-            color: rgba(255,255,255,0.8);
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            backdrop-filter: blur(4px);
-        }
-        
+
+        /* FORM CARD */
         .form-card {
             background: var(--bg-card);
             border-radius: 18px;
             padding: 32px 36px;
             border: 1px solid var(--border-color);
-            transition: all 0.3s ease;
+            transition: all .3s ease;
             max-width: 950px;
             margin: 0 auto;
             box-shadow: var(--shadow-md);
         }
-        
         .form-card:hover {
             border-color: var(--primary);
             box-shadow: 0 8px 30px rgba(11, 94, 215, 0.08);
         }
-        
         .form-card .form-header {
             display: flex;
             align-items: center;
@@ -688,33 +408,27 @@ include_once '../../components/reception_sidebar.php';
             padding-bottom: 20px;
             border-bottom: 2px solid var(--border-color);
         }
-        
         .form-card .form-header .form-icon {
-            width: 50px;
-            height: 50px;
+            width: 50px; height: 50px;
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 14px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
+            display: flex; align-items: center; justify-content: center;
+            color: #fff;
             font-size: 1.4rem;
             flex-shrink: 0;
             box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
         }
-        
         .form-card .form-header .form-title {
             font-size: 1.2rem;
             font-weight: 700;
             color: var(--text-primary);
         }
-        
         .form-card .form-header .form-subtitle {
             font-size: 0.8rem;
             color: var(--text-secondary);
             margin-top: 2px;
         }
-        
+
         .form-label {
             font-size: 0.78rem;
             font-weight: 600;
@@ -722,52 +436,34 @@ include_once '../../components/reception_sidebar.php';
             margin-bottom: 4px;
             display: block;
         }
-        
-        .form-label .required {
-            color: var(--danger);
-            margin-left: 2px;
-        }
-        
-        .form-label .label-icon {
-            margin-right: 4px;
-            color: var(--primary);
-        }
-        
+        .form-label .required { color: var(--danger); margin-left: 2px; }
+        .form-label .label-icon { margin-right: 4px; color: var(--primary); }
+
         .form-control {
             width: 100%;
             padding: 10px 14px;
             border: 2px solid var(--border-color);
             border-radius: 10px;
             font-size: 0.85rem;
-            transition: all 0.3s ease;
+            transition: all .25s ease;
             outline: none;
             background: var(--bg-card);
             color: var(--text-primary);
         }
-        
+        .form-control:hover { border-color: #94A3B8; }
         .form-control:focus {
             border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.08);
+            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.10);
         }
-        
-        .form-control::placeholder {
-            color: var(--text-secondary);
-            opacity: 0.5;
-        }
-        
-        .form-control:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-        
-        .form-row {
-            margin-bottom: 18px;
-        }
-        
-        .form-row:last-child {
-            margin-bottom: 0;
-        }
-        
+        .form-control::placeholder { color: var(--text-secondary); opacity: .55; }
+        .form-control:disabled { opacity: .6; cursor: not-allowed; }
+
+        select.form-control { cursor: pointer; }
+        textarea.form-control { resize: vertical; min-height: 60px; }
+
+        .form-row { margin-bottom: 18px; }
+        .form-row:last-child { margin-bottom: 0; }
+
         .form-actions {
             display: flex;
             gap: 12px;
@@ -776,30 +472,17 @@ include_once '../../components/reception_sidebar.php';
             border-top: 2px solid var(--border-color);
             flex-wrap: wrap;
         }
-        
-        select.form-control {
-            appearance: auto;
-            cursor: pointer;
-        }
-        
-        textarea.form-control {
-            resize: vertical;
-            min-height: 60px;
-        }
-        
+
+        /* VITAL SIGNS */
         .vital-signs-section {
             background: var(--bg-body);
             border-radius: 14px;
             padding: 20px 24px;
             margin: 20px 0;
             border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
+            transition: all .3s ease;
         }
-        
-        .vital-signs-section:hover {
-            border-color: var(--primary);
-        }
-        
+        .vital-signs-section:hover { border-color: var(--primary); }
         .vital-signs-section .vital-title {
             font-size: 0.95rem;
             font-weight: 700;
@@ -809,40 +492,32 @@ include_once '../../components/reception_sidebar.php';
             gap: 10px;
             margin-bottom: 16px;
         }
-        
-        .vital-signs-section .vital-title i {
-            color: #DC2626;
-            font-size: 1.2rem;
-        }
-        
+        .vital-signs-section .vital-title i { color: #DC2626; font-size: 1.2rem; }
+
         .vital-signs-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 12px;
         }
-        
         .vital-sign-item {
             background: var(--bg-card);
             border-radius: 10px;
             padding: 10px 14px;
             border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
+            transition: all .3s ease;
         }
-        
         .vital-sign-item:hover {
             border-color: var(--primary);
             box-shadow: 0 2px 8px rgba(11, 94, 215, 0.06);
         }
-        
         .vital-sign-item .vital-label {
             font-size: 0.6rem;
             font-weight: 600;
             color: var(--text-secondary);
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            letter-spacing: .05em;
             display: block;
         }
-        
         .vital-sign-item .vital-input {
             border: none;
             background: transparent;
@@ -853,271 +528,34 @@ include_once '../../components/reception_sidebar.php';
             outline: none;
             width: 100%;
         }
-        
-        .vital-sign-item .vital-input:focus {
-            color: var(--primary);
-        }
-        
+        .vital-sign-item .vital-input:focus { color: var(--primary); }
         .vital-sign-item .vital-input::placeholder {
             color: var(--text-secondary);
-            opacity: 0.4;
+            opacity: .4;
             font-weight: 400;
         }
-        
         .vital-sign-item .vital-unit {
             font-size: 0.55rem;
             color: var(--text-secondary);
             display: block;
         }
-        
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 24px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
+        .vital-sign-item.spo2-item {
+            border-color: #0EA5E9;
+            background: linear-gradient(135deg, rgba(14,165,233,0.05), rgba(14,165,233,0.10));
         }
-        
-        .btn-primary {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            color: white;
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
+        .vital-sign-item.spo2-item:hover {
+            border-color: #0284C7;
+            box-shadow: 0 2px 12px rgba(14,165,233,0.15);
         }
-        
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 24px rgba(11, 94, 215, 0.35);
-        }
-        
-        .btn-success {
-            background: var(--success);
-            color: white;
-        }
-        .btn-success:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .role-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--primary-bg);
-            color: var(--primary);
-            text-transform: uppercase;
-        }
-        
-        [data-theme="dark"] .role-badge-display {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        .branch-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge-display {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
-        .stat-card {
-            background: var(--bg-card);
-            border-radius: 14px;
-            padding: 16px 20px;
-            border: 1px solid var(--border-color);
-            text-align: center;
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .stat-card:hover {
-            border-color: var(--primary);
-            transform: translateY(-3px);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .stat-card .stat-number {
-            font-size: 1.8rem;
-            font-weight: 700;
-        }
-        
-        .stat-card .stat-number.primary { color: var(--primary); }
-        .stat-card .stat-number.green { color: var(--success); }
-        .stat-card .stat-number.purple { color: #7C3AED; }
-        .stat-card .stat-number.red { color: var(--danger); }
-        
-        .stat-card .stat-label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .stat-card .stat-icon {
-            font-size: 1.4rem;
-            margin-bottom: 4px;
-        }
-        
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 14px 20px;
-            border-radius: 12px;
-            z-index: 999;
-            max-width: 400px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: white;
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .toast-custom.show { transform: translateY(0); opacity: 1; }
-        .toast-custom.success { background: var(--success); }
-        .toast-custom.error { background: var(--danger); }
-        .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
-        
-        .footer {
-            padding: 14px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        .grid-2 {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 18px;
-        }
-        
-        .grid-full {
-            grid-column: 1 / -1;
-        }
-        
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-            .form-card { padding: 20px; }
-            .vital-signs-grid {
-                grid-template-columns: repeat(3, 1fr);
-            }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .form-card { padding: 14px; }
-            .form-card .form-header .form-title { font-size: 1rem; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .vital-signs-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-        }
-        
-        @media (max-width: 640px) {
-            .main-content { padding: 10px; }
-            .top-nav .search-wrapper { max-width: 120px; }
-            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
-            .form-card { padding: 12px; }
-            .form-actions { flex-direction: column; }
-            .form-actions .btn { width: 100%; justify-content: center; }
-            .stat-card .stat-number { font-size: 1.4rem; }
-            .vital-signs-grid {
-                grid-template-columns: 1fr 1fr;
-            }
-            .vital-signs-section {
-                padding: 12px 14px;
-            }
-            .grid-2 {
-                grid-template-columns: 1fr;
-                gap: 12px;
-            }
-        }
-        
-        .alert {
-            padding: 14px 18px;
-            border-radius: 12px;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-        }
-        
-        .alert-success {
-            background: var(--success-bg);
-            color: var(--success-dark);
-            border: 1px solid var(--success);
-        }
-        
-        .alert-error {
-            background: var(--danger-bg);
-            color: var(--danger-dark);
-            border: 1px solid var(--danger);
-        }
-        
-        .alert i {
-            font-size: 1.1rem;
-            margin-top: 2px;
-        }
-        
-        .alert .alert-content {
-            flex: 1;
-        }
+        .vital-sign-item.spo2-item .vital-label { color: #0284C7; }
 
+        /* TIME INPUT */
         .time-select-group {
             display: flex;
             gap: 8px;
             align-items: center;
             flex-wrap: wrap;
         }
-        
         .time-select-group .time-input {
             flex: 1;
             min-width: 60px;
@@ -1130,52 +568,30 @@ include_once '../../components/reception_sidebar.php';
             background: var(--bg-card);
             color: var(--text-primary);
             outline: none;
-            transition: all 0.3s ease;
+            transition: all .25s ease;
         }
-        
         .time-select-group .time-input:focus {
             border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.08);
+            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.10);
         }
-        
-        .time-select-group .time-input::placeholder {
-            color: var(--text-secondary);
-            opacity: 0.5;
-        }
-        
         .time-select-group .time-separator {
             font-size: 1.2rem;
             font-weight: 700;
             color: var(--text-secondary);
             padding: 0 2px;
         }
-        
         .time-select-group .ampm-select {
             flex: 0.6;
             min-width: 80px;
             max-width: 100px;
         }
-        
         .time-select-group .time-label {
             font-size: 0.65rem;
             color: var(--text-secondary);
             font-weight: 500;
         }
-        
-        @media (max-width: 640px) {
-            .time-select-group {
-                flex-wrap: wrap;
-            }
-            .time-select-group .time-input {
-                flex: 1 1 30%;
-                min-width: 50px;
-            }
-            .time-select-group .ampm-select {
-                flex: 1 1 100%;
-                max-width: 100%;
-            }
-        }
 
+        /* DOCTOR STATUS INFO */
         .doctor-status-info {
             background: var(--bg-body);
             border-radius: 10px;
@@ -1187,84 +603,146 @@ include_once '../../components/reception_sidebar.php';
             gap: 20px;
             flex-wrap: wrap;
         }
-        
-        .doctor-status-info .online-doctors {
-            color: var(--success);
-            font-weight: 600;
+        .doctor-status-info .online-doctors { color: var(--success); font-weight: 600; }
+        .doctor-status-info .offline-doctors { color: var(--text-secondary); font-weight: 600; }
+        .doctor-status-info .status-icon { margin-right: 4px; }
+        .doctor-status-info .status-count { font-weight: 700; }
+
+        /* STAT CARD */
+        .stat-card {
+            background: var(--bg-card);
+            border-radius: 14px;
+            padding: 16px 20px;
+            border: 1px solid var(--border-color);
+            text-align: center;
+            transition: all .3s ease;
+            box-shadow: var(--shadow-sm);
         }
-        
-        .doctor-status-info .offline-doctors {
+        .stat-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-md);
+        }
+        .stat-card .stat-number { font-size: 1.6rem; font-weight: 700; }
+        .stat-card .stat-number.primary { color: var(--primary); }
+        .stat-card .stat-number.green   { color: var(--success); }
+        .stat-card .stat-number.purple  { color: #7C3AED; }
+        .stat-card .stat-number.red     { color: var(--danger); }
+        .stat-card .stat-label {
+            font-size: 0.7rem;
             color: var(--text-secondary);
+            font-weight: 500;
+        }
+        .stat-card .stat-icon { font-size: 1.4rem; margin-bottom: 4px; }
+
+        /* BUTTONS */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 24px;
+            border-radius: 10px;
             font-weight: 600;
+            font-size: 0.85rem;
+            transition: all .3s;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
         }
-        
-        .doctor-status-info .status-icon {
-            margin-right: 4px;
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
         }
-        
-        .doctor-status-info .status-count {
-            font-weight: 700;
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 24px rgba(11, 94, 215, 0.35);
+        }
+        .btn-success {
+            background: var(--success);
+            color: #fff;
+        }
+        .btn-success:hover {
+            background: var(--success-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+        }
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
         }
 
-        /* SpO2 special styling */
-        .vital-sign-item.spo2-item {
-            border-color: #0EA5E9;
-            background: linear-gradient(135deg, rgba(14, 165, 233, 0.05), rgba(14, 165, 233, 0.1));
+        /* ALERTS */
+        .alert {
+            padding: 14px 18px;
+            border-radius: 12px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
         }
-        
-        .vital-sign-item.spo2-item:hover {
-            border-color: #0284C7;
-            box-shadow: 0 2px 12px rgba(14, 165, 233, 0.15);
+        .alert-success { background: var(--success-bg); color: var(--success-dark); border: 1px solid var(--success); }
+        .alert-error   { background: var(--danger-bg);  color: var(--danger-dark);  border: 1px solid var(--danger); }
+        .alert i { font-size: 1.1rem; margin-top: 2px; }
+        .alert .alert-content { flex: 1; }
+
+        /* GRID */
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+        .grid-full { grid-column: 1 / -1; }
+
+        /* FOOTER */
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
         }
-        
-        .vital-sign-item.spo2-item .vital-label {
-            color: #0284C7;
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
+
+        /* ANIMATIONS */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in-up {
+            animation: fadeInUp .5s ease forwards;
+            opacity: 0;
+        }
+
+        /* RESPONSIVE */
+        @media (max-width: 1024px) {
+            .form-card { padding: 20px; }
+            .vital-signs-grid { grid-template-columns: repeat(3, 1fr); }
+        }
+        @media (max-width: 768px) {
+            .form-card { padding: 14px; }
+            .form-card .form-header .form-title { font-size: 1rem; }
+            .page-header { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
+            .vital-signs-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 640px) {
+            .form-card { padding: 12px; }
+            .form-actions { flex-direction: column; }
+            .form-actions .btn { width: 100%; justify-content: center; }
+            .stat-card .stat-number { font-size: 1.4rem; }
+            .vital-signs-grid { grid-template-columns: 1fr 1fr; }
+            .vital-signs-section { padding: 12px 14px; }
+            .grid-2 { grid-template-columns: 1fr; gap: 12px; }
+            .time-select-group .ampm-select { flex: 1 1 100%; max-width: 100%; }
         }
     </style>
 </head>
 <body>
 
-<!-- TOP NAVIGATION -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search patients...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
-
-<!-- MAIN CONTENT -->
 <main class="main-content">
 
     <!-- PAGE HEADER -->
@@ -1273,7 +751,7 @@ include_once '../../components/reception_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-calendar-plus"></i>
                 New Appointment
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">RECEPTION</span>
+                <span class="role-badge-display">RECEPTION</span>
                 <span class="update-badge-light" id="updateBadge">
                     <i class="fas fa-sync-alt fa-spin"></i> Live
                 </span>
@@ -1281,35 +759,35 @@ include_once '../../components/reception_sidebar.php';
             <p class="page-subtitle">
                 <i class="fas fa-hospital"></i>
                 Schedule a new appointment with <strong>7 Vital Signs</strong> in <?= htmlspecialchars($branch_name) ?>
-                
+
                 <span class="header-badge" id="onlineDoctorBadge">
                     <i class="fas fa-user-md"></i>
                     <span class="online-count" id="onlineDoctorCount"><?= $online_doctors ?></span> Online
                 </span>
-                
+
                 <span class="header-badge">
                     <i class="fas fa-user-md"></i>
                     <?= $total_doctors ?> Total Doctors
                 </span>
-                
+
                 <span class="header-badge">
                     <i class="fas fa-users"></i>
                     <?= count($patients) ?> Patients
                 </span>
             </p>
         </div>
-        <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="appointments.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back to Appointments
             </a>
         </div>
     </div>
 
-    <!-- Message -->
+    <!-- MESSAGE -->
     <?php if ($message): ?>
         <div class="alert <?= $message_type === 'success' ? 'alert-success' : 'alert-error' ?>" style="max-width:950px;margin:0 auto 16px;">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
-            <div class="alert-content"><?= $message ?></div>
+            <div class="alert-content"><?= htmlspecialchars($message) ?></div>
         </div>
     <?php endif; ?>
 
@@ -1324,8 +802,9 @@ include_once '../../components/reception_sidebar.php';
                 <p class="form-subtitle">Fill in the details below to schedule an appointment with 7 vital signs</p>
             </div>
         </div>
-        
+
         <form method="POST" action="" id="appointmentForm">
+
             <!-- ROW 1: Patient + Doctor -->
             <div class="grid-2">
                 <div class="form-row">
@@ -1341,124 +820,105 @@ include_once '../../components/reception_sidebar.php';
                         <?php endforeach; ?>
                     </select>
                     <?php if (empty($patients)): ?>
-                        <p class="text-xs text-yellow-500 mt-1">
-                            <i class="fas fa-exclamation-triangle mr-1"></i> 
-                            No patients registered. <a href="new_patient.php" class="text-primary hover:underline">Register a patient</a>
+                        <p style="font-size:.72rem;color:#D97706;margin-top:4px;">
+                            <i class="fas fa-exclamation-triangle mr-1"></i>
+                            No patients registered. <a href="new_patient.php" style="color:var(--primary);">Register a patient</a>
                         </p>
                     <?php else: ?>
-                        <p class="text-xs text-gray-400 mt-1">
-                            <i class="fas fa-info-circle mr-1"></i> 
+                        <p style="font-size:.72rem;color:var(--text-secondary);margin-top:4px;">
+                            <i class="fas fa-info-circle mr-1"></i>
                             <?= count($patients) ?> patient(s) available
                         </p>
                     <?php endif; ?>
                 </div>
-                
+
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-user-md label-icon"></i> Doctor <span class="required">*</span>
                     </label>
                     <select name="doctor_id" class="form-control" required id="doctorSelect">
                         <?php foreach ($doctors as $doctor): ?>
-                            <option value="<?= (int)$doctor['id'] ?>" data-online="<?= (int)$doctor['is_online'] ?>" data-name="<?= htmlspecialchars($doctor['full_name'] ?? 'Doctor') ?>" data-specialty="<?= htmlspecialchars($doctor['specialty'] ?? '') ?>">
+                            <option value="<?= (int)$doctor['id'] ?>"
+                                    data-online="<?= (int)$doctor['is_online'] ?>"
+                                    data-name="<?= htmlspecialchars($doctor['full_name'] ?? 'Doctor') ?>"
+                                    data-specialty="<?= htmlspecialchars($doctor['specialty'] ?? '') ?>">
                                 Dr. <?= htmlspecialchars($doctor['full_name'] ?? 'Unknown') ?>
-                                <?php if (!empty($doctor['specialty'])): ?>
-                                    (<?= htmlspecialchars($doctor['specialty']) ?>)
-                                <?php endif; ?>
-                                <?php if ((int)$doctor['is_online'] === 1): ?>
-                                    🟢 Online
-                                <?php else: ?>
-                                    ⚪ Offline
-                                <?php endif; ?>
+                                <?php if (!empty($doctor['specialty'])): ?>(<?= htmlspecialchars($doctor['specialty']) ?>)<?php endif; ?>
+                                <?= (int)$doctor['is_online'] === 1 ? '🟢 Online' : '⚪ Offline' ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
                     <?php if (empty($doctors)): ?>
-                        <p class="text-xs text-red-500 mt-1">
-                            <i class="fas fa-exclamation-circle mr-1"></i> 
+                        <p style="font-size:.72rem;color:#DC2626;margin-top:4px;">
+                            <i class="fas fa-exclamation-circle mr-1"></i>
                             No doctors available.
                         </p>
                     <?php else: ?>
-                        <p class="text-xs text-gray-400 mt-1" id="doctorStatusText">
-                            <i class="fas fa-info-circle mr-1"></i> 
-                            <?= $total_doctors ?> doctor(s) available 
-                            <span class="text-green-500" id="onlineDoctorsText">(<?= $online_doctors ?> online)</span>
+                        <p style="font-size:.72rem;color:var(--text-secondary);margin-top:4px;" id="doctorStatusText">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            <?= $total_doctors ?> doctor(s) available
+                            <span style="color:#059669;" id="onlineDoctorsText">(<?= $online_doctors ?> online)</span>
                         </p>
-                        
                         <div class="doctor-status-info" id="doctorStatusInfo">
                             <span class="online-doctors">
-                                <i class="fas fa-circle status-icon" style="color:#059669;font-size:0.5rem;"></i>
+                                <i class="fas fa-circle status-icon" style="color:#059669;font-size:.5rem;"></i>
                                 Online: <span class="status-count" id="onlineCountDisplay"><?= $online_doctors ?></span>
                             </span>
                             <span class="offline-doctors">
-                                <i class="fas fa-circle status-icon" style="color:#94A3B8;font-size:0.5rem;"></i>
+                                <i class="fas fa-circle status-icon" style="color:#94A3B8;font-size:.5rem;"></i>
                                 Offline: <span class="status-count" id="offlineCountDisplay"><?= max(0, $total_doctors - $online_doctors) ?></span>
                             </span>
-                            <span class="text-gray-400" style="font-weight:400;">
+                            <span style="color:var(--text-secondary);font-weight:400;">
                                 Total: <?= $total_doctors ?>
                             </span>
                         </div>
                     <?php endif; ?>
                 </div>
             </div>
-            
+
             <!-- ROW 2: Date + Time -->
             <div class="grid-2">
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-calendar-day label-icon"></i> Date <span class="required">*</span>
                     </label>
-                    <input type="date" name="appointment_date" class="form-control" 
-                           value="<?= date('Y-m-d') ?>" required>
+                    <input type="date" name="appointment_date" class="form-control" value="<?= date('Y-m-d') ?>" required>
                 </div>
-                
+
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-clock label-icon"></i> Time <span class="required">*</span>
                     </label>
                     <div class="time-select-group">
-                        <input type="number" name="appointment_hour" 
-                               class="time-input" id="hourInput" 
-                               value="09" min="1" max="12" 
-                               placeholder="HH" required>
+                        <input type="number" name="appointment_hour" class="time-input" id="hourInput" value="09" min="1" max="12" placeholder="HH" required>
                         <span class="time-label">Hour</span>
-                        
                         <span class="time-separator">:</span>
-                        
-                        <input type="number" name="appointment_minute" 
-                               class="time-input" id="minuteInput" 
-                               value="00" min="0" max="59" 
-                               placeholder="MM" required>
+                        <input type="number" name="appointment_minute" class="time-input" id="minuteInput" value="00" min="0" max="59" placeholder="MM" required>
                         <span class="time-label">Min</span>
-                        
                         <select name="appointment_ampm" class="form-control ampm-select" id="ampmSelect" required>
                             <option value="AM" selected>AM</option>
                             <option value="PM">PM</option>
                         </select>
                     </div>
-                    <p class="text-xs text-gray-400 mt-1">
-                        <i class="fas fa-info-circle mr-1"></i> 
+                    <p style="font-size:.72rem;color:var(--text-secondary);margin-top:4px;">
+                        <i class="fas fa-info-circle mr-1"></i>
                         Enter hour (1-12) and minutes (00-59)
                     </p>
                 </div>
             </div>
-            
+
             <!-- ROW 3: Visit Type + Status -->
             <div class="grid-2">
                 <div class="form-row">
-                    <label class="form-label">
-                        <i class="fas fa-tag label-icon"></i> Visit Type
-                    </label>
+                    <label class="form-label"><i class="fas fa-tag label-icon"></i> Visit Type</label>
                     <select name="visit_type" class="form-control">
                         <option value="new">🆕 New Patient</option>
                         <option value="follow-up">🔄 Follow-up</option>
                         <option value="emergency">🚨 Emergency</option>
                     </select>
                 </div>
-                
                 <div class="form-row">
-                    <label class="form-label">
-                        <i class="fas fa-flag label-icon"></i> Status
-                    </label>
+                    <label class="form-label"><i class="fas fa-flag label-icon"></i> Status</label>
                     <select name="status" class="form-control">
                         <option value="scheduled">📅 Scheduled</option>
                         <option value="confirmed">✅ Confirmed</option>
@@ -1466,120 +926,100 @@ include_once '../../components/reception_sidebar.php';
                     </select>
                 </div>
             </div>
-            
+
             <!-- ROW 4: Purpose -->
             <div class="form-row grid-full">
-                <label class="form-label">
-                    <i class="fas fa-notes-medical label-icon"></i> Purpose
-                </label>
+                <label class="form-label"><i class="fas fa-notes-medical label-icon"></i> Purpose</label>
                 <textarea name="purpose" class="form-control" placeholder="Reason for appointment..." rows="3"></textarea>
             </div>
-            
-            <!-- 7 VITAL SIGNS SECTION -->
+
+            <!-- 7 VITAL SIGNS -->
             <div class="vital-signs-section">
                 <div class="vital-title">
                     <i class="fas fa-heartbeat"></i>
                     7 Vital Signs
-                    <span class="text-sm font-normal text-gray-400">(Record patient vital signs)</span>
+                    <span style="font-size:.8rem;font-weight:400;color:var(--text-secondary);">(Record patient vital signs)</span>
                     <?php if ($patient_id > 0 && $latest_vital_signs): ?>
-                        <span class="text-xs text-green-500 ml-auto">
-                            <i class="fas fa-check-circle"></i> Last recorded: <?= date('d/m/Y H:i', strtotime($latest_vital_signs['recorded_at'] ?? 'now')) ?>
+                        <span style="font-size:.72rem;color:#059669;margin-left:auto;">
+                            <i class="fas fa-check-circle"></i>
+                            Last recorded: <?= date('d/m/Y H:i', strtotime($latest_vital_signs['recorded_at'] ?? 'now')) ?>
                         </span>
                     <?php endif; ?>
                 </div>
-                
+
                 <div class="vital-signs-grid">
-                    
                     <!-- 1. Temperature -->
                     <div class="vital-sign-item">
                         <label class="vital-label">🌡️ Temperature</label>
-                        <input type="number" name="temperature" class="vital-input" 
-                               step="0.1" placeholder="e.g. 36.5" 
+                        <input type="number" name="temperature" class="vital-input" step="0.1" placeholder="36.5"
                                value="<?= htmlspecialchars($latest_vital_signs['temperature'] ?? '') ?>">
                         <span class="vital-unit">°C</span>
                     </div>
-                    
-                    <!-- 2. Blood Pressure -->
+
+                    <!-- 2. BP -->
                     <div class="vital-sign-item">
                         <label class="vital-label">💓 Blood Pressure</label>
                         <div style="display:flex;gap:6px;align-items:center;">
-                            <input type="number" name="bp_systolic" class="vital-input" 
-                                   style="width:50%;" placeholder="120"
+                            <input type="number" name="bp_systolic" class="vital-input" style="width:50%;" placeholder="120"
                                    value="<?= htmlspecialchars($latest_vital_signs['blood_pressure_systolic'] ?? '') ?>">
                             <span style="color:var(--text-secondary);font-weight:700;">/</span>
-                            <input type="number" name="bp_diastolic" class="vital-input" 
-                                   style="width:50%;" placeholder="80"
+                            <input type="number" name="bp_diastolic" class="vital-input" style="width:50%;" placeholder="80"
                                    value="<?= htmlspecialchars($latest_vital_signs['blood_pressure_diastolic'] ?? '') ?>">
                         </div>
                         <span class="vital-unit">mmHg</span>
                     </div>
-                    
-                    <!-- 3. Pulse Rate -->
+
+                    <!-- 3. Pulse -->
                     <div class="vital-sign-item">
                         <label class="vital-label">💓 Pulse Rate</label>
-                        <input type="number" name="pulse_rate" class="vital-input" 
-                               placeholder="72"
+                        <input type="number" name="pulse_rate" class="vital-input" placeholder="72"
                                value="<?= htmlspecialchars($latest_vital_signs['pulse_rate'] ?? '') ?>">
                         <span class="vital-unit">bpm</span>
                     </div>
-                    
-                    <!-- 4. Oxygen Saturation (SpO2) - MPYA -->
+
+                    <!-- 4. SpO2 -->
                     <div class="vital-sign-item spo2-item">
-                        <label class="vital-label">🫁 Oxygen Saturation (SpO2)</label>
-                        <input type="number" name="oxygen_saturation" class="vital-input" 
-                               placeholder="98" min="0" max="100"
+                        <label class="vital-label">🫁 Oxygen (SpO₂)</label>
+                        <input type="number" name="oxygen_saturation" class="vital-input" placeholder="98" min="0" max="100"
                                value="<?= htmlspecialchars($latest_vital_signs['oxygen_saturation'] ?? '') ?>">
                         <span class="vital-unit">% (Normal: 95-100%)</span>
                     </div>
-                    
+
                     <!-- 5. Weight -->
                     <div class="vital-sign-item">
                         <label class="vital-label">⚖️ Weight</label>
-                        <input type="number" name="weight" class="vital-input" 
-                               step="0.1" placeholder="65"
-                               id="weightInput"
+                        <input type="number" name="weight" class="vital-input" step="0.1" placeholder="65" id="weightInput"
                                value="<?= htmlspecialchars($latest_vital_signs['weight'] ?? '') ?>"
                                oninput="calculateBMI()">
                         <span class="vital-unit">kg</span>
                     </div>
-                    
+
                     <!-- 6. Height -->
                     <div class="vital-sign-item">
                         <label class="vital-label">📏 Height</label>
-                        <input type="number" name="height" class="vital-input" 
-                               step="0.1" placeholder="170"
-                               id="heightInput"
+                        <input type="number" name="height" class="vital-input" step="0.1" placeholder="170" id="heightInput"
                                value="<?= htmlspecialchars($latest_vital_signs['height'] ?? '') ?>"
                                oninput="calculateBMI()">
                         <span class="vital-unit">cm</span>
                     </div>
-                    
+
                     <!-- 7. BMI -->
-                    <div class="vital-sign-item bmi-item">
+                    <div class="vital-sign-item">
                         <label class="vital-label">📊 BMI</label>
-                        <input type="number" name="bmi" class="vital-input" 
-                               id="bmiOutput" readonly
-                               step="0.1" placeholder="Auto-calculated"
+                        <input type="number" name="bmi" class="vital-input" id="bmiOutput" readonly step="0.1" placeholder="Auto"
                                value="<?= htmlspecialchars($latest_vital_signs['bmi'] ?? '') ?>">
                         <span class="vital-unit">kg/m²</span>
-                        <span class="vital-bmi-category" id="bmiCategory" style="font-size:0.6rem;font-weight:600;display:block;margin-top:2px;">
-                            Normal: 18.5 - 24.9
-                        </span>
+                        <span id="bmiCategory" style="font-size:.6rem;font-weight:600;display:block;margin-top:2px;">Normal: 18.5 - 24.9</span>
                     </div>
-                    
                 </div>
-                
-                <!-- Vital Signs Notes -->
-                <div class="form-row mt-3">
-                    <label class="form-label">
-                        <i class="fas fa-comment label-icon"></i> Vital Signs Notes
-                    </label>
-                    <textarea name="vital_notes" class="form-control" rows="2" 
-                              placeholder="Any notes about the vital signs measurements"><?= htmlspecialchars($latest_vital_signs['notes'] ?? '') ?></textarea>
+
+                <div class="form-row" style="margin-top:12px;">
+                    <label class="form-label"><i class="fas fa-comment label-icon"></i> Vital Signs Notes</label>
+                    <textarea name="vital_notes" class="form-control" rows="2" placeholder="Any notes about the vital signs measurements"><?= htmlspecialchars($latest_vital_signs['notes'] ?? '') ?></textarea>
                 </div>
             </div>
-            
-            <!-- FORM ACTIONS -->
+
+            <!-- ACTIONS -->
             <div class="form-actions">
                 <button type="submit" class="btn btn-success" id="submitBtn">
                     <i class="fas fa-save"></i> Schedule Appointment
@@ -1591,19 +1031,19 @@ include_once '../../components/reception_sidebar.php';
                     <i class="fas fa-times"></i> Cancel
                 </a>
             </div>
-            
+
             <!-- FOOTER INFO -->
-            <div class="mt-4 pt-3 text-xs text-gray-400 text-center border-t border-gray-200 dark:border-gray-700">
+            <div style="margin-top:16px;padding-top:12px;font-size:.68rem;color:var(--text-secondary);text-align:center;border-top:1px solid var(--border-color);">
                 <i class="fas fa-info-circle mr-1"></i>
-                Schedule an appointment with 7 vital signs: BP, Weight, Height, Temperature, Pulse, SpO2, BMI
-                <span class="mx-2">|</span>
+                Schedule with 7 vital signs: BP, Weight, Height, Temperature, Pulse, SpO₂, BMI
+                <span style="margin:0 8px;">|</span>
                 <span id="formTimestamp"><?= date('h:i:s A') ?></span>
             </div>
         </form>
     </div>
 
     <!-- QUICK STATS -->
-    <div class="grid grid-cols-1 sm:grid-cols-4 gap-4 mt-5" style="max-width:950px;margin:24px auto 0;">
+    <div style="max-width:950px;margin:24px auto 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;">
         <div class="stat-card">
             <div class="stat-icon">👥</div>
             <p class="stat-number primary"><?= count($patients) ?></p>
@@ -1613,13 +1053,13 @@ include_once '../../components/reception_sidebar.php';
             <div class="stat-icon">👨‍⚕️</div>
             <p class="stat-number green" id="totalDoctorsStat"><?= $total_doctors ?></p>
             <p class="stat-label">Doctors Available</p>
-            <p class="text-xs text-gray-400" id="onlineDoctorsStatTime"><?= $online_doctors ?> online</p>
+            <p style="font-size:.68rem;color:var(--text-secondary);" id="onlineDoctorsStatTime"><?= $online_doctors ?> online</p>
         </div>
         <div class="stat-card">
             <div class="stat-icon">💓</div>
             <p class="stat-number purple"><?= $patient_id > 0 && $latest_vital_signs ? '✓' : '—' ?></p>
             <p class="stat-label">Vital Signs</p>
-            <p class="text-xs text-gray-400"><?= $patient_id > 0 && $latest_vital_signs ? 'Recorded' : 'Not recorded' ?></p>
+            <p style="font-size:.68rem;color:var(--text-secondary);"><?= $patient_id > 0 && $latest_vital_signs ? 'Recorded' : 'Not recorded' ?></p>
         </div>
         <div class="stat-card">
             <div class="stat-icon">📅</div>
@@ -1632,170 +1072,67 @@ include_once '../../components/reception_sidebar.php';
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="margin:0 8px;opacity:.4;">|</span>
             New Appointment with 7 Vital Signs
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="margin:0 8px;opacity:.4;">|</span>
             <span id="footerTimestamp">Last updated: <?= date('h:i:s A') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="margin:0 8px;opacity:.4;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
 
 </main>
 
-<!-- TOAST -->
-<div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
-    </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-        }
-    });
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
-        var ftEl = document.getElementById('footerTimestamp');
-        if (ftEl) ftEl.textContent = 'Last updated: ' + timeStr;
-        
-        var formTs = document.getElementById('formTimestamp');
-        if (formTs) formTs.textContent = timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
     // ================================================================
     // TIME INPUT VALIDATION
     // ================================================================
-    var hourInput = document.getElementById('hourInput');
+    var hourInput   = document.getElementById('hourInput');
     var minuteInput = document.getElementById('minuteInput');
-    
+
     if (hourInput) {
-        hourInput.addEventListener('input', function() {
+        hourInput.addEventListener('input', function () {
             var val = parseInt(this.value);
             if (val < 1) this.value = 1;
             if (val > 12) this.value = 12;
             if (this.value.length > 2) this.value = this.value.slice(0, 2);
         });
-        
-        hourInput.addEventListener('blur', function() {
-            if (this.value === '' || this.value === '0') {
-                this.value = '09';
-            }
-            if (this.value.length === 1) {
-                this.value = '0' + this.value;
-            }
+        hourInput.addEventListener('blur', function () {
+            if (this.value === '' || this.value === '0') this.value = '09';
+            if (this.value.length === 1) this.value = '0' + this.value;
         });
     }
-    
     if (minuteInput) {
-        minuteInput.addEventListener('input', function() {
+        minuteInput.addEventListener('input', function () {
             var val = parseInt(this.value);
             if (val < 0) this.value = 0;
             if (val > 59) this.value = 59;
             if (this.value.length > 2) this.value = this.value.slice(0, 2);
         });
-        
-        minuteInput.addEventListener('blur', function() {
-            if (this.value === '' || this.value === '0') {
-                this.value = '00';
-            }
-            if (this.value.length === 1) {
-                this.value = '0' + this.value;
-            }
+        minuteInput.addEventListener('blur', function () {
+            if (this.value === '' || this.value === '0') this.value = '00';
+            if (this.value.length === 1) this.value = '0' + this.value;
         });
     }
 
     // ================================================================
-    // SpO2 VALIDATION (0-100)
+    // SpO2 VALIDATION
     // ================================================================
     var spo2Input = document.querySelector('input[name="oxygen_saturation"]');
     if (spo2Input) {
-        spo2Input.addEventListener('input', function() {
+        spo2Input.addEventListener('input', function () {
             var val = parseInt(this.value);
             if (this.value !== '') {
                 if (val < 0) this.value = 0;
                 if (val > 100) this.value = 100;
             }
         });
-        
-        spo2Input.addEventListener('blur', function() {
+        spo2Input.addEventListener('blur', function () {
             if (this.value !== '') {
                 var val = parseInt(this.value);
-                if (val < 70) {
-                    this.style.color = '#DC2626';
-                    this.title = '⚠️ SpO2 chini sana - Hatari!';
-                } else if (val < 95) {
-                    this.style.color = '#D97706';
-                    this.title = '⚠️ SpO2 chini ya kawaida';
-                } else {
-                    this.style.color = '#059669';
-                    this.title = '✅ SpO2 nzuri';
-                }
+                if (val < 70)      { this.style.color = '#DC2626'; this.title = '⚠️ SpO₂ chini sana - Hatari!'; }
+                else if (val < 95) { this.style.color = '#D97706'; this.title = '⚠️ SpO₂ chini ya kawaida'; }
+                else               { this.style.color = '#059669'; this.title = '✅ SpO₂ nzuri'; }
             } else {
                 this.style.color = '';
                 this.title = '';
@@ -1804,70 +1141,33 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query);
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    // ================================================================
     // BMI CALCULATOR
     // ================================================================
     function calculateBMI() {
-        var weightInput = document.getElementById('weightInput');
-        var heightInput = document.getElementById('heightInput');
-        var bmiOutput = document.getElementById('bmiOutput');
-        var bmiCategory = document.getElementById('bmiCategory');
-        
+        var weightInput  = document.getElementById('weightInput');
+        var heightInput  = document.getElementById('heightInput');
+        var bmiOutput    = document.getElementById('bmiOutput');
+        var bmiCategory  = document.getElementById('bmiCategory');
         if (!weightInput || !heightInput || !bmiOutput || !bmiCategory) return;
-        
+
         var weight = parseFloat(weightInput.value);
         var height = parseFloat(heightInput.value);
-        
+
         if (weight && height && height > 0) {
             var heightM = height / 100;
-            var bmi = weight / (heightM * heightM);
-            bmi = Math.round(bmi * 10) / 10;
-            
+            var bmi = Math.round((weight / (heightM * heightM)) * 10) / 10;
             bmiOutput.value = bmi;
-            
-            var category = '';
-            var color = '';
-            if (bmi < 16) {
-                category = 'Severe Underweight';
-                color = '#DC2626';
-            } else if (bmi < 18.5) {
-                category = 'Underweight';
-                color = '#D97706';
-            } else if (bmi < 25) {
-                category = 'Normal';
-                color = '#059669';
-            } else if (bmi < 30) {
-                category = 'Overweight';
-                color = '#D97706';
-            } else if (bmi < 35) {
-                category = 'Obese Class I';
-                color = '#DC2626';
-            } else if (bmi < 40) {
-                category = 'Obese Class II';
-                color = '#DC2626';
-            } else {
-                category = 'Obese Class III';
-                color = '#DC2626';
-            }
-            
-            bmiCategory.textContent = category + ' (18.5 - 24.9 Normal)';
+
+            var category = '', color = '';
+            if (bmi < 16)         { category = 'Severe Underweight'; color = '#DC2626'; }
+            else if (bmi < 18.5)  { category = 'Underweight';        color = '#D97706'; }
+            else if (bmi < 25)    { category = 'Normal';             color = '#059669'; }
+            else if (bmi < 30)    { category = 'Overweight';         color = '#D97706'; }
+            else if (bmi < 35)    { category = 'Obese Class I';      color = '#DC2626'; }
+            else if (bmi < 40)    { category = 'Obese Class II';     color = '#DC2626'; }
+            else                  { category = 'Obese Class III';    color = '#DC2626'; }
+
+            bmiCategory.textContent = category + ' (Normal 18.5 - 24.9)';
             bmiCategory.style.color = color;
         } else {
             bmiOutput.value = '';
@@ -1877,82 +1177,70 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // TOAST
+    // TOAST (uses header's showToast if available, else local fallback)
     // ================================================================
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
-        if (!toast) return;
-        
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
+    if (typeof window.showToast !== 'function') {
+        window.showToast = function (title, message, type) {
+            var toast = document.getElementById('toast');
+            var t = document.getElementById('toastTitle');
+            var m = document.getElementById('toastMessage');
+            if (!toast) {
+                alert(title + ': ' + message);
+                return;
+            }
+            toast.className = 'toast-custom ' + (type || 'info');
+            if (t) t.textContent = title;
+            if (m) m.textContent = message;
+            toast.style.display = 'flex';
+            toast.classList.add('show');
+            clearTimeout(toast.timeout);
+            toast.timeout = setTimeout(function () {
+                toast.classList.remove('show');
+                setTimeout(() => toast.style.display = 'none', 400);
+            }, 3500);
+        };
     }
 
     // ================================================================
     // AJAX AUTO-UPDATE DOCTOR STATUS
     // ================================================================
-    var updateInterval = null;
-    var isUpdating = false;
-    var currentBranchId = <?= json_encode($branch_id) ?>;
-    var retryCount = 0;
-    var maxRetries = 5;
-    var doctorSelect = document.getElementById('doctorSelect');
-    var updateCount = 0;
+    var updateInterval   = null;
+    var isUpdating       = false;
+    var currentBranchId  = <?= json_encode($branch_id) ?>;
+    var retryCount       = 0;
+    var maxRetries       = 5;
+    var doctorSelect     = document.getElementById('doctorSelect');
+    var updateCount      = 0;
 
     function getCurrentTime() {
         var now = new Date();
-        return now.toLocaleTimeString('en-US', { 
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true 
-        });
+        return now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
     }
 
     function updateDoctorDropdown(doctorsData) {
-        if (!doctorSelect) {
-            console.error('❌ Doctor select not found!');
-            return;
-        }
-        
+        if (!doctorSelect) return;
+
         var currentValue = doctorSelect.value;
-        var onlineCount = 0;
-        var offlineCount = 0;
-        
-        // Clear existing options (keep placeholder)
-        while (doctorSelect.options.length > 0) {
-            doctorSelect.remove(0);
-        }
-        
+        var onlineCount = 0, offlineCount = 0;
+
+        while (doctorSelect.options.length > 0) doctorSelect.remove(0);
+
         var placeholder = document.createElement('option');
         placeholder.value = '';
         placeholder.textContent = '-- Select Doctor --';
         doctorSelect.appendChild(placeholder);
-        
-        doctorsData.forEach(function(doctor) {
+
+        doctorsData.forEach(function (doctor) {
             var option = document.createElement('option');
             option.value = doctor.id;
-            option.dataset.online = doctor.is_online;
-            option.dataset.name = doctor.full_name || 'Doctor';
+            option.dataset.online    = doctor.is_online;
+            option.dataset.name      = doctor.full_name || 'Doctor';
             option.dataset.specialty = doctor.specialty || '';
-            
+
             var label = 'Dr. ' + (doctor.full_name || 'Unknown');
-            if (doctor.specialty) {
-                label += ' (' + doctor.specialty + ')';
-            }
-            
-            var isOnline = parseInt(doctor.is_online) === 1;
-            if (isOnline) {
+            if (doctor.specialty) label += ' (' + doctor.specialty + ')';
+
+            if (parseInt(doctor.is_online) === 1) {
                 label += ' 🟢 Online';
                 option.style.color = '#059669';
                 option.style.fontWeight = '600';
@@ -1963,12 +1251,11 @@ include_once '../../components/reception_sidebar.php';
                 option.style.fontWeight = '400';
                 offlineCount++;
             }
-            
             option.textContent = label;
             doctorSelect.appendChild(option);
         });
-        
-        // Try to restore selected value
+
+        // Restore selection
         var found = false;
         for (var i = 0; i < doctorSelect.options.length; i++) {
             if (doctorSelect.options[i].value == currentValue) {
@@ -1977,9 +1264,7 @@ include_once '../../components/reception_sidebar.php';
                 break;
             }
         }
-        
         if (!found || !currentValue) {
-            // Select first online doctor if available
             for (var i = 0; i < doctorSelect.options.length; i++) {
                 var opt = doctorSelect.options[i];
                 if (opt.value && opt.dataset.online == '1') {
@@ -1988,13 +1273,12 @@ include_once '../../components/reception_sidebar.php';
                 }
             }
         }
-        
+
         updateDoctorStatusText();
         updateDoctorStatusCounts(onlineCount, offlineCount);
-        
+
         updateCount++;
-        console.log('✅ Dropdown updated (' + updateCount + ' times) - ' + doctorsData.length + ' doctors loaded');
-        console.log('   Online: ' + onlineCount + ', Offline: ' + offlineCount);
+        console.log('✅ Dropdown updated (' + updateCount + 'x) - ' + doctorsData.length + ' doctors');
     }
 
     function updateDoctorStatusText() {
@@ -2012,82 +1296,60 @@ include_once '../../components/reception_sidebar.php';
     }
 
     function updateDoctorStatusCounts(onlineCount, offlineCount) {
-        var onlineDisplay = document.getElementById('onlineCountDisplay');
+        var onlineDisplay  = document.getElementById('onlineCountDisplay');
         var offlineDisplay = document.getElementById('offlineCountDisplay');
-        
-        if (onlineDisplay) onlineDisplay.textContent = onlineCount;
+        if (onlineDisplay)  onlineDisplay.textContent  = onlineCount;
         if (offlineDisplay) offlineDisplay.textContent = offlineCount;
     }
 
     function fetchDoctorStatus() {
-        if (isUpdating) {
-            return;
-        }
-        
+        if (isUpdating) return;
         isUpdating = true;
         var timestamp = new Date().getTime();
         var url = '/dispensary_system/frontend/api/get_online_doctors.php?branch_id=' + encodeURIComponent(currentBranchId) + '&t=' + timestamp;
-        
-        console.log('🔄 Fetching doctor status... (attempt ' + (retryCount + 1) + ')');
-        
+
         fetch(url, {
             method: 'GET',
             cache: 'no-cache',
-            headers: {
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                'Pragma': 'no-cache'
-            }
+            headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' }
         })
-        .then(function(response) { 
-            if (!response.ok) {
-                throw new Error('HTTP error! status: ' + response.status);
-            }
-            return response.json(); 
+        .then(function (response) {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            return response.json();
         })
-        .then(function(data) {
+        .then(function (data) {
             retryCount = 0;
             if (data.success) {
-                console.log('✅ API response: ' + data.total_doctors + ' doctors, ' + data.online_count + ' online');
-                
                 updateDoctorDropdown(data.doctors);
-                
                 var onlineCount = data.online_count || 0;
-                
+
                 var onlineCountEl = document.getElementById('onlineDoctorCount');
                 if (onlineCountEl) onlineCountEl.textContent = onlineCount;
-                
+
                 var onlineDoctorsText = document.getElementById('onlineDoctorsText');
                 if (onlineDoctorsText) onlineDoctorsText.textContent = '(' + onlineCount + ' online)';
-                
+
                 var onlineDoctorsStatTime = document.getElementById('onlineDoctorsStatTime');
                 if (onlineDoctorsStatTime) onlineDoctorsStatTime.textContent = onlineCount + ' online';
-                
+
                 var totalDoctorsStat = document.getElementById('totalDoctorsStat');
                 if (totalDoctorsStat) totalDoctorsStat.textContent = data.total_doctors || 0;
-                
+
                 var timeStr = getCurrentTime();
                 var updateBadge = document.getElementById('updateBadge');
                 if (updateBadge) {
                     updateBadge.innerHTML = '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + timeStr;
                 }
-                
                 var footerTs = document.getElementById('footerTimestamp');
-                if (footerTs) {
-                    footerTs.textContent = 'Last updated: ' + timeStr;
-                }
-                
-            } else {
-                console.warn('⚠️ API returned success=false:', data.message || 'Unknown error');
+                if (footerTs) footerTs.textContent = 'Last updated: ' + timeStr;
             }
             isUpdating = false;
         })
-        .catch(function(error) {
-            console.error('❌ Doctor status update error:', error);
+        .catch(function (error) {
+            console.error('❌ Doctor status error:', error);
             isUpdating = false;
-            
             retryCount++;
             if (retryCount < maxRetries) {
-                console.log('🔄 Retrying in 3 seconds... (attempt ' + (retryCount + 1) + '/' + maxRetries + ')');
                 setTimeout(fetchDoctorStatus, 3000);
             } else {
                 var updateBadge = document.getElementById('updateBadge');
@@ -2095,76 +1357,56 @@ include_once '../../components/reception_sidebar.php';
                     updateBadge.innerHTML = '<i class="fas fa-exclamation-triangle" style="color:#F59E0B;"></i> Offline';
                 }
                 retryCount = 0;
-                console.log('❌ Max retries reached. Please refresh page.');
             }
         });
     }
 
-    // ================================================================
-    // DOCTOR SELECTION CHANGE
-    // ================================================================
+    // Doctor select change
     if (doctorSelect) {
-        doctorSelect.addEventListener('change', function() {
-            updateDoctorStatusText();
-        });
+        doctorSelect.addEventListener('change', updateDoctorStatusText);
     }
 
-    // ================================================================
-    // START AUTO-UPDATE
-    // ================================================================
+    // Auto-update start/stop
     function startAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = null;
-        }
-        setTimeout(function() {
-            fetchDoctorStatus();
-        }, 1000);
+        if (updateInterval) { clearInterval(updateInterval); updateInterval = null; }
+        setTimeout(fetchDoctorStatus, 1000);
         updateInterval = setInterval(fetchDoctorStatus, 3000);
-        console.log('✅ Auto-update timer started (every 3 seconds)');
     }
-
     function stopAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = null;
-            console.log('⏹️ Auto-update stopped');
-        }
+        if (updateInterval) { clearInterval(updateInterval); updateInterval = null; }
     }
 
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopAutoUpdate();
-        } else {
-            startAutoUpdate();
-        }
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden) stopAutoUpdate();
+        else startAutoUpdate();
     });
 
     // ================================================================
-    // INITIALIZATION
+    // INIT
     // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
+    document.addEventListener('DOMContentLoaded', function () {
         calculateBMI();
-        setTimeout(function() {
+        setTimeout(function () {
             updateDoctorStatusText();
             startAutoUpdate();
-            console.log('✅ System initialized');
-            console.log('🔄 Doctor status will update in dropdown WITHOUT page refresh');
-            console.log('📡 Using API: get_online_doctors.php');
         }, 500);
     });
 
-    console.log('%c📅 Braick - New Appointment with 7 Vital Signs', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 User: <?= htmlspecialchars($full_name) ?> (<?= htmlspecialchars($role) ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👥 Patients: <?= count($patients) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c👨‍⚕️ Doctors: <?= $total_doctors ?> (<?= $online_doctors ?> online)', 'font-size:13px; color:#64748B;');
-    console.log('%c💓 7 Vital Signs: BP, Weight, Height, Temperature, Pulse Rate, SpO2, BMI', 'font-size:13px; color:#DC2626;');
-    console.log('%c🔄 Auto-update: Every 3 seconds (Doctor status via AJAX)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Dropdown updates WITHOUT page refresh', 'font-size:13px; color:#059669;');
-    console.log('%c🕐 Time format: 12-hour (Manual input or select)', 'font-size:13px; color:#64748B;');
-    console.log('%c🫁 SpO2 range: 0-100% (Normal: 95-100%)', 'font-size:13px; color:#0EA5E9;');
-    console.log('%c💾 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
+    // Footer clock
+    setInterval(function () {
+        var now = new Date();
+        var t = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+        var ftEl = document.getElementById('footerTimestamp');
+        if (ftEl) ftEl.textContent = 'Last updated: ' + t;
+        var formTs = document.getElementById('formTimestamp');
+        if (formTs) formTs.textContent = t;
+    }, 1000);
+
+    console.log('%c📅 Braick - New Appointment (7 Vital Signs)', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
+    console.log('%c✅ Inatumia shared header + sidebar', 'font-size:13px;color:#059669;font-weight:bold;');
+    console.log('%c👥 Patients: <?= count($patients) ?>', 'font-size:13px;color:#64748B;');
+    console.log('%c👨‍⚕️ Doctors: <?= $total_doctors ?> (<?= $online_doctors ?> online)', 'font-size:13px;color:#64748B;');
+    console.log('%c🔄 Auto-update: Every 3 seconds via AJAX', 'font-size:13px;color:#34D399;');
 </script>
 
 </body>
