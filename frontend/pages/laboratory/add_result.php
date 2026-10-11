@@ -1,11 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/laboratory/add_result.php
-// LABORATORY - ADD TEST RESULT (ENGLISH)
-// ✅ INABAKI KWENYE PAGE HIYO HIYO baada ya ku-save
-// ✅ SUCCESS BANNER inaonekana juu ya page (ENGLISH)
-// ✅ BACK TO IN PROGRESS button
-// ✅ Ultrasound Forms OR Regular Textarea
+// LABORATORY - ADD TEST RESULT V3 (STATUS → PRESCRIBED)
+// ================================================================
+// ✅ V3 FIX: 'prescribe' → 'prescribed' (status kamili)
+// ✅ V2: Aki-save result → visit.status inakuwa 'prescribed'
+// ✅ V2: Auto-check - kama tests zote zimekamilika → 'prescribed'
+// ✅ V2: Inabaki kwenye page hiyo hiyo (English)
+// ✅ V2: Success banner juu ya page
+// ✅ V2: Back to In Progress button
+// ✅ V1: Ultrasound Forms OR Regular Textarea
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -158,6 +162,35 @@ function generateFormSelector($templates) {
 }
 
 // ================================================================
+// ✅ HELPER: CHECK IF ALL LAB TESTS FOR VISIT ARE COMPLETED
+// ================================================================
+function checkAllLabTestsCompleted($db, $visit_id) {
+    try {
+        $stmt = $db->prepare("
+            SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+            FROM lab_tests 
+            WHERE visit_id = ? AND status != 'cancelled'
+        ");
+        $stmt->execute([$visit_id]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        $total = (int)($result['total'] ?? 0);
+        $completed = (int)($result['completed'] ?? 0);
+        
+        return [
+            'all_completed' => ($total > 0 && $completed === $total),
+            'total' => $total,
+            'completed' => $completed,
+            'pending' => $total - $completed
+        ];
+    } catch (Exception $e) {
+        return ['all_completed' => false, 'total' => 0, 'completed' => 0, 'pending' => 0];
+    }
+}
+
+// ================================================================
 // GET LAB TEST DETAILS
 // ================================================================
 try {
@@ -263,7 +296,7 @@ if ($is_ultrasound) {
 }
 
 // ================================================================
-// ✅ HANDLE FORM SUBMISSION (ENGLISH MESSAGES)
+// ✅ V3: HANDLE FORM SUBMISSION (VISIT STATUS → PRESCRIBED)
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -284,7 +317,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 $visit_id = $lab_test['visit_id'];
                 
-                // ✅ Update lab_tests
+                // ✅ Step 1: Update lab_tests → completed
                 $stmt = $db->prepare("
                     UPDATE lab_tests 
                     SET results = ?,
@@ -308,20 +341,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $lab_test_id
                 ]);
                 
-                // ✅ Update visit status
-                $stmt = $db->prepare("
-                    UPDATE visits 
-                    SET status = 'lab_test', 
-                        updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([$visit_id]);
+                // ============================================================
+                // ✅ V3: CHECK ALL LAB TESTS FOR THIS VISIT
+                // ============================================================
+                $check = checkAllLabTestsCompleted($db, $visit_id);
+                
+                // ============================================================
+                // ✅ V3: UPDATE VISIT STATUS
+                // Kama tests zote zimekamilika → 'prescribed'
+                // Kama bado kuna nyingine → 'lab_test' (inasubiri)
+                // ============================================================
+                if ($check['all_completed']) {
+                    // ✅ Zote zimekamilika → PRESCRIBED
+                    $stmt = $db->prepare("
+                        UPDATE visits 
+                        SET status = 'prescribed',
+                            updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$visit_id]);
+                    
+                    $status_msg = "✅ All lab tests completed! Visit status: <strong>PRESCRIBED</strong> (Doctor can now prescribe)";
+                } else {
+                    // ✅ Bado kuna nyingine → lab_test
+                    $stmt = $db->prepare("
+                        UPDATE visits 
+                        SET status = 'lab_test',
+                            updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$visit_id]);
+                    
+                    $status_msg = "⏳ <strong>{$check['pending']}</strong> lab test(s) still pending. Visit status: <strong>lab_test</strong>";
+                }
                 
                 $db->commit();
                 
-                $message = "✅ Result saved successfully! Test is now completed.";
+                $message = "✅ Result saved successfully! Test is now completed.<br>" . $status_msg;
                 $message_type = 'success';
                 $save_success = true;
+                
+                // Log activity
+                try {
+                    $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'lab_result_saved', ?, NOW())");
+                    $stmt->execute([
+                        $user_id, 
+                        $user_branch_id, 
+                        "Saved result for test ID #{$lab_test_id} - {$test_name} | Visit #{$visit_id} | All completed: " . ($check['all_completed'] ? 'YES' : 'NO')
+                    ]);
+                } catch (Exception $e) {}
                 
                 // ✅ REDIRECT KWA PAGE HIYO HIYO (ili kuonyesha message)
                 $_SESSION['lab_result_message'] = $message;
@@ -340,7 +408,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ================================================================
-// ✅ CHECK SESSION MESSAGES
+// CHECK SESSION MESSAGES
 // ================================================================
 if (isset($_SESSION['lab_result_message'])) {
     $message = $_SESSION['lab_result_message'];
@@ -435,6 +503,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
+            --purple: #7C3AED;
+            --purple-bg: #EDE9FE;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
@@ -481,9 +551,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================ */
-        /* SUCCESS BANNER - ENGLISH */
-        /* ================================================================ */
+        /* SUCCESS BANNER */
         .success-banner {
             background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
             border-left: 6px solid #059669;
@@ -592,6 +660,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             gap: 8px;
             font-weight: 500;
             border: 1px solid rgba(5, 150, 105, 0.2);
+            margin-top: 8px;
         }
         
         .success-banner .success-hint i {
@@ -630,9 +699,39 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             color: white;
         }
         
-        /* ================================================================ */
-        /* ALREADY COMPLETED NOTICE */
-        /* ================================================================ */
+        /* ✅ V3: PRESCRIBED STATUS NOTICE */
+        .prescribed-notice {
+            background: linear-gradient(135deg, #EDE9FE 0%, #DDD6FE 100%);
+            border-left: 6px solid #7C3AED;
+            border-radius: 12px;
+            padding: 16px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.9rem;
+            color: #5B21B6;
+            font-weight: 600;
+            animation: slideInDown 0.5s ease;
+        }
+        
+        .prescribed-notice i {
+            font-size: 1.5rem;
+            flex-shrink: 0;
+            color: #7C3AED;
+        }
+        
+        @keyframes slideInDown {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        [data-theme="dark"] .prescribed-notice {
+            background: linear-gradient(135deg, #2D1B5F, #3A2370);
+            color: #DDD6FE;
+        }
+        
+        /* COMPLETED NOTICE */
         .completed-notice {
             background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
             border-left: 5px solid #3B82F6;
@@ -887,7 +986,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .badge-warning { background: var(--warning-bg); color: var(--warning); }
         .badge-info { background: var(--primary-bg); color: var(--primary); }
         .badge-danger { background: var(--danger-bg); color: var(--danger); }
-        .badge-purple { background: #EDE9FE; color: #7C3AED; }
+        .badge-purple { background: var(--purple-bg); color: var(--purple); }
         
         .detail-row {
             display: flex;
@@ -1149,7 +1248,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         @media print {
             .top-nav, .sidebar, .btn, .btn-outline, .btn-success, .btn-print, .btn-primary,
             .form-selector, .form-option, .page-header .btn-outline-light, .alert, .footer,
-            .success-banner, .completed-notice { display: none !important; }
+            .success-banner, .completed-notice, .prescribed-notice { display: none !important; }
             .main-content { margin-left: 0 !important; padding: 0 !important; background: white !important; }
             .ultrasound-form { border: 1px solid #0B5ED7 !important; display: block !important; padding: 15px !important; max-width: 100% !important; }
             .ultrasound-form.active { display: block !important; }
@@ -1247,8 +1346,21 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ✅ ALREADY COMPLETED NOTICE -->
+    <!-- ✅ V3: PRESCRIBED STATUS NOTICE -->
     <!-- ================================================================ -->
+    <?php if (isset($_GET['saved']) && $_GET['saved'] == '1' && !empty($lab_test['visit_status']) && $lab_test['visit_status'] === 'prescribed'): ?>
+        <div class="prescribed-notice">
+            <i class="fas fa-check-double"></i>
+            <div>
+                <strong>✅ All lab tests completed!</strong>
+                Visit status updated to <strong>PRESCRIBED</strong>.
+                <br>
+                <span style="font-size:0.8rem;font-weight:400;">Doctor can now proceed with prescribing medications.</span>
+            </div>
+        </div>
+    <?php endif; ?>
+
+    <!-- ALREADY COMPLETED NOTICE -->
     <?php if ($already_completed && !isset($_GET['saved'])): ?>
         <div class="completed-notice">
             <i class="fas fa-info-circle"></i>
@@ -1337,10 +1449,25 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 <span class="detail-value"><?= htmlspecialchars($lab_test['visit_number'] ?? 'N/A') ?></span>
             </div>
             <div class="detail-row">
-                <span class="detail-label">Status</span>
+                <span class="detail-label">Test Status</span>
                 <span class="detail-value">
                     <span class="badge <?= ($lab_test['test_status'] ?? '') === 'completed' ? 'badge-success' : 'badge-warning' ?>">
                         <?= ucfirst($lab_test['test_status'] ?? 'Pending') ?>
+                    </span>
+                </span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Visit Status</span>
+                <span class="detail-value">
+                    <?php 
+                        $vs = $lab_test['visit_status'] ?? 'N/A';
+                        $vs_class = 'badge-info';
+                        if ($vs === 'prescribed') $vs_class = 'badge-purple';
+                        elseif ($vs === 'completed') $vs_class = 'badge-success';
+                        elseif ($vs === 'lab_test') $vs_class = 'badge-warning';
+                    ?>
+                    <span class="badge <?= $vs_class ?>">
+                        <?= ucfirst(str_replace('_', ' ', $vs)) ?>
                     </span>
                 </span>
             </div>
@@ -1381,7 +1508,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             </h3>
             
             <?php if ($already_completed): ?>
-                <!-- ✅ TEST COMPLETED - SHOW RESULTS ONLY -->
+                <!-- TEST COMPLETED - SHOW RESULTS ONLY -->
                 <div style="background:linear-gradient(135deg,#D1FAE5,#A7F3D0);padding:18px 22px;border-radius:12px;border-left:5px solid #059669;margin-bottom:16px;">
                     <div style="font-weight:700;color:#065F46;margin-bottom:10px;display:flex;align-items:center;gap:8px;">
                         <i class="fas fa-check-circle"></i> Result for This Test:
@@ -1512,7 +1639,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span style="color:var(--gray-300);margin:0 8px;">|</span>
-            <?= $show_ultrasound ? 'Ultrasound Report' : 'Add Result' ?>
+            <?= $show_ultrasound ? 'Ultrasound Report' : 'Add Result V3' ?>
             <span style="color:var(--gray-300);margin:0 8px;">|</span>
             Logged in as: <strong><?= htmlspecialchars($user_full_name) ?></strong>
             <span style="color:var(--gray-300);margin:0 8px;">|</span>
@@ -1532,9 +1659,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 </div>
 
 <script>
-    // ================================================================
     // DARK MODE
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1562,36 +1687,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     });
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
+    // SIDEBAR
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-    
     sidebarToggle?.addEventListener('click', function() {
         if (sidebar) sidebar.classList.toggle('open');
     });
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var el = document.getElementById('currentDateTime');
-        if (el) el.textContent = dateStr + ' • ' + timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
-    // ================================================================
     // SELECT ULTRASOUND FORM
-    // ================================================================
     function selectForm(formId, element) {
         document.querySelectorAll('.ultrasound-form').forEach(function(form) {
             form.classList.remove('active');
@@ -1607,9 +1710,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         if (element) element.classList.add('active');
     }
 
-    // ================================================================
     // FILL RESULT FROM SAMPLE
-    // ================================================================
     function fillResult(value, element) {
         var resultText = document.getElementById('resultText');
         if (resultText) {
@@ -1626,9 +1727,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     }
 
-    // ================================================================
     // FORM VALIDATION
-    // ================================================================
     document.getElementById('regularForm')?.addEventListener('submit', function(e) {
         var result = document.getElementById('resultText').value.trim();
         if (!result) {
@@ -1644,9 +1743,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         return true;
     });
 
-    // ================================================================
     // SAVE ULTRASOUND RESULT
-    // ================================================================
     function saveUltrasoundResult() {
         var activeForm = document.querySelector('.ultrasound-form.active');
         if (!activeForm) {
@@ -1679,9 +1776,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         if (form) form.submit();
     }
 
-    // ================================================================
     // CLEAR ULTRASOUND FORM
-    // ================================================================
     function clearUltrasoundForm() {
         if (!confirm('Clear all fields on the ultrasound form?')) return;
         var activeForm = document.querySelector('.ultrasound-form.active');
@@ -1696,9 +1791,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         showToast('ℹ️ Info', 'Form cleared', 'info');
     }
 
-    // ================================================================
     // PRINT ULTRASOUND FORM
-    // ================================================================
     function printUltrasoundForm() {
         var activeForm = document.querySelector('.ultrasound-form.active');
         if (!activeForm) {
@@ -1755,9 +1848,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }, 500);
     }
 
-    // ================================================================
-    // TOAST (ENGLISH)
-    // ================================================================
+    // TOAST
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1775,17 +1866,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }, 5000);
     }
 
-    // ================================================================
-    // AUTO-LOG
-    // ================================================================
-    <?php if (isset($_GET['saved']) && $_GET['saved'] == '1'): ?>
-    console.log('%c✅ Result saved successfully - page stays the same', 'font-size:14px;color:#059669;font-weight:bold;');
-    <?php endif; ?>
-
-    console.log('%c🧪 Braick - Add Result (STAY ON PAGE)', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
-    console.log('%c✅ Stays on this page after saving', 'font-size:13px;color:#34D399;font-weight:bold;');
-    console.log('%c✅ Success banner appears at the top', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ Back to In Progress button available', 'font-size:13px;color:#34D399;');
+    console.log('%c🧪 Braick - Add Result V3 (STATUS → PRESCRIBED)', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
+    console.log('%c✅ Aki-save result → visit.status = "prescribed"', 'font-size:13px;color:#7C3AED;font-weight:bold;');
+    console.log('%c✅ Auto-check: tests zote zimekamilika → PRESCRIBED', 'font-size:13px;color:#7C3AED;');
+    console.log('%c✅ Inabaki kwenye page hiyo hiyo', 'font-size:13px;color:#34D399;');
 </script>
 
 </body>

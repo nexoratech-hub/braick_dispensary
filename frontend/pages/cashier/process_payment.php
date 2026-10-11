@@ -1,14 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/process_payment.php
-// CASHIER - PROCESS PAYMENT - v21.0 (FULL = ALL ITEMS ONLY)
+// CASHIER - PROCESS PAYMENT - V27.0 FINAL FIX
 // ================================================================
-// ✅ V21.0: FULL button DISABLED kama SI items zote zimechaguliwa
-// ✅ V21.0: PARTIAL button = items zilizochaguliwa (hata moja)
-// ✅ V21.0: Partial auto-fill = selected items amount
-// ✅ V21.0: Full button enabled TU kama ZOTE zimechaguliwa
-// ✅ V20.0: If ALL selected → partial = 0 (use FULL)
-// ✅ V18.0: Duplicate auto-removal + subtotal sync
+// ✅ V27: FIX DOUBLE DEDUCTION - Lock bill + stock movements check
+// ✅ V27: Auto-repair IMEFUTWA (inasababisha double deduction)
+// ✅ V27: Stock deduction inafanyika TU wakati wa payment
+// ✅ V27: Inatumia bill_items.id kwa reference_id (SAHIHI)
+// ✅ V26.2: Lab equipment deduction kwa visit_id
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -37,14 +36,9 @@ $user_full_name = $_SESSION['full_name'] ?? 'User';
 $user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$username = $_SESSION['username'] ?? '';
-$profile_pic = $_SESSION['profile_pic'] ?? '';
-$user_email = $_SESSION['email'] ?? '';
-$user_phone = $_SESSION['phone'] ?? '';
 
 $is_admin = ($user_role === 'admin');
 $is_reception = ($user_role === 'reception');
-$is_cashier = ($user_role === 'cashier');
 
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -55,12 +49,482 @@ try {
 }
 
 // ================================================================
-// ✅ V18: REMOVE DUPLICATE BILL ITEMS
+// V27: CHECK IF ALREADY DEDUCTED (SAFE CHECK)
+// ================================================================
+function isStockAlreadyDeducted($db, $item_type, $reference_type, $reference_id, $equipment_id_or_inventory_id, $branch_id) {
+    try {
+        if ($item_type === 'medication') {
+            // For medications, check via prescription_id
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as cnt FROM stock_movements 
+                WHERE inventory_id = ? 
+                  AND reference_type = ? 
+                  AND reference_id = ?
+                  AND movement_type = 'out'
+                  AND branch_id = ?
+            ");
+            $stmt->execute([$equipment_id_or_inventory_id, $reference_type, $reference_id, $branch_id]);
+        } else {
+            // For equipment, check via equipment_id
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as cnt FROM stock_movements 
+                WHERE equipment_id = ? 
+                  AND reference_type = ? 
+                  AND reference_id = ?
+                  AND movement_type = 'out'
+                  AND branch_id = ?
+            ");
+            $stmt->execute([$equipment_id_or_inventory_id, $reference_type, $reference_id, $branch_id]);
+        }
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        return ((int)($result['cnt'] ?? 0)) > 0;
+    } catch (Exception $e) {
+        error_log("isStockAlreadyDeducted error: " . $e->getMessage());
+        return false;
+    }
+}
+
+// ================================================================
+// V27: DEDUCT MEDICATION STOCK (FIFO) - WITH SAFETY CHECK
+// ================================================================
+function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $user_id, $patient_id, $reference_type = 'prescription', $reference_id = 0, $prescription_number = '') {
+    $result = ['deducted' => 0, 'remaining' => $quantity, 'details' => [], 'errors' => [], 'skipped' => false];
+    
+    try {
+        $needed = (int)$quantity;
+        if ($needed <= 0) return $result;
+        
+        // ✅ V27: SAFETY CHECK
+        if ($reference_type === 'prescription' && $reference_id > 0) {
+            $stmt_check = $db->prepare("
+                SELECT COUNT(*) as cnt FROM stock_movements 
+                WHERE reference_type = 'prescription' 
+                  AND reference_id = ?
+                  AND movement_type = 'out'
+                  AND branch_id = ?
+            ");
+            $stmt_check->execute([$reference_id, $branch_id]);
+            $existing = (int)$stmt_check->fetch(PDO::FETCH_ASSOC)['cnt'];
+            
+            if ($existing > 0) {
+                error_log("⏭️ V27: Medication deduction SKIPPED - Rx #$reference_id already deducted");
+                $result['skipped'] = true;
+                $result['errors'][] = "Rx #$reference_id already deducted";
+                return $result;
+            }
+        }
+        
+        $clean_name = preg_replace('/\s*\(Batch:.*?\)\s*/i', '', $medication_name);
+        $clean_name = trim($clean_name);
+        
+        $stmt = $db->prepare("
+            SELECT id, medication_name, quantity, batch_number, expiry_date
+            FROM medications_inventory 
+            WHERE (LOWER(TRIM(medication_name)) = LOWER(TRIM(?)) 
+                   OR LOWER(TRIM(medication_name)) = LOWER(TRIM(?)))
+              AND branch_id = ? 
+              AND status = 'active' 
+              AND quantity > 0
+              AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
+            ORDER BY 
+                CASE WHEN expiry_date IS NULL OR expiry_date = '0000-00-00' THEN 2 ELSE 1 END ASC,
+                expiry_date ASC,
+                id ASC
+            FOR UPDATE
+        ");
+        $stmt->execute([$clean_name, $medication_name, $branch_id]);
+        $batches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        if (empty($batches)) {
+            $result['errors'][] = "No active batches found for $clean_name";
+            return $result;
+        }
+        
+        foreach ($batches as $batch) {
+            if ($needed <= 0) break;
+            
+            $batch_id = (int)$batch['id'];
+            $available = (int)$batch['quantity'];
+            $deduct = min($needed, $available);
+            $new_stock = $available - $deduct;
+            
+            $db->prepare("UPDATE medications_inventory SET quantity = ?, updated_at = NOW() WHERE id = ? AND branch_id = ?")
+               ->execute([$new_stock, $batch_id, $branch_id]);
+            
+            $result['deducted'] += $deduct;
+            $result['remaining'] -= $deduct;
+            $result['details'][] = "{$batch['batch_number']}: {$available} → {$new_stock}";
+            
+            try {
+                $notes = "V27 - Dispensed";
+                if (!empty($prescription_number)) $notes .= " - Rx #{$prescription_number}";
+                $notes .= " - Qty: {$deduct} - Batch: " . ($batch['batch_number'] ?? 'N/A');
+                
+                $db->prepare("
+                    INSERT INTO stock_movements 
+                    (inventory_id, patient_id, movement_type, quantity, previous_stock, new_stock, 
+                     reference_type, reference_id, performed_by, branch_id, notes, created_at)
+                    VALUES (?, ?, 'out', ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                ")->execute([
+                    $batch_id, $patient_id, $deduct, $available, $new_stock,
+                    $reference_type, $reference_id, $user_id, $branch_id, $notes
+                ]);
+            } catch (Exception $e) {
+                error_log("V27 stock_movements insert error (med): " . $e->getMessage());
+            }
+            
+            $needed -= $deduct;
+        }
+        
+        if ($needed > 0) {
+            $result['errors'][] = "Insufficient stock for $clean_name (needed {$needed} more)";
+        }
+    } catch (Exception $e) {
+        $result['errors'][] = "System error: " . $e->getMessage();
+        error_log("V27 deductMedicationStock error: " . $e->getMessage());
+    }
+    
+    return $result;
+}
+
+// ================================================================
+// V27: DEDUCT EQUIPMENT STOCK - WITH SAFETY CHECK
+// ================================================================
+function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_id, $patient_id, $reference_type = 'procedure', $reference_id = 0, $notes = '') {
+    $result = ['deducted' => 0, 'details' => [], 'errors' => [], 'skipped' => false];
+    
+    try {
+        $eq_id = (int)$equipment_id;
+        $qty = (int)$quantity;
+        
+        if ($eq_id <= 0 || $qty <= 0) {
+            $result['errors'][] = "Invalid equipment ID or quantity";
+            return $result;
+        }
+        
+        // ✅ V27: SAFETY CHECK - Check if already deducted
+        $stmt_check = $db->prepare("
+            SELECT COUNT(*) as cnt FROM stock_movements 
+            WHERE equipment_id = ? 
+              AND reference_type = ?
+              AND reference_id = ?
+              AND movement_type = 'out'
+              AND branch_id = ?
+        ");
+        $stmt_check->execute([$eq_id, $reference_type, $reference_id, $branch_id]);
+        $existing = (int)$stmt_check->fetch(PDO::FETCH_ASSOC)['cnt'];
+        
+        if ($existing > 0) {
+            error_log("⏭️ V27: Equipment #$eq_id SKIPPED - reference $reference_type #$reference_id already deducted");
+            $result['skipped'] = true;
+            $result['errors'][] = "Equipment #$eq_id already deducted for $reference_type #$reference_id";
+            return $result;
+        }
+        
+        $stmt = $db->prepare("
+            SELECT id, equipment_name, quantity as stock, batch_number, status, branch_id 
+            FROM medical_equipment 
+            WHERE id = ? AND branch_id = ? 
+            FOR UPDATE
+        ");
+        $stmt->execute([$eq_id, $branch_id]);
+        $equip = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$equip) {
+            $result['errors'][] = "Equipment #$eq_id not found in branch $branch_id";
+            return $result;
+        }
+        
+        if ($equip['status'] !== 'active') {
+            $result['errors'][] = "{$equip['equipment_name']} is not active";
+            return $result;
+        }
+        
+        $previous_stock = (int)$equip['stock'];
+        
+        if ($previous_stock < $qty) {
+            $result['errors'][] = "Insufficient stock for {$equip['equipment_name']} (have: $previous_stock, need: $qty)";
+            return $result;
+        }
+        
+        $new_stock = $previous_stock - $qty;
+        
+        $db->prepare("UPDATE medical_equipment SET quantity = ?, updated_at = NOW() WHERE id = ? AND branch_id = ?")
+           ->execute([$new_stock, $eq_id, $branch_id]);
+        
+        $result['deducted'] = $qty;
+        $result['details'][] = "{$equip['equipment_name']}: {$previous_stock} → {$new_stock}";
+        
+        try {
+            $log_notes = !empty($notes) ? $notes : "V27 - Equipment used";
+            $log_notes .= " | Batch: " . ($equip['batch_number'] ?? 'N/A');
+            $log_notes .= " | Stock: {$previous_stock} → {$new_stock}";
+            
+            $db->prepare("
+                INSERT INTO stock_movements 
+                (equipment_id, patient_id, movement_type, quantity, previous_stock, new_stock, 
+                 reference_type, reference_id, performed_by, branch_id, notes, created_at)
+                VALUES (?, ?, 'out', ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            ")->execute([
+                $eq_id, $patient_id, $qty, $previous_stock, $new_stock,
+                $reference_type, $reference_id, $user_id, $branch_id, $log_notes
+            ]);
+            
+            error_log("✅ V27: Equipment {$equip['equipment_name']} deducted $qty ($previous_stock → $new_stock) for $reference_type #$reference_id");
+        } catch (Exception $e) {
+            error_log("V27 stock_movements insert error (equip): " . $e->getMessage());
+        }
+    } catch (Exception $e) {
+        $result['errors'][] = "System error: " . $e->getMessage();
+        error_log("V27 deductEquipmentStock error: " . $e->getMessage());
+    }
+    
+    return $result;
+}
+
+// ================================================================
+// V27: DEDUCT ALL STOCK FOR PAID BILL
+// ✅ Inaitwa TU kwenye PAYMENT (sio page load)
+// ✅ Ina SAFETY CHECK kabla ya kila deduction
+// ✅ Inatumia bill_items.id kwa reference_id (SAHIHI)
+// ================================================================
+function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
+    $result = [
+        'medications_deducted' => 0,
+        'medication_items' => 0,
+        'equipment_deducted' => 0,
+        'equipment_items' => 0,
+        'lab_equipment_deducted' => 0,
+        'lab_equipment_items' => 0,
+        'skipped' => 0,
+        'errors' => []
+    ];
+    
+    try {
+        error_log("═══════════════════════════════════════════════════════");
+        error_log("🔍 V27: deductAllStockForPaidBill START - Bill #$bill_id");
+        error_log("═══════════════════════════════════════════════════════");
+        
+        // ✅ SAFETY CHECK 1: Verify bill is FULLY PAID
+        $stmt_check = $db->prepare("SELECT status, balance, visit_id FROM bills WHERE id = ? AND branch_id = ? FOR UPDATE");
+        $stmt_check->execute([$bill_id, $branch_id]);
+        $bill_check = $stmt_check->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$bill_check) {
+            $result['errors'][] = "Bill #$bill_id not found";
+            return $result;
+        }
+        
+        if ($bill_check['status'] !== 'paid' || (float)$bill_check['balance'] > 0.01) {
+            error_log("⏭️ V27: Bill #$bill_id NOT fully paid - SKIPPING");
+            return $result;
+        }
+        
+        $bill_visit_id = (int)$bill_check['visit_id'];
+        
+        // ============================================================
+        // 1. MEDICATIONS FROM PRESCRIPTIONS
+        // ============================================================
+        $stmt = $db->prepare("
+            SELECT DISTINCT p.id as prescription_id, p.patient_id, p.prescription_number
+            FROM prescriptions p
+            INNER JOIN bill_items bi ON bi.reference_id = p.id AND bi.reference_type = 'prescription'
+            WHERE bi.bill_id = ? AND bi.branch_id = ? 
+              AND bi.item_type = 'medication'
+              AND bi.status != 'cancelled'
+              AND p.status IN ('confirmed', 'dispensed')
+        ");
+        $stmt->execute([$bill_id, $branch_id]);
+        $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($prescriptions as $pres) {
+            $prescription_id = $pres['prescription_id'];
+            $patient_id = $pres['patient_id'];
+            $prescription_number = $pres['prescription_number'];
+            
+            // ✅ SAFETY CHECK 2: Check if already deducted
+            $stmt_check_disp = $db->prepare("
+                SELECT COUNT(*) as dispensed_count 
+                FROM prescription_items 
+                WHERE prescription_id = ? AND dispensed_at IS NOT NULL AND cancelled_at IS NULL
+            ");
+            $stmt_check_disp->execute([$prescription_id]);
+            $already_dispensed = (int)$stmt_check_disp->fetch(PDO::FETCH_ASSOC)['dispensed_count'];
+            
+            if ($already_dispensed > 0) {
+                error_log("⏭️ V27: Rx #$prescription_number already dispensed - SKIPPING");
+                $result['skipped']++;
+                continue;
+            }
+            
+            $stmt_items = $db->prepare("
+                SELECT * FROM prescription_items 
+                WHERE prescription_id = ? 
+                  AND cancelled_at IS NULL 
+                  AND quantity > 0
+            ");
+            $stmt_items->execute([$prescription_id]);
+            $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
+            
+            foreach ($items as $item) {
+                $med_name = preg_replace('/\s*\(Batch:.*?\)\s*/i', '', $item['medication_name']);
+                $med_name = trim($med_name);
+                
+                $deduct_result = deductMedicationStock(
+                    $db, $med_name, $item['quantity'], $branch_id, $user_id, $patient_id,
+                    'prescription', $prescription_id, $prescription_number
+                );
+                
+                if ($deduct_result['deducted'] > 0) {
+                    $result['medications_deducted'] += $deduct_result['deducted'];
+                    $result['medication_items']++;
+                }
+                if ($deduct_result['skipped']) {
+                    $result['skipped']++;
+                }
+                if (!empty($deduct_result['errors'])) {
+                    $result['errors'] = array_merge($result['errors'], $deduct_result['errors']);
+                }
+            }
+            
+            // Mark prescription as dispensed
+            $db->prepare("
+                UPDATE prescriptions 
+                SET status = 'dispensed', dispensed_at = NOW(), updated_at = NOW(), pharmacy_id = ?
+                WHERE id = ? AND branch_id = ? AND status = 'confirmed'
+            ")->execute([$user_id, $prescription_id, $branch_id]);
+            
+            $db->prepare("
+                UPDATE prescription_items 
+                SET dispensed_at = NOW(), dispensed_by = ? 
+                WHERE prescription_id = ? AND cancelled_at IS NULL
+            ")->execute([$user_id, $prescription_id]);
+        }
+        
+        // ============================================================
+        // 2. EQUIPMENT (DIRECT BILL ITEMS)
+        // ✅ V27: SAFETY CHECK kwa kila item
+        // ============================================================
+        $stmt = $db->prepare("
+            SELECT bi.id as bill_item_id, bi.item_id as equipment_id, bi.quantity, 
+                   bi.item_name, me.equipment_name
+            FROM bill_items bi
+            INNER JOIN medical_equipment me ON bi.item_id = me.id 
+                AND bi.item_type = 'equipment'
+                AND me.branch_id = bi.branch_id
+            WHERE bi.bill_id = ? AND bi.branch_id = ?
+              AND bi.item_type = 'equipment'
+              AND bi.status != 'cancelled'
+        ");
+        $stmt->execute([$bill_id, $branch_id]);
+        $equipment_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($equipment_items as $eq) {
+            $equipment_id = (int)$eq['equipment_id'];
+            $qty_needed = (int)$eq['quantity'];
+            $bill_item_id = (int)$eq['bill_item_id'];
+            
+            if ($equipment_id <= 0 || $qty_needed <= 0) continue;
+            
+            $stmt_patient = $db->prepare("SELECT patient_id FROM bills WHERE id = ?");
+            $stmt_patient->execute([$bill_id]);
+            $patient_id = (int)$stmt_patient->fetchColumn();
+            
+            // ✅ V27: Use bill_item_id as reference_id (SAHIHI)
+            $deduct_result = deductEquipmentStock(
+                $db, $equipment_id, $qty_needed, $branch_id, $user_id, $patient_id,
+                'equipment', $bill_item_id,
+                "V27 - Equipment - Bill #{$bill_id} - {$eq['equipment_name']}"
+            );
+            
+            if ($deduct_result['deducted'] > 0) {
+                $result['equipment_deducted'] += $deduct_result['deducted'];
+                $result['equipment_items']++;
+            }
+            if ($deduct_result['skipped']) {
+                $result['skipped']++;
+            }
+            if (!empty($deduct_result['errors'])) {
+                $result['errors'] = array_merge($result['errors'], $deduct_result['errors']);
+            }
+        }
+        
+        // ============================================================
+        // 3. LAB-LINKED EQUIPMENT (V26.2 FIX)
+        // ✅ Inatumia visit_id (haitegemei bill_items.reference_id)
+        // ============================================================
+        if ($bill_visit_id > 0) {
+            $stmt = $db->prepare("
+                SELECT 
+                    lt.id as lab_test_id,
+                    lt.test_id,
+                    lt.test_name,
+                    lt.patient_id,
+                    lt.branch_id,
+                    lt.visit_id,
+                    lte.equipment_id,
+                    me.equipment_name,
+                    me.quantity as current_stock
+                FROM lab_tests lt
+                INNER JOIN lab_test_equipment lte 
+                    ON lte.lab_test_id = lt.test_id
+                    AND lte.branch_id = lt.branch_id
+                INNER JOIN medical_equipment me 
+                    ON lte.equipment_id = me.id
+                    AND me.branch_id = lt.branch_id
+                WHERE lt.branch_id = ?
+                  AND lt.visit_id = ?
+                  AND lt.status != 'cancelled'
+                  AND me.status = 'active'
+            ");
+            $stmt->execute([$branch_id, $bill_visit_id]);
+            $lab_equipment_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            foreach ($lab_equipment_items as $eq) {
+                $equipment_id = (int)$eq['equipment_id'];
+                $lab_test_id = (int)$eq['lab_test_id'];
+                $patient_id = (int)$eq['patient_id'];
+                $quantity_used = 1;
+                
+                if ($equipment_id <= 0) continue;
+                
+                // ✅ V27: Use lab_test_id as reference_id
+                $deduct_result = deductEquipmentStock(
+                    $db, $equipment_id, $quantity_used, $branch_id, $user_id, $patient_id,
+                    'lab_test', $lab_test_id,
+                    "V27 - Lab equipment - {$eq['test_name']} - Lab #{$lab_test_id}"
+                );
+                
+                if ($deduct_result['deducted'] > 0) {
+                    $result['lab_equipment_deducted'] += $deduct_result['deducted'];
+                    $result['lab_equipment_items']++;
+                }
+                if ($deduct_result['skipped']) {
+                    $result['skipped']++;
+                }
+                if (!empty($deduct_result['errors'])) {
+                    $result['errors'] = array_merge($result['errors'], $deduct_result['errors']);
+                }
+            }
+        }
+        
+        error_log("✅ V27: Bill #$bill_id done - Meds: {$result['medications_deducted']}, Equip: {$result['equipment_deducted']}, Lab Equip: {$result['lab_equipment_deducted']}, Skipped: {$result['skipped']}");
+        
+    } catch (Exception $e) {
+        $result['errors'][] = "System error: " . $e->getMessage();
+        error_log("V27 deductAllStockForPaidBill error: " . $e->getMessage());
+    }
+    
+    return $result;
+}
+
+// ================================================================
+// V27: HELPER FUNCTIONS
 // ================================================================
 function removeDuplicateBillItems($db, $branch_id) {
     try {
         $stmt = $db->prepare("
-            SELECT bi1.id as keep_id, bi2.id as delete_id, bi2.bill_id, bi2.item_name
+            SELECT bi1.id as keep_id, bi2.id as delete_id, bi2.bill_id
             FROM bill_items bi1
             INNER JOIN bill_items bi2 
                 ON bi1.bill_id = bi2.bill_id
@@ -70,8 +534,7 @@ function removeDuplicateBillItems($db, $branch_id) {
                 AND COALESCE(bi1.reference_type, '') = COALESCE(bi2.reference_type, '')
                 AND bi1.id < bi2.id
             INNER JOIN bills b ON bi1.bill_id = b.id
-            WHERE b.branch_id = ?
-            AND bi2.status != 'cancelled'
+            WHERE b.branch_id = ? AND bi2.status != 'cancelled'
         ");
         $stmt->execute([$branch_id]);
         $duplicates = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -91,34 +554,21 @@ function removeDuplicateBillItems($db, $branch_id) {
             recalculateBillSubtotal($db, $bill_id, $branch_id);
         }
         return $deleted;
-    } catch (Exception $e) {
-        return 0;
-    }
+    } catch (Exception $e) { return 0; }
 }
 
-// ================================================================
-// ✅ V18: RECALCULATE BILL SUBTOTAL
-// ================================================================
 function recalculateBillSubtotal($db, $bill_id, $branch_id) {
     try {
-        $stmt = $db->prepare("
-            SELECT COALESCE(SUM(total_price), 0) as new_subtotal
-            FROM bill_items WHERE bill_id = ? AND branch_id = ? AND status != 'cancelled'
-        ");
+        $stmt = $db->prepare("SELECT COALESCE(SUM(total_price), 0) as new_subtotal FROM bill_items WHERE bill_id = ? AND branch_id = ? AND status != 'cancelled'");
         $stmt->execute([$bill_id, $branch_id]);
         $new_subtotal = (float)($stmt->fetch(PDO::FETCH_ASSOC)['new_subtotal'] ?? 0);
         
-        $stmt_bill = $db->prepare("
-            SELECT subtotal, pharmacy_discount, cashier_discount, 
-                   pharmacy_premium, cashier_premium, paid_amount
-            FROM bills WHERE id = ? AND branch_id = ?
-        ");
+        $stmt_bill = $db->prepare("SELECT subtotal, pharmacy_discount, cashier_discount, pharmacy_premium, cashier_premium, paid_amount FROM bills WHERE id = ? AND branch_id = ?");
         $stmt_bill->execute([$bill_id, $branch_id]);
         $bill = $stmt_bill->fetch(PDO::FETCH_ASSOC);
         if (!$bill) return false;
         
-        $old_subtotal = (float)$bill['subtotal'];
-        if (abs($old_subtotal - $new_subtotal) < 0.01) return false;
+        if (abs((float)$bill['subtotal'] - $new_subtotal) < 0.01) return false;
         
         $pharmacy_discount = (float)$bill['pharmacy_discount'];
         $cashier_discount = (float)$bill['cashier_discount'];
@@ -149,20 +599,11 @@ function recalculateBillSubtotal($db, $bill_id, $branch_id) {
             UPDATE bills SET subtotal = ?, total_discount = ?, premium_amount = ?,
                 total_amount = ?, paid_amount = ?, balance = ?, status = ?, updated_at = NOW()
             WHERE id = ? AND branch_id = ?
-        ")->execute([
-            $new_subtotal, $total_discount, $total_premium,
-            $new_total, $paid_amount, $new_balance,
-            $new_status, $bill_id, $branch_id
-        ]);
+        ")->execute([$new_subtotal, $total_discount, $total_premium, $new_total, $paid_amount, $new_balance, $new_status, $bill_id, $branch_id]);
         return true;
-    } catch (Exception $e) {
-        return false;
-    }
+    } catch (Exception $e) { return false; }
 }
 
-// ================================================================
-// ✅ SYNC PROCEDURES STATUS (with EQUIPMENT support)
-// ================================================================
 function syncProceduresStatus($db, $bill_id, $branch_id) {
     try {
         $stmt_bill = $db->prepare("SELECT status, balance FROM bills WHERE id = ? AND branch_id = ?");
@@ -170,129 +611,33 @@ function syncProceduresStatus($db, $bill_id, $branch_id) {
         $bill = $stmt_bill->fetch(PDO::FETCH_ASSOC);
         if (!$bill) return 0;
         
-        $bill_status = $bill['status'];
-        $bill_balance = (float)$bill['balance'];
-        
         $procedure_status = 'pending';
-        if ($bill_status === 'paid' && $bill_balance <= 0.01) $procedure_status = 'completed';
-        elseif ($bill_status === 'partial') $procedure_status = 'in_progress';
+        if ($bill['status'] === 'paid' && (float)$bill['balance'] <= 0.01) $procedure_status = 'completed';
+        elseif ($bill['status'] === 'partial') $procedure_status = 'in_progress';
         
-        // ✅ V21: Include BOTH procedure AND equipment
         $stmt = $db->prepare("
             SELECT DISTINCT bi.reference_id, bi.item_type 
             FROM bill_items bi
-            WHERE bi.bill_id = ?
-            AND bi.item_type IN ('procedure', 'equipment')
-            AND bi.reference_id IS NOT NULL
-            AND bi.reference_id > 0
+            WHERE bi.bill_id = ? AND bi.item_type IN ('procedure', 'equipment')
+            AND bi.reference_id IS NOT NULL AND bi.reference_id > 0
             AND bi.status != 'cancelled'
         ");
         $stmt->execute([$bill_id]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        if (empty($rows)) return 0;
         
         $updated_count = 0;
         foreach ($rows as $row) {
-            $ref_id = $row['reference_id'];
-            $item_type = $row['item_type'];
-            
-            // ✅ Determine table
-            $table = ($item_type === 'equipment') ? 'equipment' : 'procedures';
-            
+            $table = ($row['item_type'] === 'equipment') ? 'equipment' : 'procedures';
             try {
-                $stmt_update = $db->prepare("
-                    UPDATE $table SET status = ?, updated_at = NOW()
-                    WHERE id = ? AND branch_id = ? AND status != 'cancelled'
-                ");
-                $stmt_update->execute([$procedure_status, $ref_id, $branch_id]);
+                $stmt_update = $db->prepare("UPDATE $table SET status = ?, updated_at = NOW() WHERE id = ? AND branch_id = ? AND status != 'cancelled'");
+                $stmt_update->execute([$procedure_status, $row['reference_id'], $branch_id]);
                 if ($stmt_update->rowCount() > 0) $updated_count++;
-            } catch (Exception $e) {
-                // Table haina updated_at? Jaribu bila updated_at
-                try {
-                    $stmt_update = $db->prepare("
-                        UPDATE $table SET status = ?
-                        WHERE id = ? AND branch_id = ? AND status != 'cancelled'
-                    ");
-                    $stmt_update->execute([$procedure_status, $ref_id, $branch_id]);
-                    if ($stmt_update->rowCount() > 0) $updated_count++;
-                } catch (Exception $e2) {
-                    error_log("❌ Cannot update $table #$ref_id: " . $e2->getMessage());
-                }
-            }
+            } catch (Exception $e) {}
         }
         return $updated_count;
-    } catch (Exception $e) {
-        return 0;
-    }
+    } catch (Exception $e) { return 0; }
 }
 
-// ================================================================
-// ✅ SYNC ALL PROCEDURES + EQUIPMENT
-// ================================================================
-function syncAllProcedures($db, $branch_id) {
-    try {
-        $stmt = $db->prepare("
-            SELECT p.id as ref_id, p.status as ref_status, bi.item_type,
-                b.id as bill_id, b.status as bill_status, b.balance as bill_balance
-            FROM bill_items bi
-            INNER JOIN bills b ON bi.bill_id = b.id
-            LEFT JOIN procedures p ON bi.reference_id = p.id AND bi.item_type = 'procedure'
-            LEFT JOIN equipment e ON bi.reference_id = e.id AND bi.item_type = 'equipment'
-            WHERE b.branch_id = ?
-            AND bi.item_type IN ('procedure', 'equipment')
-            AND bi.status != 'cancelled'
-            AND b.status IN ('paid', 'partial')
-        ");
-        $stmt->execute([$branch_id]);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        $fixed = 0;
-        $seen = [];
-        foreach ($rows as $row) {
-            $ref_id = $row['ref_id'];
-            $item_type = $row['item_type'];
-            $key = $item_type . '_' . $ref_id;
-            if (isset($seen[$key])) continue;
-            $seen[$key] = true;
-            
-            if (!$ref_id) continue;
-            
-            $expected_status = 'pending';
-            if ($row['bill_status'] === 'paid' && (float)$row['bill_balance'] <= 0.01) {
-                $expected_status = 'completed';
-            } elseif ($row['bill_status'] === 'partial') {
-                $expected_status = 'in_progress';
-            }
-            
-            $table = ($item_type === 'equipment') ? 'equipment' : 'procedures';
-            
-            try {
-                $stmt_update = $db->prepare("
-                    UPDATE $table SET status = ?, updated_at = NOW()
-                    WHERE id = ? AND branch_id = ? AND status != 'cancelled'
-                ");
-                $stmt_update->execute([$expected_status, $ref_id, $branch_id]);
-                if ($stmt_update->rowCount() > 0) $fixed++;
-            } catch (Exception $e) {
-                try {
-                    $stmt_update = $db->prepare("
-                        UPDATE $table SET status = ?
-                        WHERE id = ? AND branch_id = ? AND status != 'cancelled'
-                    ");
-                    $stmt_update->execute([$expected_status, $ref_id, $branch_id]);
-                    if ($stmt_update->rowCount() > 0) $fixed++;
-                } catch (Exception $e2) {}
-            }
-        }
-        return $fixed;
-    } catch (Exception $e) {
-        return 0;
-    }
-}
-
-// ================================================================
-// ✅ HELPER FUNCTIONS
-// ================================================================
 function isVisitReadyForCompletion($db, $visit_id, $branch_id) {
     if (empty($visit_id) || $visit_id <= 0) return false;
     try {
@@ -303,92 +648,7 @@ function isVisitReadyForCompletion($db, $visit_id, $branch_id) {
         if ($visit['status'] !== 'waiting') return false;
         if ((int)$visit['is_completed'] === 1) return false;
         return true;
-    } catch (Exception $e) {
-        return false;
-    }
-}
-
-function autoDispensePrescriptions($db, $bill_id, $branch_id, $user_id) {
-    try {
-        $stmt = $db->prepare("
-            SELECT DISTINCT p.id as prescription_id, p.patient_id, p.prescription_number
-            FROM prescriptions p
-            INNER JOIN bill_items bi ON bi.reference_id = p.id AND bi.reference_type = 'prescription'
-            WHERE bi.bill_id = ? AND bi.branch_id = ? AND bi.item_type = 'medication'
-            AND bi.status != 'cancelled' AND p.status = 'confirmed'
-        ");
-        $stmt->execute([$bill_id, $branch_id]);
-        $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        if (empty($prescriptions)) return 0;
-        
-        $dispensed_count = 0;
-        foreach ($prescriptions as $pres) {
-            $prescription_id = $pres['prescription_id'];
-            $stmt_items = $db->prepare("SELECT * FROM prescription_items WHERE prescription_id = ?");
-            $stmt_items->execute([$prescription_id]);
-            $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
-            if (empty($items)) continue;
-            
-            $can_dispense = true;
-            foreach ($items as $item) {
-                $stmt_stock = $db->prepare("
-                    SELECT SUM(quantity) as total_available FROM medications_inventory 
-                    WHERE medication_name = ? AND branch_id = ? AND status = 'active' AND quantity > 0
-                ");
-                $stmt_stock->execute([$item['medication_name'], $branch_id]);
-                $available = (int)($stmt_stock->fetch(PDO::FETCH_ASSOC)['total_available'] ?? 0);
-                if ($available < $item['quantity']) { $can_dispense = false; break; }
-            }
-            if (!$can_dispense) continue;
-            
-            $stmt_update = $db->prepare("
-                UPDATE prescriptions SET status = 'dispensed', dispensed_at = NOW(), 
-                    updated_at = NOW(), pharmacy_id = ?
-                WHERE id = ? AND branch_id = ? AND status = 'confirmed'
-            ");
-            $stmt_update->execute([$user_id, $prescription_id, $branch_id]);
-            if ($stmt_update->rowCount() === 0) continue;
-            
-            $db->prepare("UPDATE prescription_items SET dispensed_at = NOW(), dispensed_by = ? WHERE prescription_id = ?")
-               ->execute([$user_id, $prescription_id]);
-            
-            foreach ($items as $item) {
-                $needed = (int)$item['quantity'];
-                $stmt_batches = $db->prepare("
-                    SELECT id, quantity FROM medications_inventory 
-                    WHERE medication_name = ? AND branch_id = ? AND status = 'active' AND quantity > 0 
-                    ORDER BY expiry_date ASC
-                ");
-                $stmt_batches->execute([$item['medication_name'], $branch_id]);
-                $batches = $stmt_batches->fetchAll(PDO::FETCH_ASSOC);
-                
-                foreach ($batches as $batch) {
-                    if ($needed <= 0) break;
-                    $deduct = min($needed, (int)$batch['quantity']);
-                    $new_qty = (int)$batch['quantity'] - $deduct;
-                    
-                    $db->prepare("UPDATE medications_inventory SET quantity = ?, updated_at = NOW() WHERE id = ? AND branch_id = ?")
-                       ->execute([$new_qty, $batch['id'], $branch_id]);
-                    
-                    $db->prepare("
-                        INSERT INTO stock_movements 
-                        (inventory_id, patient_id, movement_type, quantity, previous_stock, new_stock, 
-                         reference_type, reference_id, performed_by, branch_id, notes, created_at)
-                        VALUES (?, ?, 'out', ?, ?, ?, 'prescription', ?, ?, ?, ?, NOW())
-                    ")->execute([
-                        $batch['id'], $pres['patient_id'], $deduct, (int)$batch['quantity'], $new_qty,
-                        $prescription_id, $user_id, $branch_id,
-                        "Auto-dispensed - Rx #{$pres['prescription_number']}"
-                    ]);
-                    $needed -= $deduct;
-                }
-            }
-            $dispensed_count++;
-        }
-        return $dispensed_count;
-    } catch (Exception $e) {
-        return 0;
-    }
+    } catch (Exception $e) { return false; }
 }
 
 function updateVisitPaymentStatus($db, $visit_id, $branch_id) {
@@ -399,8 +659,7 @@ function updateVisitPaymentStatus($db, $visit_id, $branch_id) {
         $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         if (empty($bills)) {
-            $db->prepare("UPDATE visits SET payment_status = 'pending', visit_total = 0, updated_at = NOW() WHERE id = ? AND branch_id = ?")
-               ->execute([$visit_id, $branch_id]);
+            $db->prepare("UPDATE visits SET payment_status = 'pending', visit_total = 0, updated_at = NOW() WHERE id = ? AND branch_id = ?")->execute([$visit_id, $branch_id]);
             return true;
         }
         
@@ -427,9 +686,7 @@ function updateVisitPaymentStatus($db, $visit_id, $branch_id) {
         $db->prepare("UPDATE visits SET payment_status = ?, visit_total = ?, total_discount = ?, updated_at = NOW() WHERE id = ? AND branch_id = ?")
            ->execute([$visit_payment_status, $visit_total, $visit_discount, $visit_id, $branch_id]);
         return true;
-    } catch (Exception $e) {
-        return false;
-    }
+    } catch (Exception $e) { return false; }
 }
 
 function updateVisitCompletionStatus($db, $visit_id, $branch_id) {
@@ -458,25 +715,7 @@ function updateVisitCompletionStatus($db, $visit_id, $branch_id) {
             return $stmt->rowCount() > 0;
         }
         return false;
-    } catch (Exception $e) {
-        return false;
-    }
-}
-
-function getPendingPrescriptionCount($db, $bill_id) {
-    try {
-        $stmt = $db->prepare("
-            SELECT COUNT(*) as pending_count FROM bill_items bi
-            LEFT JOIN prescriptions pr ON bi.reference_id = pr.id AND bi.reference_type = 'prescription'
-            WHERE bi.bill_id = ? AND bi.item_type = 'medication' 
-            AND bi.reference_type = 'prescription' AND bi.status != 'cancelled'
-            AND (pr.status IS NULL OR pr.status NOT IN ('confirmed', 'dispensed'))
-        ");
-        $stmt->execute([$bill_id]);
-        return (int)($stmt->fetch(PDO::FETCH_ASSOC)['pending_count'] ?? 0);
-    } catch (Exception $e) {
-        return 0;
-    }
+    } catch (Exception $e) { return false; }
 }
 
 function autoCompleteVisits($db, $visit_ids, $branch_id) {
@@ -487,8 +726,7 @@ function autoCompleteVisits($db, $visit_ids, $branch_id) {
             if ($visit_id <= 0) continue;
             if (!isVisitReadyForCompletion($db, $visit_id, $branch_id)) continue;
             $stmt_visit = $db->prepare("
-                SELECT v.id, v.is_completed, COALESCE(SUM(b.balance), 0) as total_balance,
-                       COUNT(b.id) as bill_count
+                SELECT v.id, v.is_completed, COALESCE(SUM(b.balance), 0) as total_balance, COUNT(b.id) as bill_count
                 FROM visits v
                 LEFT JOIN bills b ON b.visit_id = v.id AND b.status != 'cancelled'
                 WHERE v.id = ? AND v.branch_id = ? GROUP BY v.id
@@ -510,9 +748,7 @@ function autoCompleteVisits($db, $visit_ids, $branch_id) {
             }
         }
         return $completed_count;
-    } catch (Exception $e) {
-        return 0;
-    }
+    } catch (Exception $e) { return 0; }
 }
 
 function recalculateBillTotals($db, $bill_id, $branch_id) {
@@ -528,9 +764,7 @@ function recalculateBillTotals($db, $bill_id, $branch_id) {
     
     $subtotal = (float)$bill['subtotal'];
     $pharmacy_discount = (float)($bill['pharmacy_discount'] ?? 0);
-    if ($pharmacy_discount == 0 && (float)$bill['discount_amount'] > 0) {
-        $pharmacy_discount = (float)$bill['discount_amount'];
-    }
+    if ($pharmacy_discount == 0 && (float)$bill['discount_amount'] > 0) $pharmacy_discount = (float)$bill['discount_amount'];
     $cashier_discount = (float)($bill['cashier_discount'] ?? 0);
     $pharmacy_premium = (float)($bill['pharmacy_premium'] ?? 0);
     $cashier_premium = (float)($bill['cashier_premium'] ?? 0);
@@ -555,10 +789,7 @@ function recalculateBillTotals($db, $bill_id, $branch_id) {
         UPDATE bills SET total_discount = ?, premium_amount = ?, total_amount = ?, 
             paid_amount = ?, balance = ?, status = ?, updated_at = NOW()
         WHERE id = ? AND branch_id = ?
-    ")->execute([
-        $total_discount, $total_premium, $total_amount,
-        $paid_amount, $balance, $status, $bill_id, $branch_id
-    ]);
+    ")->execute([$total_discount, $total_premium, $total_amount, $paid_amount, $balance, $status, $bill_id, $branch_id]);
     
     return [
         'subtotal' => $subtotal, 'pharmacy_discount' => $pharmacy_discount,
@@ -583,41 +814,8 @@ try {
     }
     $currency = $settings['currency'] ?? 'TSh';
 
-    if (isset($_GET['ajax']) && $_GET['ajax'] == '1') {
-        header('Content-Type: application/json');
-        $totals = ['subtotal' => 0, 'total_amount' => 0, 'total_paid' => 0, 'total_balance' => 0, 'total_discount' => 0, 'total_pharmacy_discount' => 0, 'total_cashier_discount' => 0, 'total_premium' => 0, 'total_pharmacy_premium' => 0, 'total_cashier_premium' => 0];
-        try {
-            $stmt = $db->prepare("
-                SELECT COALESCE(SUM(subtotal), 0) as subtotal, COALESCE(SUM(total_amount), 0) as total_amount,
-                    COALESCE(SUM(paid_amount), 0) as total_paid, COALESCE(SUM(balance), 0) as total_balance,
-                    COALESCE(SUM(total_discount), 0) as total_discount, COALESCE(SUM(pharmacy_discount), 0) as total_pharmacy_discount,
-                    COALESCE(SUM(cashier_discount), 0) as total_cashier_discount, COALESCE(SUM(pharmacy_premium), 0) as total_pharmacy_premium,
-                    COALESCE(SUM(cashier_premium), 0) as total_cashier_premium, COALESCE(SUM(premium_amount), 0) as total_premium
-                FROM bills WHERE branch_id = ? AND status != 'cancelled'
-            ");
-            $stmt->execute([$user_branch_id]);
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($result) {
-                $totals['subtotal'] = (float)$result['subtotal'];
-                $totals['total_amount'] = (float)$result['total_amount'];
-                $totals['total_paid'] = (float)$result['total_paid'];
-                $totals['total_balance'] = (float)$result['total_balance'];
-                $totals['total_discount'] = (float)$result['total_discount'];
-                $totals['total_pharmacy_discount'] = (float)$result['total_pharmacy_discount'];
-                $totals['total_cashier_discount'] = (float)$result['total_cashier_discount'];
-                $totals['total_pharmacy_premium'] = (float)$result['total_pharmacy_premium'];
-                $totals['total_cashier_premium'] = (float)$result['total_cashier_premium'];
-                $totals['total_premium'] = (float)$result['total_premium'];
-            }
-            echo json_encode(['success' => true, 'totals' => $totals]);
-        } catch (Exception $e) {
-            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
-        }
-        exit;
-    }
-
     // ================================================================
-    // ✅ HANDLE PAYMENT PROCESSING - v21.0
+    // V27: HANDLE PAYMENT
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         header('Content-Type: application/json');
@@ -642,22 +840,9 @@ try {
             }
             
             try {
-                removeDuplicateBillItems($db, $user_branch_id);
-                
-                try {
-                    $ids_safe = implode(',', array_map('intval', $item_ids));
-                    $stmt_bills = $db->prepare("
-                        SELECT DISTINCT b.id FROM bills b
-                        WHERE b.branch_id = ? AND b.status != 'cancelled'
-                        AND b.id IN (SELECT DISTINCT bill_id FROM bill_items WHERE id IN ($ids_safe))
-                    ");
-                    $stmt_bills->execute([$user_branch_id]);
-                    foreach ($stmt_bills->fetchAll(PDO::FETCH_COLUMN) as $abid) {
-                        recalculateBillSubtotal($db, $abid, $user_branch_id);
-                    }
-                } catch (Exception $e) {}
-                
                 $db->beginTransaction();
+                
+                removeDuplicateBillItems($db, $user_branch_id);
                 
                 $placeholders = implode(',', array_fill(0, count($item_ids), '?'));
                 $stmt = $db->prepare("
@@ -678,6 +863,7 @@ try {
                     FROM bill_items bi
                     JOIN bills b ON bi.bill_id = b.id
                     WHERE bi.id IN ($placeholders) AND bi.status != 'paid' AND bi.status != 'cancelled'
+                    FOR UPDATE
                 ");
                 $stmt->execute($item_ids);
                 $selected_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -688,17 +874,12 @@ try {
                     exit;
                 }
                 
-                // ✅ V21: Validate FULL payment = ALL items selected
+                // FULL PAYMENT validation
                 if ($action === 'complete_payment') {
-                    // Get all payable items in affected bills
                     $affected_bill_ids = array_unique(array_column($selected_items, 'bill_id'));
                     $all_payable_items = [];
                     foreach ($affected_bill_ids as $abid) {
-                        $stmt_all = $db->prepare("
-                            SELECT id FROM bill_items 
-                            WHERE bill_id = ? AND branch_id = ? 
-                            AND status != 'paid' AND status != 'cancelled'
-                        ");
+                        $stmt_all = $db->prepare("SELECT id FROM bill_items WHERE bill_id = ? AND branch_id = ? AND status != 'paid' AND status != 'cancelled'");
                         $stmt_all->execute([$abid, $user_branch_id]);
                         $all_payable_items = array_merge($all_payable_items, $stmt_all->fetchAll(PDO::FETCH_COLUMN));
                     }
@@ -709,14 +890,12 @@ try {
                     
                     if ($all_payable_items !== array_map('intval', $selected_sorted)) {
                         $db->rollBack();
-                        echo json_encode([
-                            'success' => false,
-                            'message' => "⚠️ FULL PAYMENT INATAKA ITEMS ZOTE!\n\nUmechagua " . count($item_ids) . " kati ya " . count($all_payable_items) . " items.\n\nKwa FULL payment, chagua items ZOTE.\nKama unataka kulipia baadhi, tumia PARTIAL."
-                        ]);
+                        echo json_encode(['success' => false, 'message' => "⚠️ FULL PAYMENT INATAKA ITEMS ZOTE!\n\nUmechagua " . count($item_ids) . " kati ya " . count($all_payable_items) . " items."]);
                         exit;
                     }
                 }
                 
+                // Check locked bills
                 $locked_bills = [];
                 foreach ($selected_items as $item) {
                     if ($item['item_type'] === 'medication' && $item['reference_type'] === 'prescription') {
@@ -726,29 +905,14 @@ try {
                         }
                     }
                 }
-                foreach ($selected_items as $item) {
-                    if (!in_array($item['bill_id'], $locked_bills)) {
-                        if (getPendingPrescriptionCount($db, $item['bill_id']) > 0) $locked_bills[] = $item['bill_id'];
-                    }
-                }
                 
                 if (!empty($locked_bills)) {
                     $db->rollBack();
-                    $bill_numbers = [];
-                    foreach ($locked_bills as $lb) {
-                        $stmt_bn = $db->prepare("SELECT bill_number FROM bills WHERE id = ?");
-                        $stmt_bn->execute([$lb]);
-                        $bn = $stmt_bn->fetchColumn();
-                        if ($bn) $bill_numbers[] = $bn;
-                    }
-                    echo json_encode([
-                        'success' => false,
-                        'message' => "🔒 HAIWEZI KULIPWA!\n\nBill(s) zina prescriptions ambazo hazijaconfirm:\n• " . implode("\n• ", $bill_numbers),
-                        'locked_bills' => $bill_numbers
-                    ]);
+                    echo json_encode(['success' => false, 'message' => "🔒 HAIWEZI KULIPWA!\n\nBill(s) zina prescriptions ambazo hazijaconfirm."]);
                     exit;
                 }
                 
+                // Process each bill
                 $bill_map = [];
                 $total_original_amount = 0;
                 $affected_visit_ids = [];
@@ -759,24 +923,14 @@ try {
                     if ($visit_id > 0 && !in_array($visit_id, $affected_visit_ids)) $affected_visit_ids[] = $visit_id;
                     
                     if (!isset($bill_map[$bill_id])) {
-                        $stmt_bill = $db->prepare("
-                            SELECT paid_amount, balance, subtotal, total_amount, total_discount, 
-                                discount_amount, pharmacy_discount, cashier_discount, premium_amount, 
-                                pharmacy_premium, cashier_premium, premium_note
-                            FROM bills WHERE id = ? AND branch_id = ?
-                        ");
+                        $stmt_bill = $db->prepare("SELECT paid_amount, balance, subtotal, total_amount, total_discount, discount_amount, pharmacy_discount, cashier_discount, premium_amount, pharmacy_premium, cashier_premium, premium_note FROM bills WHERE id = ? AND branch_id = ? FOR UPDATE");
                         $stmt_bill->execute([$bill_id, $user_branch_id]);
                         $current_bill = $stmt_bill->fetch(PDO::FETCH_ASSOC);
                         
                         $pharmacy_discount_val = (float)($current_bill['pharmacy_discount'] ?? 0);
-                        if ($pharmacy_discount_val == 0 && (float)($current_bill['discount_amount'] ?? 0) > 0) {
-                            $pharmacy_discount_val = (float)$current_bill['discount_amount'];
-                        }
+                        if ($pharmacy_discount_val == 0 && (float)($current_bill['discount_amount'] ?? 0) > 0) $pharmacy_discount_val = (float)$current_bill['discount_amount'];
                         
-                        $stmt_sub = $db->prepare("
-                            SELECT COALESCE(SUM(total_price), 0) as correct_subtotal
-                            FROM bill_items WHERE bill_id = ? AND branch_id = ? AND status != 'cancelled'
-                        ");
+                        $stmt_sub = $db->prepare("SELECT COALESCE(SUM(total_price), 0) as correct_subtotal FROM bill_items WHERE bill_id = ? AND branch_id = ? AND status != 'cancelled'");
                         $stmt_sub->execute([$bill_id, $user_branch_id]);
                         $correct_subtotal = (float)($stmt_sub->fetch(PDO::FETCH_ASSOC)['correct_subtotal'] ?? 0);
                         
@@ -789,12 +943,9 @@ try {
                             'bill_total' => (float)($current_bill['total_amount'] ?? 0),
                             'pharmacy_discount' => $pharmacy_discount_val,
                             'existing_cashier_discount' => (float)($current_bill['cashier_discount'] ?? 0),
-                            'existing_total_discount' => (float)($current_bill['total_discount'] ?? 0),
                             'pharmacy_premium' => (float)($current_bill['pharmacy_premium'] ?? 0),
                             'existing_cashier_premium' => (float)($current_bill['cashier_premium'] ?? 0),
-                            'bill_premium_total' => (float)($current_bill['premium_amount'] ?? 0),
-                            'bill_premium_note' => $current_bill['premium_note'] ?? '',
-                            'bill_status' => $item['bill_status'] ?? 'pending'
+                            'bill_premium_note' => $current_bill['premium_note'] ?? ''
                         ];
                     }
                     $bill_map[$bill_id]['items'][] = $item;
@@ -803,11 +954,10 @@ try {
                 }
                 
                 $success_count = 0;
-                $receipt_numbers = [];
-                $total_amount_paid = 0;
                 $total_items_updated = 0;
-                $total_procedures_synced = 0;
                 $processed_bill_ids = [];
+                $fully_paid_bill_ids = [];
+                $total_amount_paid = 0;
                 
                 foreach ($bill_map as $bill_id => $bill_data) {
                     $processed_bill_ids[] = $bill_id;
@@ -876,104 +1026,111 @@ try {
                     ]);
                     
                     if ($action === 'complete_payment') {
-                        $stmt_update_items = $db->prepare("
-                            UPDATE bill_items SET status = 'paid', updated_at = NOW()
-                            WHERE bill_id = ? AND branch_id = ? AND status != 'cancelled'
-                        ");
+                        $stmt_update_items = $db->prepare("UPDATE bill_items SET status = 'paid', updated_at = NOW() WHERE bill_id = ? AND branch_id = ? AND status != 'cancelled'");
                         $stmt_update_items->execute([$bill_id, $user_branch_id]);
                         $total_items_updated += $stmt_update_items->rowCount();
                     } else {
                         $item_ids_for_bill = array_column($bill_data['items'], 'id');
                         if (!empty($item_ids_for_bill)) {
                             $placeholders2 = implode(',', array_fill(0, count($item_ids_for_bill), '?'));
-                            $stmt_update_items = $db->prepare("
-                                UPDATE bill_items SET status = 'paid', updated_at = NOW()
-                                WHERE id IN ($placeholders2)
-                            ");
+                            $stmt_update_items = $db->prepare("UPDATE bill_items SET status = 'paid', updated_at = NOW() WHERE id IN ($placeholders2)");
                             $stmt_update_items->execute($item_ids_for_bill);
                             $total_items_updated += count($item_ids_for_bill);
                         }
                     }
                     
-                    $total_procedures_synced += syncProceduresStatus($db, $bill_id, $user_branch_id);
+                    syncProceduresStatus($db, $bill_id, $user_branch_id);
                     
-                    $receipt_number = 'RCP-' . date('Ymd') . '-' . str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
-                    $notes = 'Payment | Pharm Disc: ' . $currency . ' ' . number_format($pharmacy_discount, 0) . 
-                             ' | Cashier Disc: ' . $currency . ' ' . number_format($new_cashier_discount, 0);
-                    if ($new_total_premium > 0) {
-                        $notes .= ' | Pharm Prem: ' . $currency . ' ' . number_format($pharmacy_premium, 0);
-                        $notes .= ' | Cashier Prem: ' . $currency . ' ' . number_format($new_cashier_premium, 0);
-                        if (!empty($final_premium_note)) $notes .= ' (' . $final_premium_note . ')';
+                    if ($new_status === 'paid' && $new_balance <= 0.01) {
+                        $fully_paid_bill_ids[] = $bill_id;
                     }
                     
+                    $receipt_number = 'RCP-' . date('Ymd') . '-' . str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
+                    $notes = 'V27 Payment';
+                    
                     $db->prepare("
-                        INSERT INTO payments (receipt_number, bill_id, patient_id, amount, 
-                            payment_method, received_by, branch_id, received_at, notes)
+                        INSERT INTO payments (receipt_number, bill_id, patient_id, amount, payment_method, received_by, branch_id, received_at, notes)
                         VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)
-                    ")->execute([
-                        $receipt_number, $bill_id, $bill_data['patient_id'],
-                        $bill_payment, $payment_method, $user_id, $user_branch_id, $notes
-                    ]);
+                    ")->execute([$receipt_number, $bill_id, $bill_data['patient_id'], $bill_payment, $payment_method, $user_id, $user_branch_id, $notes]);
                     
                     recalculateBillTotals($db, $bill_id, $user_branch_id);
                     $total_amount_paid += $bill_payment;
-                    $receipt_numbers[] = $receipt_number;
                     $success_count++;
                 }
                 
-                $total_dispensed = 0;
-                $dispense_skipped = 0;
-                foreach ($processed_bill_ids as $bill_id) {
-                    $stmt_check = $db->prepare("SELECT status, balance FROM bills WHERE id = ? AND branch_id = ?");
-                    $stmt_check->execute([$bill_id, $user_branch_id]);
-                    $bill_check = $stmt_check->fetch(PDO::FETCH_ASSOC);
-                    if ($bill_check && $bill_check['status'] === 'paid' && (float)$bill_check['balance'] <= 0.01) {
-                        $dispensed = autoDispensePrescriptions($db, $bill_id, $user_branch_id, $user_id);
-                        if ($dispensed > 0) $total_dispensed += $dispensed;
-                        else $dispense_skipped++;
-                    }
+                // ================================================================
+                // V27: STOCK DEDUCTION - FULLY PAID BILLS ONLY
+                // ================================================================
+                $stock_summary = [
+                    'medications_deducted' => 0, 'medication_items' => 0,
+                    'equipment_deducted' => 0, 'equipment_items' => 0,
+                    'lab_equipment_deducted' => 0, 'lab_equipment_items' => 0,
+                    'skipped' => 0, 'errors' => [],
+                    'fully_paid_bills' => count($fully_paid_bill_ids)
+                ];
+                
+                foreach ($fully_paid_bill_ids as $paid_bill_id) {
+                    $bill_stock = deductAllStockForPaidBill($db, $paid_bill_id, $user_branch_id, $user_id);
+                    
+                    $stock_summary['medications_deducted'] += $bill_stock['medications_deducted'];
+                    $stock_summary['medication_items'] += $bill_stock['medication_items'];
+                    $stock_summary['equipment_deducted'] += $bill_stock['equipment_deducted'];
+                    $stock_summary['equipment_items'] += $bill_stock['equipment_items'];
+                    $stock_summary['lab_equipment_deducted'] += $bill_stock['lab_equipment_deducted'];
+                    $stock_summary['lab_equipment_items'] += $bill_stock['lab_equipment_items'];
+                    $stock_summary['skipped'] += $bill_stock['skipped'];
+                    $stock_summary['errors'] = array_merge($stock_summary['errors'], $bill_stock['errors']);
                 }
                 
-                $updated_visits = [];
+                // Update visits
                 foreach ($affected_visit_ids as $visit_id) {
                     if ($visit_id > 0) {
-                        if (updateVisitPaymentStatus($db, $visit_id, $user_branch_id)) $updated_visits[] = $visit_id;
+                        updateVisitPaymentStatus($db, $visit_id, $user_branch_id);
                         updateVisitCompletionStatus($db, $visit_id, $user_branch_id);
                     }
                 }
                 
                 $completed_visits = autoCompleteVisits($db, $affected_visit_ids, $user_branch_id);
                 
-                try {
-                    $db->prepare("
-                        UPDATE bills SET paid_amount = total_amount, balance = 0, updated_at = NOW()
-                        WHERE branch_id = ? AND status = 'paid'
-                        AND balance <= 0.01 AND ABS(total_amount - paid_amount) > 0.01
-                    ")->execute([$user_branch_id]);
-                } catch (Exception $e) {}
-                
                 $db->commit();
                 
-                $message = $success_count . " bill(s) updated!<br>";
-                $message .= "Total Paid: " . $currency . " " . number_format($total_amount_paid, 0);
+                // Build message
+                $message = "✅ " . $success_count . " bill(s) updated!<br>";
+                $message .= "💰 Total Paid: <strong>" . $currency . " " . number_format($total_amount_paid, 0) . "</strong>";
                 $message .= "<br>📦 " . $total_items_updated . " item(s) marked as PAID";
-                if ($total_procedures_synced > 0) $message .= "<br>🩺 " . $total_procedures_synced . " procedure/equipment SYNCED!";
-                if ($total_dispensed > 0) $message .= "<br>💊 " . $total_dispensed . " prescription(s) auto-dispensed!";
+                
+                if ($action === 'partial_payment') {
+                    $message .= "<br>⚠️ <strong>PARTIAL payment</strong> — Stock HAIJADEDUCT";
+                } else {
+                    if ($stock_summary['medications_deducted'] > 0) {
+                        $message .= "<br>💊 <strong>" . $stock_summary['medications_deducted'] . "</strong> medication qty deducted";
+                    }
+                    if ($stock_summary['equipment_deducted'] > 0) {
+                        $message .= "<br>🛠️ <strong>" . $stock_summary['equipment_deducted'] . "</strong> equipment qty deducted";
+                    }
+                    if ($stock_summary['lab_equipment_deducted'] > 0) {
+                        $message .= "<br>🧪 <strong>" . $stock_summary['lab_equipment_deducted'] . "</strong> lab equipment qty deducted";
+                    }
+                    if ($stock_summary['skipped'] > 0) {
+                        $message .= "<br>⏭️ " . $stock_summary['skipped'] . " item(s) skipped (already deducted)";
+                    }
+                }
                 if ($completed_visits > 0) $message .= "<br>✅ " . $completed_visits . " visit(s) COMPLETE!";
-                if (!empty($updated_visits) && $completed_visits == 0) $message .= "<br>✅ " . count($updated_visits) . " visit(s) updated";
-                if ($dispense_skipped > 0) $message .= "<br>ℹ️ " . $dispense_skipped . " bill(s) waiting for stock";
                 
                 echo json_encode([
-                    'success' => true, 'message' => $message,
-                    'receipt_numbers' => $receipt_numbers, 'total_paid' => $total_amount_paid,
-                    'count' => $success_count, 'items_updated' => $total_items_updated,
-                    'procedures_synced' => $total_procedures_synced,
-                    'dispensed_count' => $total_dispensed, 'completed_visits' => $completed_visits
+                    'success' => true, 
+                    'message' => $message,
+                    'total_paid' => $total_amount_paid,
+                    'count' => $success_count, 
+                    'items_updated' => $total_items_updated,
+                    'stock_summary' => $stock_summary,
+                    'payment_type' => $action
                 ]);
                 
             } catch (Exception $e) {
                 $db->rollBack();
                 echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+                error_log("V27 payment error: " . $e->getMessage());
             }
             exit;
         }
@@ -983,7 +1140,8 @@ try {
     }
 
     // ================================================================
-    // GET BILLS
+    // GET BILLS (READ-ONLY - NO AUTO-REPAIR!)
+    // ✅ V27: AUTO-REPAIR IMEFUTWA - Haifanyi deduction yoyote
     // ================================================================
     $bills_query = "
         SELECT b.*, b.discount_amount, b.pharmacy_discount, b.cashier_discount,
@@ -1025,16 +1183,21 @@ try {
     $stmt->execute($params);
     $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    removeDuplicateBillItems($db, $user_branch_id);
+    // ✅ V27: HAKUNA AUTO-REPAIR! Deduction inafanyika TU wakati wa payment.
     
+    // Sync procedures status (hii ni safe - ina-update status pekee)
     try {
-        $stmt = $db->prepare("SELECT DISTINCT b.id FROM bills b WHERE b.branch_id = ? AND b.status != 'cancelled'");
+        $stmt = $db->prepare("
+            SELECT DISTINCT b.id FROM bills b
+            WHERE b.branch_id = ? AND b.status IN ('paid', 'partial')
+        ");
         $stmt->execute([$user_branch_id]);
         foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $bid) {
-            recalculateBillSubtotal($db, $bid, $user_branch_id);
+            syncProceduresStatus($db, $bid, $user_branch_id);
         }
     } catch (Exception $e) {}
-
+    
+    // Update bill_items status for paid bills (hii ni safe)
     try {
         $db->prepare("
             UPDATE bill_items bi
@@ -1043,40 +1206,6 @@ try {
             WHERE b.branch_id = ? AND b.status = 'paid'
             AND b.balance <= 0.01 AND bi.status != 'cancelled' AND bi.status != 'paid'
         ")->execute([$user_branch_id]);
-    } catch (Exception $e) {}
-
-    syncAllProcedures($db, $user_branch_id);
-
-    try {
-        $stmt = $db->prepare("
-            SELECT DISTINCT b.id as bill_id FROM bills b
-            INNER JOIN bill_items bi ON bi.bill_id = b.id
-            INNER JOIN prescriptions p ON bi.reference_id = p.id AND bi.reference_type = 'prescription'
-            WHERE b.branch_id = ? AND b.status = 'paid' AND b.balance <= 0.01
-            AND bi.item_type = 'medication' AND bi.status != 'cancelled' AND p.status = 'confirmed'
-        ");
-        $stmt->execute([$user_branch_id]);
-        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $bill_id) {
-            autoDispensePrescriptions($db, $bill_id, $user_branch_id, $user_id);
-        }
-    } catch (Exception $e) {}
-
-    try {
-        $stmt = $db->prepare("
-            SELECT DISTINCT b.visit_id FROM bills b
-            INNER JOIN visits v ON b.visit_id = v.id
-            WHERE b.branch_id = ? AND b.visit_id IS NOT NULL 
-            AND b.status != 'cancelled' AND v.status = 'waiting'
-        ");
-        $stmt->execute([$user_branch_id]);
-        $visit_ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
-        foreach ($visit_ids as $vid) {
-            if ($vid > 0) {
-                updateVisitPaymentStatus($db, $vid, $user_branch_id);
-                updateVisitCompletionStatus($db, $vid, $user_branch_id);
-            }
-        }
-        autoCompleteVisits($db, $visit_ids, $user_branch_id);
     } catch (Exception $e) {}
 
     $stmt = $db->prepare($bills_query);
@@ -1117,12 +1246,6 @@ try {
         ");
         $stmt->execute([$bill['id']]);
         $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        foreach ($items as &$item) {
-            $item['base_price'] = (float)$item['total_price'];
-            $item['discount_amount_clean'] = (float)($item['discount_amount'] ?? 0);
-        }
-        unset($item);
         
         $all_items_by_bill[$bill['id']] = $items;
         
@@ -1240,10 +1363,11 @@ include_once '../../components/cashier_sidebar.php';
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     
     <style>
         :root {
+            --font-primary: 'Inter', -apple-system, sans-serif;
             --font-mono: 'JetBrains Mono', 'Courier New', monospace;
             --primary: #059669;
             --primary-dark: #047857;
@@ -1254,10 +1378,10 @@ include_once '../../components/cashier_sidebar.php';
             --danger-dark: #B91C1C;
             --danger-bg: #FEE2E2;
             --warning: #D97706;
+            --warning-dark: #B45309;
             --warning-bg: #FEF3C7;
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
-            --premium: #D97706;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
@@ -1270,8 +1394,8 @@ include_once '../../components/cashier_sidebar.php';
             --gray-900: #0F172A;
             --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
-            --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
+            --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+            --shadow-lg: 0 10px 30px rgba(0,0,0,0.12);
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --text-primary: #1E293B;
@@ -1280,7 +1404,11 @@ include_once '../../components/cashier_sidebar.php';
             --locked-color: #DC2626;
             --locked-bg: #FEE2E2;
             --sidebar-width: 270px;
-            --content-max-width: 1100px;
+            --content-max-width: 1200px;
+            --radius: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 20px;
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
         
         [data-theme="dark"] {
@@ -1289,50 +1417,68 @@ include_once '../../components/cashier_sidebar.php';
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
             --border-color: #334155;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --locked-bg: #3A1A1A;
+            --gray-50: #1E293B;
+            --gray-100: #334155;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
-        body { font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif; background: var(--bg-body); color: var(--text-primary); }
+        body { 
+            font-family: var(--font-primary); 
+            background: var(--bg-body); 
+            color: var(--text-primary); 
+            -webkit-font-smoothing: antialiased;
+        }
         
         .main-content {
             margin-left: var(--sidebar-width);
             margin-top: 68px;
-            padding: 20px 24px 200px 24px;
+            padding: 20px 24px 140px 24px;
             min-height: calc(100vh - 68px);
         }
         
         .page-header {
-            background: linear-gradient(135deg, #059669, #047857);
-            border-radius: 14px;
-            padding: 16px 22px;
-            margin-bottom: 18px;
+            background: linear-gradient(135deg, #059669 0%, #047857 50%, #065F46 100%);
+            border-radius: var(--radius-xl);
+            padding: 20px 28px;
+            margin-bottom: 20px;
             display: flex;
             flex-wrap: wrap;
             justify-content: space-between;
             align-items: center;
-            gap: 12px;
-            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.25);
+            gap: 14px;
+            box-shadow: 0 8px 30px rgba(5, 150, 105, 0.22);
             max-width: var(--content-max-width);
             margin-left: auto;
             margin-right: auto;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .page-header::before {
+            content: '';
+            position: absolute;
+            top: -50%; right: -10%;
+            width: 400px; height: 400px;
+            background: radial-gradient(circle, rgba(255,255,255,0.12) 0%, transparent 70%);
+            border-radius: 50%;
+            pointer-events: none;
         }
         
         .page-header .page-title {
             color: white;
-            font-size: 1.3rem;
-            font-weight: 700;
+            font-size: 1.4rem;
+            font-weight: 800;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
             flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
         }
         
-        .page-header .page-title i { font-size: 1.5rem; }
+        .page-header .page-title i { font-size: 1.6rem; }
         
         .page-header .page-subtitle {
             color: rgba(255,255,255,0.9);
@@ -1341,83 +1487,145 @@ include_once '../../components/cashier_sidebar.php';
             align-items: center;
             gap: 8px;
             flex-wrap: wrap;
-            margin-top: 4px;
+            margin-top: 6px;
+            position: relative;
+            z-index: 1;
         }
         
         .page-header .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
             padding: 3px 12px;
-            border-radius: 16px;
+            border-radius: 18px;
             font-size: 0.6rem;
-            font-weight: 600;
+            font-weight: 700;
             text-transform: uppercase;
+            backdrop-filter: blur(8px);
         }
         
         .page-header .header-badge {
             background: rgba(255,255,255,0.15);
             color: white;
             padding: 3px 12px;
-            border-radius: 16px;
+            border-radius: 18px;
             font-size: 0.68rem;
-            font-weight: 500;
+            font-weight: 600;
             display: inline-flex;
             align-items: center;
             gap: 5px;
-            border: 1px solid rgba(255,255,255,0.1);
+            backdrop-filter: blur(8px);
         }
         
         .page-header .header-badge.locked {
-            background: rgba(239, 68, 68, 0.3);
-            color: #FCA5A5;
+            background: rgba(239, 68, 68, 0.4);
+            color: #FECACA;
         }
         
-        .page-header .header-badge.premium-badge-header {
-            background: rgba(251,191,36,0.3);
-            color: #FCD34D;
-            font-weight: 600;
+        .page-header .header-badge.new-version {
+            background: rgba(16,185,129,0.35);
+            color: #A7F3D0;
+            font-weight: 700;
         }
         
         .page-header .btn-outline-light {
             background: rgba(255,255,255,0.15);
             color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 7px 14px;
-            border-radius: 9px;
-            font-weight: 500;
+            border: 1px solid rgba(255,255,255,0.25);
+            padding: 8px 16px;
+            border-radius: 10px;
+            font-weight: 600;
             font-size: 0.78rem;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
-            gap: 6px;
+            gap: 7px;
+            backdrop-filter: blur(8px);
+            transition: var(--transition);
+            position: relative;
+            z-index: 1;
+            cursor: pointer;
         }
         
-        .page-header .btn-outline-light:hover { background: rgba(255,255,255,0.25); }
+        .page-header .btn-outline-light:hover { 
+            background: rgba(255,255,255,0.28);
+            transform: translateY(-2px);
+        }
         
-        .patient-card {
-            background: var(--bg-card);
-            border-radius: 14px;
-            border: 2px solid var(--border-color);
-            margin-bottom: 16px;
-            overflow: hidden;
-            box-shadow: var(--shadow);
+        .locked-warning {
+            background: var(--locked-bg);
+            border: 2px solid var(--locked-color);
+            border-radius: var(--radius-lg);
+            padding: 14px 20px;
+            margin-bottom: 18px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
             max-width: var(--content-max-width);
             margin-left: auto;
             margin-right: auto;
         }
         
-        .patient-card:hover { border-color: var(--success); }
+        .locked-warning i { font-size: 1.8rem; color: var(--locked-color); }
+        
+        .locked-warning .warning-content h4 {
+            font-weight: 800;
+            font-size: 0.9rem;
+            color: var(--locked-color);
+            margin-bottom: 3px;
+        }
+        
+        .locked-warning .warning-content p {
+            font-size: 0.78rem;
+            color: var(--locked-color);
+            opacity: 0.85;
+        }
+        
+        .patient-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-xl);
+            border: 2px solid var(--border-color);
+            margin-bottom: 18px;
+            overflow: hidden;
+            box-shadow: var(--shadow-md);
+            max-width: var(--content-max-width);
+            margin-left: auto;
+            margin-right: auto;
+            transition: var(--transition);
+        }
+        
+        .patient-card:hover { 
+            border-color: var(--success);
+            box-shadow: 0 8px 30px rgba(5, 150, 105, 0.15);
+        }
+        
+        .patient-card.locked-card { border-color: var(--locked-color); }
         
         .patient-card .card-header {
-            background: linear-gradient(135deg, var(--success), var(--success-dark));
+            background: linear-gradient(135deg, #059669 0%, #047857 100%);
             color: white;
-            padding: 12px 18px;
+            padding: 16px 22px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-wrap: wrap;
-            gap: 10px;
+            gap: 12px;
             cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .patient-card.locked-card .card-header {
+            background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+        }
+        
+        .patient-card .card-header::before {
+            content: '';
+            position: absolute;
+            top: -50%; right: -10%;
+            width: 200px; height: 200px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 50%;
+            pointer-events: none;
         }
         
         .patient-card .card-header .patient-info {
@@ -1425,62 +1633,111 @@ include_once '../../components/cashier_sidebar.php';
             align-items: center;
             gap: 12px;
             flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
         }
         
         .patient-card .card-header .patient-avatar {
-            width: 40px;
-            height: 40px;
+            width: 44px; height: 44px;
             border-radius: 50%;
             background: rgba(255,255,255,0.25);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-weight: 700;
-            font-size: 1.1rem;
+            font-weight: 800;
+            font-size: 1.15rem;
             color: white;
-            border: 2px solid rgba(255,255,255,0.3);
+            border: 2px solid rgba(255,255,255,0.4);
+            backdrop-filter: blur(8px);
+            flex-shrink: 0;
         }
         
-        .patient-card .card-header .patient-name { font-weight: 700; font-size: 0.95rem; }
-        .patient-card .card-header .patient-id { font-size: 0.7rem; opacity: 0.85; font-family: var(--font-mono); }
+        .patient-card .card-header .patient-name { 
+            font-weight: 800; 
+            font-size: 0.98rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .patient-card .card-header .patient-id { 
+            font-size: 0.68rem; 
+            opacity: 0.85; 
+            font-family: var(--font-mono);
+            font-weight: 600;
+        }
+        
+        .patient-card .card-header .patient-doctor {
+            font-size: 0.62rem;
+            opacity: 0.85;
+            margin-top: 2px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
         
         .patient-card .card-header .bill-summary {
             display: flex;
-            gap: 12px;
-            font-size: 0.72rem;
-            background: rgba(255,255,255,0.12);
-            padding: 5px 14px;
-            border-radius: 20px;
+            gap: 8px;
+            font-size: 0.68rem;
+            background: rgba(255,255,255,0.15);
+            padding: 6px 14px;
+            border-radius: 18px;
             align-items: center;
             flex-wrap: wrap;
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.15);
+            position: relative;
+            z-index: 1;
+        }
+        
+        .patient-card .card-header .bill-summary .summary-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-family: var(--font-mono);
+            font-weight: 700;
+        }
+        
+        .patient-card .card-header .bill-summary .divider {
+            opacity: 0.3;
+            font-weight: 300;
         }
         
         .patient-card .card-body { padding: 0; }
         .patient-card .card-body.collapsed { display: none; }
         
-        .master-table-wrap { overflow-x: auto; background: var(--bg-card); }
+        .master-table-wrap { 
+            overflow-x: auto; 
+            background: var(--bg-card);
+            border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+        }
         
         .master-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 0.78rem;
-            min-width: 850px;
+            min-width: 900px;
         }
         
         .master-table thead th {
             text-align: left;
-            padding: 10px 14px;
-            font-weight: 700;
+            padding: 11px 14px;
+            font-weight: 800;
             font-size: 0.65rem;
             text-transform: uppercase;
             letter-spacing: 0.06em;
             color: white;
             background: linear-gradient(135deg, #064E3B, #065F46);
             white-space: nowrap;
+            position: sticky;
+            top: 0;
+            z-index: 5;
         }
         
         .master-table tbody td {
-            padding: 9px 14px;
+            padding: 11px 14px;
             border-bottom: 1px solid var(--border-color);
             vertical-align: middle;
             font-family: var(--font-mono);
@@ -1488,18 +1745,23 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .master-table tbody tr:hover td { background: var(--success-bg); }
+        [data-theme="dark"] .master-table tbody tr:hover td { background: rgba(5,150,105,0.15); }
+        
         .master-table tbody tr.item-locked td { background: var(--locked-bg) !important; }
-        .master-table tbody tr.bill-paid td { opacity: 0.6; background: var(--success-bg); }
+        [data-theme="dark"] .master-table tbody tr.item-locked td { background: rgba(220,38,38,0.15) !important; }
+        
+        .master-table tbody tr.bill-paid td { opacity: 0.65; background: var(--success-bg); }
+        [data-theme="dark"] .master-table tbody tr.bill-paid td { background: rgba(5,150,105,0.1); }
         
         .header-info-row { background: linear-gradient(135deg, #064E3B, #065F46); }
-        .header-info-row td { padding: 8px 14px !important; }
+        .header-info-row td { padding: 10px 14px !important; }
         
         .header-info-content {
             display: flex;
             align-items: center;
-            gap: 14px;
+            gap: 10px;
             flex-wrap: wrap;
-            font-size: 0.78rem;
+            font-size: 0.75rem;
         }
         
         .header-info-content .info-item {
@@ -1507,19 +1769,21 @@ include_once '../../components/cashier_sidebar.php';
             align-items: center;
             gap: 6px;
             padding: 4px 12px;
-            border-radius: 8px;
+            border-radius: 10px;
             background: rgba(255,255,255,0.10);
+            border: 1px solid rgba(255,255,255,0.1);
         }
         
         .header-info-content .info-item .label {
             font-weight: 600;
-            color: rgba(255,255,255,0.7);
+            color: rgba(255,255,255,0.75);
             font-size: 0.6rem;
             text-transform: uppercase;
+            letter-spacing: 0.04em;
         }
         
         .header-info-content .info-item .value {
-            font-weight: 700;
+            font-weight: 800;
             font-size: 0.85rem;
             font-family: var(--font-mono);
             color: white;
@@ -1531,8 +1795,6 @@ include_once '../../components/cashier_sidebar.php';
         .header-info-content .info-item .value.balance-value.zero-balance { color: #6EE7B7; }
         .header-info-content .info-item .value.pharm-discount-value { color: #FCD34D; }
         .header-info-content .info-item .value.cashier-discount-value { color: #93C5FD; }
-        .header-info-content .info-item .value.pharm-premium-value { color: #FCD34D; }
-        .header-info-content .info-item .value.cashier-premium-value { color: #C4B5FD; }
         
         .bill-header-row {
             background: var(--gray-100);
@@ -1540,93 +1802,97 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         [data-theme="dark"] .bill-header-row { background: var(--gray-700); }
-        .bill-header-row td { padding: 6px 14px !important; }
+        .bill-header-row td { padding: 9px 14px !important; }
         
         .bill-header-info {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
             flex-wrap: wrap;
             font-size: 0.72rem;
         }
         
         .bill-header-info .bill-number {
-            font-weight: 700;
+            font-weight: 800;
             color: var(--primary);
             font-family: var(--font-mono);
-            font-size: 0.8rem;
+            font-size: 0.82rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
         }
         
         .bill-header-info .bill-status {
             font-size: 0.58rem;
-            font-weight: 600;
+            font-weight: 800;
             padding: 2px 10px;
-            border-radius: 16px;
+            border-radius: 14px;
+            text-transform: uppercase;
         }
         
-        .bill-header-info .bill-status.pending { background: #FEF3C7; color: #D97706; }
-        .bill-header-info .bill-status.partial { background: #DBEAFE; color: #2563EB; }
-        .bill-header-info .bill-status.paid { background: #D1FAE5; color: #059669; }
+        .bill-header-info .bill-status.pending { background: #FEF3C7; color: #B45309; border: 1px solid #D97706; }
+        .bill-header-info .bill-status.partial { background: #DBEAFE; color: #1E40AF; border: 1px solid #2563EB; }
+        .bill-header-info .bill-status.paid { background: #D1FAE5; color: #047857; border: 1px solid #059669; }
         
         .bill-header-info .visit-status-badge {
-            font-size: 0.55rem;
-            font-weight: 600;
+            font-size: 0.58rem;
+            font-weight: 700;
             padding: 2px 10px;
-            border-radius: 16px;
+            border-radius: 14px;
             display: inline-flex;
             align-items: center;
             gap: 4px;
+            text-transform: uppercase;
         }
         
-        .bill-header-info .visit-status-badge.waiting { background: #FEF3C7; color: #D97706; border: 1px solid #D97706; }
-        .bill-header-info .visit-status-badge.completed { background: #D1FAE5; color: #059669; border: 1px solid #059669; }
-        .bill-header-info .visit-status-badge.lab_test { background: #DBEAFE; color: #2563EB; border: 1px solid #2563EB; }
-        .bill-header-info .visit-status-badge.assigned { background: #EDE9FE; color: #7C3AED; border: 1px solid #7C3AED; }
-        .bill-header-info .visit-status-badge.prescribe { background: #FCE7F3; color: #DB2777; border: 1px solid #DB2777; }
+        .bill-header-info .visit-status-badge.waiting { background: #FEF3C7; color: #B45309; border: 1px solid #D97706; }
+        .bill-header-info .visit-status-badge.completed { background: #D1FAE5; color: #047857; border: 1px solid #059669; }
+        .bill-header-info .visit-status-badge.lab_test { background: #DBEAFE; color: #1E40AF; border: 1px solid #2563EB; }
+        .bill-header-info .visit-status-badge.assigned { background: #EDE9FE; color: #5B21B6; border: 1px solid #7C3AED; }
+        .bill-header-info .visit-status-badge.prescribed { background: #FCE7F3; color: #BE185D; border: 1px solid #DB2777; }
         
         .locked-badge {
             display: inline-flex;
             align-items: center;
-            gap: 3px;
-            font-size: 0.55rem;
-            font-weight: 700;
+            gap: 4px;
+            font-size: 0.56rem;
+            font-weight: 800;
             padding: 2px 10px;
-            border-radius: 16px;
+            border-radius: 14px;
             background: var(--locked-bg);
             color: var(--locked-color);
             border: 1px solid var(--locked-color);
+            text-transform: uppercase;
         }
         
         .premium-badge {
             display: inline-flex;
             align-items: center;
-            gap: 3px;
-            font-size: 0.55rem;
-            font-weight: 600;
-            padding: 2px 8px;
+            gap: 4px;
+            font-size: 0.56rem;
+            font-weight: 700;
+            padding: 2px 9px;
             border-radius: 12px;
             background: #FEF3C7;
-            color: #D97706;
+            color: #B45309;
             border: 1px solid #D97706;
         }
         
-        .premium-badge.cashier {
-            background: #EDE9FE;
-            color: #7C3AED;
-            border-color: #7C3AED;
-        }
+        .premium-badge.cashier { background: #EDE9FE; color: #6D28D9; border-color: #7C3AED; }
         
         [data-theme="dark"] .premium-badge { background: #3D2E0A; color: #FCD34D; }
         [data-theme="dark"] .premium-badge.cashier { background: #2D1B5E; color: #C4B5FD; }
         
         .item-checkbox {
-            width: 18px;
-            height: 18px;
+            width: 20px;
+            height: 20px;
             cursor: pointer;
             accent-color: var(--success);
-            border-radius: 4px;
+            border-radius: 5px;
+            transition: var(--transition);
         }
         
+        .item-checkbox:hover:not(:disabled) { transform: scale(1.15); }
         .item-checkbox:disabled { opacity: 0.3; cursor: not-allowed; }
         
         .payment-controls-wrapper {
@@ -1637,31 +1903,28 @@ include_once '../../components/cashier_sidebar.php';
             z-index: 100;
             display: flex;
             justify-content: center;
-            padding: 0 24px 12px;
+            padding: 0 16px 8px;
             pointer-events: none;
+        }
+        
+        @media (max-width: 1024px) {
+            .payment-controls-wrapper { left: 0; padding: 0 10px 6px; }
         }
         
         .payment-controls {
             background: var(--bg-card);
-            border-top: 3px solid var(--success);
-            border-left: 3px solid var(--success);
-            border-right: 3px solid var(--success);
-            border-radius: 14px 14px 0 0;
-            padding: 14px 20px 16px;
-            box-shadow: 0 -4px 24px rgba(0,0,0,0.12);
+            border: 2px solid var(--success);
+            border-radius: 14px;
+            padding: 8px 14px;
+            box-shadow: 0 -4px 20px rgba(5, 150, 105, 0.18), 0 4px 16px rgba(0,0,0,0.08);
             display: flex;
             flex-wrap: wrap;
             align-items: center;
-            gap: 10px;
-            min-height: 90px;
+            gap: 8px;
             max-width: var(--content-max-width);
             width: 100%;
             pointer-events: auto;
             justify-content: center;
-        }
-        
-        @media (max-width: 1024px) {
-            .payment-controls-wrapper { left: 0; padding: 0 16px 12px; }
         }
         
         .payment-controls .control-group {
@@ -1670,31 +1933,35 @@ include_once '../../components/cashier_sidebar.php';
             gap: 6px;
             flex-wrap: nowrap;
             flex-shrink: 0;
-            padding: 4px 0;
         }
         
         .payment-controls .control-group label {
-            font-size: 0.68rem;
-            font-weight: 600;
+            font-size: 0.62rem;
+            font-weight: 800;
             color: var(--text-primary);
             white-space: nowrap;
             font-family: var(--font-mono);
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
         }
         
         .payment-controls select,
         .payment-controls input[type="text"] {
-            padding: 8px 10px;
-            border: 2px solid var(--border-color);
-            border-radius: 8px;
-            font-size: 0.78rem;
+            padding: 6px 8px;
+            border: 1.5px solid var(--border-color);
+            border-radius: 7px;
+            font-size: 0.72rem;
             background: var(--bg-card);
             color: var(--text-primary);
             outline: none;
-            width: 110px;
+            width: 92px;
             font-family: var(--font-mono);
-            height: 42px;
-            font-weight: 600;
-            transition: all 0.2s ease;
+            height: 34px;
+            font-weight: 700;
+            transition: var(--transition);
         }
         
         .payment-controls select:focus,
@@ -1705,7 +1972,7 @@ include_once '../../components/cashier_sidebar.php';
         
         .payment-controls .divider {
             width: 1px;
-            height: 36px;
+            height: 24px;
             background: var(--border-color);
             flex-shrink: 0;
         }
@@ -1713,166 +1980,203 @@ include_once '../../components/cashier_sidebar.php';
         .total-display {
             display: flex;
             align-items: center;
-            gap: 10px;
-            background: var(--success-bg);
-            padding: 8px 16px;
-            border-radius: 12px;
+            gap: 6px;
+            background: linear-gradient(135deg, var(--success-bg), #A7F3D0);
+            padding: 4px 10px;
+            border-radius: 10px;
             border: 2px solid var(--success);
-            height: 52px;
+            height: 40px;
             flex-shrink: 0;
+            box-shadow: 0 2px 8px rgba(5, 150, 105, 0.15);
         }
+        
+        [data-theme="dark"] .total-display { background: linear-gradient(135deg, #1A3A2A, #064E3B); }
         
         .total-display .total-item {
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding: 1px 10px;
+            padding: 0 6px;
+            gap: 1px;
+            line-height: 1;
         }
         
         .total-display .total-item .label {
-            font-size: 0.56rem;
+            font-size: 0.5rem;
             color: var(--text-secondary);
-            font-weight: 700;
+            font-weight: 800;
             text-transform: uppercase;
             white-space: nowrap;
             font-family: var(--font-mono);
+            letter-spacing: 0.03em;
         }
         
         .total-display .total-item .value {
-            font-size: 0.9rem;
-            font-weight: 700;
+            font-size: 0.72rem;
+            font-weight: 800;
             color: var(--primary);
             font-family: var(--font-mono);
             white-space: nowrap;
         }
         
-        .total-display .total-item .value.grand { color: var(--danger); font-size: 1.05rem; }
-        .total-display .total-item .value.premium { color: var(--premium); }
+        .total-display .total-item .value.grand { color: var(--danger); font-size: 0.9rem; }
+        .total-display .total-item .value.premium { color: var(--warning); }
         
         .total-display .total-item.premium-card {
             background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-            border: 1px solid #D97706;
-            border-radius: 8px;
-            padding: 3px 12px;
+            border: 1.5px solid #D97706;
+            border-radius: 6px;
+            padding: 2px 8px;
         }
         
         [data-theme="dark"] .total-display .total-item.premium-card {
             background: linear-gradient(135deg, #3D2E0A, #4A3A12);
         }
         
-        .total-display .total-item.premium-card .label { color: #D97706; }
-        .total-display .total-item.premium-card .value { color: #D97706; font-weight: 800; }
+        .total-display .total-item.premium-card .label { color: #D97706; font-size: 0.45rem; }
+        .total-display .total-item.premium-card .value { color: #D97706; font-size: 0.68rem; font-weight: 900; }
         
-        .btn {
+        .payment-controls .btn {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 10px 20px;
-            border-radius: 9px;
-            font-weight: 700;
-            font-size: 0.78rem;
-            transition: all 0.2s;
+            gap: 5px;
+            padding: 7px 14px;
+            border-radius: 8px;
+            font-weight: 800;
+            font-size: 0.68rem;
+            transition: var(--transition);
             cursor: pointer;
             border: none;
             text-decoration: none;
             white-space: nowrap;
             flex-shrink: 0;
-            height: 44px;
+            height: 34px;
             font-family: var(--font-mono);
             letter-spacing: 0.02em;
+            text-transform: uppercase;
         }
         
-        .btn-success {
+        .payment-controls .btn i { font-size: 0.65rem; }
+        
+        .payment-controls .btn-success {
             background: linear-gradient(135deg, #059669, #047857);
             color: white;
-            box-shadow: 0 3px 10px rgba(5, 150, 105, 0.3);
+            box-shadow: 0 2px 6px rgba(5, 150, 105, 0.3);
         }
         
-        .btn-success:hover:not(:disabled) {
+        .payment-controls .btn-success:hover:not(:disabled) {
             transform: translateY(-2px);
-            box-shadow: 0 5px 16px rgba(5, 150, 105, 0.4);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.45);
         }
         
-        .btn-warning {
+        .payment-controls .btn-warning {
             background: linear-gradient(135deg, #D97706, #B45309);
             color: white;
-            box-shadow: 0 3px 10px rgba(217, 119, 6, 0.3);
+            box-shadow: 0 2px 6px rgba(217, 119, 6, 0.3);
         }
         
-        .btn-warning:hover:not(:disabled) {
+        .payment-controls .btn-warning:hover:not(:disabled) {
             transform: translateY(-2px);
-            box-shadow: 0 5px 16px rgba(217, 119, 6, 0.4);
+            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.45);
         }
         
-        .btn-outline {
+        .payment-controls .btn-outline {
             background: transparent;
             color: var(--text-secondary);
-            border: 2px solid var(--border-color);
+            border: 1.5px solid var(--border-color);
         }
         
-        .btn-outline:hover:not(:disabled) {
+        .payment-controls .btn-outline:hover:not(:disabled) {
             background: var(--bg-body);
             border-color: var(--success);
             color: var(--success);
         }
         
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
-        .btn-sm { padding: 8px 16px; font-size: 0.72rem; height: 40px; }
+        .payment-controls .btn:disabled { 
+            opacity: 0.4; 
+            cursor: not-allowed; 
+            transform: none !important; 
+            filter: grayscale(0.5);
+        }
         
-        .amount-input-wrap {
+        .payment-controls .selected-counter {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+            padding: 6px 12px;
+            background: var(--bg-body);
+            border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            font-family: var(--font-mono);
+            font-weight: 800;
+            height: 34px;
+            flex-shrink: 0;
+            border: 1.5px solid var(--border-color);
+            text-transform: uppercase;
+        }
+        
+        .payment-controls .selected-counter strong {
+            color: var(--primary);
+            margin-left: 5px;
+            font-size: 0.8rem;
+        }
+        
+        .payment-controls .amount-input-wrap {
             position: relative;
             display: inline-block;
         }
         
-        .amount-input-wrap .currency-prefix {
+        .payment-controls .amount-input-wrap .currency-prefix {
             position: absolute;
-            left: 10px;
+            left: 8px;
             top: 50%;
             transform: translateY(-50%);
-            font-size: 0.68rem;
+            font-size: 0.6rem;
             color: var(--text-secondary);
-            font-weight: 700;
+            font-weight: 800;
             font-family: var(--font-mono);
             pointer-events: none;
             z-index: 2;
         }
         
-        .amount-input-wrap input {
-            padding-left: 46px !important;
+        .payment-controls .amount-input-wrap input {
+            padding-left: 42px !important;
             text-align: right;
             font-family: var(--font-mono);
-            font-size: 0.8rem;
-            font-weight: 700;
-            width: 110px;
+            font-size: 0.72rem;
+            font-weight: 800;
+            width: 100px;
         }
         
-        .premium-input {
+        .payment-controls .premium-input {
             border-color: #D97706 !important;
             background: #FEF3C7 !important;
-            color: #D97706 !important;
+            color: #B45309 !important;
         }
         
-        [data-theme="dark"] .premium-input {
+        [data-theme="dark"] .payment-controls .premium-input {
             background: #3D2E0A !important;
             color: #FCD34D !important;
         }
         
         .toast-custom {
             position: fixed;
-            bottom: 160px;
-            right: 20px;
-            padding: 12px 20px;
-            border-radius: 12px;
+            bottom: 100px;
+            right: 24px;
+            padding: 16px 24px;
+            border-radius: var(--radius-lg);
             z-index: 999;
-            max-width: 400px;
-            transform: translateY(100px);
+            max-width: 500px;
+            transform: translateY(120px);
             opacity: 0;
             transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 14px;
             color: white;
-            box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+            box-shadow: 0 12px 32px rgba(0,0,0,0.25);
+            font-size: 0.85rem;
+            line-height: 1.5;
         }
         
         .toast-custom.show { transform: translateY(0); opacity: 1; }
@@ -1880,31 +2184,88 @@ include_once '../../components/cashier_sidebar.php';
         .toast-custom.error { background: linear-gradient(135deg, #DC2626, #B91C1C); }
         .toast-custom.warning { background: linear-gradient(135deg, #D97706, #B45309); }
         
+        .empty-state {
+            background: var(--bg-card);
+            border-radius: var(--radius-xl);
+            border: 2px dashed var(--border-color);
+            padding: 70px 30px;
+            box-shadow: var(--shadow-md);
+            text-align: center;
+            max-width: var(--content-max-width);
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .empty-state i {
+            color: var(--success);
+            font-size: 3.5rem;
+            display: block;
+            margin-bottom: 18px;
+            opacity: 0.6;
+        }
+        
+        .empty-state h3 {
+            color: var(--text-primary);
+            font-size: 1.2rem;
+            font-weight: 800;
+            margin-bottom: 6px;
+        }
+        
+        .empty-state p {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+        
+        @media (max-width: 1200px) {
+            .payment-controls { gap: 6px; padding: 6px 10px; }
+            .payment-controls .control-group label { font-size: 0.58rem; }
+            .payment-controls select,
+            .payment-controls input[type="text"] { width: 80px; font-size: 0.68rem; padding: 5px 6px; height: 30px; }
+            .payment-controls .amount-input-wrap input { width: 88px; padding-left: 38px !important; }
+            .total-display { padding: 3px 8px; height: 36px; }
+            .total-display .total-item .value { font-size: 0.65rem; }
+            .total-display .total-item .value.grand { font-size: 0.8rem; }
+            .payment-controls .btn { padding: 6px 10px; font-size: 0.62rem; height: 30px; }
+        }
+        
         @media (max-width: 1024px) {
-            .main-content { margin-left: 0; padding: 16px 16px 220px 16px; }
+            .main-content { margin-left: 0; padding: 16px 16px 140px 16px; }
         }
         
         @media (max-width: 768px) {
+            .main-content { padding-bottom: 300px; }
+            
             .payment-controls {
                 max-height: 260px;
                 overflow-y: auto;
                 flex-direction: column;
                 align-items: stretch;
-                padding: 12px;
+                padding: 10px;
+                gap: 6px;
             }
             
-            .payment-controls .control-group { justify-content: center; }
+            .payment-controls .control-group { justify-content: space-between; width: 100%; }
+            .payment-controls .control-group select,
+            .payment-controls .control-group input { flex: 1; width: auto; }
             .payment-controls .btn { width: 100%; justify-content: center; }
+            .payment-controls .divider { width: 100%; height: 1px; }
+            .payment-controls .selected-counter { width: 100%; justify-content: center; }
             
             .total-display {
                 flex-wrap: wrap;
                 justify-content: center;
                 height: auto;
-                padding: 10px 14px;
+                padding: 8px 10px;
+                width: 100%;
             }
             
-            .main-content { padding-bottom: 320px; }
+            .page-header { padding: 16px 20px; }
+            .page-header .page-title { font-size: 1.15rem; }
         }
+        
+        .master-table-wrap::-webkit-scrollbar { height: 8px; }
+        .master-table-wrap::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
+        .master-table-wrap::-webkit-scrollbar-thumb { background: var(--success); border-radius: 4px; }
     </style>
 </head>
 <body>
@@ -1923,52 +2284,25 @@ include_once '../../components/cashier_sidebar.php';
                         <i class="fas fa-lock"></i> <?= $total_locked_bills ?> LOCKED
                     </span>
                 <?php endif; ?>
-                <span class="header-badge" style="background:rgba(16,185,129,0.3);color:#6EE7B7;">
-                    <i class="fas fa-shield-alt"></i> V21.0
+                <span class="header-badge new-version">
+                    <i class="fas fa-shield-alt"></i> V27.0 FINAL - NO DOUBLE DEDUCTION
                 </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-credit-card"></i>
-                Select items to pay (FULL = all items only)
+                Stock inadeduct TU kama bill imelipwa YOTE (FULL)
                 <span class="header-badge">
-                    <i class="fas fa-file-invoice"></i>
-                    <?= $total_bills ?> pending bill(s)
-                </span>
-                <span class="header-badge">
-                    <i class="fas fa-money-bill"></i>
-                    Balance: <?= $currency ?> <?= number_format($total_balance, 0) ?>
+                    <i class="fas fa-file-invoice"></i> <?= $total_bills ?> Bill(s)
                 </span>
                 <span class="header-badge">
-                    <i class="fas fa-check-circle"></i>
-                    Paid: <?= $currency ?> <?= number_format($total_paid, 0) ?>
+                    <i class="fas fa-money-bill"></i> Balance: <?= $currency ?> <?= number_format($total_balance, 0) ?>
                 </span>
-                <?php if ($total_pharmacy_discount > 0): ?>
-                <span class="header-badge" style="background:rgba(251,191,36,0.3);color:#FCD34D;">
-                    <i class="fas fa-tag"></i>
-                    Pharm Disc: <?= $currency ?> <?= number_format($total_pharmacy_discount, 0) ?>
+                <span class="header-badge">
+                    <i class="fas fa-check-circle"></i> Paid: <?= $currency ?> <?= number_format($total_paid, 0) ?>
                 </span>
-                <?php endif; ?>
-                <?php if ($total_cashier_discount > 0): ?>
-                <span class="header-badge" style="background:rgba(59,130,246,0.3);color:#93C5FD;">
-                    <i class="fas fa-tag"></i>
-                    Cashier Disc: <?= $currency ?> <?= number_format($total_cashier_discount, 0) ?>
-                </span>
-                <?php endif; ?>
-                <?php if ($total_pharmacy_premium > 0): ?>
-                <span class="header-badge premium-badge-header">
-                    <i class="fas fa-crown"></i>
-                    Pharm Prem: <?= $currency ?> <?= number_format($total_pharmacy_premium, 0) ?>
-                </span>
-                <?php endif; ?>
-                <?php if ($total_cashier_premium > 0): ?>
-                <span class="header-badge" style="background:rgba(124,58,237,0.3);color:#C4B5FD;">
-                    <i class="fas fa-crown"></i>
-                    Cashier Prem: <?= $currency ?> <?= number_format($total_cashier_premium, 0) ?>
-                </span>
-                <?php endif; ?>
             </p>
         </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="pending_bills.php" class="btn-outline-light">
                 <i class="fas fa-clock"></i> Pending Bills
             </a>
@@ -1980,15 +2314,11 @@ include_once '../../components/cashier_sidebar.php';
 
     <!-- LOCKED WARNING -->
     <?php if ($total_locked_bills > 0): ?>
-        <div style="background:var(--locked-bg);border:2px solid var(--locked-color);border-radius:12px;padding:12px 20px;margin-bottom:16px;display:flex;align-items:center;gap:12px;max-width:1100px;margin-left:auto;margin-right:auto;">
-            <i class="fas fa-lock" style="font-size:1.5rem;color:var(--locked-color);"></i>
-            <div>
-                <div style="font-weight:700;font-size:0.9rem;color:var(--locked-color);">
-                    🔒 <?= $total_locked_bills ?> Bill(s) LOCKED - Haiwezi Kulipwa
-                </div>
-                <div style="font-size:0.78rem;color:var(--locked-color);opacity:0.8;margin-top:2px;">
-                    Kuna <strong><?= $total_pending_prescriptions ?></strong> prescription(s) ambazo hazijathibitishwa na pharmacy.
-                </div>
+        <div class="locked-warning">
+            <i class="fas fa-lock"></i>
+            <div class="warning-content">
+                <h4>🔒 <?= $total_locked_bills ?> Bill(s) LOCKED — Haiwezi Kulipwa</h4>
+                <p>Kuna <strong><?= $total_pending_prescriptions ?></strong> prescription(s) ambazo hazijathibitishwa na pharmacy.</p>
             </div>
         </div>
     <?php endif; ?>
@@ -2007,6 +2337,7 @@ include_once '../../components/cashier_sidebar.php';
             $patient_cashier_premium = 0;
             $patient_items = 0;
             $patient_med_items = 0;
+            $patient_equip_items = 0;
             $patient_locked_items = 0;
             $patient_has_locked = false;
             
@@ -2026,14 +2357,15 @@ include_once '../../components/cashier_sidebar.php';
                 foreach ($bill['items'] as $item) {
                     $patient_items++;
                     if ($item['item_type'] === 'medication') $patient_med_items++;
+                    if ($item['item_type'] === 'equipment') $patient_equip_items++;
                 }
             }
             
             $doctor_name = $patient['doctor_name'] ?? 'Not Assigned';
             $is_selected_patient = $has_selected_bill && $selected_bill && $selected_bill['patient_id'] == $patient['patient_id'];
         ?>
-        <div class="patient-card" data-patient-id="<?= $patient['patient_id'] ?>" <?= $patient_has_locked ? 'style="border-color:var(--locked-color);"' : '' ?>>
-            <div class="card-header" onclick="togglePatientCard(this)" <?= $patient_has_locked ? 'style="background:linear-gradient(135deg, #DC2626, #B91C1C);"' : '' ?>>
+        <div class="patient-card <?= $patient_has_locked ? 'locked-card' : '' ?>" data-patient-id="<?= $patient['patient_id'] ?>">
+            <div class="card-header" onclick="togglePatientCard(this)">
                 <div class="patient-info">
                     <div class="patient-avatar" style="background: <?= '#' . substr(md5($patient['full_name']), 0, 6) ?>;">
                         <?= strtoupper(substr($patient['full_name'], 0, 1)) ?>
@@ -2042,32 +2374,36 @@ include_once '../../components/cashier_sidebar.php';
                         <div class="patient-name">
                             <?= htmlspecialchars($patient['full_name']) ?>
                             <?php if ($patient_has_locked): ?>
-                                <span class="locked-badge" style="font-size:0.5rem;padding:1px 8px;margin-left:6px;">
+                                <span class="locked-badge" style="font-size:0.55rem;padding:2px 10px;">
                                     <i class="fas fa-lock"></i> LOCKED
                                 </span>
                             <?php endif; ?>
                         </div>
                         <div class="patient-id"><?= htmlspecialchars($patient['patient_number']) ?></div>
-                        <div style="font-size:0.6rem; opacity:0.8;">
+                        <div class="patient-doctor">
                             <i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($doctor_name) ?>
                         </div>
                     </div>
                 </div>
-                <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
                     <div class="bill-summary">
-                        <span>Items: <strong><?= $patient_items ?></strong></span>
-                        <span>|</span>
-                        <span>Meds: <strong><?= $patient_med_items ?></strong></span>
-                        <?php if ($patient_locked_items > 0): ?>
-                            <span>|</span>
-                            <span style="color:#FCA5A5;">🔒 <?= $patient_locked_items ?></span>
+                        <span class="summary-item"><i class="fas fa-box"></i> <?= $patient_items ?></span>
+                        <span class="divider">•</span>
+                        <span class="summary-item" style="color:#FCD34D;"><i class="fas fa-pills"></i> <?= $patient_med_items ?></span>
+                        <?php if ($patient_equip_items > 0): ?>
+                            <span class="divider">•</span>
+                            <span class="summary-item" style="color:#FCA5A5;"><i class="fas fa-tools"></i> <?= $patient_equip_items ?></span>
                         <?php endif; ?>
-                        <span>|</span>
-                        <span>Paid: <strong style="color:#6EE7B7;"><?= $currency ?> <?= number_format($patient_paid_amount, 0) ?></strong></span>
-                        <span>|</span>
-                        <span>Bal: <strong style="color: <?= $patient_total_balance > 0 ? '#FCD34D' : '#6EE7B7' ?>;">
-                            <?= $currency ?> <?= number_format($patient_total_balance, 0) ?>
-                        </strong></span>
+                        <?php if ($patient_locked_items > 0): ?>
+                            <span class="divider">•</span>
+                            <span class="summary-item" style="color:#FCA5A5;"><i class="fas fa-lock"></i> <?= $patient_locked_items ?></span>
+                        <?php endif; ?>
+                        <span class="divider">•</span>
+                        <span class="summary-item" style="color:#6EE7B7;"><?= $currency ?> <?= number_format($patient_paid_amount, 0) ?></span>
+                        <span class="divider">•</span>
+                        <span class="summary-item" style="color:<?= $patient_total_balance > 0 ? '#FCD34D' : '#6EE7B7' ?>;">
+                            BAL: <?= $currency ?> <?= number_format($patient_total_balance, 0) ?>
+                        </span>
                     </div>
                 </div>
             </div>
@@ -2077,21 +2413,22 @@ include_once '../../components/cashier_sidebar.php';
                     <table class="master-table">
                         <thead>
                             <tr>
-                                <th style="width:44px; text-align:center;">
+                                <th style="width:50px; text-align:center;">
                                     <input type="checkbox" class="item-checkbox select-all-items" 
                                            data-patient-id="<?= $patient['patient_id'] ?>" 
-                                           onchange="selectAllItems(this, <?= $patient['patient_id'] ?>); updateSelectedTotal();">
+                                           onchange="selectAllItems(this, <?= $patient['patient_id'] ?>); updateSelectedTotal();"
+                                           title="Select all items">
                                 </th>
-                                <th style="min-width:140px;">Item Name</th>
-                                <th style="min-width:80px;">Type</th>
-                                <th style="text-align:center; min-width:50px;">Qty</th>
-                                <th style="text-align:right; min-width:100px;">Total</th>
-                                <th style="text-align:center; min-width:100px;">Status</th>
+                                <th style="min-width:180px;">Item Name</th>
+                                <th style="min-width:100px;">Type</th>
+                                <th style="text-align:center; min-width:60px;">Qty</th>
+                                <th style="text-align:right; min-width:110px;">Total</th>
+                                <th style="text-align:center; min-width:110px;">Status</th>
                             </tr>
                         </thead>
                         <tbody>
                             <tr class="header-info-row">
-                                <td colspan="6" style="padding:8px 14px;">
+                                <td colspan="6">
                                     <div class="header-info-content">
                                         <div class="info-item">
                                             <span class="label"><i class="fas fa-calculator"></i> Subtotal</span>
@@ -2110,29 +2447,13 @@ include_once '../../components/cashier_sidebar.php';
                                         <?php if ($patient_pharmacy_discount > 0): ?>
                                         <div class="info-item">
                                             <span class="label"><i class="fas fa-tag"></i> Pharm Disc</span>
-                                            <span class="value pharm-discount-value">
-                                                <?= $currency ?> <?= number_format($patient_pharmacy_discount, 0) ?>
-                                            </span>
+                                            <span class="value pharm-discount-value"><?= $currency ?> <?= number_format($patient_pharmacy_discount, 0) ?></span>
                                         </div>
                                         <?php endif; ?>
                                         <?php if ($patient_cashier_discount > 0): ?>
                                         <div class="info-item">
                                             <span class="label"><i class="fas fa-tag"></i> Cashier Disc</span>
-                                            <span class="value cashier-discount-value">
-                                                <?= $currency ?> <?= number_format($patient_cashier_discount, 0) ?>
-                                            </span>
-                                        </div>
-                                        <?php endif; ?>
-                                        <?php if ($patient_pharmacy_premium > 0): ?>
-                                        <div class="info-item">
-                                            <span class="label"><i class="fas fa-crown"></i> Pharm Prem</span>
-                                            <span class="value pharm-premium-value"><?= $currency ?> <?= number_format($patient_pharmacy_premium, 0) ?></span>
-                                        </div>
-                                        <?php endif; ?>
-                                        <?php if ($patient_cashier_premium > 0): ?>
-                                        <div class="info-item">
-                                            <span class="label"><i class="fas fa-crown"></i> Cashier Prem</span>
-                                            <span class="value cashier-premium-value"><?= $currency ?> <?= number_format($patient_cashier_premium, 0) ?></span>
+                                            <span class="value cashier-discount-value"><?= $currency ?> <?= number_format($patient_cashier_discount, 0) ?></span>
                                         </div>
                                         <?php endif; ?>
                                     </div>
@@ -2165,24 +2486,22 @@ include_once '../../components/cashier_sidebar.php';
                                     data-bill-cashier-disc="<?= $bill_cashier_discount ?>"
                                     data-bill-pharm-prem="<?= $bill_pharmacy_premium ?>"
                                     data-bill-cashier-prem="<?= $bill_cashier_premium ?>"
-                                    data-visit-status="<?= htmlspecialchars($visit_status) ?>"
-                                    data-visit-completed="<?= $visit_is_completed ?>"
                                     <?= $bill_is_locked ? 'style="background:var(--locked-bg);"' : '' ?>>
-                                    <td colspan="6" style="padding:6px 14px;">
+                                    <td colspan="6">
                                         <div class="bill-header-info">
                                             <span class="bill-number"><i class="fas fa-file-invoice"></i> <?= htmlspecialchars($bill_number) ?></span>
                                             <span class="bill-status <?= $bill_status ?>"><?= ucfirst($bill_status) ?></span>
                                             
                                             <?php if ($visit_is_completed): ?>
-                                                <span class="visit-status-badge completed"><i class="fas fa-check-circle"></i> Visit Complete</span>
+                                                <span class="visit-status-badge completed"><i class="fas fa-check-circle"></i> Complete</span>
                                             <?php elseif ($visit_status === 'waiting'): ?>
-                                                <span class="visit-status-badge waiting"><i class="fas fa-clock"></i> Visit Waiting</span>
+                                                <span class="visit-status-badge waiting"><i class="fas fa-clock"></i> Waiting</span>
                                             <?php elseif ($visit_status === 'lab_test'): ?>
                                                 <span class="visit-status-badge lab_test"><i class="fas fa-flask"></i> Lab Test</span>
                                             <?php elseif ($visit_status === 'assigned'): ?>
                                                 <span class="visit-status-badge assigned"><i class="fas fa-user-md"></i> Assigned</span>
-                                            <?php elseif ($visit_status === 'prescribe'): ?>
-                                                <span class="visit-status-badge prescribe"><i class="fas fa-prescription"></i> Prescribe</span>
+                                            <?php elseif ($visit_status === 'prescribed'): ?>
+                                                <span class="visit-status-badge prescribed"><i class="fas fa-prescription"></i> Prescribed</span>
                                             <?php else: ?>
                                                 <span class="visit-status-badge waiting"><i class="fas fa-info-circle"></i> <?= ucfirst($visit_status) ?></span>
                                             <?php endif; ?>
@@ -2224,6 +2543,7 @@ include_once '../../components/cashier_sidebar.php';
                                     $is_paid = ($item['status'] === 'paid');
                                     $is_cancelled = ($item['status'] === 'cancelled');
                                     $is_medication = ($item['item_type'] === 'medication');
+                                    $is_equipment = ($item['item_type'] === 'equipment');
                                     $pres_status = $item['prescription_status'] ?? 'pending';
                                     $is_item_locked = ($is_medication && $item['reference_type'] === 'prescription' && $pres_status !== 'confirmed' && $pres_status !== 'dispensed');
                                     $can_select = !$is_paid && !$is_cancelled && !$is_item_locked;
@@ -2236,11 +2556,11 @@ include_once '../../components/cashier_sidebar.php';
                                         data-price="<?= $price ?>"
                                         data-bill-id="<?= $bill['id'] ?>"
                                         data-patient-id="<?= $patient['patient_id'] ?>"
-                                        data-is-locked="<?= $is_item_locked ? 'true' : 'false' ?>"
-                                        data-is-medication="<?= $is_medication ? 'true' : 'false' ?>">
+                                        data-item-type="<?= htmlspecialchars($item['item_type'] ?? '') ?>"
+                                        data-is-locked="<?= $is_item_locked ? 'true' : 'false' ?>">
                                         <td style="text-align:center;">
                                             <?php if ($is_item_locked): ?>
-                                                <i class="fas fa-lock" style="color:var(--locked-color);"></i>
+                                                <i class="fas fa-lock" style="color:var(--locked-color); font-size:1.05rem;"></i>
                                             <?php elseif ($can_select): ?>
                                                 <input type="checkbox" class="item-checkbox item-select" 
                                                        data-id="<?= $item['id'] ?>" 
@@ -2248,37 +2568,46 @@ include_once '../../components/cashier_sidebar.php';
                                                        data-bill-id="<?= $bill['id'] ?>"
                                                        data-patient-id="<?= $patient['patient_id'] ?>"
                                                        data-is-locked="<?= $is_item_locked ? 'true' : 'false' ?>"
+                                                       data-item-type="<?= htmlspecialchars($item['item_type'] ?? '') ?>"
                                                        onchange="updateSelectedTotal()">
                                             <?php elseif ($is_paid): ?>
-                                                <i class="fas fa-check-circle" style="color:var(--success);"></i>
+                                                <i class="fas fa-check-circle" style="color:var(--success); font-size:1.05rem;"></i>
                                             <?php endif; ?>
                                         </td>
                                         <td>
-                                            <strong><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></strong>
-                                            <?php if ($is_medication && !empty($item['instructions'])): ?>
-                                                <div style="font-size:0.55rem;color:var(--text-secondary);margin-top:2px;">
-                                                    <i class="fas fa-edit"></i> <?= htmlspecialchars(substr($item['instructions'], 0, 30)) ?>
-                                                </div>
-                                            <?php endif; ?>
+                                            <div style="display:flex; align-items:center; gap:8px; font-weight:700;">
+                                                <?php if ($is_medication): ?>
+                                                    <i class="fas fa-pills" style="color:var(--success);"></i>
+                                                <?php elseif ($is_equipment): ?>
+                                                    <i class="fas fa-tools" style="color:var(--warning);"></i>
+                                                <?php elseif ($item['item_type'] === 'lab_test'): ?>
+                                                    <i class="fas fa-flask" style="color:#0EA5E9;"></i>
+                                                <?php elseif ($item['item_type'] === 'procedure'): ?>
+                                                    <i class="fas fa-syringe" style="color:var(--purple);"></i>
+                                                <?php else: ?>
+                                                    <i class="fas fa-cube"></i>
+                                                <?php endif; ?>
+                                                <span><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></span>
+                                            </div>
                                         </td>
                                         <td>
-                                            <span style="font-size:0.55rem; background:var(--bg-body); padding:2px 8px; border-radius:5px;">
+                                            <span style="font-size:0.58rem; font-weight:700; background:var(--bg-body); padding:3px 10px; border-radius:8px; text-transform:uppercase;">
                                                 <?= ucfirst($item['item_type'] ?? 'item') ?>
                                             </span>
                                         </td>
-                                        <td style="text-align:center; font-weight:600;"><?= $qty ?></td>
-                                        <td style="text-align:right; font-weight:700; <?= $is_paid ? 'color:var(--success);' : 'color:var(--danger);' ?>">
+                                        <td style="text-align:center; font-weight:800; font-size:0.85rem;"><?= $qty ?></td>
+                                        <td style="text-align:right; font-weight:800; <?= $is_paid ? 'color:var(--success);' : 'color:var(--danger);' ?> font-size:0.85rem;">
                                             <?= $currency ?> <?= number_format($price, 0) ?>
                                         </td>
                                         <td style="text-align:center;">
                                             <?php if ($is_item_locked): ?>
                                                 <span class="locked-badge"><i class="fas fa-lock"></i> Locked</span>
                                             <?php elseif ($is_paid): ?>
-                                                <span class="bill-status paid">✅ Paid</span>
+                                                <span class="bill-status paid"><i class="fas fa-check"></i> Paid</span>
                                             <?php elseif ($item_status === 'partial'): ?>
-                                                <span class="bill-status partial">🔄 Partial</span>
+                                                <span class="bill-status partial"><i class="fas fa-hourglass-half"></i> Partial</span>
                                             <?php else: ?>
-                                                <span class="bill-status pending">⏳ Pending</span>
+                                                <span class="bill-status pending"><i class="fas fa-clock"></i> Pending</span>
                                             <?php endif; ?>
                                         </td>
                                     </tr>
@@ -2291,16 +2620,16 @@ include_once '../../components/cashier_sidebar.php';
         </div>
         <?php endforeach; ?>
     <?php else: ?>
-        <div style="background:var(--bg-card);border-radius:16px;border:2px solid var(--border-color);padding:60px 20px;box-shadow:var(--shadow);text-align:center;max-width:1100px;margin-left:auto;margin-right:auto;">
-            <i class="fas fa-check-circle" style="color:var(--success);display:block;margin-bottom:16px;font-size:4rem;"></i>
-            <h3 style="color:var(--text-primary);font-size:1.2rem;">No Pending Bills</h3>
-            <p style="color:var(--text-secondary);margin-top:8px;">All bills have been paid. Great job! 🎉</p>
+        <div class="empty-state">
+            <i class="fas fa-check-circle"></i>
+            <h3>No Pending Bills</h3>
+            <p>All bills have been paid. Great job! 🎉</p>
         </div>
     <?php endif; ?>
 
 </main>
 
-<!-- ✅ PAYMENT CONTROLS -->
+<!-- COMPACT PAYMENT CONTROLS -->
 <div class="payment-controls-wrapper">
     <div class="payment-controls" id="paymentControls">
         <div class="control-group">
@@ -2308,9 +2637,9 @@ include_once '../../components/cashier_sidebar.php';
             <select id="paymentMethod">
                 <option value="cash">💰 Cash</option>
                 <option value="m-pesa">📱 M-Pesa</option>
-                <option value="airtel_money">📱 Airtel Money</option>
-                <option value="tigo_pesa">📱 Tigo Pesa</option>
-                <option value="halopesa">📱 HaloPesa</option>
+                <option value="airtel_money">📱 Airtel</option>
+                <option value="tigo_pesa">📱 Tigo</option>
+                <option value="halopesa">📱 Halo</option>
                 <option value="card">💳 Card</option>
                 <option value="bank">🏦 Bank</option>
                 <option value="insurance">🏥 Insurance</option>
@@ -2320,7 +2649,7 @@ include_once '../../components/cashier_sidebar.php';
         <div class="divider"></div>
         
         <div class="control-group">
-            <label><i class="fas fa-percent"></i> Cashier Disc:</label>
+            <label><i class="fas fa-percent"></i> Disc:</label>
             <div class="amount-input-wrap">
                 <span class="currency-prefix"><?= $currency ?></span>
                 <input type="text" id="discountAmount" class="discount-input" placeholder="0" 
@@ -2331,7 +2660,7 @@ include_once '../../components/cashier_sidebar.php';
         <div class="divider"></div>
         
         <div class="control-group">
-            <label><i class="fas fa-crown"></i> Cashier Prem:</label>
+            <label><i class="fas fa-crown"></i> Prem:</label>
             <div class="amount-input-wrap">
                 <span class="currency-prefix"><?= $currency ?></span>
                 <input type="text" id="premiumAmount" class="premium-input" placeholder="0" 
@@ -2354,10 +2683,10 @@ include_once '../../components/cashier_sidebar.php';
         
         <div class="total-display" id="totalDisplay">
             <div class="total-item">
-                <span class="label">Subtotal (Selected)</span>
+                <span class="label">Subtotal</span>
                 <span class="value" id="displayTotal"><?= $currency ?> 0</span>
             </div>
-            <div style="color:var(--border-color);">|</div>
+            <div style="color:var(--border-color);font-size:1rem;">|</div>
             <div class="total-item">
                 <span class="label">Pharm Disc</span>
                 <span class="value" style="color:#D97706;" id="displayPharmDiscount"><?= $currency ?> 0</span>
@@ -2366,13 +2695,13 @@ include_once '../../components/cashier_sidebar.php';
                 <span class="label">Cashier Disc</span>
                 <span class="value" style="color:var(--warning);" id="displayDiscount"><?= $currency ?> 0</span>
             </div>
-            <div style="color:var(--border-color);">|</div>
+            <div style="color:var(--border-color);font-size:1rem;">|</div>
             <div class="total-item premium-card" id="pharmPremiumCard" style="display:none;">
-                <span class="label"><i class="fas fa-crown"></i> Pharm Prem</span>
+                <span class="label"><i class="fas fa-crown"></i> Pharm</span>
                 <span class="value premium" id="displayPharmPremium"><?= $currency ?> 0</span>
             </div>
             <div class="total-item premium-card" id="premiumCard" style="display:none;">
-                <span class="label"><i class="fas fa-crown"></i> Cashier Prem</span>
+                <span class="label"><i class="fas fa-crown"></i> Cashier</span>
                 <span class="value premium" id="displayPremium"><?= $currency ?> 0</span>
             </div>
             <div class="total-item">
@@ -2381,20 +2710,20 @@ include_once '../../components/cashier_sidebar.php';
             </div>
         </div>
         
-        <div style="flex:1; display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; min-width:0;">
-            <span style="font-size:0.7rem;color:var(--text-secondary);padding:9px 12px;background:var(--bg-body);border-radius:20px;display:inline-flex;align-items:center;font-family:var(--font-mono);font-weight:700;height:44px;flex-shrink:0;">
-                Selected: <strong id="selectedCountNum" style="color:var(--primary);margin-left:4px;">0</strong>
+        <div style="flex:1; display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap; min-width:0;">
+            <span class="selected-counter">
+                Selected: <strong id="selectedCountNum">0</strong>
             </span>
-            <button onclick="selectAllItemsAllPatients()" class="btn btn-outline btn-sm">
+            <button onclick="selectAllItemsAllPatients()" class="btn btn-outline" title="Select all">
                 <i class="fas fa-check-double"></i> All
             </button>
-            <button onclick="deselectAllItems()" class="btn btn-outline btn-sm">
+            <button onclick="deselectAllItems()" class="btn btn-outline" title="Deselect all">
                 <i class="fas fa-times"></i> None
             </button>
-            <button onclick="processPayment('partial')" class="btn btn-warning btn-sm" id="partialPayBtn">
+            <button onclick="processPayment('partial')" class="btn btn-warning" id="partialPayBtn">
                 <i class="fas fa-hand-holding-heart"></i> PARTIAL
             </button>
-            <button onclick="processPayment('full')" class="btn btn-success btn-sm" id="fullPayBtn">
+            <button onclick="processPayment('full')" class="btn btn-success" id="fullPayBtn">
                 <i class="fas fa-check-circle"></i> FULL
             </button>
         </div>
@@ -2403,10 +2732,10 @@ include_once '../../components/cashier_sidebar.php';
 
 <!-- TOAST -->
 <div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:1.2rem;"></i>
+    <i class="fas fa-info-circle" style="font-size:1.3rem;"></i>
     <div>
-        <p style="font-weight:700;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.78rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+        <p style="font-weight:800;font-size:0.88rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.78rem;opacity:0.95;margin:0;margin-top:2px;" id="toastMessage"></p>
     </div>
 </div>
 
@@ -2414,10 +2743,11 @@ include_once '../../components/cashier_sidebar.php';
     var currency = '<?= $currency ?>';
     var totalLockedBills = <?= $total_locked_bills ?>;
 
-    console.log('💰 Process Payment v21.0 - FULL = ALL ITEMS ONLY');
-    console.log('✅ V21.0: FULL button DISABLED kama SI items zote zimechaguliwa');
-    console.log('✅ V21.0: PARTIAL button enabled kwa items zilizochaguliwa');
-    console.log('✅ V21.0: Full only when ALL items selected');
+    console.log('%c💰 Process Payment V27.0 FINAL', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c✅ NO AUTO-REPAIR - Deduction TU wakati wa payment');
+    console.log('%c✅ Safety check kabla ya kila deduction');
+    console.log('%c✅ Inatumia bill_items.id kwa reference_id (SAHIHI)');
+    console.log('%c✅ Lab equipment deduction kwa visit_id');
 
     (function() {
         var htmlElement = document.documentElement;
@@ -2434,19 +2764,15 @@ include_once '../../components/cashier_sidebar.php';
         var parts = val.split('.');
         var whole = parts[0];
         var decimal = parts.length > 1 ? '.' + parts[1].slice(0, 2) : '';
-        if (whole.length > 0) {
-            whole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-        }
+        if (whole.length > 0) whole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
         input.value = whole + decimal;
-        var rawValue = parseFloat(val) || 0;
-        input.dataset.rawValue = rawValue;
+        input.dataset.rawValue = parseFloat(val) || 0;
     }
     
     function getRawValue(input) {
         var raw = input.dataset.rawValue;
         if (raw !== undefined && raw !== '') return parseFloat(raw) || 0;
-        var val = input.value.replace(/,/g, '');
-        return parseFloat(val) || 0;
+        return parseFloat(input.value.replace(/,/g, '')) || 0;
     }
 
     function togglePatientCard(header) {
@@ -2483,39 +2809,23 @@ include_once '../../components/cashier_sidebar.php';
 
     function getBillProRatedValues(billId) {
         var billHeader = document.querySelector('.bill-header-row[data-bill-id="' + billId + '"]');
-        if (!billHeader) {
-            return {
-                pharmacyDiscount: 0, cashierDiscount: 0,
-                pharmacyPremium: 0, cashierPremium: 0, paid: 0
-            };
-        }
+        if (!billHeader) return { pharmacyDiscount: 0, cashierDiscount: 0, pharmacyPremium: 0, cashierPremium: 0, paid: 0 };
         
         var allItems = document.querySelectorAll('.item-select[data-bill-id="' + billId + '"]');
         var totalItemsPrice = 0;
-        allItems.forEach(function(cb) {
-            totalItemsPrice += parseFloat(cb.dataset.price) || 0;
-        });
+        allItems.forEach(function(cb) { totalItemsPrice += parseFloat(cb.dataset.price) || 0; });
         
         var selectedPrice = 0;
-        allItems.forEach(function(cb) {
-            if (cb.checked) selectedPrice += parseFloat(cb.dataset.price) || 0;
-        });
+        allItems.forEach(function(cb) { if (cb.checked) selectedPrice += parseFloat(cb.dataset.price) || 0; });
         
         var ratio = (totalItemsPrice > 0) ? (selectedPrice / totalItemsPrice) : 0;
         
-        var billPharmDisc = parseFloat(billHeader.dataset.billPharmDisc) || 0;
-        var billCashierDisc = parseFloat(billHeader.dataset.billCashierDisc) || 0;
-        var billPharmPrem = parseFloat(billHeader.dataset.billPharmPrem) || 0;
-        var billCashierPrem = parseFloat(billHeader.dataset.billCashierPrem) || 0;
-        var billPaid = parseFloat(billHeader.dataset.billPaid) || 0;
-        
         return {
-            pharmacyDiscount: billPharmDisc * ratio,
-            cashierDiscount: billCashierDisc * ratio,
-            pharmacyPremium: billPharmPrem * ratio,
-            cashierPremium: billCashierPrem * ratio,
-            paid: billPaid * ratio,
-            ratio: ratio
+            pharmacyDiscount: (parseFloat(billHeader.dataset.billPharmDisc) || 0) * ratio,
+            cashierDiscount: (parseFloat(billHeader.dataset.billCashierDisc) || 0) * ratio,
+            pharmacyPremium: (parseFloat(billHeader.dataset.billPharmPrem) || 0) * ratio,
+            cashierPremium: (parseFloat(billHeader.dataset.billCashierPrem) || 0) * ratio,
+            paid: (parseFloat(billHeader.dataset.billPaid) || 0) * ratio
         };
     }
 
@@ -2528,30 +2838,18 @@ include_once '../../components/cashier_sidebar.php';
             if (cb.getAttribute('data-is-locked') === 'true') hasLockedItems = true;
         });
         
-        var discountInput = document.getElementById('discountAmount');
         var partialInput = document.getElementById('partialAmount');
-        var premiumInput = document.getElementById('premiumAmount');
-        
-        var cashier_discount_input = getRawValue(discountInput);
+        var cashier_discount_input = getRawValue(document.getElementById('discountAmount'));
         var partial = getRawValue(partialInput);
-        var cashier_premium_input = getRawValue(premiumInput);
+        var cashier_premium_input = getRawValue(document.getElementById('premiumAmount'));
         
         var selectedSubtotal = 0;
-        checkboxes.forEach(function(cb) {
-            selectedSubtotal += parseFloat(cb.dataset.price) || 0;
-        });
+        checkboxes.forEach(function(cb) { selectedSubtotal += parseFloat(cb.dataset.price) || 0; });
         
         var billIds = new Set();
-        checkboxes.forEach(function(cb) {
-            var billId = cb.dataset.billId;
-            if (billId) billIds.add(billId);
-        });
+        checkboxes.forEach(function(cb) { if (cb.dataset.billId) billIds.add(cb.dataset.billId); });
         
-        var totalPaid = 0;
-        var pharmacyDiscount = 0;
-        var cashierDiscount = 0;
-        var pharmacyPremium = 0;
-        var cashierPremium = 0;
+        var totalPaid = 0, pharmacyDiscount = 0, cashierDiscount = 0, pharmacyPremium = 0, cashierPremium = 0;
         
         billIds.forEach(function(billId) {
             var values = getBillProRatedValues(billId);
@@ -2562,11 +2860,8 @@ include_once '../../components/cashier_sidebar.php';
             cashierPremium += values.cashierPremium;
         });
         
-        var newCashierDiscount = cashier_discount_input;
-        var newCashierPremium = cashier_premium_input;
-        
-        var totalDiscount = pharmacyDiscount + cashierDiscount + newCashierDiscount;
-        var totalPremium = pharmacyPremium + cashierPremium + newCashierPremium;
+        var totalDiscount = pharmacyDiscount + cashierDiscount + cashier_discount_input;
+        var totalPremium = pharmacyPremium + cashierPremium + cashier_premium_input;
         
         var grand_total = selectedSubtotal + totalPremium - totalPaid - totalDiscount;
         if (grand_total < 0) grand_total = 0;
@@ -2574,22 +2869,16 @@ include_once '../../components/cashier_sidebar.php';
         document.getElementById('selectedCountNum').textContent = count;
         document.getElementById('displayTotal').textContent = currency + ' ' + selectedSubtotal.toFixed(0);
         document.getElementById('displayPharmDiscount').textContent = currency + ' ' + pharmacyDiscount.toFixed(0);
-        document.getElementById('displayDiscount').textContent = currency + ' ' + (cashierDiscount + newCashierDiscount).toFixed(0);
+        document.getElementById('displayDiscount').textContent = currency + ' ' + (cashierDiscount + cashier_discount_input).toFixed(0);
         document.getElementById('displayPharmPremium').textContent = currency + ' ' + pharmacyPremium.toFixed(0);
-        document.getElementById('displayPremium').textContent = currency + ' ' + (cashierPremium + newCashierPremium).toFixed(0);
+        document.getElementById('displayPremium').textContent = currency + ' ' + (cashierPremium + cashier_premium_input).toFixed(0);
         document.getElementById('displayGrandTotal').textContent = currency + ' ' + grand_total.toFixed(0);
         
-        // ✅ V21: Check if ALL items selected
         var totalSelectableItems = document.querySelectorAll('.item-select:not([data-is-locked="true"]):not(:disabled)').length;
         var allItemsSelected = (count > 0 && count === totalSelectableItems);
         
-        // ✅ Auto-fill partial only if NOT all selected
         if (partialInput.dataset.userEdited !== 'true') {
-            if (count === 0) {
-                partialInput.value = '0';
-                partialInput.dataset.rawValue = 0;
-                partial = 0;
-            } else if (allItemsSelected) {
+            if (count === 0 || allItemsSelected) {
                 partialInput.value = '0';
                 partialInput.dataset.rawValue = 0;
                 partial = 0;
@@ -2600,13 +2889,8 @@ include_once '../../components/cashier_sidebar.php';
             }
         }
         
-        var pharmPremiumCard = document.getElementById('pharmPremiumCard');
-        if (pharmacyPremium > 0) pharmPremiumCard.style.display = 'flex';
-        else pharmPremiumCard.style.display = 'none';
-        
-        var premiumCard = document.getElementById('premiumCard');
-        if ((cashierPremium + newCashierPremium) > 0) premiumCard.style.display = 'flex';
-        else premiumCard.style.display = 'none';
+        document.getElementById('pharmPremiumCard').style.display = pharmacyPremium > 0 ? 'flex' : 'none';
+        document.getElementById('premiumCard').style.display = (cashierPremium + cashier_premium_input) > 0 ? 'flex' : 'none';
         
         var fullBtn = document.getElementById('fullPayBtn');
         var partialBtn = document.getElementById('partialPayBtn');
@@ -2619,55 +2903,57 @@ include_once '../../components/cashier_sidebar.php';
             return;
         }
         
-        // ✅ V21: FULL button logic
+        var hasPartialAmount = partial > 0 && partial < grand_total;
+        
         if (count === 0) {
-            // Hakuna kitu kimechaguliwa
             fullBtn.disabled = true;
             fullBtn.innerHTML = '<i class="fas fa-check-circle"></i> FULL';
             partialBtn.disabled = true;
             partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> PARTIAL';
-        } else if (allItemsSelected) {
-            // ✅ Items ZOTE zimechaguliwa → FULL ENABLED, PARTIAL DISABLED
-            fullBtn.disabled = false;
-            fullBtn.innerHTML = '<i class="fas fa-check-circle"></i> FULL ' + currency + ' ' + grand_total.toFixed(0);
-            
-            partialBtn.disabled = true;
-            partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> PARTIAL';
-        } else {
-            // ✅ Baadhi tu ya items → FULL DISABLED, PARTIAL ENABLED
-            fullBtn.disabled = true;
-            fullBtn.innerHTML = '<i class="fas fa-check-circle"></i> FULL';
-            
-            if (partial > 0 && partial <= grand_total) {
+            return;
+        }
+        
+        if (allItemsSelected) {
+            if (hasPartialAmount) {
+                fullBtn.disabled = true;
+                fullBtn.innerHTML = '<i class="fas fa-check-circle"></i> FULL';
                 partialBtn.disabled = false;
-                partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> PARTIAL ' + currency + ' ' + partial.toFixed(0);
-            } else if (partial > grand_total) {
-                partialBtn.disabled = true;
-                partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> Exceeds';
+                partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> PAY PARTIAL ' + currency + ' ' + partial.toFixed(0);
             } else {
+                fullBtn.disabled = false;
+                fullBtn.innerHTML = '<i class="fas fa-check-circle"></i> FULL ' + currency + ' ' + grand_total.toFixed(0);
                 partialBtn.disabled = true;
                 partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> PARTIAL';
             }
+            return;
+        }
+        
+        fullBtn.disabled = true;
+        fullBtn.innerHTML = '<i class="fas fa-check-circle"></i> FULL';
+        
+        if (hasPartialAmount) {
+            partialBtn.disabled = false;
+            partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> PAY PARTIAL ' + currency + ' ' + partial.toFixed(0);
+        } else {
+            partialBtn.disabled = true;
+            partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> PARTIAL';
         }
     }
 
     function processPayment(type) {
         var checkboxes = document.querySelectorAll('.item-select:checked');
         var itemIds = [];
-        var hasLockedItems = false;
+        var medication_count = 0;
+        var equipment_count = 0;
         
         checkboxes.forEach(function(cb) {
             itemIds.push(parseInt(cb.dataset.id));
-            if (cb.getAttribute('data-is-locked') === 'true') hasLockedItems = true;
+            if (cb.dataset.itemType === 'medication') medication_count++;
+            if (cb.dataset.itemType === 'equipment') equipment_count++;
         });
         
         if (itemIds.length === 0) {
             showToast('⚠️ No Selection', 'Please select at least one item', 'warning');
-            return;
-        }
-        
-        if (hasLockedItems) {
-            showToast('🔒 Locked', 'Kuna prescriptions ambazo hazijathibitishwa. Subiri pharmacy.', 'error');
             return;
         }
         
@@ -2677,21 +2963,12 @@ include_once '../../components/cashier_sidebar.php';
         var cashier_premium_input = getRawValue(document.getElementById('premiumAmount'));
         
         var selectedSubtotal = 0;
-        checkboxes.forEach(function(cb) {
-            selectedSubtotal += parseFloat(cb.dataset.price) || 0;
-        });
+        checkboxes.forEach(function(cb) { selectedSubtotal += parseFloat(cb.dataset.price) || 0; });
         
         var billIds = new Set();
-        checkboxes.forEach(function(cb) {
-            var billId = cb.dataset.billId;
-            if (billId) billIds.add(billId);
-        });
+        checkboxes.forEach(function(cb) { if (cb.dataset.billId) billIds.add(cb.dataset.billId); });
         
-        var totalPaid = 0;
-        var pharmacyDiscount = 0;
-        var cashierDiscount = 0;
-        var pharmacyPremium = 0;
-        var cashierPremium = 0;
+        var totalPaid = 0, pharmacyDiscount = 0, cashierDiscount = 0, pharmacyPremium = 0, cashierPremium = 0;
         
         billIds.forEach(function(billId) {
             var values = getBillProRatedValues(billId);
@@ -2702,49 +2979,63 @@ include_once '../../components/cashier_sidebar.php';
             cashierPremium += values.cashierPremium;
         });
         
-        var newCashierDiscount = cashier_discount_input;
-        var newCashierPremium = cashier_premium_input;
-        
-        var totalDiscount = pharmacyDiscount + cashierDiscount + newCashierDiscount;
-        var totalPremium = pharmacyPremium + cashierPremium + newCashierPremium;
+        var totalDiscount = pharmacyDiscount + cashierDiscount + cashier_discount_input;
+        var totalPremium = pharmacyPremium + cashierPremium + cashier_premium_input;
         
         var grandTotal = selectedSubtotal + totalPremium - totalPaid - totalDiscount;
         if (grandTotal < 0) grandTotal = 0;
         
-        // ✅ V21: Validate FULL = ALL items
         if (type === 'full') {
             var totalSelectableItems = document.querySelectorAll('.item-select:not([data-is-locked="true"]):not(:disabled)').length;
+            
             if (itemIds.length !== totalSelectableItems) {
-                showToast('⚠️ FULL Payment', 'FULL payment inahitaji items ZOTE kuchaguliwa. Kwa baadhi, tumia PARTIAL.', 'warning');
+                showToast('⚠️ FULL Payment', 
+                    'FULL payment inahitaji items ZOTE kuchaguliwa.<br><br>Umechagua <strong>' + itemIds.length + '</strong> kati ya <strong>' + totalSelectableItems + '</strong> items.', 
+                    'warning');
+                return;
+            }
+            
+            if (partialAmount > 0 && partialAmount < grandTotal) {
+                showToast('⚠️ Partial Amount Filled', 
+                    'Umejaza PARTIAL amount (<strong>' + currency + ' ' + partialAmount.toFixed(0) + '</strong>).<br><br>Kama unataka kulipia FULL, futa partial kwanza.', 
+                    'warning');
                 return;
             }
         }
         
         if (type === 'partial') {
             if (partialAmount <= 0) {
-                showToast('⚠️ Invalid Amount', 'Please enter a valid partial amount. Kama unataka kulipia zote, tumia FULL button.', 'warning');
+                showToast('⚠️ Invalid Amount', 'Please enter a valid partial amount.', 'warning');
                 return;
             }
             if (partialAmount > grandTotal) {
-                showToast('⚠️ Amount Exceeds', 'Partial amount exceeds grand total', 'warning');
+                showToast('⚠️ Amount Exceeds', 'Partial amount inazidi grand total.', 'warning');
+                return;
+            }
+            if (partialAmount >= grandTotal) {
+                showToast('⚠️ Full Amount', 'Partial amount ni sawa au zaidi ya grand total.', 'warning');
                 return;
             }
         }
         
+        var stock_info = '';
+        if (type === 'full') {
+            if (medication_count > 0) stock_info += '<br>💊 ' + medication_count + ' medication - stock itadeduct';
+            if (equipment_count > 0) stock_info += '<br>🛠️ ' + equipment_count + ' equipment - stock itadeduct';
+            stock_info += '<br>🧪 Lab equipment itadeduct (kama ipo)';
+            stock_info += '<br>✅ SAFETY CHECK - Double deduction imezuiwa';
+        } else {
+            stock_info = '<br>⚠️ PARTIAL payment - stock HAIJADEDUCT';
+        }
+        
         var confirmMsg = (type === 'partial' ? '💳 PARTIAL' : '💰 FULL') + ' PAYMENT\n' +
                          '═══════════════════════════════\n' +
-                         'Selected Items: ' + itemIds.length + '\n' +
-                         'Subtotal (Selected): ' + currency + ' ' + selectedSubtotal.toFixed(0) + '\n' +
-                         'Paid (Pro-rated): ' + currency + ' ' + totalPaid.toFixed(0) + '\n' +
-                         'Pharm Disc: ' + currency + ' ' + pharmacyDiscount.toFixed(0) + '\n' +
-                         'Cashier Disc: ' + currency + ' ' + (cashierDiscount + newCashierDiscount).toFixed(0) + '\n' +
-                         (pharmacyPremium > 0 ? '👑 Pharm Prem: ' + currency + ' ' + pharmacyPremium.toFixed(0) + '\n' : '') +
-                         ((cashierPremium + newCashierPremium) > 0 ? '👑 Cashier Prem: ' + currency + ' ' + (cashierPremium + newCashierPremium).toFixed(0) + '\n' : '') +
-                         '───────────────────────────────\n' +
-                         'REMAINING: ' + currency + ' ' + grandTotal.toFixed(0) + '\n' +
-                         (type === 'partial' ? 'Paying: ' + currency + ' ' + partialAmount.toFixed(0) + '\n' +
-                         'Remaining After: ' + currency + ' ' + (grandTotal - partialAmount).toFixed(0) + '\n' : '') +
-                         '\nConfirm?';
+                         'Items: ' + itemIds.length + '\n' +
+                         'Subtotal: ' + currency + ' ' + selectedSubtotal.toFixed(0) + '\n' +
+                         'TOTAL: ' + currency + ' ' + grandTotal.toFixed(0) + '\n' +
+                         (type === 'partial' ? 'Paying: ' + currency + ' ' + partialAmount.toFixed(0) + '\n' : '') +
+                         stock_info.replace(/<br>/g, '\n') +
+                         '\n\nConfirm?';
         
         if (!confirm(confirmMsg)) return;
         
@@ -2757,28 +3048,19 @@ include_once '../../components/cashier_sidebar.php';
         var formData = new FormData();
         formData.append('action', type === 'partial' ? 'partial_payment' : 'complete_payment');
         formData.append('payment_method', paymentMethod);
-        if (newCashierDiscount > 0) formData.append('discount_amount', newCashierDiscount);
-        if (newCashierPremium > 0) formData.append('premium_amount', newCashierPremium);
+        if (cashier_discount_input > 0) formData.append('discount_amount', cashier_discount_input);
+        if (cashier_premium_input > 0) formData.append('premium_amount', cashier_premium_input);
         if (type === 'partial') formData.append('partial_amount', partialAmount);
-        itemIds.forEach(function(id) {
-            formData.append('item_ids[]', id);
-        });
+        itemIds.forEach(function(id) { formData.append('item_ids[]', id); });
         
-        fetch(window.location.href, {
-            method: 'POST',
-            body: formData
-        })
+        fetch(window.location.href, { method: 'POST', body: formData })
         .then(function(response) { return response.json(); })
         .then(function(data) {
             if (data.success) {
                 showToast('✅ Success', data.message, 'success');
-                setTimeout(function() { window.location.reload(); }, 3500);
+                setTimeout(function() { window.location.reload(); }, 5000);
             } else {
-                if (data.locked_bills) {
-                    showToast('🔒 LOCKED', data.message, 'error');
-                } else {
-                    showToast('❌ Error', data.message, 'error');
-                }
+                showToast('❌ Error', data.message, 'error');
                 btn.innerHTML = originalHtml;
                 btn.disabled = false;
             }
@@ -2797,24 +3079,24 @@ include_once '../../components/cashier_sidebar.php';
         if (!toast) return;
         toast.className = 'toast-custom ' + (type || 'info');
         toastTitle.textContent = title || 'Notification';
-        toastMessage.textContent = message || '';
+        toastMessage.innerHTML = message || '';
         toast.style.display = 'flex';
         toast.classList.add('show');
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
             setTimeout(function() { toast.style.display = 'none'; }, 400);
-        }, 8000);
+        }, 12000);
     }
 
     document.addEventListener('DOMContentLoaded', function() {
         var partialInput = document.getElementById('partialAmount');
-        if (partialInput) partialInput.dataset.userEdited = 'false';
-        
+        if (partialInput) partialInput.dataset.userInput = 'false';
         updateSelectedTotal();
-        console.log('✅ Process Payment v21.0 loaded');
-        console.log('✅ FULL = all items only');
-        console.log('✅ PARTIAL = selected items');
+        
+        console.log('✅ Process Payment V27.0 loaded');
+        console.log('✅ NO AUTO-REPAIR');
+        console.log('✅ Safety check kabla ya deduction');
     });
 </script>
 

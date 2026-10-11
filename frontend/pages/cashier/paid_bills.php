@@ -1,16 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/paid_bills.php
-// V9 FINAL: Received By (Grouped) + Payment Dates + Scroll Buttons
+// V11 FINAL: Combined Columns + Visit Created Time
 // ================================================================
-// ✅ V9: Scroll buttons < > kwenye search bar (kulia)
-// ✅ V9: Search bar imepunguzwa ukubwa
-// ✅ V8: Received By inaonyesha majina YOTE + (count received)
-// ✅ V8: Kama user mmoja: SALOME SANGA (2 received)
-// ✅ V8: Kama users 2: SALOME SANGA (1), LUCY MUSSA (1)
-// ✅ V8: Expand → unaona kila payment na tarehe yake
-// ✅ V8: HAKUNA amounts
-// ✅ V8: Rangi za Regular/OTC/Equipment
+// ✅ V11: DISCOUNT column moja (Pharm + Cashier combined)
+// ✅ V11: PREMIUM column moja (Pharm + Cashier combined)
+// ✅ V11: Visit Created time inaonekana (saa ya visit)
+// ✅ V11: Payment time inaonekana kwenye expand
+// ✅ V10: Timezone fix (+03:00 EAT)
+// ✅ V10: Subquery badala ya GROUP BY
+// ✅ V9: Scroll buttons <> kwenye search bar
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -45,7 +44,8 @@ require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
-    $db->exec("SET time_zone = '+00:00'");
+    // ✅ V10 FIX: EAT (UTC+3)
+    $db->exec("SET time_zone = '+03:00'");
 } catch (Exception $e) {
     die("Database connection failed: " . $e->getMessage());
 }
@@ -130,13 +130,15 @@ elseif ($premium_filter === 'both_premium') $premium_discount_condition = " AND 
 elseif ($premium_filter === 'both_discount') $premium_discount_condition = " AND b.pharmacy_discount > 0 AND b.cashier_discount > 0";
 
 // ================================================================
-// ✅ V9: GET GROUPED BILLS
+// ✅ V11: GET GROUPED BILLS (with VISIT CREATED + PAYMENT TIME)
 // ================================================================
 $grouped_bills = [];
 $total_bills = 0;
 
 try {
-    // 1. REGULAR BILLS
+    // ============================================================
+    // ✅ V11: 1. REGULAR BILLS - Ongeza visit.created_at
+    // ============================================================
     $sql_bills = "
         SELECT 
             b.id as bill_id,
@@ -156,13 +158,15 @@ try {
             pat.phone as patient_phone,
             v.visit_number,
             v.visit_date,
-            COUNT(p.id) as payment_count,
-            MAX(p.received_at) as last_payment_date,
+            v.created_at as visit_created_at,
+            v.completed_at as visit_completed_at,
+            (SELECT COUNT(*) FROM payments WHERE bill_id = b.id) as payment_count,
+            (SELECT MAX(received_at) FROM payments WHERE bill_id = b.id) as last_payment_date,
+            (SELECT MIN(received_at) FROM payments WHERE bill_id = b.id) as first_payment_date,
             (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND status != 'cancelled') as item_count,
             'Regular' as bill_type,
             'regular' as row_type
         FROM bills b
-        LEFT JOIN payments p ON b.id = p.bill_id
         LEFT JOIN patients pat ON b.patient_id = pat.id
         LEFT JOIN visits v ON b.visit_id = v.id
         WHERE b.branch_id = ? 
@@ -171,8 +175,8 @@ try {
           AND b.bill_number NOT LIKE 'BILL-OTC-%'
           $date_condition_bills
           $premium_discount_condition
-        GROUP BY b.id
-        HAVING payment_count > 0
+          AND EXISTS (SELECT 1 FROM payments WHERE bill_id = b.id)
+        ORDER BY last_payment_date DESC
     ";
     
     $stmt = $db->prepare($sql_bills);
@@ -192,7 +196,7 @@ try {
         }
         $row['pharmacy_premium'] = $pharm_prem;
         
-        // Get all payments for this bill
+        // Get all payments
         $stmt_payments = $db->prepare("
             SELECT 
                 p.id,
@@ -207,7 +211,7 @@ try {
             FROM payments p
             LEFT JOIN users u ON p.received_by = u.id
             WHERE p.bill_id = ?
-            ORDER BY p.received_at ASC
+            ORDER BY p.received_at ASC, p.id ASC
         ");
         $stmt_payments->execute([$row['bill_id']]);
         $payments = $stmt_payments->fetchAll(PDO::FETCH_ASSOC);
@@ -215,7 +219,7 @@ try {
         $row['payments'] = $payments;
         $row['payment_count'] = count($payments);
         
-        // Build received_by_summary (GROUPED)
+        // Build received_by_summary
         $received_by_summary = [];
         foreach ($payments as $pmt) {
             $name = $pmt['received_by_name'] ?? 'Unknown';
@@ -234,6 +238,7 @@ try {
         
         if (!empty($payments)) {
             $row['last_payment_date'] = end($payments)['received_at'];
+            $row['first_payment_date'] = $payments[0]['received_at'];
         }
         
         // Build search data
@@ -254,7 +259,9 @@ try {
         $grouped_bills[] = $row;
     }
 
-    // 2. OTC SALES
+    // ============================================================
+    // ✅ V11: 2. OTC SALES - Ongeza visit/sale created time
+    // ============================================================
     $sql_otc = "
         SELECT 
             o.id as bill_id,
@@ -264,6 +271,7 @@ try {
             o.discount_amount as cashier_discount,
             o.payment_method,
             o.created_at as last_payment_date,
+            o.created_at as visit_created_at,
             o.sold_by as received_by,
             CASE 
                 WHEN o.sale_number LIKE 'OTC-EQP-%' THEN 'Equipment'
@@ -281,6 +289,7 @@ try {
         WHERE o.branch_id = ? 
           AND o.payment_status = 'paid'
           $date_condition_otc
+        ORDER BY o.created_at DESC
     ";
     
     $stmt = $db->prepare($sql_otc);
@@ -307,7 +316,6 @@ try {
         $row['pharmacy_premium'] = 0;
         $row['cashier_premium'] = 0;
         
-        // OTC received_by_summary
         $row['received_by_summary'] = [
             [
                 'name' => $row['received_by_name'] ?? 'Unknown',
@@ -349,6 +357,8 @@ $summary_pharm_discount_count = 0;
 $summary_cashier_discount_count = 0;
 $summary_both_premium_count = 0;
 $summary_both_discount_count = 0;
+$summary_any_discount_count = 0;
+$summary_any_premium_count = 0;
 
 foreach ($grouped_bills as $b) {
     $pharm_disc = (float)($b['pharmacy_discount'] ?? 0);
@@ -366,6 +376,8 @@ foreach ($grouped_bills as $b) {
     if ($cashier_disc > 0) $summary_cashier_discount_count++;
     if ($pharm_prem > 0 && $cashier_prem > 0) $summary_both_premium_count++;
     if ($pharm_disc > 0 && $cashier_disc > 0) $summary_both_discount_count++;
+    if ($pharm_disc > 0 || $cashier_disc > 0) $summary_any_discount_count++;
+    if ($pharm_prem > 0 || $cashier_prem > 0) $summary_any_premium_count++;
 }
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
@@ -381,7 +393,7 @@ include_once '../../components/cashier_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Paid Bills V9 - Braick Dispensary</title>
+    <title>Paid Bills V11 - Braick Dispensary</title>
 
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
@@ -531,7 +543,7 @@ include_once '../../components/cashier_sidebar.php';
         .legend-item { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
         .legend-dot { width: 12px; height: 12px; border-radius: 50%; }
 
-        /* ✅ V9: SEARCH BAR with SCROLL BUTTONS */
+        /* SEARCH BAR */
         .table-search-bar { 
             display: flex; 
             align-items: center; 
@@ -555,8 +567,8 @@ include_once '../../components/cashier_sidebar.php';
             padding: 0 12px; 
             flex: 1; 
             min-width: 200px; 
-            max-width: 400px;  /* ✅ Punguza ukubwa */
-            height: 36px;  /* ✅ Punguza urefu */
+            max-width: 400px;
+            height: 36px;
         }
         .search-wrapper:focus-within { border-color: var(--success); }
         .search-wrapper .search-icon { color: var(--success); font-size: 0.8rem; margin-right: 8px; }
@@ -575,12 +587,11 @@ include_once '../../components/cashier_sidebar.php';
         }
         .search-results-count.visible { display: inline-block; }
 
-        /* ✅ V9: SCROLL BUTTONS <> */
         .scroll-controls {
             display: flex;
             align-items: center;
             gap: 6px;
-            margin-left: auto;  /* ✅ Push kwa kulia */
+            margin-left: auto;
             flex-shrink: 0;
         }
         .scroll-controls .scroll-label {
@@ -628,7 +639,8 @@ include_once '../../components/cashier_sidebar.php';
         .table-wrap::-webkit-scrollbar-track { background: var(--gray-100); border-radius: 10px; }
         .table-wrap::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
 
-        .data-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; min-width: 1300px; }
+        /* ✅ V11: TABLE WITH COMBINED COLUMNS (14 → 12 columns) */
+        .data-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; min-width: 1250px; }
         .data-table thead th { text-align: left; padding: 10px 8px; font-weight: 700; font-size: 0.6rem; text-transform: uppercase; color: white; background: var(--success); border-bottom: 3px solid var(--success-dark); white-space: nowrap; }
         .data-table thead th:first-child { border-radius: 8px 0 0 0; }
         .data-table thead th:last-child { border-radius: 0 8px 0 0; }
@@ -703,7 +715,50 @@ include_once '../../components/cashier_sidebar.php';
         .badge-yes.cashier-prem { background: var(--cashier-premium-bg); color: var(--cashier-premium-color); border: 1px solid var(--cashier-premium-color); }
         .col-dash { color: var(--text-secondary); font-size: 0.65rem; text-align: center; display: block; }
 
-        /* RECEIVED BY SUMMARY STYLE */
+        /* ✅ V11: COMBINED BADGE STYLES */
+        .combined-badge-group {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            align-items: center;
+        }
+        .combined-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-size: 0.55rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+        .combined-badge.pharm {
+            background: #FEF3C7;
+            color: #D97706;
+            border: 1px solid #D97706;
+        }
+        .combined-badge.cashier-disc {
+            background: #DBEAFE;
+            color: #2563EB;
+            border: 1px solid #2563EB;
+        }
+        .combined-badge.cashier-prem {
+            background: #EDE9FE;
+            color: #7C3AED;
+            border: 1px solid #7C3AED;
+        }
+        .combined-badge.pharm-prem {
+            background: #FEF3C7;
+            color: #F59E0B;
+            border: 1px solid #F59E0B;
+        }
+        [data-theme="dark"] .combined-badge.pharm { background: #3D2E0A; color: #FBBF24; }
+        [data-theme="dark"] .combined-badge.cashier-disc { background: #1E3A5F; color: #60A5FA; }
+        [data-theme="dark"] .combined-badge.cashier-prem { background: #2A1A3A; color: #A78BFA; }
+        [data-theme="dark"] .combined-badge.pharm-prem { background: #3D2E0A; color: #FBBF24; }
+
+        /* RECEIVED BY SUMMARY */
         .received-by-summary {
             display: flex;
             flex-direction: column;
@@ -789,6 +844,9 @@ include_once '../../components/cashier_sidebar.php';
                 All payments received in <strong><?= htmlspecialchars($user_branch_name) ?></strong>
                 <span class="header-badge">
                     <i class="fas fa-receipt"></i> <?= $total_bills ?> Bills
+                </span>
+                <span class="header-badge" style="background: rgba(255,255,255,0.25);">
+                    <i class="fas fa-clock"></i> EAT (UTC+3)
                 </span>
             </p>
         </div>
@@ -911,7 +969,7 @@ include_once '../../components/cashier_sidebar.php';
             <span class="legend-item"><span class="legend-dot" style="background:#0891B2;"></span><span style="color:#0891B2;">OTC Equipment</span></span>
         </div>
 
-        <!-- ✅ V9: SEARCH BAR + SCROLL BUTTONS <> -->
+        <!-- SEARCH BAR + SCROLL BUTTONS -->
         <div class="table-search-bar">
             <div class="search-wrapper">
                 <i class="fas fa-search search-icon"></i>
@@ -923,7 +981,6 @@ include_once '../../components/cashier_sidebar.php';
             
             <span class="search-results-count" id="searchResultsCount"></span>
             
-            <!-- ✅ V9: SCROLL BUTTONS <> -->
             <div class="scroll-controls">
                 <span class="scroll-label"><i class="fas fa-arrows-alt-h"></i> Scroll:</span>
                 <button type="button" class="btn-scroll-table" onclick="scrollTable('left')" title="Scroll Left (Alt+←)">
@@ -942,15 +999,20 @@ include_once '../../components/cashier_sidebar.php';
                         <th style="min-width:50px;text-align:center;">#</th>
                         <th style="min-width:130px;">Receipt #</th>
                         <th style="min-width:150px;">Bill #</th>
-                        <th style="min-width:65px;text-align:center;">Type</th>
+                        <th style="min-width:60px;text-align:center;">Type</th>
                         <th style="min-width:140px;">Patient</th>
                         <th style="min-width:55px;text-align:center;">Items</th>
-                        <th style="min-width:180px;">Received By</th>
-                        <th style="min-width:85px;text-align:center;">Pharm Disc</th>
-                        <th style="min-width:85px;text-align:center;">Cashier Disc</th>
-                        <th style="min-width:85px;text-align:center;">Pharm Prem</th>
-                        <th style="min-width:85px;text-align:center;">Cashier Prem</th>
-                        <th style="min-width:120px;text-align:center;">Last Payment</th>
+                        <th style="min-width:170px;">Received By</th>
+                        <!-- ✅ V11: COMBINED DISCOUNT COLUMN -->
+                        <th style="min-width:110px;text-align:center;">
+                            <i class="fas fa-tag"></i> Discount
+                        </th>
+                        <!-- ✅ V11: COMBINED PREMIUM COLUMN -->
+                        <th style="min-width:110px;text-align:center;">
+                            <i class="fas fa-crown"></i> Premium
+                        </th>
+                        <th style="min-width:130px;text-align:center;">Last Payment</th>
+                        <th style="min-width:130px;text-align:center;">Visit Created</th>
                         <th style="min-width:70px;text-align:center;">Print</th>
                     </tr>
                 </thead>
@@ -974,12 +1036,14 @@ include_once '../../components/cashier_sidebar.php';
                             $has_cashier_disc = ($cashier_disc > 0);
                             $has_pharm_prem = ($pharm_prem > 0);
                             $has_cashier_prem = ($cashier_prem > 0);
-                            $has_both_prem = ($has_pharm_prem && $has_cashier_prem);
+                            $has_any_disc = ($has_pharm_disc || $has_cashier_disc);
+                            $has_any_prem = ($has_pharm_prem || $has_cashier_prem);
 
                             $payments = $bill['payments'] ?? [];
                             $received_by_summary = $bill['received_by_summary'] ?? [];
                             $latest_receipt = '';
                             $latest_paid_date = $bill['last_payment_date'] ?? null;
+                            $visit_created_at = $bill['visit_created_at'] ?? null;
                             if (!empty($payments)) {
                                 $last_pmt = end($payments);
                                 $latest_receipt = $last_pmt['receipt_number'] ?? '';
@@ -994,7 +1058,7 @@ include_once '../../components/cashier_sidebar.php';
                                 
                                 <td class="row-number-cell">
                                     <?= $row_number++ ?>
-                                    <?php if ($has_both_prem): ?>
+                                    <?php if ($has_any_prem && $has_any_disc): ?>
                                         <div style="font-size:0.5rem;color:var(--danger);margin-top:2px;">⚠️</div>
                                     <?php endif; ?>
                                 </td>
@@ -1064,38 +1128,47 @@ include_once '../../components/cashier_sidebar.php';
                                     <?php endif; ?>
                                 </td>
                                 
+                                <!-- ✅ V11: COMBINED DISCOUNT COLUMN -->
                                 <td style="text-align:center;">
-                                    <?php if ($has_pharm_disc): ?>
-                                        <span class="badge-yes pharm"><i class="fas fa-check"></i> YES</span>
+                                    <?php if ($has_any_disc): ?>
+                                        <div class="combined-badge-group">
+                                            <?php if ($has_pharm_disc): ?>
+                                                <span class="combined-badge pharm" title="Pharmacy Discount">
+                                                    <i class="fas fa-pills"></i> PHARM
+                                                </span>
+                                            <?php endif; ?>
+                                            <?php if ($has_cashier_disc): ?>
+                                                <span class="combined-badge cashier-disc" title="Cashier Discount">
+                                                    <i class="fas fa-cash-register"></i> CASHIER
+                                                </span>
+                                            <?php endif; ?>
+                                        </div>
                                     <?php else: ?>
                                         <span class="col-dash">—</span>
                                     <?php endif; ?>
                                 </td>
                                 
+                                <!-- ✅ V11: COMBINED PREMIUM COLUMN -->
                                 <td style="text-align:center;">
-                                    <?php if ($has_cashier_disc): ?>
-                                        <span class="badge-yes cashier-disc"><i class="fas fa-check"></i> YES</span>
+                                    <?php if ($has_any_prem): ?>
+                                        <div class="combined-badge-group">
+                                            <?php if ($has_pharm_prem): ?>
+                                                <span class="combined-badge pharm-prem" title="Pharmacy Premium">
+                                                    <i class="fas fa-crown"></i> PHARM
+                                                </span>
+                                            <?php endif; ?>
+                                            <?php if ($has_cashier_prem): ?>
+                                                <span class="combined-badge cashier-prem" title="Cashier Premium">
+                                                    <i class="fas fa-crown"></i> CASHIER
+                                                </span>
+                                            <?php endif; ?>
+                                        </div>
                                     <?php else: ?>
                                         <span class="col-dash">—</span>
                                     <?php endif; ?>
                                 </td>
                                 
-                                <td style="text-align:center;">
-                                    <?php if ($has_pharm_prem): ?>
-                                        <span class="badge-yes pharm"><i class="fas fa-crown"></i> YES</span>
-                                    <?php else: ?>
-                                        <span class="col-dash">—</span>
-                                    <?php endif; ?>
-                                </td>
-                                
-                                <td style="text-align:center;">
-                                    <?php if ($has_cashier_prem): ?>
-                                        <span class="badge-yes cashier-prem"><i class="fas fa-crown"></i> YES</span>
-                                    <?php else: ?>
-                                        <span class="col-dash">—</span>
-                                    <?php endif; ?>
-                                </td>
-                                
+                                <!-- LAST PAYMENT -->
                                 <td style="text-align:center;">
                                     <?php if ($latest_paid_date): ?>
                                         <div style="font-size:0.68rem;font-weight:700;font-family:var(--font-mono);">
@@ -1103,6 +1176,20 @@ include_once '../../components/cashier_sidebar.php';
                                         </div>
                                         <div style="font-size:0.55rem;color:var(--text-secondary);">
                                             <?= date('h:i A', strtotime($latest_paid_date)) ?>
+                                        </div>
+                                    <?php else: ?>
+                                        <span style="color:var(--text-secondary);font-size:0.65rem;">—</span>
+                                    <?php endif; ?>
+                                </td>
+                                
+                                <!-- ✅ V11: VISIT CREATED COLUMN -->
+                                <td style="text-align:center;">
+                                    <?php if ($visit_created_at): ?>
+                                        <div style="font-size:0.68rem;font-weight:700;font-family:var(--font-mono);color:#0B5ED7;">
+                                            <?= date('d/m/y', strtotime($visit_created_at)) ?>
+                                        </div>
+                                        <div style="font-size:0.55rem;color:var(--text-secondary);">
+                                            <?= date('h:i A', strtotime($visit_created_at)) ?>
                                         </div>
                                     <?php else: ?>
                                         <span style="color:var(--text-secondary);font-size:0.65rem;">—</span>
@@ -1127,13 +1214,21 @@ include_once '../../components/cashier_sidebar.php';
                             
                             <!-- PAYMENT DETAILS (EXPANDABLE) -->
                             <tr class="payments-detail-row" id="payments-<?= $bill_id ?>">
-                                <td colspan="13" class="payments-detail-cell">
+                                <td colspan="12" class="payments-detail-cell">
                                     <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
                                         <strong style="color:#059669;font-size:0.85rem;">
                                             <i class="fas fa-receipt"></i> Payment History (<?= count($payments) ?>)
                                         </strong>
                                         <span style="font-size:0.72rem;color:var(--text-secondary);">
                                             Bill: <strong style="color:var(--text-primary);font-family:var(--font-mono);"><?= htmlspecialchars($bill['bill_number']) ?></strong>
+                                        </span>
+                                        <?php if ($visit_created_at): ?>
+                                            <span style="font-size:0.65rem;color:#0B5ED7;background:#DBEAFE;padding:2px 8px;border-radius:6px;font-weight:600;">
+                                                <i class="fas fa-user-plus"></i> Visit: <?= date('d M Y, h:i A', strtotime($visit_created_at)) ?>
+                                            </span>
+                                        <?php endif; ?>
+                                        <span style="font-size:0.65rem;color:var(--success);background:var(--success-bg);padding:2px 8px;border-radius:6px;font-weight:600;">
+                                            <i class="fas fa-clock"></i> EAT Time
                                         </span>
                                     </div>
                                     
@@ -1178,7 +1273,7 @@ include_once '../../components/cashier_sidebar.php';
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="13" style="text-align:center;padding:40px 20px;color:var(--text-secondary);">
+                            <td colspan="12" style="text-align:center;padding:40px 20px;color:var(--text-secondary);">
                                 <i class="fas fa-check-circle" style="font-size:2.5rem;display:block;margin-bottom:12px;color:var(--success);opacity:0.4;"></i>
                                 <p style="font-size:1rem;font-weight:600;">No payments found</p>
                             </td>
@@ -1192,13 +1287,15 @@ include_once '../../components/cashier_sidebar.php';
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span>|</span> Paid Bills V9
+            <span>|</span> Paid Bills V11
             <span>|</span>
             <span style="color:#059669;"><i class="fas fa-circle"></i> Regular</span>
             <span style="color:#0B5ED7;"><i class="fas fa-circle"></i> OTC Med</span>
             <span style="color:#0891B2;"><i class="fas fa-circle"></i> Equipment</span>
             <span>|</span>
             <span>👤 <?= htmlspecialchars($user_full_name) ?></span>
+            <span>|</span>
+            <span><i class="fas fa-clock"></i> EAT (UTC+3)</span>
             <span>|</span>
             &copy; <?= date('Y') ?>
         </p>
@@ -1222,7 +1319,6 @@ include_once '../../components/cashier_sidebar.php';
         }
     }
 
-    // ✅ V9: SCROLL TABLE LEFT/RIGHT
     function scrollTable(direction) {
         var wrapper = document.getElementById('tableScrollWrapper');
         if (!wrapper) return;
@@ -1243,7 +1339,6 @@ include_once '../../components/cashier_sidebar.php';
         wrapper.scrollTo({ left: targetScroll, behavior: 'smooth' });
     }
 
-    // ✅ V9: KEYBOARD SHORTCUTS for scrolling
     document.addEventListener('keydown', function(e) {
         if (e.altKey && e.key === 'ArrowLeft') {
             e.preventDefault();
@@ -1325,9 +1420,11 @@ include_once '../../components/cashier_sidebar.php';
         });
     })();
 
-    console.log('%c✅ Braick - Paid Bills V9', 'font-size:16px; font-weight:bold; color:#059669;');
-    console.log('%c✅ V9: Scroll buttons <> kwenye search bar', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ V9: Search bar imepunguzwa', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Braick - Paid Bills V11', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c✅ V11: DISCOUNT column moja (Pharm + Cashier combined)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ V11: PREMIUM column moja (Pharm + Cashier combined)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ V11: Visit Created column imeongezwa', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ V11: Timezone +03:00 (EAT)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💡 Tip: Tumia Alt + ←/→ kwa keyboard', 'font-size:12px; color:#94A3B8;');
 </script>
 

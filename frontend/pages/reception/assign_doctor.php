@@ -1,12 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/assign_doctor.php
-// RECEPTION - ASSIGN / CHANGE / REASSIGN DOCTOR & LAB TESTS (V26)
-// ✅ V26: Filter buttons zimepanuliwa kujaza width yote (row moja)
+// RECEPTION - ASSIGN / CHANGE / REASSIGN DOCTOR & LAB TESTS (V27)
+// ================================================================
+// ✅ V27 #1: FIX - Complete patients HAWAKO kwenye Assigned
+// ✅ V27 #2: Date & Time zimeondolewa kwenye column yake
+// ✅ V27 #3: Saa na Tarehe zimewekwa CHINI YA DOCTOR
+// ✅ V27 #4: Vital Signs cards - COLORED background + text
+// ✅ V27 #5: BMI inaonyesha status (Normal/Overweight/etc)
+// ✅ V26: Filter buttons zimepanuliwa (row moja)
 // ✅ V25: Total Patients kwenye page header
-// ✅ V24: Saa+Tarehe kwenye kila patient row
-// ✅ V23: SHARED HEADER/SIDEBAR + LAB TEST filter fix
-// BRAICK DISPENSARY
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -207,7 +210,7 @@ try {
     $branch_patients_total = count($unique_patients_for_dropdown);
 
     // ============================================================
-    // CATEGORIZE (V26: Lab Test = pending/in_progress only)
+    // ✅ V27 FIX: CATEGORIZE - COMPLETE HAWAKO ASSIGNED
     // ============================================================
     foreach ($all_patients as $patient) {
         $patient['has_active_visit'] = !empty($patient['visit_id']);
@@ -217,23 +220,37 @@ try {
             $status            = $patient['visit_status'];
             $pending_lab_count = (int)($patient['pending_lab_tests_count'] ?? 0);
 
-            if ($status === 'lab_test' && $pending_lab_count > 0) {
-                $lab_only_patients[] = $patient;
-            } elseif ($status === 'lab_test' && $pending_lab_count === 0) {
-                if (!empty($patient['assigned_doctor_name'])) {
-                    $assigned_patients[] = $patient;
-                }
-            } elseif ($status === 'waiting') {
-                $waiting_patients[] = $patient;
-            } elseif ($status === 'prescribed') {
-                $prescribed_patients[] = $patient;
-            } elseif (in_array($status, ['assigned','with_doctor'])) {
-                if (!empty($patient['assigned_doctor_name'])) {
-                    $assigned_patients[] = $patient;
-                }
-            } elseif (in_array($status, ['completed','cancelled'])) {
+            // ✅ COMPLETE - inaenda complete, HAIFAI kuwa assigned
+            if (in_array($status, ['completed', 'cancelled'])) {
                 $complete_patients[] = $patient;
             }
+            // ✅ LAB TEST - pending/in_progress only
+            elseif ($status === 'lab_test' && $pending_lab_count > 0) {
+                $lab_only_patients[] = $patient;
+            }
+            // ✅ Lab test but no pending → assigned (kama ana doctor)
+            elseif ($status === 'lab_test' && $pending_lab_count === 0) {
+                if (!empty($patient['assigned_doctor_name'])) {
+                    $assigned_patients[] = $patient;
+                }
+            }
+            // ✅ WAITING
+            elseif ($status === 'waiting') {
+                $waiting_patients[] = $patient;
+            }
+            // ✅ PRESCRIBED
+            elseif ($status === 'prescribed') {
+                $prescribed_patients[] = $patient;
+            }
+            // ✅ ASSIGNED - ONLY active visits with doctor
+            elseif (in_array($status, ['assigned', 'with_doctor'])) {
+                if (!empty($patient['assigned_doctor_name'])) {
+                    $assigned_patients[] = $patient;
+                }
+            }
+        } else {
+            // ✅ NO ACTIVE VISIT → Complete
+            $complete_patients[] = $patient;
         }
     }
 
@@ -285,9 +302,7 @@ try {
     }
     $total_doctors = count($doctors);
 
-    // ============================================================
-    // HELPERS (guarded)
-    // ============================================================
+    // HELPERS
     if (!function_exists('createLabOnlyBill')) {
         function createLabOnlyBill($db, $patient_id, $visit_id, $lab_test_ids, $user_id, $branch_id) {
             $total_lab_fee = 0;
@@ -416,15 +431,10 @@ try {
         }
     }
 
-    // ============================================================
     // AJAX HANDLERS
-    // ============================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
 
-        // ============================================================
-        // GET FILTERED LIST
-        // ============================================================
         if ($action === 'get_filtered_list') {
             header('Content-Type: application/json');
             $status   = $_POST['status'] ?? 'assigned';
@@ -449,19 +459,18 @@ try {
                 exit;
             }
 
+            // ✅ V27: Date & Time column IMETOLEWA - ipo chini ya Doctor
             $html = '<div class="patient-list-table-wrap"><table class="patient-list-table">';
             $html .= '<thead><tr>';
             $html .= '<th>Patient / Service</th>';
             $html .= '<th>Patient ID</th>';
-            $html .= '<th>Date & Time</th>';
-            $html .= '<th>Doctor</th>';
+            $html .= '<th>Doctor & Time</th>';  // ✅ Combined
             if ($show_assigned_by) $html .= '<th>Assigned By</th>';
             $html .= '<th>Status</th>';
             if ($status === 'assigned') $html .= '<th style="text-align:center;">Actions</th>';
             $html .= '</tr></thead><tbody>';
 
             foreach ($filtered as $patient) {
-                // ✅ SAA + TAREHE
                 $base_date = !empty($patient['visit_created_at']) ? $patient['visit_created_at'] : ($patient['patient_created_at'] ?? null);
                 $date_full = $base_date ? date('d/m/Y', strtotime($base_date)) : '—';
                 $time_full = $base_date ? date('h:i A', strtotime($base_date)) : '—';
@@ -478,9 +487,19 @@ try {
                     ? '<span class="visit-number-pill"><i class="fas fa-hashtag"></i> ' . htmlspecialchars($patient['visit_number']) . '</span>'
                     : '';
 
-                $doctor_html = !empty($patient['assigned_doctor_name'])
-                    ? '<div class="doctor-pill"><i class="fas fa-user-md"></i><span>Dr. ' . htmlspecialchars($patient['assigned_doctor_name']) . '</span><span class="doctor-status">' . ($patient['assigned_doctor_online'] == 1 ? '🟢' : '⚪') . '</span></div>'
-                    : '<span class="no-doctor-tag"><i class="fas fa-minus-circle"></i> No doctor</span>';
+                // ✅ V27: Doctor cell inaonyesha jina + time
+                $doctor_html = '';
+                if (!empty($patient['assigned_doctor_name'])) {
+                    $doctor_html = '<div class="doctor-cell">';
+                    $doctor_html .= '<div class="doctor-pill"><i class="fas fa-user-md"></i><span>Dr. ' . htmlspecialchars($patient['assigned_doctor_name']) . '</span><span class="doctor-status">' . ($patient['assigned_doctor_online'] == 1 ? '🟢' : '⚪') . '</span></div>';
+                    $doctor_html .= '<div class="doctor-time"><i class="fas fa-calendar-day"></i> ' . $date_full . ' <span style="color:var(--primary);font-weight:700;"><i class="fas fa-clock"></i> ' . $time_full . '</span></div>';
+                    $doctor_html .= '</div>';
+                } else {
+                    $doctor_html = '<div class="doctor-cell">';
+                    $doctor_html .= '<span class="no-doctor-tag"><i class="fas fa-minus-circle"></i> No doctor</span>';
+                    $doctor_html .= '<div class="doctor-time"><i class="fas fa-calendar-day"></i> ' . $date_full . ' <span style="color:var(--primary);font-weight:700;"><i class="fas fa-clock"></i> ' . $time_full . '</span></div>';
+                    $doctor_html .= '</div>';
+                }
 
                 $assigned_by_html = '';
                 if ($show_assigned_by) {
@@ -522,15 +541,7 @@ try {
                 $html .= '<div class="patient-service-cell"><i class="fas fa-stethoscope"></i> ' . htmlspecialchars($patient['visit_type'] ?? 'Consultation') . '</div>';
                 $html .= '</td>';
                 $html .= '<td><span class="patient-id-pill">' . htmlspecialchars($patient['patient_id'] ?? 'N/A') . '</span></td>';
-
-                $html .= '<td>';
-                $html .= '<div class="datetime-cell">';
-                $html .= '<span class="dt-date"><i class="fas fa-calendar-day"></i> ' . $date_full . '</span>';
-                $html .= '<span class="dt-time"><i class="fas fa-clock"></i> ' . $time_full . '</span>';
-                $html .= '</div>';
-                $html .= '</td>';
-
-                $html .= '<td>' . $doctor_html . '</td>';
+                $html .= '<td>' . $doctor_html . '</td>';  // ✅ Doctor + Time
                 if ($show_assigned_by) $html .= '<td>' . $assigned_by_html . '</td>';
                 $html .= '<td>' . $status_badge . '</td>';
 
@@ -553,9 +564,7 @@ try {
             exit;
         }
 
-        // ============================================================
         // REASSIGN DOCTOR
-        // ============================================================
         if ($action === 'reassign_doctor') {
             header('Content-Type: application/json');
             $patient_id = (int)($_POST['patient_id'] ?? 0);
@@ -625,9 +634,7 @@ try {
             exit;
         }
 
-        // ============================================================
         // GET PATIENT DETAILS
-        // ============================================================
         if ($action === 'get_patient_details') {
             header('Content-Type: application/json');
             $patient_id = (int)($_POST['patient_id'] ?? 0);
@@ -664,9 +671,7 @@ try {
             exit;
         }
 
-        // ============================================================
         // CHANGE DOCTOR
-        // ============================================================
         if ($action === 'change_doctor') {
             header('Content-Type: application/json');
 
@@ -903,7 +908,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Assign Doctor V26 - Braick Dispensary</title>
+    <title>Assign Doctor V27 - Braick Dispensary</title>
 
     <link rel="icon" href="<?= htmlspecialchars($logo_path) ?>" type="image/png">
     <link rel="shortcut icon" href="<?= htmlspecialchars($logo_path) ?>" type="image/png">
@@ -1012,10 +1017,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: #fff;
         }
 
-        /* ================================================================
-           ✅ FILTER BAR — FULL WIDTH, ROW MOJA
-           Kila button inajaza nafasi sawa (flex: 1)
-           ================================================================ */
+        /* FILTER BAR */
         .filter-bar {
             display: flex;
             align-items: center;
@@ -1064,7 +1066,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             border-right: 1px solid var(--border-color);
         }
 
-        /* ✅ Filter buttons — kubwa, flex: 1, kujaza card */
         .filter-btn {
             display: inline-flex;
             align-items: center;
@@ -1141,9 +1142,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             .filter-count { font-size: 0.62rem; min-width: 20px; padding: 1px 6px; }
         }
 
-        /* ================================================================
-           PATIENT LIST TABLE
-           ================================================================ */
+        /* PATIENT LIST TABLE */
         .patient-list-table-wrap {
             overflow-x: auto;
             border-radius: 14px;
@@ -1237,28 +1236,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: #93C5FD;
         }
 
-        /* ✅ DATE/TIME CELL */
-        .datetime-cell {
+        /* ✅ V27: DOCTOR CELL with TIME */
+        .doctor-cell {
             display: flex;
             flex-direction: column;
-            gap: 3px;
+            gap: 5px;
         }
-        .datetime-cell .dt-date,
-        .datetime-cell .dt-time {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            font-size: 0.72rem;
-            font-weight: 600;
-            font-family: 'JetBrains Mono', monospace;
-            white-space: nowrap;
-        }
-        .datetime-cell .dt-date { color: var(--text-primary); }
-        .datetime-cell .dt-time { color: var(--primary); font-weight: 700; }
-        .datetime-cell i { font-size: 0.65rem; opacity: 0.8; }
-
-        [data-theme="dark"] .datetime-cell .dt-time { color: #93C5FD; }
-
         .doctor-pill {
             font-size: 0.75rem;
             display: inline-flex;
@@ -1271,6 +1254,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             font-weight: 600;
             color: var(--primary);
             white-space: nowrap;
+            width: fit-content;
         }
         [data-theme="dark"] .doctor-pill {
             background: rgba(59, 130, 246, 0.15);
@@ -1279,6 +1263,17 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
         .doctor-pill i { font-size: 0.72rem; }
         .doctor-status { font-size: 0.68rem; margin-left: 2px; }
+
+        .doctor-time {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.68rem;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-secondary);
+        }
+        .doctor-time i { font-size: 0.62rem; opacity: 0.8; color: var(--primary); }
 
         .no-doctor-tag {
             font-size: 0.72rem;
@@ -1292,6 +1287,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             border-radius: 10px;
             border: 1px dashed var(--border-color);
             white-space: nowrap;
+            width: fit-content;
         }
 
         .assigned-by-cell { display: flex; flex-direction: column; gap: 4px; }
@@ -1401,9 +1397,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .btn-action-mini.assign:hover { transform: translateY(-2px); box-shadow: 0 5px 16px rgba(5, 150, 105, 0.45); }
         .btn-action-mini:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
 
-        /* ================================================================
-           LIST SEARCH
-           ================================================================ */
+        /* LIST SEARCH */
         .list-search-wrapper {
             position: relative;
             display: flex;
@@ -1504,9 +1498,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
         .empty-list-state p { font-size: 0.95rem; font-weight: 600; color: var(--text-primary); }
 
-        /* ================================================================
-           MODERN CARD
-           ================================================================ */
+        /* MODERN CARD */
         .modern-card {
             background: var(--bg-card);
             border-radius: 18px;
@@ -1543,9 +1535,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             font-family: 'JetBrains Mono', monospace;
         }
 
-        /* ================================================================
-           FORM CARD
-           ================================================================ */
+        /* FORM CARD */
         .form-card-modern {
             background: var(--bg-card);
             border-radius: 20px;
@@ -1907,64 +1897,191 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
         [data-theme="dark"] .lab-modal-footer-modern .lab-total-price { background: #1A3A2A; color: #6EE7B7; }
 
-        /* VITAL GRID */
+        /* ✅ V27: VITAL SIGNS - COLORED CARDS */
         .vital-grid-modern {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             gap: 12px;
         }
         .vital-item-modern {
-            background: var(--bg-body);
-            border-radius: 12px;
-            padding: 10px 14px;
-            border: 2px solid var(--border-color);
+            border-radius: 14px;
+            padding: 12px 16px;
+            border: 2px solid;
             transition: all .3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .vital-item-modern:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.12);
         }
         .vital-item-modern .vital-label {
             font-size: 0.62rem;
-            font-weight: 700;
-            color: var(--text-secondary);
+            font-weight: 800;
             text-transform: uppercase;
-            letter-spacing: 0.04em;
+            letter-spacing: 0.06em;
             display: block;
-            margin-bottom: 3px;
+            margin-bottom: 4px;
         }
         .vital-item-modern .vital-input {
             border: none;
             background: transparent;
             padding: 4px 0;
-            font-size: 0.95rem;
-            font-weight: 700;
-            color: var(--text-primary);
+            font-size: 1.1rem;
+            font-weight: 800;
             outline: none;
             width: 100%;
-            font-family: inherit;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .vital-item-modern .vital-input::placeholder {
+            opacity: 0.4;
+            font-weight: 600;
         }
         .vital-item-modern .vital-unit {
             font-size: 0.58rem;
-            color: var(--text-secondary);
             display: block;
-            font-weight: 600;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
         }
-        .vital-item-modern.bmi-item { background: #E8F0FE; border-color: #2563EB; }
-        [data-theme="dark"] .vital-item-modern.bmi-item { background: #1E3A5F; }
-        .vital-item-modern.spo2-item { background: rgba(8, 145, 178, 0.05); border-color: #0891B2; }
-        .vital-item-modern.spo2-item .vital-label { color: #0891B2; }
-        .vital-item-modern.spo2-item .vital-input { color: #0891B2; font-weight: 700; }
-
-        .spo2-category {
+        .vital-item-modern .vital-status-badge {
             display: inline-block;
             font-size: 0.58rem;
-            font-weight: 700;
-            padding: 3px 8px;
-            border-radius: 6px;
-            margin-top: 2px;
-            background: #E2E8F0;
-            color: var(--text-secondary);
+            font-weight: 800;
+            padding: 3px 9px;
+            border-radius: 8px;
+            margin-top: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
         }
-        .spo2-category.spo2-normal   { background: rgba(5, 150, 105, 0.15); color: #059669; }
-        .spo2-category.spo2-low      { background: rgba(217, 119, 6, 0.15); color: #D97706; }
-        .spo2-category.spo2-critical { background: rgba(220, 38, 38, 0.3); color: #DC2626; font-weight: 800; }
+
+        /* TEMPERATURE - RED */
+        .vital-item-modern.vital-temp {
+            background: linear-gradient(135deg, #FEF2F2, #FEE2E2);
+            border-color: #EF4444;
+        }
+        .vital-item-modern.vital-temp .vital-label { color: #B91C1C; }
+        .vital-item-modern.vital-temp .vital-input { color: #DC2626; }
+        .vital-item-modern.vital-temp .vital-unit { color: #B91C1C; }
+
+        [data-theme="dark"] .vital-item-modern.vital-temp {
+            background: linear-gradient(135deg, #3D1A1A, #4A1F1F);
+            border-color: #DC2626;
+        }
+
+        /* BLOOD PRESSURE - BLUE */
+        .vital-item-modern.vital-bp {
+            background: linear-gradient(135deg, #EFF6FF, #DBEAFE);
+            border-color: #3B82F6;
+        }
+        .vital-item-modern.vital-bp .vital-label { color: #1E40AF; }
+        .vital-item-modern.vital-bp .vital-input { color: #2563EB; }
+        .vital-item-modern.vital-bp .vital-unit { color: #1E40AF; }
+
+        [data-theme="dark"] .vital-item-modern.vital-bp {
+            background: linear-gradient(135deg, #0F2A4F, #1E3A5F);
+            border-color: #3B82F6;
+        }
+
+        /* PULSE - PINK */
+        .vital-item-modern.vital-pulse {
+            background: linear-gradient(135deg, #FCE7F3, #FBCFE8);
+            border-color: #EC4899;
+        }
+        .vital-item-modern.vital-pulse .vital-label { color: #9D174D; }
+        .vital-item-modern.vital-pulse .vital-input { color: #DB2777; }
+        .vital-item-modern.vital-pulse .vital-unit { color: #9D174D; }
+
+        [data-theme="dark"] .vital-item-modern.vital-pulse {
+            background: linear-gradient(135deg, #4A1B34, #5A1F3F);
+            border-color: #EC4899;
+        }
+
+        /* WEIGHT - PURPLE */
+        .vital-item-modern.vital-weight {
+            background: linear-gradient(135deg, #F5F3FF, #EDE9FE);
+            border-color: #8B5CF6;
+        }
+        .vital-item-modern.vital-weight .vital-label { color: #5B21B6; }
+        .vital-item-modern.vital-weight .vital-input { color: #7C3AED; }
+        .vital-item-modern.vital-weight .vital-unit { color: #5B21B6; }
+
+        [data-theme="dark"] .vital-item-modern.vital-weight {
+            background: linear-gradient(135deg, #2D1B5F, #3A2370);
+            border-color: #8B5CF6;
+        }
+
+        /* HEIGHT - GREEN */
+        .vital-item-modern.vital-height {
+            background: linear-gradient(135deg, #F0FDF4, #DCFCE7);
+            border-color: #22C55E;
+        }
+        .vital-item-modern.vital-height .vital-label { color: #15803D; }
+        .vital-item-modern.vital-height .vital-input { color: #16A34A; }
+        .vital-item-modern.vital-height .vital-unit { color: #15803D; }
+
+        [data-theme="dark"] .vital-item-modern.vital-height {
+            background: linear-gradient(135deg, #0F3A1F, #1A4A2A);
+            border-color: #22C55E;
+        }
+
+        /* BMI - ORANGE */
+        .vital-item-modern.vital-bmi {
+            background: linear-gradient(135deg, #FFFBEB, #FEF3C7);
+            border-color: #F59E0B;
+        }
+        .vital-item-modern.vital-bmi .vital-label { color: #B45309; }
+        .vital-item-modern.vital-bmi .vital-input { color: #D97706; }
+        .vital-item-modern.vital-bmi .vital-unit { color: #B45309; }
+
+        [data-theme="dark"] .vital-item-modern.vital-bmi {
+            background: linear-gradient(135deg, #3D2E0A, #4A3A12);
+            border-color: #F59E0B;
+        }
+
+        /* SpO2 - CYAN */
+        .vital-item-modern.vital-spo2 {
+            background: linear-gradient(135deg, #ECFEFF, #CFFAFE);
+            border-color: #06B6D4;
+        }
+        .vital-item-modern.vital-spo2 .vital-label { color: #0E7490; }
+        .vital-item-modern.vital-spo2 .vital-input { color: #0891B2; }
+        .vital-item-modern.vital-spo2 .vital-unit { color: #0E7490; }
+
+        [data-theme="dark"] .vital-item-modern.vital-spo2 {
+            background: linear-gradient(135deg, #0A3D4A, #0F4A57);
+            border-color: #06B6D4;
+        }
+
+        /* BMI STATUS BADGES */
+        .vital-status-badge.bmi-underweight {
+            background: #DBEAFE;
+            color: #1E40AF;
+        }
+        .vital-status-badge.bmi-normal {
+            background: #D1FAE5;
+            color: #047857;
+        }
+        .vital-status-badge.bmi-overweight {
+            background: #FEF3C7;
+            color: #B45309;
+        }
+        .vital-status-badge.bmi-obese {
+            background: #FEE2E2;
+            color: #991B1B;
+        }
+        .vital-status-badge.spo2-normal {
+            background: rgba(5, 150, 105, 0.15);
+            color: #059669;
+        }
+        .vital-status-badge.spo2-low {
+            background: rgba(217, 119, 6, 0.15);
+            color: #D97706;
+        }
+        .vital-status-badge.spo2-critical {
+            background: rgba(220, 38, 38, 0.3);
+            color: #DC2626;
+        }
 
         /* BUTTONS */
         .btn-modern {
@@ -2045,7 +2162,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             box-shadow: 0 2px 6px rgba(16, 185, 129, 0.3);
         }
 
-        /* FOOTER */
         .footer {
             padding: 12px 0;
             border-top: 1px solid var(--border-color);
@@ -2056,7 +2172,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
         .footer .footer-brand { color: var(--primary); font-weight: 700; }
 
-        /* TOAST */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -2080,7 +2195,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .toast-custom.error   { background: var(--danger, #DC2626); }
         .toast-custom.info    { background: var(--primary, #0B5ED7); }
 
-        /* RESPONSIVE */
         @media (max-width: 1024px) {
             .form-card-modern { padding: 18px; }
             .form-grid-6 { grid-template-columns: 1fr; gap: 14px; }
@@ -2131,9 +2245,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
 
 <main class="main-content">
 
-    <!-- ================================================================
-         PAGE HEADER
-         ================================================================ -->
+    <!-- PAGE HEADER -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -2143,7 +2255,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-hospital"></i>
-                Change & Reassign → Inafuta visit + bills kabisa                <span class="header-badge"><i class="fas fa-user-md"></i> <span id="onlineDoctorCount"><?= $online_doctors_count ?></span> Online</span>
+                Change & Reassign → Inafuta visit + bills kabisa
+                <span class="header-badge"><i class="fas fa-user-md"></i> <span id="onlineDoctorCount"><?= $online_doctors_count ?></span> Online</span>
                 <span class="header-badge"><i class="fas fa-user-md"></i> <span id="offlineDoctorCount"><?= $offline_doctors_count ?></span> Offline</span>
                 <span class="header-badge"><i class="fas fa-user-check"></i> <span id="assignedCount"><?= $assigned_count ?></span> Assigned</span>
                 <span class="header-badge" style="background:rgba(124,58,237,0.2);border-color:rgba(124,58,237,0.3);color:#A78BFA;">
@@ -2158,8 +2271,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <span class="header-badge" style="background:rgba(5,150,105,0.2);border-color:rgba(5,150,105,0.3);color:#6EE7B7;">
                     <i class="fas fa-check-double"></i> <span id="completeCount"><?= $complete_count ?></span> Complete
                 </span>
-
-                <!-- ✅ TOTAL PATIENTS BADGE -->
                 <span class="header-badge" style="background:rgba(255,255,255,0.25);border-color:rgba(255,255,255,0.4);font-weight:700;">
                     <i class="fas fa-users"></i> Total: <strong><?= $branch_patients_total ?></strong>
                 </span>
@@ -2175,9 +2286,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         </div>
     </div>
 
-    <!-- ============================================================
-         ✅ FILTER BAR — FULL WIDTH, ROW MOJA (kila button inajaza nafasi sawa)
-         ============================================================ -->
+    <!-- FILTER BAR -->
     <div class="filter-bar">
         <span class="filter-label">
             <i class="fas fa-filter"></i> Filter:
@@ -2214,9 +2323,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         </button>
     </div>
 
-    <!-- ============================================================
-         PATIENTS LIST
-         ============================================================ -->
+    <!-- PATIENTS LIST -->
     <div class="modern-card animate-fade-in-up" style="max-width:1400px;margin:0 auto 20px;" id="patientsListCard">
         <div class="card-header">
             <div class="card-title">
@@ -2253,9 +2360,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         </div>
     </div>
 
-    <!-- ============================================================
-         ASSIGN FORM
-         ============================================================ -->
+    <!-- ASSIGN FORM -->
     <div class="form-card-modern animate-fade-in-up" id="mainFormCard" style="animation-delay:.1s;">
         <div class="form-header">
             <div class="form-icon">
@@ -2324,10 +2429,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                             $is_assigned  = false;
                                             $pending_lab  = (int)($patient['pending_lab_tests_count'] ?? 0);
 
-                                            if (!empty($patient['assigned_doctor_name'])) {
-                                                $is_assigned  = true;
-                                                $status_label = 'Assigned'; $status_class = 'assigned'; $status_icon = '✅';
-                                            } elseif (!empty($patient['visit_id'])) {
+                                            if (!empty($patient['visit_id'])) {
                                                 if ($patient['visit_status'] === 'lab_test' && $pending_lab > 0) {
                                                     $status_label = 'Lab Test'; $status_class = 'lab_only'; $status_icon = '🧪';
                                                 } elseif ($patient['visit_status'] === 'waiting') {
@@ -2336,6 +2438,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                                     $status_label = 'Prescribed'; $status_class = 'prescribed'; $status_icon = '💊';
                                                 } elseif (in_array($patient['visit_status'], ['assigned','with_doctor'])) {
                                                     $status_label = 'Assigned'; $status_class = 'assigned'; $status_icon = '✅';
+                                                    $is_assigned = true;
                                                 } elseif (in_array($patient['visit_status'], ['completed','cancelled'])) {
                                                     $status_label = 'Complete'; $status_class = 'complete'; $status_icon = '✅';
                                                 } else {
@@ -2344,7 +2447,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                             }
 
                                             $doctor_info = '';
-                                            if (!empty($patient['assigned_doctor_name'])) {
+                                            if (!empty($patient['assigned_doctor_name']) && $is_assigned) {
                                                 $online_status = !empty($patient['assigned_doctor_online']) ? '🟢' : '⚪';
                                                 $doctor_info   = 'Dr. ' . htmlspecialchars($patient['assigned_doctor_name']) . ' ' . $online_status;
                                             }
@@ -2534,51 +2637,66 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 </div>
             </div>
 
+            <!-- ✅ V27: VITAL SIGNS - COLORED CARDS -->
             <div class="form-card-item" style="margin-top:18px;">
                 <div class="card-item-title">
                     <i class="fas fa-heartbeat" style="color:#DC2626;"></i> Vital Signs
                     <span class="badge-label">Optional - 7 Vitals</span>
                 </div>
                 <div class="vital-grid-modern">
-                    <div class="vital-item-modern">
+                    <!-- TEMPERATURE - RED -->
+                    <div class="vital-item-modern vital-temp">
                         <span class="vital-label">🌡️ Temperature</span>
                         <input type="number" name="temperature" class="vital-input" step="0.1" placeholder="36.5" value="<?= $latest_vital_signs['temperature'] ?? '' ?>">
                         <span class="vital-unit">°C</span>
                     </div>
-                    <div class="vital-item-modern">
+
+                    <!-- BLOOD PRESSURE - BLUE -->
+                    <div class="vital-item-modern vital-bp">
                         <span class="vital-label">💓 Blood Pressure</span>
                         <div style="display:flex;gap:6px;align-items:center;">
                             <input type="number" name="bp_systolic" class="vital-input" style="width:45%;" placeholder="120" value="<?= $latest_vital_signs['blood_pressure_systolic'] ?? '' ?>">
-                            <span style="color:var(--text-secondary);font-weight:700;">/</span>
+                            <span style="color:#2563EB;font-weight:800;">/</span>
                             <input type="number" name="bp_diastolic" class="vital-input" style="width:45%;" placeholder="80" value="<?= $latest_vital_signs['blood_pressure_diastolic'] ?? '' ?>">
                         </div>
                         <span class="vital-unit">mmHg</span>
                     </div>
-                    <div class="vital-item-modern">
+
+                    <!-- PULSE - PINK -->
+                    <div class="vital-item-modern vital-pulse">
                         <span class="vital-label">❤️ Pulse Rate</span>
                         <input type="number" name="pulse_rate" class="vital-input" placeholder="72" value="<?= $latest_vital_signs['pulse_rate'] ?? '' ?>">
                         <span class="vital-unit">bpm</span>
                     </div>
-                    <div class="vital-item-modern">
+
+                    <!-- WEIGHT - PURPLE -->
+                    <div class="vital-item-modern vital-weight">
                         <span class="vital-label">⚖️ Weight</span>
                         <input type="number" name="weight" class="vital-input" step="0.1" placeholder="65" value="<?= $latest_vital_signs['weight'] ?? '' ?>" id="weightInput" oninput="calculateBMI()">
                         <span class="vital-unit">kg</span>
                     </div>
-                    <div class="vital-item-modern">
+
+                    <!-- HEIGHT - GREEN -->
+                    <div class="vital-item-modern vital-height">
                         <span class="vital-label">📏 Height</span>
                         <input type="number" name="height" class="vital-input" step="0.1" placeholder="170" value="<?= $latest_vital_signs['height'] ?? '' ?>" id="heightInput" oninput="calculateBMI()">
                         <span class="vital-unit">cm</span>
                     </div>
-                    <div class="vital-item-modern bmi-item">
+
+                    <!-- BMI - ORANGE with STATUS -->
+                    <div class="vital-item-modern vital-bmi">
                         <span class="vital-label">📊 BMI</span>
                         <input type="number" name="bmi" class="vital-input" id="bmiOutput" readonly step="0.1" placeholder="22.5" value="<?= $latest_vital_signs['bmi'] ?? '' ?>">
                         <span class="vital-unit">kg/m²</span>
+                        <span class="vital-status-badge" id="bmiStatusBadge" style="display:none;"></span>
                     </div>
-                    <div class="vital-item-modern spo2-item">
+
+                    <!-- SpO2 - CYAN -->
+                    <div class="vital-item-modern vital-spo2">
                         <span class="vital-label">🫁 SpO₂</span>
                         <input type="number" name="oxygen_saturation" class="vital-input" placeholder="98" value="<?= $latest_vital_signs['oxygen_saturation'] ?? '' ?>" id="spo2Input" oninput="calculateSpO2Category()">
                         <span class="vital-unit">%</span>
-                        <span class="spo2-category" id="spo2Category">Auto</span>
+                        <span class="vital-status-badge" id="spo2StatusBadge" style="display:none;"></span>
                     </div>
                 </div>
             </div>
@@ -2612,7 +2730,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span style="margin:0 6px;opacity:.4;">|</span>
-            Assign Doctor
+            Assign Doctor V27
             <span style="margin:0 6px;opacity:.4;">|</span>
             <span id="footerTimestamp"><?= date('h:i:s A') ?></span>
             <span style="margin:0 6px;opacity:.4;">|</span>
@@ -2722,41 +2840,59 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
     });
 
-    // BMI + SpO2
+    // ✅ V27: BMI + STATUS + SpO2
     function calculateBMI() {
         var weightInput = document.getElementById('weightInput');
         var heightInput = document.getElementById('heightInput');
         var bmiOutput = document.getElementById('bmiOutput');
+        var bmiStatusBadge = document.getElementById('bmiStatusBadge');
         if (!weightInput || !heightInput || !bmiOutput) return;
         var weight = parseFloat(weightInput.value);
         var height = parseFloat(heightInput.value);
         if (weight && height && height > 0) {
             var heightM = height / 100;
-            bmiOutput.value = Math.round((weight / (heightM * heightM)) * 10) / 10;
+            var bmi = Math.round((weight / (heightM * heightM)) * 10) / 10;
+            bmiOutput.value = bmi;
+
+            // ✅ BMI STATUS BADGE
+            if (bmiStatusBadge) {
+                var statusText = '';
+                var statusClass = '';
+                if (bmi < 18.5) { statusText = 'Underweight'; statusClass = 'bmi-underweight'; }
+                else if (bmi < 25) { statusText = 'Normal'; statusClass = 'bmi-normal'; }
+                else if (bmi < 30) { statusText = 'Overweight'; statusClass = 'bmi-overweight'; }
+                else { statusText = 'Obese'; statusClass = 'bmi-obese'; }
+                bmiStatusBadge.textContent = statusText;
+                bmiStatusBadge.className = 'vital-status-badge ' + statusClass;
+                bmiStatusBadge.style.display = 'inline-block';
+            }
         } else {
             bmiOutput.value = '';
+            if (bmiStatusBadge) bmiStatusBadge.style.display = 'none';
         }
     }
 
     function calculateSpO2Category() {
         var spo2Input = document.getElementById('spo2Input');
-        var spo2Category = document.getElementById('spo2Category');
-        if (!spo2Input || !spo2Category) return;
+        var spo2StatusBadge = document.getElementById('spo2StatusBadge');
+        if (!spo2Input) return;
 
         var spo2 = parseFloat(spo2Input.value);
         if (!spo2 || spo2 <= 0) {
-            spo2Category.textContent = 'Auto';
-            spo2Category.className = 'spo2-category';
+            if (spo2StatusBadge) spo2StatusBadge.style.display = 'none';
             return;
         }
 
         var category = '', categoryClass = '';
-        if (spo2 >= 95)      { category = 'Normal';   categoryClass = 'spo2-normal'; }
-        else if (spo2 >= 90) { category = 'Low';      categoryClass = 'spo2-low'; }
-        else                 { category = 'Critical'; categoryClass = 'spo2-critical'; }
+        if (spo2 >= 95) { category = 'Normal'; categoryClass = 'spo2-normal'; }
+        else if (spo2 >= 90) { category = 'Low'; categoryClass = 'spo2-low'; }
+        else { category = 'Critical'; categoryClass = 'spo2-critical'; }
 
-        spo2Category.textContent = category;
-        spo2Category.className = 'spo2-category ' + categoryClass;
+        if (spo2StatusBadge) {
+            spo2StatusBadge.textContent = category;
+            spo2StatusBadge.className = 'vital-status-badge ' + categoryClass;
+            spo2StatusBadge.style.display = 'inline-block';
+        }
     }
 
     // ASSIGNMENT TYPE
@@ -3161,10 +3297,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         });
     });
 
-    console.log('%c👨‍⚕️ Braick - Assign Doctor V26 (Filters Full Width, Row Moja)', 'font-size:18px;font-weight:bold;color:#2563EB;');
-    console.log('%c✅ V26: Filter buttons zinajaza width yote ya card (flex: 1)', 'font-size:12px;color:#059669;font-weight:bold;');
-    console.log('%c✅ V26: Total Patients kwenye page header', 'font-size:12px;color:#059669;font-weight:bold;');
-    console.log('%c✅ V26: Saa na Tarehe kwenye kila patient row', 'font-size:12px;color:#7C3AED;font-weight:bold;');
+    console.log('%c👨‍⚕️ Braick - Assign Doctor V27', 'font-size:18px;font-weight:bold;color:#2563EB;');
+    console.log('%c✅ V27: Complete patients HAWAKO Assigned', 'font-size:12px;color:#059669;font-weight:bold;');
+    console.log('%c✅ V27: Date & Time zimeondolewa kwenye column yake', 'font-size:12px;color:#059669;font-weight:bold;');
+    console.log('%c✅ V27: Saa na Tarehe zimewekwa CHINI YA DOCTOR', 'font-size:12px;color:#7C3AED;font-weight:bold;');
+    console.log('%c✅ V27: Vital Signs - COLORED background + text + BMI status', 'font-size:12px;color:#DC2626;font-weight:bold;');
 </script>
 
 </body>
