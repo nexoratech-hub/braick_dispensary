@@ -1,11 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/purchases.php
-// ADMIN - PURCHASE MANAGEMENT
+// ADMIN - PURCHASE MANAGEMENT V9.3
+// ✅ Cancel reason OPTIONAL kwa admin
+// ✅ Kila IN_PROGRESS invoice ina button ya DELETE
 // ✅ Kila purchase inaunda NEW BATCH (haiongezi kwenye iliyopo)
 // ✅ Autocomplete inajaza category, unit, prices, supplier
-// ✅ Inaonyesha batches zote za dawa moja
-// ✅ Auto-migration inarekebisha item_id kuwa NULL-able
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -70,11 +70,6 @@ try {
     }
 } catch (Exception $e) {}
 
-// ================================================================
-// ✅ AUTO-MIGRATION: purchase_items
-// ================================================================
-
-// 1. Rekebisha item_id kuwa NULL-able
 try {
     $stmt = $db->query("SHOW COLUMNS FROM purchase_items LIKE 'item_id'");
     $col = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -83,7 +78,6 @@ try {
     }
 } catch (Exception $e) {}
 
-// 2. Rekebisha medicine_id kuwa NULL-able
 try {
     $stmt = $db->query("SHOW COLUMNS FROM purchase_items LIKE 'medicine_id'");
     $col = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -92,7 +86,6 @@ try {
     }
 } catch (Exception $e) {}
 
-// 3. Rekebisha equipment_id kuwa NULL-able
 try {
     $stmt = $db->query("SHOW COLUMNS FROM purchase_items LIKE 'equipment_id'");
     $col = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -101,7 +94,6 @@ try {
     }
 } catch (Exception $e) {}
 
-// 4. Ongeza columns mpya kwenye purchase_items
 try {
     $stmt = $db->query("SHOW COLUMNS FROM purchase_items LIKE 'item_name'");
     if ($stmt->rowCount() == 0) {
@@ -554,11 +546,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // ============================================================
-    // CANCEL PURCHASE
+    // CANCEL PURCHASE - Reason OPTIONAL kwa admin
     // ============================================================
     if ($action_post === 'cancel_purchase') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
-        $cancel_reason = trim($_POST['cancel_reason'] ?? 'Cancelled by Admin');
+        // ✅ Reason ni OPTIONAL - kama ni tupu, tumia default
+        $cancel_reason_raw = trim($_POST['cancel_reason'] ?? '');
+        $cancel_reason = !empty($cancel_reason_raw) ? $cancel_reason_raw : 'Cancelled by Admin';
 
         $stmt = $db->prepare("SELECT id, status, invoice_number, purchase_type FROM purchases WHERE id = ?");
         $stmt->execute([$purchase_id_post]);
@@ -586,6 +580,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['purchase_message'] = "✅ Purchase <strong>{$purchase['invoice_number']}</strong> cancelled!";
                 $_SESSION['purchase_message_type'] = 'success';
                 header('Location: purchases.php?type=' . $purchase['purchase_type'] . '&branch=' . $post_branch);
+                exit;
+            } catch (Exception $e) {
+                $db->rollBack();
+                $message = "❌ Error: " . $e->getMessage();
+                $message_type = 'error';
+            }
+        }
+        if (!empty($errors)) { $message = implode('<br>', $errors); $message_type = 'error'; }
+    }
+
+    // ============================================================
+    // ✅ DELETE PURCHASE (IN_PROGRESS only) - Admin anaweza kufuta yoyote
+    // ============================================================
+    if ($action_post === 'delete_purchase') {
+        $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
+        
+        $stmt = $db->prepare("SELECT id, status, invoice_number, purchase_type FROM purchases WHERE id = ?");
+        $stmt->execute([$purchase_id_post]);
+        $purchase = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        $errors = [];
+        if (!$purchase) $errors[] = 'Purchase not found';
+        elseif ($purchase['status'] === 'COMPLETED') $errors[] = 'Cannot delete completed purchase. Cancel first or use History.';
+        
+        if (empty($errors)) {
+            try {
+                $db->beginTransaction();
+                // Futa purchase_items zote
+                $stmt = $db->prepare("DELETE FROM purchase_items WHERE purchase_id = ?");
+                $stmt->execute([$purchase_id_post]);
+                
+                // Futa purchase record
+                $stmt = $db->prepare("DELETE FROM purchases WHERE id = ?");
+                $stmt->execute([$purchase_id_post]);
+                
+                $db->commit();
+                
+                $_SESSION['purchase_message'] = "🗑️ Purchase <strong>{$purchase['invoice_number']}</strong> deleted successfully! (Inventory unaffected)";
+                $_SESSION['purchase_message_type'] = 'success';
+                header('Location: purchases.php?action=list_' . $purchase['purchase_type'] . '&branch=' . $post_branch);
                 exit;
             } catch (Exception $e) {
                 $db->rollBack();
@@ -644,9 +678,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// ================================================================
-// SESSION MESSAGES
-// ================================================================
 if (isset($_SESSION['purchase_message'])) {
     $message = $_SESSION['purchase_message'];
     $message_type = $_SESSION['purchase_message_type'] ?? 'success';
@@ -698,7 +729,6 @@ if ($purchase_id > 0) {
         $stmt->execute([$purchase_id]);
         $purchase_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Autocomplete: chukua record ya mwisho kwa kila dawa
         $stmt = $db->prepare("
             SELECT mi.*
             FROM medications_inventory mi
@@ -888,6 +918,23 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .btn-join-purch:hover { background: #0A4CA8; color: white; }
     .btn-join-purch.purple { background: #7C3AED; }
     .btn-join-purch.purple:hover { background: #6D28D9; }
+    
+    /* ✅ NEW: DELETE PURCHASE BUTTON */
+    .btn-delete-purchase-purch {
+        background: #DC2626; color: white;
+        padding: 6px 14px; border-radius: 6px;
+        font-size: 0.75rem; font-weight: 600;
+        border: none; cursor: pointer;
+        display: inline-flex; align-items: center; gap: 4px;
+        transition: all 0.3s ease;
+        font-family: inherit;
+    }
+    .btn-delete-purchase-purch:hover {
+        background: #991B1B; color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+    }
+    
     .btn-complete-purch {
         background: #059669; color: white;
         padding: 10px 24px; border-radius: 8px;
@@ -1177,6 +1224,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         margin-bottom: 16px;
     }
     .modal-title-purch { font-size: 1.1rem; font-weight: 700; color: #DC2626; }
+    .modal-title-purch.blue { color: #0B5ED7; }
     .modal-close-purch {
         background: none; border: none;
         font-size: 1.5rem; cursor: pointer;
@@ -1408,9 +1456,17 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <div class="meta-text-purch">
                                     <i class="fas fa-boxes"></i> <?= number_format($purchase['total_items']) ?> items
                                 </div>
-                                <a href="purchases.php?id=<?= $purchase['id'] ?>&type=medicine&branch=<?= $selected_branch_id ?>" class="btn-purch btn-join-purch">
-                                    <i class="fas fa-sign-in-alt"></i> Open
-                                </a>
+                                <div style="display:flex;gap:4px;">
+                                    <a href="purchases.php?id=<?= $purchase['id'] ?>&type=medicine&branch=<?= $selected_branch_id ?>" class="btn-purch btn-join-purch">
+                                        <i class="fas fa-sign-in-alt"></i> Open
+                                    </a>
+                                    <!-- ✅ DELETE BUTTON -->
+                                    <button type="button" class="btn-delete-purchase-purch" 
+                                            onclick="openDeletePurchaseModal(<?= $purchase['id'] ?>, '<?= addslashes($purchase['invoice_number']) ?>')"
+                                            title="Delete this purchase">
+                                        <i class="fas fa-trash"></i> Delete
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -1471,9 +1527,17 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <div class="meta-text-purch">
                                     <i class="fas fa-boxes"></i> <?= number_format($purchase['total_items']) ?> items
                                 </div>
-                                <a href="purchases.php?id=<?= $purchase['id'] ?>&type=equipment&branch=<?= $selected_branch_id ?>" class="btn-purch btn-join-purch purple">
-                                    <i class="fas fa-sign-in-alt"></i> Open
-                                </a>
+                                <div style="display:flex;gap:4px;">
+                                    <a href="purchases.php?id=<?= $purchase['id'] ?>&type=equipment&branch=<?= $selected_branch_id ?>" class="btn-purch btn-join-purch purple">
+                                        <i class="fas fa-sign-in-alt"></i> Open
+                                    </a>
+                                    <!-- ✅ DELETE BUTTON -->
+                                    <button type="button" class="btn-delete-purchase-purch" 
+                                            onclick="openDeletePurchaseModal(<?= $purchase['id'] ?>, '<?= addslashes($purchase['invoice_number']) ?>')"
+                                            title="Delete this purchase">
+                                        <i class="fas fa-trash"></i> Delete
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -1972,7 +2036,59 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
 </main>
 
-<!-- CANCEL MODAL -->
+<!-- ================================================================ -->
+<!-- ✅ DELETE PURCHASE MODAL (MPYA) -->
+<!-- ================================================================ -->
+<div class="modal-overlay-purch" id="deletePurchaseModal">
+    <div class="modal-content-purch">
+        <div class="modal-header-purch">
+            <div class="modal-title-purch">
+                <i class="fas fa-trash-alt"></i> Delete Purchase
+            </div>
+            <button class="modal-close-purch" onclick="closeDeletePurchaseModal()">&times;</button>
+        </div>
+
+        <div class="cancel-warning-icon-purch" style="color:#DC2626;">
+            <i class="fas fa-trash-alt"></i>
+        </div>
+
+        <p style="text-align:center;color:var(--page-text-primary);font-weight:600;margin-bottom:8px;">
+            Are you sure you want to <span style="color:#DC2626;">DELETE</span> this purchase?
+        </p>
+        <p style="text-align:center;color:var(--page-text-secondary);font-size:0.85rem;margin-bottom:16px;">
+            <strong id="deleteInvoiceNumber"></strong>
+        </p>
+
+        <div style="background:#FEE2E2;border:2px solid #DC2626;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:0.82rem;color:#991B1B;">
+            <i class="fas fa-exclamation-triangle"></i> 
+            <strong>WARNING - This cannot be undone!</strong>
+            <ul style="margin-top:6px;padding-left:20px;line-height:1.5;">
+                <li>Purchase record <strong>itafutwa kabisa</strong></li>
+                <li>Items zote za purchase hii <strong>zitafutwa</strong></li>
+                <li>Inventory stock <strong>HAIATHIRIKI</strong></li>
+            </ul>
+        </div>
+
+        <form method="POST" id="deletePurchaseForm">
+            <input type="hidden" name="action" value="delete_purchase">
+            <input type="hidden" name="purchase_id" id="deletePurchaseId" value="">
+            <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
+
+            <div class="modal-actions-purch">
+                <button type="submit" class="btn-confirm-cancel-purch" style="background:#DC2626;">
+                    <i class="fas fa-trash-alt"></i> Yes, Delete Permanently
+                </button>
+                <button type="button" class="btn-close-modal-purch" onclick="closeDeletePurchaseModal()">
+                    <i class="fas fa-times"></i> No, Go Back
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- CANCEL MODAL - Reason OPTIONAL kwa admin -->
+<!-- ================================================================ -->
 <div class="modal-overlay-purch" id="cancelModal">
     <div class="modal-content-purch">
         <div class="modal-header-purch">
@@ -2004,9 +2120,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
 
             <div style="margin-bottom:8px;">
-                <label class="form-label-purch">Reason for Cancellation <span class="required">*</span></label>
+                <label class="form-label-purch">
+                    Reason for Cancellation 
+                    <span style="color:#64748B;font-weight:400;font-size:0.7rem;">(Optional - Admin)</span>
+                </label>
                 <textarea name="cancel_reason" id="cancelReason" class="cancel-reason-textarea-purch" 
-                          placeholder="Explain why..." required></textarea>
+                          placeholder="Explain why (optional - unaweza kuacha wazi)..." rows="3"></textarea>
+                <div style="font-size:0.65rem;color:#64748B;margin-top:4px;">
+                    <i class="fas fa-info-circle"></i> 
+                    Unaweza kuacha wazi — mfumo utaweka "Cancelled by Admin" kiotomatiki.
+                </div>
             </div>
 
             <div class="modal-actions-purch">
@@ -2025,7 +2148,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <div class="modal-overlay-purch" id="pdfModal">
     <div class="modal-content-purch modal-pdf">
         <div class="modal-header-purch">
-            <div class="modal-title-purch" style="color:#0B5ED7;">
+            <div class="modal-title-purch blue">
                 <i class="fas fa-file-pdf" style="color:#DC2626;"></i> Purchase Invoice
             </div>
             <button class="modal-close-purch" onclick="closePDF()">&times;</button>
@@ -2196,6 +2319,43 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     }
 
+    // ================================================================
+    // ✅ DELETE PURCHASE MODAL
+    // ================================================================
+    function openDeletePurchaseModal(purchaseId, invoiceNumber) {
+        var modal = document.getElementById('deletePurchaseModal');
+        if (!modal) return;
+
+        document.getElementById('deletePurchaseId').value = purchaseId;
+        document.getElementById('deleteInvoiceNumber').textContent = 'Invoice: ' + invoiceNumber;
+
+        modal.classList.add('show');
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeDeletePurchaseModal() {
+        var modal = document.getElementById('deletePurchaseModal');
+        if (modal) {
+            modal.classList.remove('show');
+            document.body.style.overflow = 'auto';
+        }
+    }
+
+    document.getElementById('deletePurchaseModal')?.addEventListener('click', function(e) {
+        if (e.target === this) closeDeletePurchaseModal();
+    });
+
+    // Delete form submit with confirmation
+    document.getElementById('deletePurchaseForm')?.addEventListener('submit', function(e) {
+        if (!confirm('⚠️ Are you ABSOLUTELY SURE? This will permanently delete the purchase and all its items. This cannot be undone!')) {
+            e.preventDefault();
+            return false;
+        }
+    });
+
+    // ================================================================
+    // CANCEL MODAL - Reason OPTIONAL kwa admin
+    // ================================================================
     function openCancelModal(purchaseId, invoiceNumber) {
         var modal = document.getElementById('cancelModal');
         if (!modal) return;
@@ -2220,6 +2380,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         if (e.target === this) closeCancelModal();
     });
 
+    // ✅ Cancel form - NO validation kwa reason (OPTIONAL)
+    document.getElementById('cancelForm')?.addEventListener('submit', function(e) {
+        // Admin - reason ni optional, hakuna validation
+        // Kama ni tupu, server itaweka "Cancelled by Admin"
+        
+        if (!confirm('⚠️ Are you sure? All items will be permanently deleted!')) {
+            e.preventDefault();
+            return false;
+        }
+    });
+
+    // ================================================================
+    // PDF FUNCTIONS
+    // ================================================================
     function openPDFView(purchaseId) {
         var modal = document.getElementById('pdfModal');
         var content = document.getElementById('pdfInvoiceContent');
@@ -2275,6 +2449,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             closeCancelModal();
+            closeDeletePurchaseModal();
             closePDF();
         }
     });
@@ -2390,7 +2565,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     if (medicineIdInput) medicineIdInput.value = this.dataset.id;
                     autocomplete.classList.remove('show');
 
-                    // Category
                     var catVal = this.dataset.category;
                     var catSelect = document.getElementById('purchaseCategorySelect');
                     var catManual = document.getElementById('purchaseCategoryManual');
@@ -2417,7 +2591,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         }
                     }
 
-                    // Unit
                     var unitVal = this.dataset.unit;
                     var unitSelect = document.getElementById('purchaseUnit');
                     var unitManual = document.getElementById('purchaseUnitManual');
@@ -2444,7 +2617,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         }
                     }
 
-                    // Prices & supplier
                     if (document.getElementById('purchaseBuyingPrice')) 
                         document.getElementById('purchaseBuyingPrice').value = Number(this.dataset.cost || 0).toLocaleString();
                     if (document.getElementById('purchaseUnitPrice')) 
@@ -2454,13 +2626,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     if (document.getElementById('purchaseSupplier')) 
                         document.getElementById('purchaseSupplier').value = this.dataset.supplier || '';
 
-                    // Show batch info
                     if (batchInfoDiv && batchesCountSpan) {
                         batchInfoDiv.style.display = 'block';
                         batchesCountSpan.textContent = '1+';
                     }
 
-                    // Focus quantity
                     var qtyInput = document.getElementById('purchaseQuantity');
                     if (qtyInput) qtyInput.focus();
                 });
@@ -2523,7 +2693,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     if (equipmentIdInput) equipmentIdInput.value = this.dataset.id;
                     autocomplete.classList.remove('show');
 
-                    // Category
                     var catVal = this.dataset.category;
                     var catSelect = document.getElementById('purchaseEquipCategorySelect');
                     var catManual = document.getElementById('purchaseEquipCategoryManual');
@@ -2550,7 +2719,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         }
                     }
 
-                    // Unit
                     var unitVal = this.dataset.unit;
                     var unitSelect = document.getElementById('purchaseEquipUnit');
                     var unitManual = document.getElementById('purchaseEquipUnitManual');
@@ -2577,7 +2745,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         }
                     }
 
-                    // Prices & supplier
                     if (document.getElementById('purchaseEquipBuyingPrice')) 
                         document.getElementById('purchaseEquipBuyingPrice').value = Number(this.dataset.cost || 0).toLocaleString();
                     if (document.getElementById('purchaseEquipSellingPrice')) 
@@ -2605,10 +2772,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         return div.innerHTML;
     }
 
-    console.log('%c💊 Braick - Admin Purchases', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💊 Braick - Admin Purchases V9.3', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Cancel reason OPTIONAL kwa admin', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ Kila IN_PROGRESS invoice ina button ya DELETE', 'font-size:13px; color:#34D399; font-weight:bold;');
     console.log('%c✅ Kila purchase inaunda NEW BATCH', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Autocomplete inajaza category, unit, prices, supplier', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Mouse scroll hairuhusiwi kupunguza quantities', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
