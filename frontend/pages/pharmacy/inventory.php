@@ -1,12 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/inventory.php
-// PHARMACY - COMPLETE INVENTORY
-// ✅ Add Medicine/Equipment zinafungua select_purchase.php
-// ✅ Branch ID aware
-// ✅ FIXED: All filters working (All, Active, Inactive, Low Stock, Out of Stock, Expiring Soon, Has Expired)
-// ✅ FIXED: Quantity 0 = ACTIVE (inaonekana kwenye search, haiwezi kuuzwa)
-// ✅ FIXED: Expired pekee = INACTIVE
+// PHARMACY - COMPLETE INVENTORY V8.9.1
+// ✅ Modal ipo MBELE ya sidebar (z-index 999999)
+// ✅ Batch count badge ni BLUE
+// ✅ Stock low, days warning, expiry expiring ni BLUE
+// ✅ Table header search (auto-filter)
+// ✅ View modal inaonyesha batches zote + added by
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -93,9 +93,6 @@ try {
     }
 } catch (Exception $e) {}
 
-// ================================================================
-// DROP UNIQUE CONSTRAINT ON invoice_number IF EXISTS
-// ================================================================
 try {
     $stmt = $db->query("SHOW INDEX FROM purchases WHERE Key_name = 'invoice_number' AND Non_unique = 0");
     if ($stmt->rowCount() > 0) {
@@ -127,9 +124,6 @@ $equip_categories = $stmt->fetchAll();
 $message = '';
 $message_type = '';
 
-// ================================================================
-// CHECK SESSION MESSAGES
-// ================================================================
 if (isset($_SESSION['purchase_message'])) {
     $message = $_SESSION['purchase_message'];
     $message_type = $_SESSION['purchase_message_type'] ?? 'success';
@@ -154,9 +148,7 @@ $stock_filter = isset($_GET['stock']) ? trim($_GET['stock']) : '';
 $expiry_filter = isset($_GET['expiry']) ? trim($_GET['expiry']) : '';
 
 // ================================================================
-// ✅ MEDICINES QUERY - WHERE → GROUP BY → HAVING → ORDER BY
-// ✅ FIXED: Quantity 0 = ACTIVE (batch yoyote active & haijaexpire)
-// ✅ FIXED: Expired pekee = INACTIVE
+// MEDICINES QUERY
 // ================================================================
 $med_query = "
     SELECT 
@@ -168,6 +160,9 @@ $med_query = "
         GROUP_CONCAT(m.id) as batch_ids, GROUP_CONCAT(m.batch_number SEPARATOR '|') as batch_numbers,
         GROUP_CONCAT(m.quantity SEPARATOR '|') as batch_quantities, GROUP_CONCAT(m.expiry_date SEPARATOR '|') as batch_expiries,
         GROUP_CONCAT(m.status SEPARATOR '|') as batch_statuses,
+        GROUP_CONCAT(m.category SEPARATOR '|') as batch_categories,
+        GROUP_CONCAT(m.supplier SEPARATOR '|') as batch_suppliers,
+        GROUP_CONCAT(m.added_by_name SEPARATOR '|') as batch_added_bys,
         MIN(DATEDIFF(CASE WHEN m.expiry_date = '0000-00-00' THEN NULL ELSE m.expiry_date END, CURDATE())) as days_remaining,
         CASE 
             WHEN SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') THEN 1 ELSE 0 END) > 0 
@@ -180,13 +175,11 @@ $med_query = "
 ";
 $med_params = [$user_branch_id];
 
-// Category filter (WHERE)
 if (!empty($category_filter)) { 
     $med_query .= " AND m.category = ?"; 
     $med_params[] = $category_filter; 
 }
 
-// Expiry filter (WHERE - kabla ya GROUP BY)
 if ($expiry_filter === 'expiring') { 
     $med_query .= " AND m.expiry_date IS NOT NULL AND m.expiry_date != '0000-00-00' AND m.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"; 
 }
@@ -196,14 +189,12 @@ if ($expiry_filter === 'expired') {
 
 $med_query .= " GROUP BY m.medication_name, m.category, m.unit, m.branch_id";
 
-// Status filter (HAVING - baada ya GROUP BY)
 if ($status_filter === 'active') { 
     $med_query .= " HAVING computed_status = 'active'"; 
 } elseif ($status_filter === 'inactive') { 
     $med_query .= " HAVING computed_status = 'inactive'"; 
 }
 
-// Stock filter (HAVING - baada ya GROUP BY)
 if ($stock_filter === 'low') { 
     $med_query .= " HAVING total_quantity > 0 AND total_quantity <= reorder_level AND computed_status = 'active'"; 
 } elseif ($stock_filter === 'out') { 
@@ -217,9 +208,7 @@ $stmt->execute($med_params);
 $medicines = $stmt->fetchAll();
 
 // ================================================================
-// ✅ EQUIPMENT QUERY - WHERE → GROUP BY → HAVING → ORDER BY
-// ✅ FIXED: Quantity 0 = ACTIVE (batch yoyote active & haijaexpire)
-// ✅ FIXED: Expired pekee = INACTIVE
+// EQUIPMENT QUERY
 // ================================================================
 $equip_query = "
     SELECT 
@@ -231,6 +220,9 @@ $equip_query = "
         GROUP_CONCAT(e.id) as batch_ids, GROUP_CONCAT(e.batch_number SEPARATOR '|') as batch_numbers,
         GROUP_CONCAT(e.quantity SEPARATOR '|') as batch_quantities, GROUP_CONCAT(e.expiry_date SEPARATOR '|') as batch_expiries,
         GROUP_CONCAT(e.status SEPARATOR '|') as batch_statuses,
+        GROUP_CONCAT(e.category SEPARATOR '|') as batch_categories,
+        GROUP_CONCAT(e.supplier SEPARATOR '|') as batch_suppliers,
+        GROUP_CONCAT(e.added_by_name SEPARATOR '|') as batch_added_bys,
         MIN(DATEDIFF(CASE WHEN e.expiry_date = '0000-00-00' THEN NULL ELSE e.expiry_date END, CURDATE())) as days_remaining,
         CASE 
             WHEN SUM(CASE WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') THEN 1 ELSE 0 END) > 0 
@@ -243,13 +235,11 @@ $equip_query = "
 ";
 $equip_params = [$user_branch_id];
 
-// Category filter (WHERE)
 if (!empty($category_filter)) { 
     $equip_query .= " AND e.category = ?"; 
     $equip_params[] = $category_filter; 
 }
 
-// Expiry filter (WHERE - kabla ya GROUP BY)
 if ($expiry_filter === 'expiring') { 
     $equip_query .= " AND e.expiry_date IS NOT NULL AND e.expiry_date != '0000-00-00' AND e.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"; 
 }
@@ -259,14 +249,12 @@ if ($expiry_filter === 'expired') {
 
 $equip_query .= " GROUP BY e.equipment_name, e.category, e.unit, e.branch_id";
 
-// Status filter (HAVING - baada ya GROUP BY)
 if ($status_filter === 'active') { 
     $equip_query .= " HAVING computed_status = 'active'"; 
 } elseif ($status_filter === 'inactive') { 
     $equip_query .= " HAVING computed_status = 'inactive'"; 
 }
 
-// Stock filter (HAVING - baada ya GROUP BY)
 if ($stock_filter === 'low') { 
     $equip_query .= " HAVING total_quantity > 0 AND total_quantity <= reorder_level AND computed_status = 'active'"; 
 } elseif ($stock_filter === 'out') { 
@@ -281,8 +269,6 @@ $equipment = $stmt->fetchAll();
 
 // ================================================================
 // STATISTICS - MEDICINES
-// ✅ FIXED: Quantity 0 bado ni ACTIVE (haiwezi kuuzwa)
-// ✅ FIXED: Expired/Inactive manual pekee = INACTIVE
 // ================================================================
 $stmt = $db->prepare("SELECT COUNT(DISTINCT medication_name) as count FROM medications_inventory WHERE branch_id = ? AND status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00')");
 $stmt->execute([$user_branch_id]);
@@ -308,7 +294,6 @@ $stmt = $db->prepare("SELECT COUNT(DISTINCT medication_name) as count FROM medic
 $stmt->execute([$user_branch_id]);
 $med_expired = $stmt->fetch()['count'] ?? 0;
 
-// ✅ FIXED: Inactive = status='inactive' AU imeexpire (SI quantity 0)
 $stmt = $db->prepare("SELECT COUNT(DISTINCT medication_name) as count FROM medications_inventory WHERE branch_id = ? AND (status = 'inactive' OR (expiry_date IS NOT NULL AND expiry_date != '0000-00-00' AND expiry_date < CURDATE()))");
 $stmt->execute([$user_branch_id]);
 $med_inactive = $stmt->fetch()['count'] ?? 0;
@@ -319,8 +304,6 @@ $med_value = $stmt->fetch(PDO::FETCH_ASSOC)['total_value'] ?? 0;
 
 // ================================================================
 // STATISTICS - EQUIPMENT
-// ✅ FIXED: Quantity 0 bado ni ACTIVE (haiwezi kuuzwa)
-// ✅ FIXED: Expired/Inactive manual pekee = INACTIVE
 // ================================================================
 $stmt = $db->prepare("SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE branch_id = ? AND status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00')");
 $stmt->execute([$user_branch_id]);
@@ -346,7 +329,6 @@ $stmt = $db->prepare("SELECT COUNT(DISTINCT equipment_name) as count FROM medica
 $stmt->execute([$user_branch_id]);
 $equip_expired = $stmt->fetch()['count'] ?? 0;
 
-// ✅ FIXED: Inactive = status='inactive' AU imeexpire (SI quantity 0)
 $stmt = $db->prepare("SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE branch_id = ? AND (status = 'inactive' OR (expiry_date IS NOT NULL AND expiry_date != '0000-00-00' AND expiry_date < CURDATE()))");
 $stmt->execute([$user_branch_id]);
 $equip_inactive = $stmt->fetch()['count'] ?? 0;
@@ -358,7 +340,7 @@ $equip_value = $stmt->fetch(PDO::FETCH_ASSOC)['total_value'] ?? 0;
 $total_inventory_value = $med_value + $equip_value;
 
 // ================================================================
-// IN PROGRESS PURCHASES FOR CURRENT USER (INFO ONLY)
+// IN PROGRESS PURCHASES
 // ================================================================
 $in_progress_purchases = [];
 $stmt = $db->prepare("SELECT id, invoice_number, purchase_type, status, total_items, total_quantity, created_at, created_by FROM purchases WHERE created_by = ? AND status = 'IN_PROGRESS' AND branch_id = ? ORDER BY created_at DESC");
@@ -376,7 +358,7 @@ if ($view_id > 0) {
         $name_row = $stmt->fetch();
         if ($name_row) {
             $view_name = $name_row['medication_name'];
-            $stmt = $db->prepare("SELECT m.*, u.full_name as added_by_full_name FROM medications_inventory m LEFT JOIN users u ON m.added_by = u.id WHERE m.medication_name = ? AND m.branch_id = ? ORDER BY m.id ASC");
+            $stmt = $db->prepare("SELECT m.*, u.full_name as added_by_full_name FROM medications_inventory m LEFT JOIN users u ON m.added_by = u.id WHERE m.medication_name = ? AND m.branch_id = ? ORDER BY m.expiry_date ASC, m.id ASC");
             $stmt->execute([$view_name, $user_branch_id]);
             $view_batches = $stmt->fetchAll();
             $view_data = $view_batches[0] ?? null;
@@ -387,7 +369,7 @@ if ($view_id > 0) {
         $name_row = $stmt->fetch();
         if ($name_row) {
             $view_name = $name_row['equipment_name'];
-            $stmt = $db->prepare("SELECT e.*, u.full_name as added_by_full_name FROM medical_equipment e LEFT JOIN users u ON e.added_by = u.id WHERE e.equipment_name = ? AND e.branch_id = ? ORDER BY e.id ASC");
+            $stmt = $db->prepare("SELECT e.*, u.full_name as added_by_full_name FROM medical_equipment e LEFT JOIN users u ON e.added_by = u.id WHERE e.equipment_name = ? AND e.branch_id = ? ORDER BY e.expiry_date ASC, e.id ASC");
             $stmt->execute([$view_name, $user_branch_id]);
             $view_batches = $stmt->fetchAll();
             $view_data = $view_batches[0] ?? null;
@@ -402,745 +384,770 @@ include_once __DIR__ . '/../../components/pharmacy_header.php';
 include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 ?>
 
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inventory - Braick Dispensary</title>
-    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<style>
+    :root {
+        --primary: #0B5ED7; --primary-dark: #0A3D8A; --primary-light: #E8F0FE;
+        --success: #059669; --success-dark: #047857; --success-light: #D1FAE5;
+        --warning: #D97706; --warning-light: #FEF3C7;
+        --danger: #DC2626; --danger-light: #FEE2E2;
+        --purple: #7C3AED; --purple-light: #EDE9FE;
+        --teal: #0D9488; --teal-light: #CCFBF1;
+        --bg-body: #F1F5F9; --bg-card: #FFFFFF;
+        --border-color: #E2E8F0;
+        --text-primary: #0F172A; --text-secondary: #475569; --text-muted: #94A3B8;
+    }
     
-    <style>
-        :root {
-            --primary: #0B5ED7; --primary-dark: #0A3D8A; --primary-light: #E8F0FE;
-            --success: #059669; --success-dark: #047857; --success-light: #D1FAE5;
-            --warning: #D97706; --warning-light: #FEF3C7;
-            --danger: #DC2626; --danger-light: #FEE2E2;
-            --purple: #7C3AED; --purple-light: #EDE9FE;
-            --teal: #0D9488; --teal-light: #CCFBF1;
-            --bg-body: #F1F5F9; --bg-card: #FFFFFF;
-            --border-color: #E2E8F0;
-            --text-primary: #0F172A; --text-secondary: #475569; --text-muted: #94A3B8;
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A; --bg-card: #1E293B;
-            --border-color: #334155;
-            --text-primary: #F1F5F9; --text-secondary: #94A3B8; --text-muted: #64748B;
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-        }
-        
-        .page-header {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            border-radius: 16px;
-            padding: 24px 32px;
-            margin-bottom: 28px;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -50%; right: -20%;
-            width: 300px; height: 300px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header .page-title {
-            color: white; font-size: 1.8rem; font-weight: 700;
-            display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-            position: relative; z-index: 1;
-        }
-        
-        .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85); font-size: 0.95rem;
-            display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-            position: relative; z-index: 1;
-        }
-        
-        .page-header .branch-tag {
-            background: rgba(255,255,255,0.15); color: white;
-            padding: 3px 14px; border-radius: 20px;
-            font-size: 0.7rem; font-weight: 600;
-            display: inline-flex; align-items: center; gap: 4px;
-            backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        .page-header .header-actions {
-            display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
-            position: relative; z-index: 1;
-        }
-        
-        .btn-add-medicine {
-            background: var(--success); color: white;
-            padding: 10px 24px; border-radius: 10px;
-            font-weight: 600; font-size: 0.9rem; border: none;
-            cursor: pointer; transition: all 0.3s ease;
-            display: inline-flex; align-items: center; gap: 8px;
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
-            text-decoration: none;
-        }
-        
-        .btn-add-medicine:hover {
-            background: var(--success-dark);
-            transform: translateY(-3px);
-            box-shadow: 0 6px 20px rgba(5, 150, 105, 0.35);
-            color: white;
-        }
-        
-        .btn-add-equipment {
-            background: var(--purple); color: white;
-            padding: 10px 24px; border-radius: 10px;
-            font-weight: 600; font-size: 0.9rem; border: none;
-            cursor: pointer; transition: all 0.3s ease;
-            display: inline-flex; align-items: center; gap: 8px;
-            box-shadow: 0 4px 12px rgba(124, 58, 237, 0.25);
-            text-decoration: none;
-        }
-        
-        .btn-add-equipment:hover {
-            background: #6D28D9;
-            transform: translateY(-3px);
-            box-shadow: 0 6px 20px rgba(124, 58, 237, 0.35);
-            color: white;
-        }
-        
-        .btn-outline {
-            background: transparent; color: rgba(255,255,255,0.9);
-            border: 2px solid rgba(255,255,255,0.3);
-            padding: 8px 18px; border-radius: 10px;
-            font-weight: 600; font-size: 0.82rem;
-            cursor: pointer; transition: all 0.3s ease;
-            text-decoration: none;
-            display: inline-flex; align-items: center; gap: 6px;
-        }
-        
-        .btn-outline:hover {
-            border-color: white; color: white;
-            background: rgba(255,255,255,0.1);
-        }
-        
-        .btn-purchase-history {
-            background: var(--warning); color: white;
-            padding: 10px 24px; border-radius: 10px;
-            font-weight: 600; font-size: 0.9rem; border: none;
-            cursor: pointer; transition: all 0.3s ease;
-            display: inline-flex; align-items: center; gap: 8px;
-            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.25);
-            text-decoration: none;
-        }
-        
-        .btn-purchase-history:hover {
-            background: #B45309;
-            transform: translateY(-3px);
-            box-shadow: 0 6px 20px rgba(217, 119, 6, 0.35);
-            color: white;
-        }
-        
-        .purchase-banner {
-            background: var(--success-light);
-            border: 2px solid var(--success);
-            border-radius: 12px;
-            padding: 12px 18px;
-            margin-bottom: 20px;
-            display: flex; justify-content: space-between;
-            align-items: center; flex-wrap: wrap; gap: 10px;
-        }
-        
-        [data-theme="dark"] .purchase-banner { background: #1A3A2A; border-color: #34D399; }
-        
-        .purchase-banner .banner-text {
-            font-size: 0.85rem; font-weight: 500; color: var(--text-primary);
-        }
-        
-        .purchase-banner .banner-text i { color: var(--success); }
-        
-        .purchase-banner .btn-go-to-purchase {
-            background: var(--success); color: white;
-            padding: 6px 20px; border-radius: 8px;
-            font-weight: 600; font-size: 0.8rem; border: none;
-            cursor: pointer; transition: all 0.3s ease;
-            text-decoration: none;
-            display: inline-flex; align-items: center; gap: 6px;
-        }
-        
-        .purchase-banner .btn-go-to-purchase:hover {
-            background: var(--success-dark); transform: translateY(-2px);
-        }
-        
-        .tabs-container {
-            display: flex; gap: 4px;
-            background: var(--bg-card); border-radius: 12px;
-            padding: 4px; border: 2px solid var(--border-color);
-            margin-bottom: 24px;
-        }
-        
-        .tab-btn {
-            padding: 10px 24px; border-radius: 10px;
-            font-weight: 600; font-size: 0.85rem; border: none;
-            cursor: pointer; transition: all 0.3s ease;
-            background: transparent; color: var(--text-secondary);
-            display: inline-flex; align-items: center; gap: 8px;
-            flex: 1; justify-content: center;
-        }
-        
-        .tab-btn:hover { background: var(--primary-light); color: var(--primary); }
-        
-        .tab-btn.active {
-            background: var(--primary); color: white;
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .tab-btn .badge {
-            background: rgba(255,255,255,0.2); color: white;
-            padding: 1px 8px; border-radius: 10px; font-size: 0.65rem;
-        }
-        
-        .tab-btn:not(.active) .badge {
-            background: var(--border-color); color: var(--text-secondary);
-        }
-        
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(7, 1fr);
-            gap: 12px; margin-bottom: 24px;
-        }
-        
-        .stat-card {
-            border-radius: 12px; padding: 14px 16px;
-            transition: all 0.3s ease; cursor: pointer;
-            text-decoration: none; display: block;
-            color: white; box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-            min-height: 80px;
-        }
-        
-        .stat-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-        }
-        
-        .stat-card .stat-number { font-size: 1.4rem; font-weight: 700; line-height: 1.2; }
-        .stat-card .stat-label { font-size: 0.6rem; color: rgba(255,255,255,0.85); font-weight: 500; margin-top: 2px; }
-        .stat-card .stat-icon { font-size: 1.2rem; opacity: 0.8; float: right; }
-        .stat-card .stat-value { font-size: 0.7rem; font-weight: 600; color: rgba(255,255,255,0.7); margin-top: 2px; }
-        .stat-card .stat-sub { font-size: 0.55rem; color: rgba(255,255,255,0.5); }
-        
-        .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .stat-card.green { background: linear-gradient(135deg, #059669, #047857); }
-        .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
-        .stat-card.red { background: linear-gradient(135deg, #DC2626, #991B1B); }
-        .stat-card.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-        .stat-card.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
-        
-        .card {
-            background: var(--bg-card); border-radius: 14px;
-            padding: 18px 22px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease; margin-bottom: 24px;
-        }
-        
-        .card:hover {
-            border-color: var(--primary);
-            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06);
-        }
-        
-        .result-count { font-size: 0.8rem; color: var(--text-secondary); }
-        .result-count strong { color: var(--primary); }
-        
-        .filter-group {
-            display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px;
-        }
-        
-        .filter-btn {
-            padding: 4px 14px; border-radius: 16px;
-            font-size: 0.7rem; font-weight: 600;
-            border: 2px solid var(--border-color);
-            background: transparent; color: var(--text-secondary);
-            cursor: pointer; transition: all 0.3s ease;
-            text-decoration: none;
-        }
-        
-        .filter-btn:hover { border-color: var(--primary); color: var(--primary); }
-        .filter-btn.active { background: var(--primary); border-color: var(--primary); color: white; }
-        .filter-btn.clear-filter { border-color: var(--danger); color: var(--danger); }
-        .filter-btn.clear-filter:hover { background: var(--danger); color: white; }
-        
-        .filter-form {
-            display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
-        }
-        
-        .filter-form select {
-            padding: 8px 14px;
-            border: 2px solid var(--border-color);
-            border-radius: 10px; font-size: 0.8rem;
-            background: var(--bg-card); color: var(--text-primary);
-            outline: none; transition: all 0.3s ease;
-            min-width: 180px; cursor: pointer;
-        }
-        
-        .filter-form select:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
-        }
-        
-        .btn-search {
-            padding: 8px 20px; border-radius: 10px;
-            font-weight: 600; font-size: 0.85rem; border: none;
-            background: var(--primary); color: white;
-            cursor: pointer; transition: all 0.3s ease;
-        }
-        
-        .btn-search:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-reset {
-            padding: 8px 16px; border-radius: 10px;
-            font-weight: 600; font-size: 0.85rem;
-            border: 2px solid var(--border-color);
-            background: transparent; color: var(--text-secondary);
-            cursor: pointer; transition: all 0.3s ease;
-            text-decoration: none;
-        }
-        
-        .btn-reset:hover { border-color: var(--danger); color: var(--danger); }
-        
-        .table-header-bar {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 12px;
-            margin-bottom: 12px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid var(--border-color);
-        }
-        
-        .table-header-left {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            flex: 1;
-            min-width: 0;
-        }
-        
-        .table-header-right {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-            flex-shrink: 0;
-        }
-        
-        .table-search-box {
-            position: relative;
-            min-width: 280px;
-            flex: 1;
-            max-width: 400px;
-        }
-        
-        .table-search-box i {
-            position: absolute;
-            left: 14px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: rgba(255,255,255,0.95);
-            font-size: 0.85rem;
-            pointer-events: none;
-            z-index: 1;
-        }
-        
-        .table-search-box input {
-            width: 100%;
-            padding: 10px 14px 10px 42px;
-            border: 2px solid var(--primary-dark);
-            border-radius: 10px;
-            font-size: 0.85rem;
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            color: white;
-            outline: none;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            height: 42px;
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
-        }
-        
-        .table-search-box input::placeholder {
-            color: rgba(255,255,255,0.85);
-            font-weight: 400;
-        }
-        
-        .table-search-box input:focus {
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.25), 0 6px 20px rgba(11, 94, 215, 0.35);
-            transform: translateY(-1px);
-        }
-        
-        .scroll-btn-header {
-            width: 38px;
-            height: 38px;
-            border-radius: 8px;
-            border: 2px solid var(--border-color);
-            background: var(--bg-card);
-            color: var(--text-primary);
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.3s ease;
-            font-size: 0.8rem;
-        }
-        
-        .scroll-btn-header:hover {
-            background: var(--primary);
-            border-color: var(--primary);
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .scroll-btn-header:disabled {
-            opacity: 0.35;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
-        .search-results-info {
-            font-size: 0.7rem;
-            color: var(--primary);
-            padding: 6px 12px;
-            background: var(--primary-light);
-            border-radius: 8px;
-            white-space: nowrap;
-            display: none;
-            font-weight: 600;
-            border: 1px solid var(--primary);
-        }
-        
-        .search-results-info strong {
-            color: var(--primary);
-            font-size: 0.8rem;
-        }
-        
-        .table-title-inline {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            white-space: nowrap;
-        }
-        
-        .table-title-inline i {
-            color: var(--primary);
-        }
-        
-        .table-container {
-            position: relative;
-            border-radius: 10px;
-            overflow: hidden;
-        }
-        
-        .table-wrap {
-            overflow-x: auto;
-            overflow-y: auto;
-            max-height: 500px;
-            scroll-behavior: smooth;
-            position: relative;
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-        }
-        
-        .table-wrap::-webkit-scrollbar { height: 8px; width: 8px; }
-        .table-wrap::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
-        .table-wrap::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
-        .table-wrap::-webkit-scrollbar-thumb:hover { background: var(--primary-dark); }
-        
-        .data-table {
-            width: 100%;
-            min-width: 1400px;
-            border-collapse: separate;
-            border-spacing: 0;
-            font-size: 0.78rem;
-        }
-        
-        .data-table thead th {
-            position: sticky;
-            top: 0;
-            z-index: 10;
-            background: var(--primary);
-            color: white;
-            padding: 8px 12px;
-            font-size: 0.65rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            font-weight: 700;
-            white-space: nowrap;
-            text-align: left;
-        }
-        
-        .data-table thead th:first-child { border-radius: 8px 0 0 0; }
-        .data-table thead th:last-child { border-radius: 0 8px 0 0; }
-        
-        .data-table tbody tr:nth-child(even) { background: var(--primary-light); }
-        .data-table tbody tr:hover td { background: var(--success-light); }
-        
-        [data-theme="dark"] .data-table tbody tr:nth-child(even) { background: #1E293B; }
-        [data-theme="dark"] .data-table tbody tr:hover td { background: #1A3A2A; }
-        
-        .data-table td {
-            padding: 8px 12px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-            vertical-align: middle;
-            white-space: nowrap;
-        }
-        
-        .col-sno { width: 35px; text-align: center; }
-        .col-name { min-width: 160px; }
-        .col-category { min-width: 100px; }
-        .col-qty { min-width: 80px; text-align: center; }
-        .col-reorder { min-width: 70px; text-align: center; }
-        .col-stock { min-width: 100px; }
-        .col-price { min-width: 130px; font-family: 'Courier New', monospace; }
-        .col-expiry { min-width: 100px; }
-        .col-days { min-width: 70px; text-align: center; }
-        .col-batch { min-width: 130px; }
-        .col-status { min-width: 70px; text-align: center; }
-        .col-added-by { min-width: 120px; }
-        .col-actions { min-width: 60px; text-align: center; }
-        
-        .added-by-tag {
-            display: inline-flex; align-items: center; gap: 4px;
-            padding: 2px 10px; border-radius: 12px;
-            font-size: 0.65rem; font-weight: 600;
-            background: var(--purple-light); color: var(--purple);
-        }
-        
-        [data-theme="dark"] .added-by-tag { background: #2D1B4E; color: #C4B5FD; }
-        
-        .status-badge {
-            padding: 2px 8px; border-radius: 10px;
-            font-size: 0.6rem; font-weight: 600;
-            display: inline-flex; align-items: center; gap: 3px;
-        }
-        
-        .status-badge.active { background: var(--success-light); color: var(--success); }
-        .status-badge.inactive { background: var(--danger-light); color: var(--danger); }
-        
-        .stock-badge {
-            padding: 2px 8px; border-radius: 8px;
-            font-size: 0.65rem; font-weight: 600;
-            display: inline-flex; align-items: center; gap: 3px;
-        }
-        
-        .stock-badge.ok { background: var(--success-light); color: var(--success); }
-        .stock-badge.low { background: var(--warning-light); color: var(--warning); animation: pulse 1.5s infinite; }
-        .stock-badge.out { background: var(--danger-light); color: var(--danger); animation: pulse 1s infinite; }
-        
-        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
-        
-        .expiry-badge {
-            padding: 2px 8px; border-radius: 8px;
-            font-size: 0.6rem; font-weight: 600;
-            display: inline-flex; align-items: center; gap: 3px;
-        }
-        
-        .expiry-badge.valid { background: var(--success-light); color: var(--success); }
-        .expiry-badge.expiring { background: var(--warning-light); color: var(--warning); animation: pulse 1.5s infinite; }
-        .expiry-badge.expired { background: var(--danger-light); color: var(--danger); animation: pulse 1s infinite; }
-        .expiry-badge.no-expiry { background: #E2E8F0; color: var(--text-muted); }
-        
-        .days-remaining {
-            font-size: 0.65rem; font-weight: 600;
-            padding: 1px 6px; border-radius: 8px;
-            display: inline-flex; align-items: center; gap: 3px;
-        }
-        
-        .days-remaining.good { background: var(--success-light); color: var(--success); }
-        .days-remaining.warning { background: var(--warning-light); color: var(--warning); animation: pulse 1.5s infinite; }
-        .days-remaining.danger { background: var(--danger-light); color: var(--danger); animation: pulse 1s infinite; }
-        .days-remaining.forever { background: #E2E8F0; color: var(--text-muted); }
-        
-        .batch-number {
-            font-family: monospace; font-size: 0.65rem;
-            font-weight: 600; padding: 1px 6px;
-            border-radius: 4px;
-            background: var(--primary-light);
-            color: var(--primary);
-        }
-        
-        [data-theme="dark"] .batch-number { background: #1E3A5F; color: #6EA8FE; }
-        
-        .action-btn {
-            padding: 3px 8px; border-radius: 4px;
-            font-size: 0.65rem; font-weight: 600;
-            border: none; cursor: pointer;
-            transition: all 0.3s ease;
-            text-decoration: none;
-            display: inline-flex; align-items: center; gap: 3px;
-        }
-        
-        .action-btn.view { background: var(--purple); color: white; }
-        .action-btn.view:hover { background: #6D28D9; transform: scale(1.05); }
-        
-        .no-results-row td {
-            text-align: center;
-            padding: 30px 20px !important;
-            color: var(--text-secondary);
-        }
-        
-        .no-results-row i {
-            font-size: 2rem;
-            color: var(--border-color);
-            display: block;
-            margin-bottom: 8px;
-        }
-        
-        .message-box {
-            padding: 12px 18px;
-            border-radius: 10px;
-            margin-bottom: 16px;
-            display: flex; align-items: center; gap: 10px;
-            font-weight: 500;
-            animation: slideDown 0.4s ease;
-        }
-        
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .message-box.success { background: var(--success-light); color: #065F46; border: 2px solid #6EE7B7; }
-        .message-box.error { background: var(--danger-light); color: #991B1B; border: 2px solid #FCA5A5; }
-        .message-box.info { background: var(--primary-light); color: #0A4CA8; border: 2px solid #6EA8FE; }
-        
-        [data-theme="dark"] .message-box.success { background: #1A3A2A; color: #34D399; border-color: #34D399; }
-        [data-theme="dark"] .message-box.error { background: #3A1A1A; color: #F87171; border-color: #F87171; }
-        [data-theme="dark"] .message-box.info { background: #1A2A4A; color: #6EA8FE; border-color: #6EA8FE; }
-        
-        .empty-state {
-            text-align: center; padding: 40px 20px;
-            color: var(--text-secondary);
-        }
-        
-        .empty-state i {
-            font-size: 2.5rem; color: var(--border-color);
-            display: block; margin-bottom: 10px;
-        }
-        
-        .empty-state .sub { font-size: 0.8rem; margin-top: 4px; }
-        
-        .footer {
-            padding: 12px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 20px; text-align: center;
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        .animate-fade-in-up:nth-child(1) { animation-delay: 0.05s; }
-        .animate-fade-in-up:nth-child(2) { animation-delay: 0.1s; }
-        .animate-fade-in-up:nth-child(3) { animation-delay: 0.15s; }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        /* ✅ Zero qty warning badge */
-        .zero-qty-warning {
-            font-size: 0.55rem;
-            display: block;
-            color: var(--warning);
-            font-weight: 600;
-            margin-top: 2px;
-        }
-        
-        @media (max-width: 1200px) { .stats-grid { grid-template-columns: repeat(4, 1fr); } }
-        @media (max-width: 1024px) { .main-content { margin-left: 0; padding: 16px; } }
-        @media (max-width: 992px) { .stats-grid { grid-template-columns: repeat(3, 1fr); } }
-        
-        @media (max-width: 768px) {
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-            .filter-form { flex-direction: column; align-items: stretch; }
-            .filter-form select { min-width: 100%; }
-            .filter-group { justify-content: center; }
-            .card { padding: 12px 14px; }
-            .tab-btn { font-size: 0.7rem; padding: 8px 12px; }
-            .tab-btn .badge { display: none; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .stat-card .stat-number { font-size: 1.1rem; }
-            .stat-card { padding: 10px 12px; min-height: 65px; }
-            .header-actions { flex-direction: column; align-items: stretch; width: 100%; }
-            .header-actions .btn-add-medicine,
-            .header-actions .btn-add-equipment,
-            .header-actions .btn-outline,
-            .header-actions .btn-purchase-history { width: 100%; justify-content: center; }
-            .data-table { min-width: 900px; }
-            .table-header-bar { flex-direction: column; align-items: stretch; }
-            .table-header-left { width: 100%; flex-direction: column; align-items: stretch; }
-            .table-search-box { min-width: 100%; max-width: 100%; }
-            .table-header-right { width: 100%; justify-content: flex-end; }
-        }
-        
-        @media (max-width: 480px) {
-            .stats-grid { grid-template-columns: 1fr 1fr; }
-            .stat-card .stat-number { font-size: 0.9rem; }
-            .stat-card { padding: 8px 10px; min-height: 55px; }
-            .data-table { min-width: 650px; font-size: 0.65rem; }
-        }
-    </style>
-</head>
-<body>
+    [data-theme="dark"] {
+        --bg-body: #0F172A; --bg-card: #1E293B;
+        --border-color: #334155;
+        --text-primary: #F1F5F9; --text-secondary: #94A3B8; --text-muted: #64748B;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+        font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+        background: var(--bg-body);
+        color: var(--text-primary);
+        transition: background 0.3s ease, color 0.3s ease;
+    }
+    
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: var(--bg-body); }
+    ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+    
+    .main-content {
+        margin-left: 270px;
+        margin-top: 68px;
+        padding: 28px 32px;
+        min-height: calc(100vh - 68px);
+    }
+    
+    .page-header {
+        background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+        border-radius: 16px;
+        padding: 24px 32px;
+        margin-bottom: 28px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .page-header::before {
+        content: '';
+        position: absolute;
+        top: -50%; right: -20%;
+        width: 300px; height: 300px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+    
+    .page-header .page-title {
+        color: white; font-size: 1.8rem; font-weight: 700;
+        display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+        position: relative; z-index: 1;
+    }
+    
+    .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
+    
+    .page-header .page-subtitle {
+        color: rgba(255,255,255,0.85); font-size: 0.95rem;
+        display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        position: relative; z-index: 1;
+    }
+    
+    .page-header .branch-tag {
+        background: rgba(255,255,255,0.15); color: white;
+        padding: 3px 14px; border-radius: 20px;
+        font-size: 0.7rem; font-weight: 600;
+        display: inline-flex; align-items: center; gap: 4px;
+        backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    .page-header .header-actions {
+        display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+        position: relative; z-index: 1;
+    }
+    
+    .btn-add-medicine {
+        background: var(--success); color: white;
+        padding: 10px 24px; border-radius: 10px;
+        font-weight: 600; font-size: 0.9rem; border: none;
+        cursor: pointer; transition: all 0.3s ease;
+        display: inline-flex; align-items: center; gap: 8px;
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
+        text-decoration: none;
+    }
+    .btn-add-medicine:hover { background: var(--success-dark); transform: translateY(-3px); box-shadow: 0 6px 20px rgba(5, 150, 105, 0.35); color: white; }
+    
+    .btn-add-equipment {
+        background: var(--purple); color: white;
+        padding: 10px 24px; border-radius: 10px;
+        font-weight: 600; font-size: 0.9rem; border: none;
+        cursor: pointer; transition: all 0.3s ease;
+        display: inline-flex; align-items: center; gap: 8px;
+        box-shadow: 0 4px 12px rgba(124, 58, 237, 0.25);
+        text-decoration: none;
+    }
+    .btn-add-equipment:hover { background: #6D28D9; transform: translateY(-3px); box-shadow: 0 6px 20px rgba(124, 58, 237, 0.35); color: white; }
+    
+    .btn-purchase-history {
+        background: var(--warning); color: white;
+        padding: 10px 24px; border-radius: 10px;
+        font-weight: 600; font-size: 0.9rem; border: none;
+        cursor: pointer; transition: all 0.3s ease;
+        display: inline-flex; align-items: center; gap: 8px;
+        box-shadow: 0 4px 12px rgba(217, 119, 6, 0.25);
+        text-decoration: none;
+    }
+    .btn-purchase-history:hover { background: #B45309; transform: translateY(-3px); box-shadow: 0 6px 20px rgba(217, 119, 6, 0.35); color: white; }
+    
+    .btn-outline {
+        background: transparent; color: rgba(255,255,255,0.9);
+        border: 2px solid rgba(255,255,255,0.3);
+        padding: 8px 18px; border-radius: 10px;
+        font-weight: 600; font-size: 0.82rem;
+        cursor: pointer; transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-flex; align-items: center; gap: 6px;
+    }
+    .btn-outline:hover { border-color: white; color: white; background: rgba(255,255,255,0.1); }
+    
+    .purchase-banner {
+        background: var(--success-light);
+        border: 2px solid var(--success);
+        border-radius: 12px;
+        padding: 12px 18px;
+        margin-bottom: 20px;
+        display: flex; justify-content: space-between;
+        align-items: center; flex-wrap: wrap; gap: 10px;
+    }
+    
+    [data-theme="dark"] .purchase-banner { background: #1A3A2A; border-color: #34D399; }
+    
+    .purchase-banner .banner-text {
+        font-size: 0.85rem; font-weight: 500; color: var(--text-primary);
+    }
+    .purchase-banner .banner-text i { color: var(--success); }
+    
+    .purchase-banner .btn-go-to-purchase {
+        background: var(--success); color: white;
+        padding: 6px 20px; border-radius: 8px;
+        font-weight: 600; font-size: 0.8rem; border: none;
+        cursor: pointer; transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-flex; align-items: center; gap: 6px;
+    }
+    .purchase-banner .btn-go-to-purchase:hover { background: var(--success-dark); transform: translateY(-2px); }
+    
+    .tabs-container {
+        display: flex; gap: 4px;
+        background: var(--bg-card); border-radius: 12px;
+        padding: 4px; border: 2px solid var(--border-color);
+        margin-bottom: 24px;
+    }
+    
+    .tab-btn {
+        padding: 10px 24px; border-radius: 10px;
+        font-weight: 600; font-size: 0.85rem; border: none;
+        cursor: pointer; transition: all 0.3s ease;
+        background: transparent; color: var(--text-secondary);
+        display: inline-flex; align-items: center; gap: 8px;
+        flex: 1; justify-content: center;
+    }
+    .tab-btn:hover { background: var(--primary-light); color: var(--primary); }
+    .tab-btn.active { background: var(--primary); color: white; box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
+    .tab-btn .badge { background: rgba(255,255,255,0.2); color: white; padding: 1px 8px; border-radius: 10px; font-size: 0.65rem; }
+    .tab-btn:not(.active) .badge { background: var(--border-color); color: var(--text-secondary); }
+    
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 12px; margin-bottom: 24px;
+    }
+    
+    .stat-card {
+        border-radius: 12px; padding: 14px 16px;
+        transition: all 0.3s ease; cursor: pointer;
+        text-decoration: none; display: block;
+        color: white; box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        min-height: 80px;
+    }
+    .stat-card:hover { transform: translateY(-4px); box-shadow: 0 8px 25px rgba(0,0,0,0.15); }
+    .stat-card .stat-number { font-size: 1.4rem; font-weight: 700; line-height: 1.2; }
+    .stat-card .stat-label { font-size: 0.6rem; color: rgba(255,255,255,0.85); font-weight: 500; margin-top: 2px; }
+    .stat-card .stat-icon { font-size: 1.2rem; opacity: 0.8; float: right; }
+    .stat-card .stat-value { font-size: 0.7rem; font-weight: 600; color: rgba(255,255,255,0.7); margin-top: 2px; }
+    .stat-card .stat-sub { font-size: 0.55rem; color: rgba(255,255,255,0.5); }
+    .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+    .stat-card.green { background: linear-gradient(135deg, #059669, #047857); }
+    .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
+    .stat-card.red { background: linear-gradient(135deg, #DC2626, #991B1B); }
+    .stat-card.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+    .stat-card.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
+    
+    .card {
+        background: var(--bg-card); border-radius: 14px;
+        padding: 18px 22px;
+        border: 2px solid var(--border-color);
+        transition: all 0.3s ease; margin-bottom: 24px;
+    }
+    .card:hover { border-color: var(--primary); box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06); }
+    
+    .result-count { font-size: 0.8rem; color: var(--text-secondary); }
+    .result-count strong { color: var(--primary); }
+    
+    .filter-group { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+    
+    .filter-btn {
+        padding: 4px 14px; border-radius: 16px;
+        font-size: 0.7rem; font-weight: 600;
+        border: 2px solid var(--border-color);
+        background: transparent; color: var(--text-secondary);
+        cursor: pointer; transition: all 0.3s ease;
+        text-decoration: none;
+    }
+    .filter-btn:hover { border-color: var(--primary); color: var(--primary); }
+    .filter-btn.active { background: var(--primary); border-color: var(--primary); color: white; }
+    .filter-btn.clear-filter { border-color: var(--danger); color: var(--danger); }
+    .filter-btn.clear-filter:hover { background: var(--danger); color: white; }
+    
+    .filter-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    
+    .filter-form select {
+        padding: 8px 14px;
+        border: 2px solid var(--border-color);
+        border-radius: 10px; font-size: 0.8rem;
+        background: var(--bg-card); color: var(--text-primary);
+        outline: none; transition: all 0.3s ease;
+        min-width: 180px; cursor: pointer;
+    }
+    .filter-form select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1); }
+    
+    .btn-search {
+        padding: 8px 20px; border-radius: 10px;
+        font-weight: 600; font-size: 0.85rem; border: none;
+        background: var(--primary); color: white;
+        cursor: pointer; transition: all 0.3s ease;
+    }
+    .btn-search:hover { background: var(--primary-dark); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
+    
+    .btn-reset {
+        padding: 8px 16px; border-radius: 10px;
+        font-weight: 600; font-size: 0.85rem;
+        border: 2px solid var(--border-color);
+        background: transparent; color: var(--text-secondary);
+        cursor: pointer; transition: all 0.3s ease;
+        text-decoration: none;
+    }
+    .btn-reset:hover { border-color: var(--danger); color: var(--danger); }
+    
+    /* TABLE HEADER BAR */
+    .table-header-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-bottom: 14px;
+        padding-bottom: 12px;
+        border-bottom: 2px solid var(--border-color);
+    }
+    
+    .table-header-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        flex: 1;
+        min-width: 0;
+    }
+    
+    .table-header-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        flex-shrink: 0;
+    }
+    
+    .table-search-box {
+        position: relative;
+        min-width: 320px;
+        flex: 1;
+        max-width: 500px;
+    }
+    
+    .table-search-box i {
+        position: absolute;
+        left: 14px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: rgba(255,255,255,0.95);
+        font-size: 0.9rem;
+        pointer-events: none;
+        z-index: 1;
+    }
+    
+    .table-search-box input {
+        width: 100%;
+        padding: 11px 16px 11px 44px;
+        border: 2px solid var(--primary-dark);
+        border-radius: 10px;
+        font-size: 0.85rem;
+        background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+        color: white;
+        outline: none;
+        font-weight: 500;
+        height: 44px;
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
+        transition: all 0.3s ease;
+    }
+    
+    .table-search-box input::placeholder { color: rgba(255,255,255,0.85); font-weight: 400; }
+    .table-search-box input:focus { box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.25), 0 6px 20px rgba(11, 94, 215, 0.35); transform: translateY(-1px); }
+    
+    .scroll-btn-header {
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+        border: 2px solid var(--border-color);
+        background: var(--bg-card);
+        color: var(--text-primary);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.3s ease;
+        font-size: 0.85rem;
+    }
+    .scroll-btn-header:hover { background: var(--primary); border-color: var(--primary); color: white; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
+    .scroll-btn-header:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+    
+    .search-results-info {
+        font-size: 0.72rem;
+        color: var(--primary);
+        padding: 6px 12px;
+        background: var(--primary-light);
+        border-radius: 8px;
+        white-space: nowrap;
+        display: none;
+        font-weight: 600;
+        border: 1px solid var(--primary);
+    }
+    .search-results-info strong { color: var(--primary); font-size: 0.8rem; }
+    
+    .table-title-inline {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        white-space: nowrap;
+    }
+    .table-title-inline i { color: var(--primary); }
+    
+    /* TABLE */
+    .table-container { position: relative; border-radius: 10px; overflow: hidden; }
+    
+    .table-wrap {
+        overflow-x: auto;
+        overflow-y: auto;
+        max-height: 560px;
+        scroll-behavior: smooth;
+        position: relative;
+        border-radius: 12px;
+        border: 2px solid var(--border-color);
+        background: var(--bg-card);
+    }
+    
+    .table-wrap::-webkit-scrollbar { height: 10px; width: 10px; }
+    .table-wrap::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 6px; }
+    .table-wrap::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 6px; border: 2px solid var(--bg-body); }
+    .table-wrap::-webkit-scrollbar-thumb:hover { background: var(--primary-dark); }
+    
+    .data-table {
+        width: 100%;
+        min-width: 1550px;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 0.8rem;
+        font-family: 'Inter', 'Segoe UI', sans-serif;
+    }
+    
+    .data-table thead th {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+        color: white;
+        padding: 14px 16px;
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-weight: 700;
+        white-space: nowrap;
+        text-align: left;
+        border-right: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    
+    .data-table thead th:last-child { border-right: none; text-align: center; }
+    .data-table thead th:first-child { border-radius: 10px 0 0 0; }
+    .data-table thead th:last-child { border-radius: 0 10px 0 0; }
+    
+    .data-table tbody tr { transition: all 0.2s ease; background: var(--bg-card); }
+    .data-table tbody tr:nth-child(even) { background: rgba(11, 94, 215, 0.03); }
+    [data-theme="dark"] .data-table tbody tr:nth-child(even) { background: rgba(11, 94, 215, 0.08); }
+    
+    .data-table tbody tr:hover {
+        background: linear-gradient(90deg, rgba(209, 250, 229, 0.5) 0%, rgba(209, 250, 229, 0.15) 100%) !important;
+        box-shadow: inset 4px 0 0 var(--success);
+    }
+    [data-theme="dark"] .data-table tbody tr:hover {
+        background: linear-gradient(90deg, rgba(26, 58, 42, 0.7) 0%, rgba(26, 58, 42, 0.3) 100%) !important;
+        box-shadow: inset 4px 0 0 #34D399;
+    }
+    
+    .data-table td {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-primary);
+        vertical-align: middle;
+        font-size: 0.82rem;
+        line-height: 1.45;
+        transition: all 0.2s ease;
+    }
+    .data-table tbody tr:last-child td { border-bottom: none; }
+    
+    /* Column widths */
+    .col-sno { width: 55px; min-width: 55px; text-align: center; font-weight: 700; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace; }
+    .col-name { min-width: 220px; max-width: 280px; white-space: normal; }
+    .col-name strong { display: block; font-size: 0.85rem; font-weight: 700; color: var(--text-primary); margin-bottom: 2px; line-height: 1.3; }
+    .col-category { min-width: 140px; }
+    .col-qty { min-width: 90px; text-align: center; font-family: 'JetBrains Mono', monospace; }
+    .col-qty strong { font-size: 0.95rem; font-weight: 800; color: var(--primary); display: inline-block; }
+    .col-reorder { min-width: 80px; text-align: center; font-family: 'JetBrains Mono', monospace; color: var(--text-secondary); }
+    .col-stock { min-width: 140px; text-align: center; }
+    .col-price { min-width: 120px; text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--success); font-size: 0.85rem; }
+    .col-expiry { min-width: 120px; text-align: center; }
+    .col-days { min-width: 85px; text-align: center; }
+    .col-batch { min-width: 150px; text-align: center; }
+    .col-status { min-width: 105px; text-align: center; }
+    .col-added-by { min-width: 150px; max-width: 180px; }
+    .col-actions { min-width: 100px; text-align: center; padding: 12px 8px; }
+    
+    /* BADGES */
+    .added-by-tag {
+        display: inline-flex; align-items: center; gap: 5px;
+        padding: 5px 12px; border-radius: 20px;
+        font-size: 0.7rem; font-weight: 600;
+        background: var(--purple-light); color: var(--purple);
+        white-space: nowrap; max-width: 100%;
+        overflow: hidden; text-overflow: ellipsis;
+        border: 1px solid rgba(124, 58, 237, 0.2);
+    }
+    [data-theme="dark"] .added-by-tag { background: #2D1B4E; color: #C4B5FD; border-color: rgba(196, 181, 253, 0.2); }
+    
+    .status-badge {
+        padding: 5px 14px; border-radius: 20px;
+        font-size: 0.68rem; font-weight: 700;
+        display: inline-flex; align-items: center; gap: 4px;
+        letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;
+    }
+    .status-badge.active { background: var(--success-light); color: var(--success); border: 1px solid rgba(5, 150, 105, 0.3); }
+    .status-badge.inactive { background: var(--danger-light); color: var(--danger); border: 1px solid rgba(220, 38, 38, 0.3); }
+    
+    /* ✅ STOCK BADGES - LOW NI BLUE */
+    .stock-badge {
+        padding: 6px 14px; border-radius: 20px;
+        font-size: 0.7rem; font-weight: 700;
+        display: inline-flex; align-items: center; gap: 5px;
+        letter-spacing: 0.02em; white-space: nowrap;
+    }
+    .stock-badge.ok { background: var(--success-light); color: var(--success); border: 1px solid rgba(5, 150, 105, 0.3); }
+    .stock-badge.low { background: var(--primary-light); color: var(--primary); border: 1px solid rgba(11, 94, 215, 0.3); animation: pulse 1.5s infinite; }
+    .stock-badge.out { background: var(--danger-light); color: var(--danger); border: 1px solid rgba(220, 38, 38, 0.3); animation: pulse 1s infinite; }
+    
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.65; } }
+    
+    /* ✅ EXPIRY BADGES - EXPIRING NI BLUE */
+    .expiry-badge {
+        padding: 5px 12px; border-radius: 20px;
+        font-size: 0.7rem; font-weight: 700;
+        display: inline-flex; align-items: center; gap: 4px;
+        white-space: nowrap;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .expiry-badge.valid { background: var(--success-light); color: var(--success); border: 1px solid rgba(5, 150, 105, 0.3); }
+    .expiry-badge.expiring { background: var(--primary-light); color: var(--primary); border: 1px solid rgba(11, 94, 215, 0.3); animation: pulse 1.5s infinite; }
+    .expiry-badge.expired { background: var(--danger-light); color: var(--danger); border: 1px solid rgba(220, 38, 38, 0.3); animation: pulse 1s infinite; }
+    .expiry-badge.no-expiry { background: var(--border-color); color: var(--text-muted); border: 1px solid rgba(148, 163, 184, 0.3); }
+    
+    /* ✅ DAYS REMAINING - WARNING NI BLUE */
+    .days-remaining {
+        font-size: 0.72rem; font-weight: 700;
+        padding: 5px 12px; border-radius: 20px;
+        display: inline-flex; align-items: center; gap: 4px;
+        font-family: 'JetBrains Mono', monospace;
+        white-space: nowrap;
+    }
+    .days-remaining.good { background: var(--success-light); color: var(--success); }
+    .days-remaining.warning { background: var(--primary-light); color: var(--primary); animation: pulse 1.5s infinite; }
+    .days-remaining.danger { background: var(--danger-light); color: var(--danger); animation: pulse 1s infinite; }
+    .days-remaining.forever { background: var(--border-color); color: var(--text-muted); }
+    
+    .batch-number {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.72rem; font-weight: 700;
+        padding: 5px 12px; border-radius: 8px;
+        background: var(--primary-light); color: var(--primary);
+        display: inline-block; letter-spacing: 0.02em;
+        border: 1px solid rgba(11, 94, 215, 0.2);
+    }
+    [data-theme="dark"] .batch-number { background: #1E3A5F; color: #6EA8FE; border-color: rgba(110, 168, 254, 0.3); }
+    
+    /* ✅ BATCH COUNT BADGE - BLUE */
+    .batch-count-badge {
+        font-size: 0.6rem;
+        background: var(--primary-light);
+        color: var(--primary);
+        padding: 2px 10px;
+        border-radius: 10px;
+        font-weight: 700;
+        border: 1px solid rgba(11, 94, 215, 0.3);
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        box-shadow: 0 1px 3px rgba(11, 94, 215, 0.15);
+    }
+    [data-theme="dark"] .batch-count-badge { background: #1E3A5F; color: #6EA8FE; border-color: rgba(110, 168, 254, 0.3); }
+    
+    .zero-qty-warning {
+        font-size: 0.6rem;
+        display: block;
+        color: var(--warning);
+        font-weight: 700;
+        margin-top: 3px;
+    }
+    
+    /* ACTION BUTTONS */
+    .action-btn {
+        padding: 8px 14px; border-radius: 8px;
+        font-size: 0.72rem; font-weight: 700;
+        border: none; cursor: pointer;
+        display: inline-flex; align-items: center; justify-content: center;
+        gap: 5px; color: white; min-width: 72px;
+        height: 34px; transition: all 0.25s ease;
+        letter-spacing: 0.02em;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+        white-space: nowrap;
+        text-decoration: none;
+        font-family: inherit;
+    }
+    .action-btn.view { background: linear-gradient(135deg, var(--purple), #6D28D9); }
+    .action-btn.view:hover { background: linear-gradient(135deg, #6D28D9, #5B21B6); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(124, 58, 237, 0.5); color: white; }
+    
+    .no-results-row td {
+        text-align: center;
+        padding: 50px 20px !important;
+        color: var(--text-secondary);
+    }
+    .no-results-row i { font-size: 2.5rem; color: var(--border-color); display: block; margin-bottom: 10px; }
+    .no-results-row p { font-weight: 600; color: var(--text-primary); margin: 0; }
+    
+    /* MESSAGE */
+    .message-box {
+        padding: 12px 18px; border-radius: 10px;
+        margin-bottom: 16px; display: flex;
+        align-items: center; gap: 10px;
+        font-weight: 500;
+        animation: slideDown 0.4s ease;
+    }
+    @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+    
+    .message-box.success { background: var(--success-light); color: #065F46; border: 2px solid #6EE7B7; }
+    .message-box.error { background: var(--danger-light); color: #991B1B; border: 2px solid #FCA5A5; }
+    .message-box.info { background: var(--primary-light); color: #0A4CA8; border: 2px solid #6EA8FE; }
+    
+    [data-theme="dark"] .message-box.success { background: #1A3A2A; color: #34D399; border-color: #34D399; }
+    [data-theme="dark"] .message-box.error { background: #3A1A1A; color: #F87171; border-color: #F87171; }
+    [data-theme="dark"] .message-box.info { background: #1A2A4A; color: #6EA8FE; border-color: #6EA8FE; }
+    
+    .empty-state { text-align: center; padding: 50px 20px; color: var(--text-secondary); }
+    .empty-state i { font-size: 3rem; color: var(--border-color); display: block; margin-bottom: 12px; }
+    .empty-state p { font-size: 0.95rem; font-weight: 600; margin-bottom: 6px; }
+    .empty-state .sub { font-size: 0.8rem; font-weight: 400; }
+    
+    /* ================================================================
+       ✅ MODAL - Z-INDEX KUBWA ILI IWE MBELE YA SIDEBAR
+       ================================================================ */
+    .modal-overlay {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.75);
+        z-index: 999999;
+        justify-content: center;
+        align-items: center;
+        padding: 20px;
+        backdrop-filter: blur(4px);
+    }
+    .modal-overlay.show { display: flex; }
+    
+    .modal-content {
+        background: var(--bg-card);
+        border-radius: 14px;
+        max-width: 950px;
+        width: 100%;
+        max-height: 90vh;
+        overflow-y: auto;
+        padding: 24px 28px;
+        border: 2px solid var(--border-color);
+        box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+        position: relative;
+        z-index: 1000000;
+    }
+    
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding-bottom: 12px;
+        border-bottom: 2px solid var(--border-color);
+        margin-bottom: 16px;
+    }
+    .modal-title {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .modal-close {
+        background: none; border: none;
+        font-size: 1.4rem; cursor: pointer;
+        color: var(--text-secondary);
+        transition: all 0.2s;
+        text-decoration: none;
+        line-height: 1;
+    }
+    .modal-close:hover { color: var(--danger); transform: rotate(90deg); }
+    
+    /* VIEW MODAL */
+    .view-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-bottom: 14px;
+    }
+    .view-item {
+        padding: 10px 14px;
+        background: var(--bg-body);
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+    }
+    .view-item .label {
+        font-size: 0.55rem;
+        text-transform: uppercase;
+        color: var(--text-secondary);
+        font-weight: 700;
+        letter-spacing: 0.05em;
+    }
+    .view-item .value {
+        font-size: 0.88rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-top: 3px;
+    }
+    .view-item.full-width { grid-column: 1 / -1; }
+    
+    .view-items-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.78rem;
+    }
+    .view-items-table thead th {
+        background: var(--primary);
+        color: white;
+        padding: 10px 12px;
+        font-size: 0.62rem;
+        text-transform: uppercase;
+        font-weight: 700;
+        text-align: left;
+        border-bottom: 2px solid var(--primary);
+        letter-spacing: 0.04em;
+        white-space: nowrap;
+    }
+    .view-items-table tbody td {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-primary);
+        font-size: 0.78rem;
+    }
+    .view-items-table tbody tr:nth-child(even) { background: rgba(11, 94, 215, 0.03); }
+    [data-theme="dark"] .view-items-table tbody tr:nth-child(even) { background: rgba(11, 94, 215, 0.08); }
+    .view-items-table tbody tr:hover { background: rgba(209, 250, 229, 0.4); }
+    
+    /* FOOTER */
+    .footer {
+        padding: 12px 0;
+        border-top: 1px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.65rem;
+        color: var(--text-secondary);
+    }
+    .footer .footer-brand { color: var(--primary); font-weight: 600; }
+    
+    .animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
+    .animate-fade-in-up:nth-child(1) { animation-delay: 0.05s; }
+    .animate-fade-in-up:nth-child(2) { animation-delay: 0.1s; }
+    .animate-fade-in-up:nth-child(3) { animation-delay: 0.15s; }
+    @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    
+    @media (max-width: 1200px) { .stats-grid { grid-template-columns: repeat(4, 1fr); } }
+    @media (max-width: 1024px) { .main-content { margin-left: 0; padding: 16px; } .stats-grid { grid-template-columns: repeat(3, 1fr); } }
+    
+    @media (max-width: 768px) {
+        .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        .filter-form { flex-direction: column; align-items: stretch; }
+        .filter-form select { min-width: 100%; }
+        .filter-group { justify-content: center; }
+        .card { padding: 12px 14px; }
+        .tab-btn { font-size: 0.7rem; padding: 8px 12px; }
+        .tab-btn .badge { display: none; }
+        .page-header .page-title { font-size: 1.3rem; }
+        .stat-card .stat-number { font-size: 1.1rem; }
+        .stat-card { padding: 10px 12px; min-height: 65px; }
+        .header-actions { flex-direction: column; align-items: stretch; width: 100%; }
+        .header-actions a { width: 100%; justify-content: center; }
+        .data-table { min-width: 1200px; }
+        .table-header-bar { flex-direction: column; align-items: stretch; }
+        .table-header-left { width: 100%; flex-direction: column; align-items: stretch; }
+        .table-search-box { min-width: 100%; max-width: 100%; }
+        .table-header-right { width: 100%; justify-content: flex-end; }
+        .view-grid { grid-template-columns: 1fr; }
+    }
+    
+    @media (max-width: 480px) {
+        .stats-grid { grid-template-columns: 1fr 1fr; }
+        .stat-card .stat-number { font-size: 0.9rem; }
+        .stat-card { padding: 8px 10px; min-height: 55px; }
+        .data-table { min-width: 1000px; font-size: 0.72rem; }
+    }
+</style>
 
 <main class="main-content">
 
@@ -1164,15 +1171,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <a href="select_purchase.php?type=medicine" class="btn-add-medicine">
                 <i class="fas fa-plus-circle"></i> Add Medicine
             </a>
-            
             <a href="select_purchase.php?type=equipment" class="btn-add-equipment">
                 <i class="fas fa-plus-circle"></i> Add Equipment
             </a>
-            
             <a href="purchase_history.php" class="btn-purchase-history">
                 <i class="fas fa-history"></i> Purchase History
             </a>
-            
             <a href="dashboard.php" class="btn-outline">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
@@ -1181,9 +1185,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="message-box <?= $message_type ?>">
+        <div class="message-box <?= $message_type ?>" id="messageBox">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'info' ? 'fa-info-circle' : 'fa-exclamation-circle') ?>"></i>
             <?= $message ?>
+            <button onclick="this.parentElement.style.display='none'" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1.1rem;color:inherit;">&times;</button>
         </div>
     <?php endif; ?>
 
@@ -1389,16 +1394,24 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                         <td class="col-name">
                                             <strong><?= htmlspecialchars($item['medication_name']) ?></strong>
                                             <?php if ($batch_count > 1): ?>
-                                                <span style="font-size:0.55rem;margin-left:4px;background:var(--primary-light);color:var(--primary);padding:1px 8px;border-radius:10px;"><?= $batch_count ?> batches</span>
+                                                <span class="batch-count-badge">
+                                                    <i class="fas fa-layer-group"></i> <?= $batch_count ?> batches
+                                                </span>
                                             <?php endif; ?>
-                                            <div style="font-size:0.6rem;color:var(--text-muted);"><?= htmlspecialchars($item['unit'] ?? 'pcs') ?></div>
+                                            <div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">
+                                                <i class="fas fa-cube"></i> <?= htmlspecialchars($item['unit'] ?? 'pcs') ?>
+                                            </div>
                                         </td>
-                                        <td class="col-category"><?= htmlspecialchars($item['category'] ?? 'N/A') ?></td>
+                                        <td class="col-category">
+                                            <span style="background:var(--primary-light);color:var(--primary);padding:4px 12px;border-radius:12px;font-size:0.7rem;font-weight:600;">
+                                                <?= htmlspecialchars($item['category'] ?? 'N/A') ?>
+                                            </span>
+                                        </td>
                                         <td class="col-qty">
                                             <strong><?= $total_qty ?></strong>
                                             <?php if ($total_qty == 0 && $display_status === 'active'): ?>
                                                 <span class="zero-qty-warning">
-                                                    <i class="fas fa-exclamation-triangle"></i> 0 Qty
+                                                    <i class="fas fa-exclamation-triangle"></i> Cannot sell
                                                 </span>
                                             <?php endif; ?>
                                         </td>
@@ -1432,19 +1445,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                             <?php if (!empty($first_batch)): ?>
                                                 <span class="batch-number"><?= htmlspecialchars($first_batch) ?></span>
                                                 <?php if ($batch_count > 1): ?>
-                                                    <span style="font-size:0.6rem;color:var(--text-muted);">+<?= $batch_count - 1 ?> more</span>
+                                                    <span style="font-size:0.65rem;color:var(--text-muted);margin-left:4px;font-weight:600;">+<?= $batch_count - 1 ?></span>
                                                 <?php endif; ?>
                                             <?php else: ?>
-                                                <span style="color:var(--text-muted);">N/A</span>
+                                                <span style="color:var(--text-muted);font-size:0.75rem;">N/A</span>
                                             <?php endif; ?>
                                         </td>
-                                        <td class="col-status"><span class="status-badge <?= $display_status ?>"><?= ucfirst($display_status) ?></span></td>
+                                        <td class="col-status">
+                                            <span class="status-badge <?= $display_status ?>">
+                                                <i class="fas <?= $display_status === 'active' ? 'fa-circle-check' : 'fa-circle-xmark' ?>"></i>
+                                                <?= ucfirst($display_status) ?>
+                                            </span>
+                                        </td>
                                         <td class="col-added-by">
-                                            <span class="added-by-tag"><i class="fas fa-user-circle"></i> <?= htmlspecialchars($added_by_display) ?></span>
+                                            <span class="added-by-tag">
+                                                <i class="fas fa-user-circle"></i> <?= htmlspecialchars($added_by_display) ?>
+                                            </span>
                                         </td>
                                         <td class="col-actions">
                                             <a href="inventory.php?tab=medicines&view=<?= $item['id'] ?>&type=medicine" class="action-btn view">
-                                                <i class="fas fa-eye"></i>
+                                                <i class="fas fa-eye"></i> View
                                             </a>
                                         </td>
                                     </tr>
@@ -1637,16 +1657,24 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                         <td class="col-name">
                                             <strong><?= htmlspecialchars($item['equipment_name']) ?></strong>
                                             <?php if ($batch_count > 1): ?>
-                                                <span style="font-size:0.55rem;margin-left:4px;background:var(--primary-light);color:var(--primary);padding:1px 8px;border-radius:10px;"><?= $batch_count ?> batches</span>
+                                                <span class="batch-count-badge">
+                                                    <i class="fas fa-layer-group"></i> <?= $batch_count ?> batches
+                                                </span>
                                             <?php endif; ?>
-                                            <div style="font-size:0.6rem;color:var(--text-muted);"><?= htmlspecialchars($item['unit'] ?? 'pcs') ?></div>
+                                            <div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">
+                                                <i class="fas fa-cube"></i> <?= htmlspecialchars($item['unit'] ?? 'pcs') ?>
+                                            </div>
                                         </td>
-                                        <td class="col-category"><?= htmlspecialchars($item['category'] ?? 'N/A') ?></td>
+                                        <td class="col-category">
+                                            <span style="background:var(--purple-light);color:var(--purple);padding:4px 12px;border-radius:12px;font-size:0.7rem;font-weight:600;">
+                                                <?= htmlspecialchars($item['category'] ?? 'N/A') ?>
+                                            </span>
+                                        </td>
                                         <td class="col-qty">
                                             <strong><?= $total_qty ?></strong>
                                             <?php if ($total_qty == 0 && $display_status === 'active'): ?>
                                                 <span class="zero-qty-warning">
-                                                    <i class="fas fa-exclamation-triangle"></i> 0 Qty
+                                                    <i class="fas fa-exclamation-triangle"></i> Cannot sell
                                                 </span>
                                             <?php endif; ?>
                                         </td>
@@ -1680,19 +1708,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                             <?php if (!empty($first_batch)): ?>
                                                 <span class="batch-number"><?= htmlspecialchars($first_batch) ?></span>
                                                 <?php if ($batch_count > 1): ?>
-                                                    <span style="font-size:0.6rem;color:var(--text-muted);">+<?= $batch_count - 1 ?> more</span>
+                                                    <span style="font-size:0.65rem;color:var(--text-muted);margin-left:4px;font-weight:600;">+<?= $batch_count - 1 ?></span>
                                                 <?php endif; ?>
                                             <?php else: ?>
-                                                <span style="color:var(--text-muted);">N/A</span>
+                                                <span style="color:var(--text-muted);font-size:0.75rem;">N/A</span>
                                             <?php endif; ?>
                                         </td>
-                                        <td class="col-status"><span class="status-badge <?= $display_status ?>"><?= ucfirst($display_status) ?></span></td>
+                                        <td class="col-status">
+                                            <span class="status-badge <?= $display_status ?>">
+                                                <i class="fas <?= $display_status === 'active' ? 'fa-circle-check' : 'fa-circle-xmark' ?>"></i>
+                                                <?= ucfirst($display_status) ?>
+                                            </span>
+                                        </td>
                                         <td class="col-added-by">
-                                            <span class="added-by-tag"><i class="fas fa-user-circle"></i> <?= htmlspecialchars($added_by_display) ?></span>
+                                            <span class="added-by-tag">
+                                                <i class="fas fa-user-circle"></i> <?= htmlspecialchars($added_by_display) ?>
+                                            </span>
                                         </td>
                                         <td class="col-actions">
                                             <a href="inventory.php?tab=equipment&view=<?= $item['id'] ?>&type=equipment" class="action-btn view">
-                                                <i class="fas fa-eye"></i>
+                                                <i class="fas fa-eye"></i> View
                                             </a>
                                         </td>
                                     </tr>
@@ -1718,191 +1753,208 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     </div>
 
-    <!-- VIEW MODAL -->
-    <?php if ($view_data && !empty($view_batches)): ?>
-    <div class="modal-overlay show" id="viewModal" style="display:flex;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;justify-content:center;align-items:center;">
-        <div class="modal-content" style="background:var(--bg-card);border-radius:16px;padding:24px 28px;max-width:850px;width:95%;max-height:90vh;overflow-y:auto;border:2px solid var(--border-color);box-shadow:var(--shadow-lg);">
-            <div class="modal-header" style="display:flex;justify-content:space-between;align-items:center;padding-bottom:12px;border-bottom:2px solid var(--border-color);margin-bottom:16px;">
-                <div class="modal-title" style="font-size:1.1rem;font-weight:700;color:var(--text-primary);display:flex;align-items:center;gap:10px;">
-                    <i class="fas fa-eye"></i> 
-                    <?= ucfirst($view_type) ?> Details - <?= htmlspecialchars($view_name) ?>
-                </div>
-                <a href="inventory.php?tab=<?= $active_tab ?>" class="modal-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--text-secondary);text-decoration:none;">&times;</a>
+</main>
+
+<!-- ================================================================
+     ✅ VIEW MODAL - Ipo MBELE ya sidebar (z-index: 999999)
+     ================================================================ -->
+<?php if ($view_data && !empty($view_batches)): ?>
+<div class="modal-overlay show" id="viewModal" style="display:flex;z-index:999999;">
+    <div class="modal-content" style="z-index:1000000;">
+        <div class="modal-header">
+            <div class="modal-title">
+                <i class="fas fa-eye"></i> 
+                <?= ucfirst($view_type) ?> Details - <?= htmlspecialchars($view_name) ?>
             </div>
-            
-            <div class="view-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
-                <div class="view-item full-width" style="grid-column:1/-1;padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
-                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Name</div>
-                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;"><?= htmlspecialchars($view_name) ?></div>
-                </div>
-                <div class="view-item" style="padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
-                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Category</div>
-                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;"><?= htmlspecialchars($view_data['category'] ?? 'N/A') ?></div>
-                </div>
-                <div class="view-item" style="padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
-                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Unit</div>
-                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;"><?= htmlspecialchars($view_data['unit'] ?? 'pcs') ?></div>
-                </div>
-                <div class="view-item" style="padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
-                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Total Quantity</div>
-                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;">
-                        <?php 
-                            $total_qty = 0;
-                            foreach ($view_batches as $batch) {
-                                if ($batch['status'] === 'active' && (empty($batch['expiry_date']) || $batch['expiry_date'] >= date('Y-m-d'))) {
-                                    $total_qty += $batch['quantity'];
-                                }
+            <a href="inventory.php?tab=<?= $active_tab ?>" class="modal-close">&times;</a>
+        </div>
+        
+        <div class="view-grid">
+            <div class="view-item full-width">
+                <div class="label">Name</div>
+                <div class="value"><?= htmlspecialchars($view_name) ?></div>
+            </div>
+            <div class="view-item">
+                <div class="label">Category</div>
+                <div class="value"><?= htmlspecialchars($view_data['category'] ?? 'N/A') ?></div>
+            </div>
+            <div class="view-item">
+                <div class="label">Unit</div>
+                <div class="value"><?= htmlspecialchars($view_data['unit'] ?? 'pcs') ?></div>
+            </div>
+            <div class="view-item">
+                <div class="label">Total Quantity (Active)</div>
+                <div class="value">
+                    <?php 
+                        $total_qty = 0;
+                        foreach ($view_batches as $batch) {
+                            if ($batch['status'] === 'active' && (empty($batch['expiry_date']) || $batch['expiry_date'] >= date('Y-m-d'))) {
+                                $total_qty += $batch['quantity'];
                             }
-                        ?>
-                        <strong><?= $total_qty ?></strong>
-                        <?php if ($total_qty == 0): ?>
-                            <span style="font-size:0.6rem;color:var(--warning);font-weight:600;margin-left:6px;">
-                                <i class="fas fa-exclamation-triangle"></i> Cannot be sold
-                            </span>
-                        <?php endif; ?>
-                    </div>
-                </div>
-                <div class="view-item" style="padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
-                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Reorder Level</div>
-                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;"><?= $view_data['reorder_level'] ?></div>
-                </div>
-                <div class="view-item" style="padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
-                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Selling Price</div>
-                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;">
-                        <?= ($view_data['selling_price'] ?? 0) > 0 ? 'TSh ' . number_format($view_data['selling_price'], 0) : 'FREE' ?>
-                    </div>
-                </div>
-                <div class="view-item" style="padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
-                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Added By</div>
-                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;">
-                        <span class="added-by-tag">
-                            <i class="fas fa-user-circle"></i>
-                            <?= !empty($view_data['added_by_full_name']) ? htmlspecialchars($view_data['added_by_full_name']) : ($view_data['added_by_name'] ?? 'System') ?>
+                        }
+                    ?>
+                    <strong><?= $total_qty ?></strong>
+                    <?php if ($total_qty == 0): ?>
+                        <span style="font-size:0.6rem;color:var(--warning);font-weight:600;margin-left:6px;">
+                            <i class="fas fa-exclamation-triangle"></i> Cannot be sold
                         </span>
-                    </div>
-                </div>
-                <div class="view-item full-width" style="grid-column:1/-1;padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
-                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Branch</div>
-                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;">
-                        <span style="background:var(--primary-light);color:var(--primary);padding:2px 12px;border-radius:12px;font-size:0.75rem;">
-                            <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
-                        </span>
-                    </div>
+                    <?php endif; ?>
                 </div>
             </div>
-            
-            <div style="margin-top:16px;">
-                <div style="font-size:0.8rem;font-weight:600;margin-bottom:8px;color:var(--text-primary);">
-                    <i class="fas fa-layer-group"></i> Batches (<?= count($view_batches) ?>)
-                </div>
-                <div style="overflow-x:auto;margin-top:10px;">
-                    <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
-                        <thead>
-                            <tr>
-                                <th style="background:var(--primary);color:white;padding:6px 10px;font-size:0.6rem;text-transform:uppercase;font-weight:700;text-align:left;width:25%;">Batch</th>
-                                <th style="background:var(--primary);color:white;padding:6px 10px;font-size:0.6rem;text-transform:uppercase;font-weight:700;text-align:center;width:12%;">Qty</th>
-                                <th style="background:var(--primary);color:white;padding:6px 10px;font-size:0.6rem;text-transform:uppercase;font-weight:700;text-align:left;width:20%;">Expiry</th>
-                                <th style="background:var(--primary);color:white;padding:6px 10px;font-size:0.6rem;text-transform:uppercase;font-weight:700;text-align:center;width:12%;">Days</th>
-                                <th style="background:var(--primary);color:white;padding:6px 10px;font-size:0.6rem;text-transform:uppercase;font-weight:700;text-align:center;width:13%;">Status</th>
-                                <th style="background:var(--primary);color:white;padding:6px 10px;font-size:0.6rem;text-transform:uppercase;font-weight:700;text-align:center;width:18%;">Added By</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($view_batches as $batch): 
-                                $batch_expiry = $batch['expiry_date'] ?? '';
-                                $batch_status = $batch['status'] ?? 'active';
-                                $batch_qty = $batch['quantity'] ?? 0;
-                                
-                                $exp_status = 'no-expiry';
-                                $days_left = '-';
-                                $status_label = 'Active';
-                                $status_class = 'active';
-                                
-                                if (!empty($batch_expiry) && $batch_expiry !== '0000-00-00') {
-                                    $days_left = (strtotime($batch_expiry) - time()) / 86400;
-                                    $days_left = round($days_left);
-                                    
-                                    if ($days_left < 0) { $exp_status = 'expired'; $status_label = 'Expired'; $status_class = 'inactive'; }
-                                    elseif ($days_left <= 30) { $exp_status = 'expiring'; $status_label = 'Expiring Soon'; }
-                                    else { $exp_status = 'valid'; $status_label = 'Valid'; }
-                                } else {
-                                    $days_left = '∞';
-                                }
-                                
-                                // ✅ Batch yenye quantity 0 bado ni ACTIVE (haiwezi kuuzwa)
-                                if ($batch_status === 'inactive') { 
-                                    $status_label = 'Inactive'; 
-                                    $status_class = 'inactive'; 
-                                } elseif ($batch_qty == 0) {
-                                    $status_label = 'Active (0 Qty)';
-                                    $status_class = 'active';
-                                }
-                                
-                                $batch_added_by = !empty($batch['added_by_full_name']) ? $batch['added_by_full_name'] : ($batch['added_by_name'] ?? 'System');
-                            ?>
-                                <tr style="border-bottom:1px solid var(--border-color);">
-                                    <td style="padding:5px 10px;"><span class="batch-number"><?= htmlspecialchars($batch['batch_number'] ?? 'N/A') ?></span></td>
-                                    <td style="padding:5px 10px;text-align:center;font-weight:600;">
-                                        <?= $batch_qty ?>
-                                        <?php if ($batch_qty == 0): ?>
-                                            <span style="font-size:0.55rem;display:block;color:var(--warning);font-weight:600;">
-                                                <i class="fas fa-exclamation-triangle"></i> 0 Qty
-                                            </span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td style="padding:5px 10px;">
-                                        <?php if (!empty($batch_expiry) && $batch_expiry !== '0000-00-00'): ?>
-                                            <span class="expiry-badge <?= $exp_status ?>"><?= date('d/m/Y', strtotime($batch_expiry)) ?></span>
-                                        <?php else: ?>
-                                            <span class="expiry-badge no-expiry"><i class="fas fa-infinity"></i> No Expiry</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td style="padding:5px 10px;text-align:center;">
-                                        <?php if ($days_left === '∞'): ?>
-                                            <span class="days-remaining forever"><i class="fas fa-infinity"></i> ∞</span>
-                                        <?php elseif ($days_left !== '-'): ?>
-                                            <span class="days-remaining <?= $days_left < 0 ? 'danger' : ($days_left <= 30 ? 'warning' : 'good') ?>">
-                                                <?php if ($days_left < 0): ?><i class="fas fa-skull"></i> EXP
-                                                <?php elseif ($days_left <= 30): ?><i class="fas fa-clock"></i> <?= $days_left ?>d
-                                                <?php else: ?><i class="fas fa-check"></i> <?= $days_left ?>d<?php endif; ?>
-                                            </span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td style="padding:5px 10px;text-align:center;">
-                                        <span class="status-badge <?= $status_class ?>"><?= $status_label ?></span>
-                                    </td>
-                                    <td style="padding:5px 10px;text-align:center;">
-                                        <span class="added-by-tag"><i class="fas fa-user-circle"></i> <?= htmlspecialchars($batch_added_by) ?></span>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
+            <div class="view-item">
+                <div class="label">Reorder Level</div>
+                <div class="value"><?= $view_data['reorder_level'] ?></div>
+            </div>
+            <div class="view-item">
+                <div class="label">Selling Price</div>
+                <div class="value">
+                    <?= ($view_data['selling_price'] ?? 0) > 0 ? 'TSh ' . number_format($view_data['selling_price'], 0) : 'FREE' ?>
                 </div>
             </div>
-            
-            <div style="display:flex;gap:10px;margin-top:18px;padding-top:14px;border-top:2px solid var(--border-color);">
-                <a href="inventory.php?tab=<?= $active_tab ?>" class="btn-reset">
-                    <i class="fas fa-times"></i> Close
-                </a>
+            <div class="view-item">
+                <div class="label">Added By</div>
+                <div class="value">
+                    <span class="added-by-tag">
+                        <i class="fas fa-user-circle"></i>
+                        <?= !empty($view_data['added_by_full_name']) ? htmlspecialchars($view_data['added_by_full_name']) : ($view_data['added_by_name'] ?? 'System') ?>
+                    </span>
+                </div>
+            </div>
+            <div class="view-item full-width">
+                <div class="label">Branch</div>
+                <div class="value">
+                    <span style="background:var(--primary-light);color:var(--primary);padding:2px 12px;border-radius:12px;font-size:0.75rem;">
+                        <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
+                    </span>
+                </div>
             </div>
         </div>
+        
+        <div style="margin-top:16px;">
+            <div style="font-size:0.85rem;font-weight:700;margin-bottom:10px;color:var(--text-primary);display:flex;align-items:center;gap:8px;">
+                <i class="fas fa-layer-group" style="color:var(--primary);"></i> 
+                ALL BATCHES (<?= count($view_batches) ?>)
+            </div>
+            <div style="overflow-x:auto;border:2px solid var(--primary);border-radius:10px;">
+                <table class="view-items-table">
+                    <thead>
+                        <tr>
+                            <th style="width:40px;text-align:center;">#</th>
+                            <th style="min-width:150px;">Batch Number</th>
+                            <th style="min-width:110px;">Category</th>
+                            <th style="text-align:center;width:80px;">Qty</th>
+                            <th style="min-width:110px;">Expiry Date</th>
+                            <th style="text-align:center;width:80px;">Days</th>
+                            <th style="text-align:center;width:100px;">Status</th>
+                            <th style="min-width:130px;text-align:center;">Supplier</th>
+                            <th style="min-width:140px;text-align:center;">Added By</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php $bcounter = 1; ?>
+                        <?php foreach ($view_batches as $batch): 
+                            $batch_expiry = $batch['expiry_date'] ?? '';
+                            $batch_status = $batch['status'] ?? 'active';
+                            $batch_qty = $batch['quantity'] ?? 0;
+                            
+                            $exp_status = 'no-expiry';
+                            $days_left = '-';
+                            $status_label = 'Active';
+                            $status_class = 'active';
+                            
+                            if (!empty($batch_expiry) && $batch_expiry !== '0000-00-00') {
+                                $days_left = (strtotime($batch_expiry) - time()) / 86400;
+                                $days_left = round($days_left);
+                                
+                                if ($days_left < 0) { $exp_status = 'expired'; $status_label = 'Expired'; $status_class = 'inactive'; }
+                                elseif ($days_left <= 30) { $exp_status = 'expiring'; $status_label = 'Expiring Soon'; }
+                                else { $exp_status = 'valid'; $status_label = 'Valid'; }
+                            } else {
+                                $days_left = '∞';
+                            }
+                            
+                            if ($batch_status === 'inactive') { 
+                                $status_label = 'Inactive'; 
+                                $status_class = 'inactive'; 
+                            } elseif ($batch_qty == 0) {
+                                $status_label = 'Active (0 Qty)';
+                                $status_class = 'active';
+                            }
+                            
+                            $batch_added_by = !empty($batch['added_by_full_name']) ? $batch['added_by_full_name'] : ($batch['added_by_name'] ?? 'System');
+                        ?>
+                            <tr>
+                                <td style="text-align:center;font-weight:700;color:var(--text-secondary);"><?= $bcounter++ ?></td>
+                                <td><span class="batch-number"><?= htmlspecialchars($batch['batch_number'] ?? 'N/A') ?></span></td>
+                                <td>
+                                    <span style="background:var(--primary-light);color:var(--primary);padding:3px 10px;border-radius:10px;font-size:0.65rem;font-weight:600;">
+                                        <?= htmlspecialchars($batch['category'] ?? 'N/A') ?>
+                                    </span>
+                                </td>
+                                <td style="text-align:center;font-weight:700;font-family:monospace;">
+                                    <?= $batch_qty ?>
+                                    <?php if ($batch_qty == 0): ?>
+                                        <span style="font-size:0.55rem;display:block;color:var(--warning);font-weight:600;">
+                                            <i class="fas fa-exclamation-triangle"></i> 0 Qty
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <?php if (!empty($batch_expiry) && $batch_expiry !== '0000-00-00'): ?>
+                                        <span class="expiry-badge <?= $exp_status ?>"><?= date('d/m/Y', strtotime($batch_expiry)) ?></span>
+                                    <?php else: ?>
+                                        <span class="expiry-badge no-expiry"><i class="fas fa-infinity"></i> No Expiry</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td style="text-align:center;">
+                                    <?php if ($days_left === '∞'): ?>
+                                        <span class="days-remaining forever"><i class="fas fa-infinity"></i> ∞</span>
+                                    <?php elseif ($days_left !== '-'): ?>
+                                        <span class="days-remaining <?= $days_left < 0 ? 'danger' : ($days_left <= 30 ? 'warning' : 'good') ?>">
+                                            <?php if ($days_left < 0): ?><i class="fas fa-skull"></i> EXP
+                                            <?php elseif ($days_left <= 30): ?><i class="fas fa-clock"></i> <?= $days_left ?>d
+                                            <?php else: ?><i class="fas fa-check"></i> <?= $days_left ?>d<?php endif; ?>
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
+                                <td style="text-align:center;">
+                                    <span class="status-badge <?= $status_class ?>"><?= $status_label ?></span>
+                                </td>
+                                <td style="text-align:center;font-size:0.72rem;color:var(--text-secondary);">
+                                    <?= htmlspecialchars($batch['supplier'] ?? 'N/A') ?>
+                                </td>
+                                <td style="text-align:center;">
+                                    <span class="added-by-tag" style="font-size:0.65rem;">
+                                        <i class="fas fa-user-circle"></i> <?= htmlspecialchars($batch_added_by) ?>
+                                    </span>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div style="display:flex;gap:10px;margin-top:18px;padding-top:14px;border-top:2px solid var(--border-color);">
+            <a href="inventory.php?tab=<?= $active_tab ?>" class="btn-reset">
+                <i class="fas fa-times"></i> Close
+            </a>
+        </div>
     </div>
-    <?php endif; ?>
+</div>
+<?php endif; ?>
 
-    <footer class="footer">
-        <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-400 mx-2">|</span>
-            Inventory Management (Grouped by Name)
-            <span class="text-gray-400 mx-2">|</span>
-            Total Value: <strong>TSh <?= formatMoney($total_inventory_value) ?></strong>
-            <span class="text-gray-400 mx-2">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
-        </p>
-    </footer>
-
-</main>
+<footer class="footer">
+    <p>
+        <span class="footer-brand">Braick Dispensary</span> Management System
+        <span style="color:var(--text-muted);margin:0 8px;">|</span>
+        Inventory Management (Grouped by Name)
+        <span style="color:var(--text-muted);margin:0 8px;">|</span>
+        Total Value: <strong>TSh <?= formatMoney($total_inventory_value) ?></strong>
+        <span style="color:var(--text-muted);margin:0 8px;">|</span>
+        &copy; <?= date('Y') ?> All rights reserved
+    </p>
+</footer>
 
 <script>
 // TAB SWITCHING
@@ -2100,11 +2152,12 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-console.log('%c💊 Braick - Pharmacy Inventory', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ FIXED: Quantity 0 = ACTIVE (inaonekana kwenye search, haiwezi kuuzwa)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ FIXED: Expired/Inactive manual pekee = INACTIVE', 'font-size:13px; color:#34D399;');
-console.log('%c✅ SQL order: WHERE → GROUP BY → HAVING → ORDER BY', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Add Medicine/Equipment zinafungua select_purchase.php', 'font-size:13px; color:#34D399;');
+console.log('%c💊 Braick - Pharmacy Inventory V8.9.1', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ Modal ipo MBELE ya sidebar (z-index 999999)', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Batch count badge ni BLUE', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Stock low, days warning, expiry expiring ni BLUE', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Table header search (auto-filter)', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ View modal inaonyesha batches zote + added by', 'font-size:13px; color:#34D399; font-weight:bold;');
 </script>
 
 </body>

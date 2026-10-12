@@ -1,12 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/view_patient_prescriptions.php
-// V8.4 - CANCEL WITH PROPER STOCK_MOVEMENTS (inventory_id fix)
+// V8.6 - CANCEL WITHOUT STOCK RETURN + EDITABLE QUANTITY
 // ================================================================
-// ✅ V8.4: reference_type = 'prescription_cancel'
-// ✅ V8.4: reference_id = prescriptions.id (sio prescription_items.id)
-// ✅ V8.4: equipment_id = NULL explicit kwa medicine
-// ✅ V8.4: batch_number + previous_stock + new_stock kwenye notes
+// ✅ V8.6: Quantity inaweza kuedit (input field)
+// ✅ V8.6: Total Price (GROSS) ina green background
+// ✅ V8.5: Cancel HAIRUDISHI stock - inapunguza bill tu
+// ✅ V8.5: No stock_movements entry
+// ✅ V8.5: Cards zinaonyesha maandishi yote (no truncation)
 // ✅ V8.3: cancelled_quantity + original_quantity zinahifadhiwa
 // ✅ V8.3: Auto-sync prescriptions.status = 'cancelled'
 // ================================================================
@@ -85,7 +86,7 @@ try {
     $currency = $settings['currency'] ?? 'TSh';
 
     // ================================================================
-    // ✅ V8.4 CANCEL HANDLER
+    // ✅ V8.6 CANCEL HANDLER - NO STOCK RETURN
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'cancel_item') {
         $item_id = isset($_POST['item_id']) ? (int)$_POST['item_id'] : 0;
@@ -115,109 +116,14 @@ try {
                 $item_total = (float)$item['total_price'];
                 $item_qty = (int)$item['quantity'];
                 $item_name = trim($item['medication_name']);
-                $inventory_id = $item['inventory_id'] ?? null;
                 $was_dispensed = !empty($item['dispensed_at']);
                 $rx_status = $item['rx_status'];
                 $prescription_id_of_item = (int)$item['prescription_id'];
                 $item_dosage = $item['dosage'] ?? '';
 
-                // FIND INVENTORY ITEM
-                $inventory_found = null;
-
-                if (!empty($inventory_id)) {
-                    $stmt_inv = $db->prepare("
-                        SELECT id, medication_name, quantity, batch_number
-                        FROM medications_inventory 
-                        WHERE id = ? AND branch_id = ? AND status = 'active'
-                    ");
-                    $stmt_inv->execute([$inventory_id, $user_branch_id]);
-                    $inventory_found = $stmt_inv->fetch(PDO::FETCH_ASSOC);
-                }
-
-                if (!$inventory_found) {
-                    $clean_name = preg_replace('/\s*\(Batch:.*?\)\s*/i', '', $item_name);
-                    $clean_name = trim($clean_name);
-
-                    $stmt_inv = $db->prepare("
-                        SELECT id, medication_name, quantity, batch_number
-                        FROM medications_inventory 
-                        WHERE branch_id = ?
-                          AND status = 'active'
-                          AND (
-                              LOWER(TRIM(medication_name)) = LOWER(TRIM(?))
-                              OR LOWER(TRIM(medication_name)) = LOWER(TRIM(?))
-                              OR medication_name LIKE ?
-                          )
-                        ORDER BY
-                            CASE
-                                WHEN LOWER(TRIM(medication_name)) = LOWER(TRIM(?)) THEN 1
-                                WHEN LOWER(TRIM(medication_name)) = LOWER(TRIM(?)) THEN 2
-                                ELSE 3
-                            END
-                        LIMIT 1
-                    ");
-                    $stmt_inv->execute([
-                        $user_branch_id,
-                        $clean_name,
-                        $item_name,
-                        '%' . $clean_name . '%',
-                        $clean_name,
-                        $item_name
-                    ]);
-                    $inventory_found = $stmt_inv->fetch(PDO::FETCH_ASSOC);
-                }
-
-                // Return stock to inventory
-                $prev_stock = 0;
-                $new_stock = 0;
-                $inv_id = null;
-                $inv_batch = '';
-
-                if ($inventory_found && $item_qty > 0) {
-                    $inv_id = (int)$inventory_found['id'];
-                    $inv_batch = $inventory_found['batch_number'] ?? '';
-                    $prev_stock = (int)$inventory_found['quantity'];
-                    $new_stock = $prev_stock + $item_qty;
-
-                    $stmt_upd = $db->prepare("
-                        UPDATE medications_inventory
-                        SET quantity = ?, updated_at = NOW()
-                        WHERE id = ? AND branch_id = ?
-                    ");
-                    $stmt_upd->execute([$new_stock, $inv_id, $user_branch_id]);
-
-                    // ✅ V8.4: INSERT stock_movements with proper fields
-                    $stmt_log = $db->prepare("
-                        INSERT INTO stock_movements (
-                            inventory_id, equipment_id, patient_id, movement_type, quantity,
-                            previous_stock, new_stock, reference_type, reference_id,
-                            performed_by, branch_id, notes, created_at
-                        ) VALUES (?, NULL, ?, 'in', ?, ?, ?, 'prescription_cancel', ?, ?, ?, ?, NOW())
-                    ");
-                    $stmt_log->execute([
-                        $inv_id,                                    // inventory_id
-                        $patient_id_post,                           // patient_id
-                        $item_qty,                                  // quantity
-                        $prev_stock,                                // previous_stock
-                        $new_stock,                                 // new_stock
-                        $prescription_id_of_item,                   // reference_id = prescriptions.id
-                        $user_id,                                   // performed_by
-                        $user_branch_id,                            // branch_id
-                        "Stock returned - Cancelled by {$user_full_name} - "
-                            . ($was_dispensed ? 'DISPENSED' : strtoupper($rx_status))
-                            . " item: {$item_name} (Qty: {$item_qty}) from Rx #{$item['prescription_number']}"
-                            . " | Batch: {$inv_batch} | Stock: {$prev_stock} → {$new_stock}"
-                    ]);
-                }
-
-                // Update prescription_items.inventory_id kama ilikuwa NULL
-                if ($inv_id && empty($inventory_id)) {
-                    $db->prepare("
-                        UPDATE prescription_items
-                        SET inventory_id = ?
-                        WHERE id = ? AND (inventory_id IS NULL OR inventory_id = 0)
-                    ")->execute([$inv_id, $item_id]);
-                }
+                // ================================================================
+                // ✅ V8.6: NO STOCK RETURN - Only log the cancellation
+                // ================================================================
 
                 // GET BILL
                 $stmt_bill = $db->prepare("
@@ -315,7 +221,6 @@ try {
                     $stmt_med->execute([$bill_id]);
                     $med_data = $stmt_med->fetch(PDO::FETCH_ASSOC);
                     $med_total = (float)($med_data['med_total'] ?? 0);
-                    $med_count = (int)($med_data['med_count'] ?? 0);
 
                     $stmt_other = $db->prepare("
                         SELECT SUM(total_price) as other_total
@@ -371,7 +276,7 @@ try {
                                . " | removed: {$removed_bi_count}";
                 }
 
-                // ✅ V8.4: Store cancelled quantity (NOT delete it)
+                // ✅ V8.6: Store cancelled quantity (NOT delete it)
                 $stmt_cancel_log = $db->prepare("
                     UPDATE prescription_items
                     SET cancelled_by = ?,
@@ -381,13 +286,11 @@ try {
                             WHEN original_quantity > 0 THEN original_quantity 
                             ELSE quantity 
                         END,
-                        quantity = 0,
-                        inventory_id = COALESCE(inventory_id, ?)
+                        quantity = 0
                     WHERE id = ? AND patient_id = ? AND branch_id = ?
                 ");
                 $stmt_cancel_log->execute([
                     $user_id,
-                    $inv_id,
                     $item_id,
                     $patient_id_post,
                     $user_branch_id
@@ -444,12 +347,8 @@ try {
 
                 $db->commit();
 
-                $stock_msg = $inventory_found
-                    ? "Stock returned: {$prev_stock} → {$new_stock} (+{$item_qty}) | inventory_id: {$inv_id}"
-                    : "⚠️ Stock NOT returned - inventory item not found";
-
-                $_SESSION['flash_message'] = "✅ Medication cancelled by {$user_full_name}: {$item_name} (Qty: {$item_qty}) | {$stock_msg}{$bill_info}";
-                $_SESSION['flash_type'] = $inventory_found ? 'success' : 'warning';
+                $_SESSION['flash_message'] = "✅ Medication cancelled by {$user_full_name}: {$item_name} (Qty: {$item_qty}){$bill_info}";
+                $_SESSION['flash_type'] = 'success';
 
                 header("Location: view_patient_prescriptions.php?patient_id={$patient_id_post}&visit_id={$visit_id_post}");
                 exit;
@@ -463,7 +362,7 @@ try {
     }
 
     // ================================================================
-    // SAVE AND CONFIRM HANDLER
+    // SAVE AND CONFIRM HANDLER (with QUANTITY EDIT support)
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'save_and_confirm') {
         $patient_id = isset($_POST['patient_id']) ? (int)$_POST['patient_id'] : 0;
@@ -479,14 +378,31 @@ try {
                 $duration = trim($item_data['duration'] ?? '');
                 $instructions = trim($item_data['instructions'] ?? '');
 
+                // ✅ V8.6: Quantity editable
+                $new_quantity = isset($item_data['quantity']) ? (int)$item_data['quantity'] : 0;
+                if ($new_quantity < 1) $new_quantity = 1;
+                if ($new_quantity > 99999) $new_quantity = 99999;
+
+                // Get current unit_price to recalculate total_price
+                $stmt_price = $db->prepare("
+                    SELECT unit_price FROM prescription_items 
+                    WHERE id = ? AND patient_id = ? AND branch_id = ?
+                ");
+                $stmt_price->execute([$item_id, $patient_id, $user_branch_id]);
+                $price_row = $stmt_price->fetch(PDO::FETCH_ASSOC);
+                $unit_price = (float)($price_row['unit_price'] ?? 0);
+                $new_total_price = $unit_price * $new_quantity;
+
                 $stmt = $db->prepare("
                     UPDATE prescription_items
-                    SET dosage = ?, frequency = ?, route = ?, duration = ?, instructions = ?
+                    SET dosage = ?, frequency = ?, route = ?, duration = ?, instructions = ?,
+                        quantity = ?, total_price = ?
                     WHERE id = ? AND patient_id = ? AND branch_id = ?
                       AND cancelled_at IS NULL
                 ");
                 $stmt->execute([
                     $dosage, $frequency, $route, $duration, $instructions,
+                    $new_quantity, $new_total_price,
                     $item_id, $patient_id, $user_branch_id
                 ]);
             }
@@ -495,45 +411,6 @@ try {
         if ($patient_id > 0 && $visit_id > 0) {
             try {
                 $db->beginTransaction();
-
-                // ✅ V8.4: Fix inventory_id where it's NULL
-                $stmt_fix_inv = $db->prepare("
-                    SELECT pi.id, pi.medication_name, pi.inventory_id
-                    FROM prescription_items pi
-                    JOIN prescriptions p ON pi.prescription_id = p.id
-                    WHERE pi.patient_id = ?
-                      AND p.branch_id = ?
-                      AND p.visit_id = ?
-                      AND pi.cancelled_at IS NULL
-                      AND pi.quantity > 0
-                      AND (pi.inventory_id IS NULL OR pi.inventory_id = 0)
-                ");
-                $stmt_fix_inv->execute([$patient_id, $user_branch_id, $visit_id]);
-                $items_to_fix = $stmt_fix_inv->fetchAll(PDO::FETCH_ASSOC);
-
-                foreach ($items_to_fix as $fix_item) {
-                    $clean_name = preg_replace('/\s*\(Batch:.*?\)\s*/i', '', $fix_item['medication_name']);
-                    $clean_name = trim($clean_name);
-
-                    $stmt_lookup = $db->prepare("
-                        SELECT id FROM medications_inventory
-                        WHERE branch_id = ? AND status = 'active'
-                          AND (LOWER(TRIM(medication_name)) = LOWER(TRIM(?))
-                               OR medication_name LIKE ?)
-                        ORDER BY quantity DESC
-                        LIMIT 1
-                    ");
-                    $stmt_lookup->execute([$user_branch_id, $clean_name, '%' . $clean_name . '%']);
-                    $found = $stmt_lookup->fetch(PDO::FETCH_ASSOC);
-
-                    if ($found) {
-                        $db->prepare("
-                            UPDATE prescription_items
-                            SET inventory_id = ?
-                            WHERE id = ?
-                        ")->execute([$found['id'], $fix_item['id']]);
-                    }
-                }
 
                 $stmt = $db->prepare("
                     SELECT id, prescription_number, visit_id, status
@@ -1050,6 +927,7 @@ include_once '../../components/pharmacy_sidebar.php';
             --success: #059669;
             --success-dark: #047857;
             --success-bg: #D1FAE5;
+            --success-light: #34D399;
             --danger: #DC2626;
             --danger-dark: #B91C1C;
             --danger-bg: #FEE2E2;
@@ -1072,7 +950,7 @@ include_once '../../components/pharmacy_sidebar.php';
             --shadow: 0 2px 8px rgba(0,0,0,0.06);
             --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
             --transition: all 0.3s ease;
-            --field-height: 34px;
+            --field-min-height: 38px;
         }
 
         [data-theme="dark"] {
@@ -1296,10 +1174,13 @@ include_once '../../components/pharmacy_sidebar.php';
             gap: 4px;
         }
 
+        /* ================================================================
+           ITEMS GRID
+           ================================================================ */
         .items-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-            gap: 16px;
+            grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+            gap: 18px;
             margin-bottom: 24px;
         }
 
@@ -1307,10 +1188,13 @@ include_once '../../components/pharmacy_sidebar.php';
             background: var(--bg-card);
             border-radius: var(--radius-lg);
             border: 2px solid var(--border-color);
-            padding: 18px 20px;
+            padding: 20px 22px;
             transition: var(--transition);
             box-shadow: var(--shadow);
             position: relative;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
         }
 
         .item-card:hover {
@@ -1380,13 +1264,20 @@ include_once '../../components/pharmacy_sidebar.php';
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
-            margin-bottom: 10px;
             flex-wrap: wrap;
-            gap: 4px;
+            gap: 8px;
             margin-left: 36px;
+            padding-bottom: 10px;
+            border-bottom: 2px dashed var(--border-color);
         }
 
-        .item-card .item-name { font-size: 1rem; font-weight: 700; color: var(--primary); }
+        .item-card .item-name {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--primary);
+            line-height: 1.3;
+            word-break: break-word;
+        }
 
         .item-card.cancelled .item-name {
             text-decoration: line-through;
@@ -1397,40 +1288,42 @@ include_once '../../components/pharmacy_sidebar.php';
             font-size: 0.6rem;
             color: var(--text-secondary);
             background: var(--gray-100);
-            padding: 2px 8px;
+            padding: 3px 10px;
             border-radius: 12px;
             font-family: 'JetBrains Mono', monospace;
+            white-space: nowrap;
         }
 
         .item-card .item-details {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 8px 12px;
-            margin: 8px 0;
+            gap: 12px;
         }
 
         .item-card .item-detail { display: flex; flex-direction: column; }
 
         .item-card .item-detail .label {
-            font-size: 0.55rem;
-            font-weight: 600;
+            font-size: 0.58rem;
+            font-weight: 700;
             color: var(--text-secondary);
             text-transform: uppercase;
-            letter-spacing: 0.04em;
-            margin-bottom: 2px;
+            letter-spacing: 0.05em;
+            margin-bottom: 4px;
         }
 
         .item-card .item-detail .value-display {
             font-size: 0.85rem;
-            font-weight: 500;
+            font-weight: 600;
             color: var(--text-primary);
-            padding: 4px 8px;
+            padding: 8px 12px;
             background: var(--bg-body);
             border-radius: var(--radius);
             border: 2px solid var(--border-color);
-            min-height: var(--field-height);
+            min-height: var(--field-min-height);
             display: flex;
             align-items: center;
+            word-break: break-word;
+            line-height: 1.4;
         }
 
         .item-card .item-detail .value-display.highlight {
@@ -1438,6 +1331,7 @@ include_once '../../components/pharmacy_sidebar.php';
             font-weight: 700;
             border-color: var(--primary-light);
             font-family: 'JetBrains Mono', monospace;
+            justify-content: center;
         }
 
         .item-card.cancelled .item-detail .value-display.highlight {
@@ -1445,21 +1339,107 @@ include_once '../../components/pharmacy_sidebar.php';
             border-color: var(--danger);
         }
 
+        /* ================================================================
+           QUANTITY INPUT - EDITABLE
+           ================================================================ */
+        .item-card .item-detail .qty-input-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            border: 2px solid var(--success);
+            border-radius: var(--radius);
+            background: var(--bg-body);
+            overflow: hidden;
+            min-height: var(--field-min-height);
+        }
+
+        .item-card .item-detail .qty-input-wrapper:focus-within {
+            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15);
+        }
+
+        .item-card .item-detail .qty-btn {
+            width: 34px;
+            height: var(--field-min-height);
+            border: none;
+            background: var(--success-bg);
+            color: var(--success);
+            font-weight: 800;
+            font-size: 1rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: var(--transition);
+            font-family: inherit;
+            flex-shrink: 0;
+        }
+
+        .item-card .item-detail .qty-btn:hover {
+            background: var(--success);
+            color: white;
+        }
+
+        .item-card .item-detail .qty-btn:active {
+            transform: scale(0.95);
+        }
+
+        .item-card .item-detail .qty-input {
+            flex: 1;
+            border: none;
+            background: transparent;
+            text-align: center;
+            font-size: 0.95rem;
+            font-weight: 800;
+            color: var(--success);
+            font-family: 'JetBrains Mono', monospace;
+            padding: 6px 4px;
+            min-width: 50px;
+            outline: none;
+            height: var(--field-min-height);
+            -moz-appearance: textfield;
+        }
+
+        .item-card .item-detail .qty-input::-webkit-outer-spin-button,
+        .item-card .item-detail .qty-input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
+        .item-card .item-detail .qty-input:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .item-card.cancelled .item-detail .qty-input-wrapper {
+            border-color: var(--danger);
+        }
+
+        .item-card.cancelled .item-detail .qty-btn {
+            background: var(--danger-bg);
+            color: var(--danger);
+        }
+
+        .item-card.cancelled .item-detail .qty-input {
+            color: var(--danger);
+            text-decoration: line-through;
+        }
+
+        /* ================================================================
+           FIELD WRAPPER
+           ================================================================ */
         .item-card .item-detail select,
-        .item-card .item-detail input,
-        .item-card .item-detail .field-wrapper {
+        .item-card .item-detail input {
             width: 100%;
-            min-height: var(--field-height);
-            padding: 4px 8px;
+            min-height: var(--field-min-height);
+            padding: 8px 10px;
             border: 2px solid var(--border-color);
             border-radius: var(--radius);
-            font-size: 0.75rem;
+            font-size: 0.78rem;
             background: var(--bg-body);
             color: var(--text-primary);
             transition: var(--transition);
             font-family: inherit;
-            height: var(--field-height);
-            box-sizing: border-box;
+            line-height: 1.4;
         }
 
         .item-card .item-detail select:focus,
@@ -1477,121 +1457,141 @@ include_once '../../components/pharmacy_sidebar.php';
 
         .item-card .item-detail .field-wrapper {
             display: flex;
-            gap: 4px;
-            padding: 2px;
-            background: var(--bg-card);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            height: var(--field-height);
+            flex-direction: column;
+            gap: 6px;
         }
 
         .item-card .item-detail .field-wrapper select {
-            flex: 2;
-            min-width: 60px;
-            border: none;
-            background: transparent;
-            height: 100%;
-            padding: 2px 4px;
-            font-size: 0.75rem;
-            color: var(--text-primary);
-            outline: none;
-        }
-
-        .item-card .item-detail .field-wrapper select:focus { box-shadow: none; }
-
-        .item-card .item-detail .field-wrapper input {
-            flex: 1;
-            min-width: 50px;
-            border: none;
-            border-left: 1px solid var(--border-color);
-            background: transparent;
-            height: 100%;
-            padding: 2px 6px;
-            font-size: 0.75rem;
-            color: var(--text-primary);
-            outline: none;
-        }
-
-        .item-card .item-instructions {
-            margin-top: 10px;
-            padding-top: 10px;
-            border-top: 2px solid var(--border-color);
-        }
-
-        .item-card .item-instructions label {
-            font-size: 0.6rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            display: block;
-            margin-bottom: 4px;
-        }
-
-        .item-card .item-instructions .instr-row {
-            display: flex;
-            gap: 4px;
-            flex-wrap: wrap;
-            height: var(--field-height);
-        }
-
-        .item-card .item-instructions .instr-row select {
-            flex: 2;
-            min-width: 100px;
-            height: var(--field-height);
-            padding: 4px 8px;
+            width: 100%;
+            min-height: var(--field-min-height);
+            padding: 8px 10px;
             border: 2px solid var(--border-color);
             border-radius: var(--radius);
-            font-size: 0.75rem;
+            font-size: 0.78rem;
             background: var(--bg-body);
             color: var(--text-primary);
             font-family: inherit;
+            line-height: 1.4;
         }
 
-        .item-card .item-instructions .instr-row select:focus {
+        .item-card .item-detail .field-wrapper input {
+            width: 100%;
+            min-height: var(--field-min-height);
+            padding: 8px 10px;
+            border: 2px solid var(--border-color);
+            border-radius: var(--radius);
+            font-size: 0.78rem;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            font-family: inherit;
+            line-height: 1.4;
+        }
+
+        .item-card .item-detail .field-wrapper select:focus,
+        .item-card .item-detail .field-wrapper input:focus {
             border-color: var(--primary);
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
             outline: none;
         }
 
+        /* ================================================================
+           INSTRUCTIONS
+           ================================================================ */
+        .item-card .item-instructions {
+            padding-top: 10px;
+            border-top: 2px dashed var(--border-color);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .item-card .item-instructions label {
+            font-size: 0.58rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .item-card .item-instructions .instr-row {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            width: 100%;
+        }
+
+        .item-card .item-instructions .instr-row select,
         .item-card .item-instructions .instr-row input {
-            flex: 3;
-            min-width: 120px;
-            height: var(--field-height);
-            padding: 4px 10px;
+            width: 100%;
+            min-height: var(--field-min-height);
+            padding: 8px 12px;
             border: 2px solid var(--border-color);
             border-radius: var(--radius);
-            font-size: 0.75rem;
+            font-size: 0.8rem;
             background: var(--bg-body);
             color: var(--text-primary);
             font-family: inherit;
+            line-height: 1.5;
+            word-break: break-word;
+            white-space: normal;
         }
 
+        .item-card .item-instructions .instr-row select:focus,
         .item-card .item-instructions .instr-row input:focus {
             border-color: var(--primary);
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
             outline: none;
         }
 
+        .item-card .item-instructions .instr-row input {
+            min-height: 60px;
+            resize: vertical;
+        }
+
+        /* ================================================================
+           ITEM PRICE - GREEN BACKGROUND
+           ================================================================ */
         .item-card .item-price {
-            margin-top: 8px;
             text-align: right;
             font-weight: 700;
             font-size: 0.95rem;
-            color: var(--success);
+            color: white;
             font-family: 'JetBrains Mono', monospace;
-        }
-
-        .item-card.cancelled .item-price {
-            text-decoration: line-through;
-            color: var(--danger);
+            padding: 10px 14px;
+            border-radius: var(--radius);
+            background: linear-gradient(135deg, var(--success), var(--success-dark));
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 6px;
+            flex-wrap: wrap;
         }
 
         .item-card .item-price .label {
-            font-weight: 400;
-            color: var(--text-secondary);
+            font-weight: 500;
+            color: rgba(255,255,255,0.85);
             font-size: 0.7rem;
             font-family: 'Inter', sans-serif;
+        }
+
+        .item-card .item-price .amount {
+            font-weight: 800;
+            font-size: 1.05rem;
+            color: white;
+        }
+
+        .item-card.cancelled .item-price {
+            background: linear-gradient(135deg, var(--danger), var(--danger-dark));
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25);
+        }
+
+        .item-card.cancelled .item-price .label,
+        .item-card.cancelled .item-price .amount {
+            color: white;
         }
 
         .item-card .item-badge {
@@ -1599,7 +1599,7 @@ include_once '../../components/pharmacy_sidebar.php';
             top: 14px;
             right: 14px;
             font-size: 0.55rem;
-            font-weight: 600;
+            font-weight: 700;
             padding: 2px 10px;
             border-radius: 12px;
             background: var(--primary-bg);
@@ -1629,13 +1629,13 @@ include_once '../../components/pharmacy_sidebar.php';
             display: inline-flex;
             align-items: center;
             gap: 5px;
-            padding: 4px 10px;
+            padding: 6px 12px;
             border-radius: 8px;
-            font-size: 0.6rem;
+            font-size: 0.65rem;
             font-weight: 600;
             font-family: 'Inter', sans-serif;
-            margin-top: 8px;
             flex-wrap: wrap;
+            line-height: 1.4;
         }
 
         .audit-badge.confirmed-audit {
@@ -1658,20 +1658,18 @@ include_once '../../components/pharmacy_sidebar.php';
         }
 
         .audit-badge .audit-time {
-            font-size: 0.55rem;
+            font-size: 0.58rem;
             opacity: 0.8;
-            margin-left: 4px;
         }
 
-        .audit-badge .qty-returned-tag {
+        .audit-badge .qty-cancelled-tag {
             background: var(--danger);
             color: white;
-            padding: 2px 8px;
+            padding: 3px 10px;
             border-radius: 8px;
-            font-size: 0.58rem;
+            font-size: 0.6rem;
             font-weight: 800;
             font-family: 'JetBrains Mono', monospace;
-            margin-left: 4px;
             letter-spacing: 0.02em;
         }
 
@@ -1733,6 +1731,7 @@ include_once '../../components/pharmacy_sidebar.php';
             align-items: center;
             gap: 8px;
             margin-bottom: 16px;
+            flex-wrap: wrap;
         }
 
         .discount-section .discount-title i { color: var(--warning); }
@@ -2126,6 +2125,7 @@ include_once '../../components/pharmacy_sidebar.php';
             align-items: center;
             padding: 6px 0;
             font-size: 0.8rem;
+            gap: 8px;
         }
 
         .cancel-modal-info-row + .cancel-modal-info-row {
@@ -2138,6 +2138,7 @@ include_once '../../components/pharmacy_sidebar.php';
             display: flex;
             align-items: center;
             gap: 6px;
+            flex-shrink: 0;
         }
 
         .cancel-modal-info-row .info-label i {
@@ -2152,9 +2153,7 @@ include_once '../../components/pharmacy_sidebar.php';
             font-family: 'JetBrains Mono', monospace;
             text-align: right;
             max-width: 60%;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            word-break: break-word;
         }
 
         .cancel-modal-info-row .info-value.med-name {
@@ -2378,7 +2377,7 @@ include_once '../../components/pharmacy_sidebar.php';
 
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 14px; }
-            .items-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+            .items-grid { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
         }
 
         @media (max-width: 768px) {
@@ -2414,7 +2413,7 @@ include_once '../../components/pharmacy_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-prescription"></i>
                 Prescriptions
-                <span style="background:rgba(255,255,255,0.2);color:white;padding:2px 10px;border-radius:20px;font-size:0.55rem;font-weight:600;text-transform:uppercase;">PHARMACY V8.4</span>
+                <span style="background:rgba(255,255,255,0.2);color:white;padding:2px 10px;border-radius:20px;font-size:0.55rem;font-weight:600;text-transform:uppercase;">PHARMACY V8.6</span>
                 <?php if ($visit_info): ?>
                     <span class="visit-badge">
                         <i class="fas fa-calendar-check"></i>
@@ -2447,7 +2446,7 @@ include_once '../../components/pharmacy_sidebar.php';
     </div>
 
     <?php if ($message): ?>
-        <div class="p-3 rounded-lg mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : ($message_type === 'warning' ? 'bg-yellow-100 text-yellow-700 border border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-300 dark:border-yellow-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800') ?>" style="max-width:1200px;margin:0 auto 12px;font-size:0.8rem;">
+        <div class="p-3 rounded-lg mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : ($message_type === 'warning' ? 'bg-yellow-100 text-yellow-700 border border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-300 dark:border-yellow-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800') ?>" style="max-width:1400px;margin:0 auto 12px;font-size:0.8rem;">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'warning' ? 'fa-exclamation-triangle' : 'fa-exclamation-circle') ?> mr-2"></i>
             <?= $message ?>
         </div>
@@ -2538,14 +2537,6 @@ include_once '../../components/pharmacy_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- INFO BANNER -->
-    <div style="max-width:1200px;margin:0 auto 16px;padding:10px 16px;background:rgba(220,38,38,0.08);border-radius:var(--radius);font-size:0.75rem;color:var(--danger);border:1px dashed var(--danger);display:flex;align-items:center;gap:10px;">
-        <i class="fas fa-info-circle" style="font-size:1rem;"></i>
-        <div>
-            <strong>CANCEL FEATURE:</strong> Click the red button <i class="fas fa-times-circle"></i> on each medication to cancel it. Stock will be returned to inventory and the bill will be automatically reduced. <strong>The cancel action will be logged with your name and timestamp.</strong>
-        </div>
-    </div>
-
     <!-- FORM -->
     <form method="POST" action="" id="prescriptionForm">
         <input type="hidden" name="action" value="save_and_confirm">
@@ -2587,7 +2578,7 @@ include_once '../../components/pharmacy_sidebar.php';
                     }
                 }
             ?>
-                <div class="item-card <?= $card_class ?>" data-item-id="<?= $item['id'] ?>" data-status="<?= $is_cancelled ? 'cancelled' : $rx_status ?>">
+                <div class="item-card <?= $card_class ?>" data-item-id="<?= $item['id'] ?>" data-unit-price="<?= (float)($item['unit_price'] ?? 0) ?>" data-status="<?= $is_cancelled ? 'cancelled' : $rx_status ?>">
                     <div class="item-badge">#<?= $index + 1 ?></div>
 
                     <div class="status-badge <?= $is_cancelled ? 'cancelled' : $rx_status ?>">
@@ -2602,7 +2593,7 @@ include_once '../../components/pharmacy_sidebar.php';
                         <button type="button"
                                 class="cancel-item-btn"
                                 onclick="openCancelModal(<?= $item['id'] ?>, '<?= htmlspecialchars(addslashes($item['medication_name'])) ?>', <?= $item['quantity'] ?>, <?= $item['total_price'] ?>, '<?= $rx_status ?>')"
-                                title="Cancel this medication (Stock will be returned)">
+                                title="Cancel this medication">
                             <i class="fas fa-times"></i>
                         </button>
                     <?php endif; ?>
@@ -2619,8 +2610,8 @@ include_once '../../components/pharmacy_sidebar.php';
                             <span class="audit-name"><?= htmlspecialchars($item['cancelled_by_name']) ?></span>
                             <span class="audit-time">• <?= formatDate($item['cancelled_at']) ?></span>
                             <?php if ($display_cancelled_qty > 0): ?>
-                                <span class="qty-returned-tag">
-                                    <i class="fas fa-undo"></i> × <?= number_format($display_cancelled_qty) ?> qty returned
+                                <span class="qty-cancelled-tag">
+                                    <i class="fas fa-ban"></i> × <?= number_format($display_cancelled_qty) ?> cancelled
                                 </span>
                             <?php endif; ?>
                         </div>
@@ -2638,7 +2629,7 @@ include_once '../../components/pharmacy_sidebar.php';
                             <span class="label">💊 Dosage</span>
                             <div class="field-wrapper">
                                 <select name="items[<?= $item['id'] ?>][dosage]" class="dosage-select" data-item-id="<?= $item['id'] ?>" onchange="updateLiveData()" <?= $is_cancelled ? 'disabled' : '' ?>>
-                                    <option value="">--</option>
+                                    <option value="">-- Select --</option>
                                     <?php foreach ($dosage_options as $dos): ?>
                                         <option value="<?= htmlspecialchars($dos) ?>" <?= $item['dosage'] == $dos ? 'selected' : '' ?>>
                                             <?= htmlspecialchars($dos) ?> mg
@@ -2647,7 +2638,7 @@ include_once '../../components/pharmacy_sidebar.php';
                                 </select>
                                 <input type="text" class="dosage-manual" data-item-id="<?= $item['id'] ?>"
                                        value="<?= htmlspecialchars($item['dosage'] ?? '') ?>"
-                                       placeholder="Manual" oninput="updateLiveData()" <?= $is_cancelled ? 'disabled' : '' ?>>
+                                       placeholder="Manual entry..." oninput="updateLiveData()" <?= $is_cancelled ? 'disabled' : '' ?>>
                             </div>
                         </div>
 
@@ -2655,7 +2646,7 @@ include_once '../../components/pharmacy_sidebar.php';
                             <span class="label">🕐 Frequency</span>
                             <div class="field-wrapper">
                                 <select name="items[<?= $item['id'] ?>][frequency]" class="frequency-select" data-item-id="<?= $item['id'] ?>" onchange="updateLiveData()" <?= $is_cancelled ? 'disabled' : '' ?>>
-                                    <option value="">--</option>
+                                    <option value="">-- Select --</option>
                                     <?php foreach ($frequency_options as $freq): ?>
                                         <option value="<?= htmlspecialchars($freq) ?>" <?= $item['frequency'] == $freq ? 'selected' : '' ?>>
                                             <?= htmlspecialchars($freq) ?>
@@ -2664,23 +2655,32 @@ include_once '../../components/pharmacy_sidebar.php';
                                 </select>
                                 <input type="text" class="frequency-manual" data-item-id="<?= $item['id'] ?>"
                                        value="<?= htmlspecialchars($item['frequency'] ?? '') ?>"
-                                       placeholder="Manual" oninput="updateLiveData()" <?= $is_cancelled ? 'disabled' : '' ?>>
+                                       placeholder="Manual entry..." oninput="updateLiveData()" <?= $is_cancelled ? 'disabled' : '' ?>>
                             </div>
                         </div>
 
+                        <!-- ✅ V8.6: QUANTITY EDITABLE -->
                         <div class="item-detail">
-                            <span class="label">📦 Quantity</span>
-                            <div class="value-display highlight qty-display" data-item-id="<?= $item['id'] ?>">
-                                <?php if ($is_cancelled && $display_cancelled_qty > 0): ?>
-                                    <span style="text-decoration: line-through; color: var(--danger); font-weight: 800; font-size: 1rem;">
-                                        <?= $display_cancelled_qty ?>
-                                    </span>
-                                    <span style="font-size:0.55rem; color: var(--danger); margin-left: 6px; font-weight: 800; letter-spacing: 0.04em;">
-                                        CANCELLED
-                                    </span>
-                                <?php else: ?>
-                                    <?= $item['quantity'] ?? 0 ?>
-                                <?php endif; ?>
+                            <span class="label">📦 Quantity (Editable)</span>
+                            <div class="qty-input-wrapper">
+                                <button type="button" class="qty-btn" onclick="changeQty(<?= $item['id'] ?>, -1)" <?= $is_cancelled ? 'disabled' : '' ?>>
+                                    <i class="fas fa-minus"></i>
+                                </button>
+                                <input type="number"
+                                       name="items[<?= $item['id'] ?>][quantity]"
+                                       id="qty_input_<?= $item['id'] ?>"
+                                       class="qty-input"
+                                       data-item-id="<?= $item['id'] ?>"
+                                       value="<?= $is_cancelled ? $display_cancelled_qty : $item['quantity'] ?>"
+                                       min="1"
+                                       max="99999"
+                                       step="1"
+                                       oninput="onQtyChange(<?= $item['id'] ?>)"
+                                       onchange="onQtyChange(<?= $item['id'] ?>)"
+                                       <?= $is_cancelled ? 'disabled' : '' ?>>
+                                <button type="button" class="qty-btn" onclick="changeQty(<?= $item['id'] ?>, 1)" <?= $is_cancelled ? 'disabled' : '' ?>>
+                                    <i class="fas fa-plus"></i>
+                                </button>
                             </div>
                         </div>
 
@@ -2688,7 +2688,7 @@ include_once '../../components/pharmacy_sidebar.php';
                             <span class="label">📅 Duration</span>
                             <div class="field-wrapper">
                                 <select class="duration-select" data-item-id="<?= $item['id'] ?>" onchange="updateLiveData()" <?= $is_cancelled ? 'disabled' : '' ?>>
-                                    <option value="">--</option>
+                                    <option value="">-- Select --</option>
                                     <option value="1 day">1 day</option>
                                     <option value="2 days">2 days</option>
                                     <option value="3 days">3 days</option>
@@ -2705,7 +2705,7 @@ include_once '../../components/pharmacy_sidebar.php';
                                 </select>
                                 <input type="text" name="items[<?= $item['id'] ?>][duration]" class="duration-manual" data-item-id="<?= $item['id'] ?>"
                                        value="<?= htmlspecialchars($item['duration'] ?? '') ?>"
-                                       placeholder="Manual" oninput="updateLiveData()" <?= $is_cancelled ? 'disabled' : '' ?>>
+                                       placeholder="Manual entry..." oninput="updateLiveData()" <?= $is_cancelled ? 'disabled' : '' ?>>
                             </div>
                         </div>
 
@@ -2713,7 +2713,7 @@ include_once '../../components/pharmacy_sidebar.php';
                             <span class="label">📏 Route</span>
                             <div class="field-wrapper">
                                 <select name="items[<?= $item['id'] ?>][route]" class="route-select" data-item-id="<?= $item['id'] ?>" onchange="updateLiveData()" <?= $is_cancelled ? 'disabled' : '' ?>>
-                                    <option value="">--</option>
+                                    <option value="">-- Select --</option>
                                     <?php foreach ($route_options as $route): ?>
                                         <option value="<?= htmlspecialchars($route) ?>" <?= $item['route'] == $route ? 'selected' : '' ?>>
                                             <?= htmlspecialchars($route) ?>
@@ -2722,7 +2722,7 @@ include_once '../../components/pharmacy_sidebar.php';
                                 </select>
                                 <input type="text" class="route-manual" data-item-id="<?= $item['id'] ?>"
                                        value="<?= htmlspecialchars($item['route'] ?? '') ?>"
-                                       placeholder="Manual" oninput="updateLiveData()" <?= $is_cancelled ? 'disabled' : '' ?>>
+                                       placeholder="Manual entry..." oninput="updateLiveData()" <?= $is_cancelled ? 'disabled' : '' ?>>
                             </div>
                         </div>
                     </div>
@@ -2731,38 +2731,39 @@ include_once '../../components/pharmacy_sidebar.php';
                         <label><i class="fas fa-edit"></i> Instructions</label>
                         <div class="instr-row">
                             <select id="instr_select_<?= $item['id'] ?>" class="instr-select" data-item-id="<?= $item['id'] ?>" onchange="updateInstructionInput(<?= $item['id'] ?>); updateLiveData();" <?= $is_cancelled ? 'disabled' : '' ?>>
-                                <option value="">-- Select --</option>
+                                <option value="">-- Select Preset --</option>
                                 <?php foreach ($instruction_options as $opt): ?>
                                     <option value="<?= htmlspecialchars($opt) ?>" <?= $item['instructions'] == $opt ? 'selected' : '' ?>>
                                         <?= htmlspecialchars($opt) ?>
                                     </option>
                                 <?php endforeach; ?>
-                                <option value="__custom__">✏️ Custom...</option>
+                                <option value="__custom__">✏️ Custom instruction...</option>
                             </select>
                             <input type="text" name="items[<?= $item['id'] ?>][instructions]"
                                    id="instr_input_<?= $item['id'] ?>"
                                    class="instr-input"
                                    data-item-id="<?= $item['id'] ?>"
                                    value="<?= htmlspecialchars($item['instructions'] ?? '') ?>"
-                                   placeholder="Custom instructions..."
+                                   placeholder="Type custom instructions here (full text will be preserved)..."
                                    oninput="updateLiveData()" <?= $is_cancelled ? 'disabled' : '' ?>>
                         </div>
                     </div>
 
+                    <!-- ✅ V8.6: Total Price with GREEN background -->
                     <div class="item-price" id="itemPrice_<?= $item['id'] ?>">
                         <?php if ($is_cancelled && $display_cancelled_amount > 0): ?>
-                            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
-                                <span class="label" style="color: var(--danger); font-weight: 700;">❌ Cancelled Amount:</span>
-                                <span style="color: var(--danger); text-decoration: line-through; font-weight: 800; font-size: 1.05rem;">
-                                    <?= $currency ?> <?= formatMoney($display_cancelled_amount) ?>
-                                </span>
-                                <span style="font-size:0.6rem; color: var(--danger); font-weight: 700; background: rgba(220,38,38,0.1); padding: 2px 8px; border-radius: 6px;">
-                                    <?= number_format($display_cancelled_qty) ?> × <?= $currency ?> <?= formatMoney((float)($item['unit_price'] ?? 0)) ?>
-                                </span>
-                            </div>
+                            <span class="label">❌ Cancelled Amount:</span>
+                            <span class="amount" style="text-decoration: line-through;">
+                                <?= $currency ?> <?= formatMoney($display_cancelled_amount) ?>
+                            </span>
+                            <span style="font-size:0.6rem; background: rgba(255,255,255,0.2); padding: 2px 8px; border-radius: 6px; font-weight: 700;">
+                                <?= number_format($display_cancelled_qty) ?> × <?= $currency ?> <?= formatMoney((float)($item['unit_price'] ?? 0)) ?>
+                            </span>
                         <?php else: ?>
-                            <span class="label">Total Price (GROSS): </span>
-                            <?= $currency ?> <?= formatMoney($item['total_price'] ?? 0) ?>
+                            <span class="label">💰 Total Price (GROSS):</span>
+                            <span class="amount" id="item_total_<?= $item['id'] ?>">
+                                <?= $currency ?> <?= formatMoney($item['total_price'] ?? 0) ?>
+                            </span>
                         <?php endif; ?>
                     </div>
                 </div>
@@ -2890,7 +2891,7 @@ include_once '../../components/pharmacy_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Prescriptions V8.4 (Stock Movements Fix)
+            Prescriptions V8.6 (Editable Quantity + Green Total)
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -2934,7 +2935,7 @@ include_once '../../components/pharmacy_sidebar.php';
             <div class="cancel-modal-warning">
                 <i class="fas fa-info-circle"></i>
                 <div class="cancel-modal-warning-text">
-                    <strong>Stock will be returned</strong> to inventory and the <strong>bill will be reduced</strong> automatically.
+                    This item will be <strong>removed from the bill</strong> and marked as <strong>CANCELLED</strong>.
                     <br>
                     This action will be logged as <strong>Cancelled by <?= htmlspecialchars($user_full_name) ?></strong>.
                 </div>
@@ -3024,6 +3025,7 @@ include_once '../../components/pharmacy_sidebar.php';
     var existingCashierPremium  = <?= (float)$existing_cashier_premium ?>;
     var existingPharmacyDiscount = <?= (float)$existing_pharmacy_discount ?>;
     var currentUserName = '<?= htmlspecialchars(addslashes($user_full_name)) ?>';
+    var currencySymbol = '<?= $currency ?>';
 
     var pendingCancelItem = {
         id: null,
@@ -3032,6 +3034,47 @@ include_once '../../components/pharmacy_sidebar.php';
         totalPrice: 0,
         status: ''
     };
+
+    // ================================================================
+    // ✅ V8.6: QUANTITY CHANGE HANDLERS
+    // ================================================================
+    function changeQty(itemId, delta) {
+        var input = document.getElementById('qty_input_' + itemId);
+        if (!input || input.disabled) return;
+
+        var current = parseInt(input.value) || 1;
+        var newVal = current + delta;
+        if (newVal < 1) newVal = 1;
+        if (newVal > 99999) newVal = 99999;
+
+        input.value = newVal;
+        onQtyChange(itemId);
+    }
+
+    function onQtyChange(itemId) {
+        var input = document.getElementById('qty_input_' + itemId);
+        if (!input) return;
+
+        var qty = parseInt(input.value) || 0;
+        if (qty < 1) { qty = 1; input.value = 1; }
+        if (qty > 99999) { qty = 99999; input.value = 99999; }
+
+        // Get unit_price from card
+        var card = document.querySelector('.item-card[data-item-id="' + itemId + '"]');
+        if (!card) return;
+
+        var unitPrice = parseFloat(card.getAttribute('data-unit-price')) || 0;
+        var totalPrice = qty * unitPrice;
+
+        // Update the item total display
+        var totalEl = document.getElementById('item_total_' + itemId);
+        if (totalEl) {
+            totalEl.textContent = currencySymbol + ' ' + formatMoney(totalPrice);
+        }
+
+        // Recalculate overall
+        updateLiveData();
+    }
 
     function openCancelModal(itemId, medicationName, quantity, totalPrice, status) {
         pendingCancelItem.id = itemId;
@@ -3135,22 +3178,29 @@ include_once '../../components/pharmacy_sidebar.php';
         });
     }
 
+    // ================================================================
+    // ✅ V8.6: Update live data with editable quantity
+    // ================================================================
     function updateLiveData() {
         var totalQty = 0, totalAmount = 0, totalItems = 0;
+
         document.querySelectorAll('.item-card:not(.cancelled)').forEach(function(card) {
-            var qtyEl = card.querySelector('.qty-display');
-            if (qtyEl) { totalQty += parseInt(qtyEl.textContent) || 0; totalItems++; }
-            var priceEl = card.querySelector('.item-price');
-            if (priceEl) {
-                var amount = parseInt(priceEl.textContent.replace(/[^0-9]/g, '')) || 0;
-                totalAmount += amount;
-            }
+            var itemId = card.getAttribute('data-item-id');
+            var unitPrice = parseFloat(card.getAttribute('data-unit-price')) || 0;
+
+            var qtyInput = document.getElementById('qty_input_' + itemId);
+            var qty = qtyInput ? (parseInt(qtyInput.value) || 0) : 0;
+            if (qty < 1) qty = 1;
+
+            totalQty += qty;
+            totalAmount += (qty * unitPrice);
+            totalItems++;
         });
 
         document.getElementById('totalQty').textContent = totalQty;
         document.getElementById('totalItems').textContent = totalItems;
-        document.getElementById('totalAmountDisplay').textContent = '<?= $currency ?> ' + formatMoney(totalAmount);
-        document.getElementById('subtotalDisplay').textContent = '<?= $currency ?> ' + formatMoney(totalAmount);
+        document.getElementById('totalAmountDisplay').textContent = currencySymbol + ' ' + formatMoney(totalAmount);
+        document.getElementById('subtotalDisplay').textContent = currencySymbol + ' ' + formatMoney(totalAmount);
         document.getElementById('totalAmountHidden').value = totalAmount;
 
         calculateFinal();
@@ -3172,10 +3222,10 @@ include_once '../../components/pharmacy_sidebar.php';
         document.getElementById('premiumAmountHidden').value = premiumValue;
         document.getElementById('discountAmountHidden').value = discountValue;
 
-        document.getElementById('subtotalDisplay').textContent = '<?= $currency ?> ' + formatMoney(totalAmount);
-        document.getElementById('premiumDisplay').textContent = '<?= $currency ?> ' + formatMoney(premiumValue);
-        document.getElementById('discountDisplay').textContent = '<?= $currency ?> ' + formatMoney(discountValue);
-        document.getElementById('finalAmount').textContent = '<?= $currency ?> ' + formatMoney(finalAmount);
+        document.getElementById('subtotalDisplay').textContent = currencySymbol + ' ' + formatMoney(totalAmount);
+        document.getElementById('premiumDisplay').textContent = currencySymbol + ' ' + formatMoney(premiumValue);
+        document.getElementById('discountDisplay').textContent = currencySymbol + ' ' + formatMoney(discountValue);
+        document.getElementById('finalAmount').textContent = currencySymbol + ' ' + formatMoney(finalAmount);
 
         document.getElementById('existingPremiumDisplay').textContent = formatMoney(existingPharmacyPremium);
         document.getElementById('newPremiumDisplay').textContent = formatMoney(premiumValue);
@@ -3200,11 +3250,11 @@ include_once '../../components/pharmacy_sidebar.php';
         message += '📊 Active Quantity: ' + totalQty + '\n';
         message += '💰 Subtotal (GROSS): ' + subtotal + '\n';
         if (premiumValue > 0) {
-            message += '⭐ New Pharmacy Premium: <?= $currency ?> ' + formatMoney(premiumValue) + '\n';
-            message += '📊 Total Pharmacy Premium: <?= $currency ?> ' + formatMoney(totalPharmacyPremium) + '\n';
+            message += '⭐ New Pharmacy Premium: ' + currencySymbol + ' ' + formatMoney(premiumValue) + '\n';
+            message += '📊 Total Pharmacy Premium: ' + currencySymbol + ' ' + formatMoney(totalPharmacyPremium) + '\n';
         }
         if (discountValue > 0) {
-            message += '🎯 Pharmacy Discount: <?= $currency ?> ' + formatMoney(discountValue) + '\n';
+            message += '🎯 Pharmacy Discount: ' + currencySymbol + ' ' + formatMoney(discountValue) + '\n';
         }
         message += '✅ Final Amount: ' + finalAmount + '\n\n';
         message += '📝 This will be logged as: Confirmed by ' + currentUserName + '\n';
@@ -3305,16 +3355,21 @@ include_once '../../components/pharmacy_sidebar.php';
         var cancelledItemsHtml = '';
 
         document.querySelectorAll('.item-card').forEach(function(card) {
+            var itemId = card.getAttribute('data-item-id');
+            var unitPrice = parseFloat(card.getAttribute('data-unit-price')) || 0;
+
             var medName = card.querySelector('.item-name')?.textContent || 'N/A';
             var prescription = card.querySelector('.item-prescription')?.textContent || 'N/A';
-            var statusBadge = card.querySelector('.status-badge')?.textContent.trim() || 'Pending';
             var dosage = card.querySelector('.dosage-select')?.value || card.querySelector('.dosage-manual')?.value || 'N/A';
             var frequency = card.querySelector('.frequency-select')?.value || card.querySelector('.frequency-manual')?.value || 'N/A';
-            var quantity = parseInt(card.querySelector('.qty-display')?.textContent) || 0;
+
+            var qtyInput = document.getElementById('qty_input_' + itemId);
+            var quantity = qtyInput ? (parseInt(qtyInput.value) || 0) : 0;
+
             var duration = card.querySelector('.duration-select')?.value || card.querySelector('.duration-manual')?.value || 'N/A';
             var route = card.querySelector('.route-select')?.value || card.querySelector('.route-manual')?.value || 'N/A';
             var instructions = card.querySelector('.instr-input')?.value || 'No instructions';
-            var price = parseInt(card.querySelector('.item-price')?.textContent?.replace(/[^0-9]/g, '')) || 0;
+            var price = quantity * unitPrice;
             var isCancelled = card.classList.contains('cancelled');
             var auditBadge = card.querySelector('.audit-badge');
             var auditText = auditBadge ? auditBadge.textContent.trim() : '';
@@ -3323,12 +3378,12 @@ include_once '../../components/pharmacy_sidebar.php';
                 cancelledQty += quantity;
                 cancelledAmount += price;
                 cancelledCount++;
-                cancelledItemsHtml += `<div style="border:1px solid #FCA5A5;border-radius:8px;padding:10px 14px;margin-bottom:8px;background:#FEF2F2;page-break-inside:avoid;"><div style="display:flex;justify-content:space-between;"><strong style="color:#DC2626;text-decoration:line-through;">${medName}</strong><span style="color:#DC2626;">❌ CANCELLED</span></div><div style="font-size:12px;color:#991B1B;">Qty: ${quantity} = <strong>-<?= $currency ?> ${formatMoney(price)}</strong></div>${auditText ? `<div style="font-size:11px;color:#B91C1C;margin-top:4px;">${auditText}</div>` : ''}</div>`;
+                cancelledItemsHtml += `<div style="border:1px solid #FCA5A5;border-radius:8px;padding:10px 14px;margin-bottom:8px;background:#FEF2F2;page-break-inside:avoid;"><div style="display:flex;justify-content:space-between;"><strong style="color:#DC2626;text-decoration:line-through;">${medName}</strong><span style="color:#DC2626;">❌ CANCELLED</span></div><div style="font-size:12px;color:#991B1B;">Qty: ${quantity} = <strong>-${currencySymbol} ${formatMoney(price)}</strong></div>${auditText ? `<div style="font-size:11px;color:#B91C1C;margin-top:4px;">${auditText}</div>` : ''}</div>`;
             } else {
                 totalQty += quantity;
                 totalAmount += price;
                 totalItems++;
-                itemsHtml += `<div style="border:1px solid #E2E8F0;border-radius:8px;padding:12px 16px;margin-bottom:10px;page-break-inside:avoid;"><div style="display:flex;justify-content:space-between;"><strong style="color:#0B5ED7;font-size:16px;">${medName}</strong><span style="font-family:monospace;font-size:12px;color:#64748B;">${prescription}</span></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:14px;margin-top:6px;"><div><strong>Dosage:</strong> ${dosage}</div><div><strong>Frequency:</strong> ${frequency}</div><div><strong>Quantity:</strong> ${quantity}</div><div><strong>Duration:</strong> ${duration}</div><div style="grid-column:span 2;"><strong>Route:</strong> ${route}</div><div style="grid-column:span 2;"><strong>Instructions:</strong> ${instructions}</div>${auditText ? `<div style="grid-column:span 2;color:#0B5ED7;font-size:11px;">${auditText}</div>` : ''}<div style="grid-column:span 2;text-align:right;font-weight:700;color:#059669;">Total: <?= $currency ?> ${formatMoney(price)}</div></div></div>`;
+                itemsHtml += `<div style="border:1px solid #E2E8F0;border-radius:8px;padding:12px 16px;margin-bottom:10px;page-break-inside:avoid;"><div style="display:flex;justify-content:space-between;"><strong style="color:#0B5ED7;font-size:16px;">${medName}</strong><span style="font-family:monospace;font-size:12px;color:#64748B;">${prescription}</span></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:14px;margin-top:6px;"><div><strong>Dosage:</strong> ${dosage}</div><div><strong>Frequency:</strong> ${frequency}</div><div><strong>Quantity:</strong> ${quantity}</div><div><strong>Duration:</strong> ${duration}</div><div style="grid-column:span 2;"><strong>Route:</strong> ${route}</div><div style="grid-column:span 2;"><strong>Instructions:</strong> ${instructions}</div>${auditText ? `<div style="grid-column:span 2;color:#0B5ED7;font-size:11px;">${auditText}</div>` : ''}<div style="grid-column:span 2;text-align:right;font-weight:700;color:#059669;">Total: ${currencySymbol} ${formatMoney(price)}</div></div></div>`;
             }
         });
 
@@ -3336,7 +3391,7 @@ include_once '../../components/pharmacy_sidebar.php';
         var discountValue = unformatMoney(document.getElementById('discountAmount')?.value);
         var finalAmount = totalAmount + premiumValue - discountValue;
 
-        var html = `<div style="font-family:'Inter',sans-serif;padding:20px;"><div style="text-align:center;padding-bottom:16px;border-bottom:3px solid #0B5ED7;margin-bottom:20px;"><div style="font-size:1.6rem;font-weight:800;color:#0B5ED7;">BRAICK DISPENSARY</div><div style="font-size:0.8rem;color:#64748B;">Tunajali Afya Yako</div><div style="font-size:0.9rem;font-weight:600;color:#0B5ED7;margin-top:6px;">Prescriptions (With Cancelled Quantities)</div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;padding:12px 16px;background:#F8FAFC;border-radius:8px;margin-bottom:16px;"><div><strong>Patient:</strong> <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></div><div><strong>ID:</strong> <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></div><div><strong>Visit #:</strong> <?= htmlspecialchars($visit_info['visit_number'] ?? 'N/A') ?></div><div><strong>Date:</strong> <?= date('d M Y') ?></div></div><div style="margin-bottom:16px;"><div style="font-size:1rem;font-weight:700;color:#0B5ED7;border-bottom:2px solid #6EA8FE;padding-bottom:4px;margin-bottom:10px;">✅ Active Items (${totalItems})</div>${itemsHtml}</div>${cancelledCount > 0 ? `<div style="margin-bottom:16px;"><div style="font-size:1rem;font-weight:700;color:#DC2626;border-bottom:2px solid #FCA5A5;padding-bottom:4px;margin-bottom:10px;">❌ Cancelled Items (${cancelledCount})</div>${cancelledItemsHtml}</div>` : ''}<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin:16px 0;padding:12px 16px;background:#E8F0FE;border-radius:8px;"><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Active Items</div><div style="font-weight:700;color:#0B5ED7;font-family:monospace;">${totalItems}</div></div><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Active Qty</div><div style="font-weight:700;color:#D97706;font-family:monospace;">${totalQty}</div></div><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Cancelled Qty</div><div style="font-weight:700;color:#DC2626;font-family:monospace;">${cancelledQty}</div></div><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Final Amount</div><div style="font-weight:700;color:#059669;font-family:monospace;"><?= $currency ?> ${formatMoney(finalAmount)}</div></div></div><div style="margin-top:20px;padding-top:12px;border-top:2px solid #E2E8F0;text-align:center;font-size:12px;color:#94A3B8;">Braick Dispensary • Generated on <?= date('F d, Y h:i:s A') ?></div></div>`;
+        var html = `<div style="font-family:'Inter',sans-serif;padding:20px;"><div style="text-align:center;padding-bottom:16px;border-bottom:3px solid #0B5ED7;margin-bottom:20px;"><div style="font-size:1.6rem;font-weight:800;color:#0B5ED7;">BRAICK DISPENSARY</div><div style="font-size:0.8rem;color:#64748B;">Tunajali Afya Yako</div><div style="font-size:0.9rem;font-weight:600;color:#0B5ED7;margin-top:6px;">Prescriptions (With Cancelled Items)</div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;padding:12px 16px;background:#F8FAFC;border-radius:8px;margin-bottom:16px;"><div><strong>Patient:</strong> <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></div><div><strong>ID:</strong> <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></div><div><strong>Visit #:</strong> <?= htmlspecialchars($visit_info['visit_number'] ?? 'N/A') ?></div><div><strong>Date:</strong> <?= date('d M Y') ?></div></div><div style="margin-bottom:16px;"><div style="font-size:1rem;font-weight:700;color:#0B5ED7;border-bottom:2px solid #6EA8FE;padding-bottom:4px;margin-bottom:10px;">✅ Active Items (${totalItems})</div>${itemsHtml}</div>${cancelledCount > 0 ? `<div style="margin-bottom:16px;"><div style="font-size:1rem;font-weight:700;color:#DC2626;border-bottom:2px solid #FCA5A5;padding-bottom:4px;margin-bottom:10px;">❌ Cancelled Items (${cancelledCount})</div>${cancelledItemsHtml}</div>` : ''}<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin:16px 0;padding:12px 16px;background:#E8F0FE;border-radius:8px;"><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Active Items</div><div style="font-weight:700;color:#0B5ED7;font-family:monospace;">${totalItems}</div></div><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Active Qty</div><div style="font-weight:700;color:#D97706;font-family:monospace;">${totalQty}</div></div><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Cancelled Qty</div><div style="font-weight:700;color:#DC2626;font-family:monospace;">${cancelledQty}</div></div><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Final Amount</div><div style="font-weight:700;color:#059669;font-family:monospace;">${currencySymbol} ${formatMoney(finalAmount)}</div></div></div><div style="margin-top:20px;padding-top:12px;border-top:2px solid #E2E8F0;text-align:center;font-size:12px;color:#94A3B8;">Braick Dispensary • Generated on <?= date('F d, Y h:i:s A') ?></div></div>`;
         content.innerHTML = html;
         modal.classList.add('active');
     }
@@ -3362,11 +3417,10 @@ include_once '../../components/pharmacy_sidebar.php';
         if (e.target === this) closePDFModal();
     });
 
-    console.log('%c💊 Braick - Prescriptions V8.4', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Cancel: inventory_id + previous_stock + new_stock', 'font-size:13px; color:#DC2626; font-weight:bold;');
-    console.log('%c✅ reference_type = prescription_cancel', 'font-size:13px; color:#DC2626; font-weight:bold;');
-    console.log('%c✅ reference_id = prescriptions.id', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
-    console.log('%c✅ equipment_id = NULL explicit', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
+    console.log('%c💊 Braick - Prescriptions V8.6', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Quantity: EDITABLE (with +/- buttons)', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ Total Price: GREEN background', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ Cancel: Bill-only (NO stock return)', 'font-size:13px; color:#DC2626; font-weight:bold;');
 </script>
 
 </body>

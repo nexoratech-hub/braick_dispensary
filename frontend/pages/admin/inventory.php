@@ -1,11 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/inventory.php
-// ADMIN - COMPLETE INVENTORY (Medicine & Equipment)
-// ✅ Inatumia SHARED admin_header.php
-// ✅ Inatumia SHARED admin_sidebar.php
-// ✅ Ondoa duplicates za CSS/JS (dark mode, search, clock, branch)
-// ✅ Dark mode inatoka kwa header pekee
+// ADMIN - COMPLETE INVENTORY V8.9 (BLUE BATCH BADGE)
+// ✅ Batch count badge ni BLUE
+// ✅ Stock low, days warning, expiry expiring ni BLUE
+// ✅ GROUP BY name + unit + branch
+// ✅ Batches zote zinaonekana kwenye View Modal
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -568,14 +568,29 @@ try {
 // ================================================================
 $med_query = "
     SELECT 
-        MIN(m.id) as id, m.medication_name, m.category, m.unit, m.branch_id, m.added_by, m.added_by_name,
-        u.full_name as added_by_full_name, b.name as branch_name,
+        MIN(m.id) as id, 
+        m.medication_name, 
+        MIN(m.category) as category,
+        m.unit, 
+        m.branch_id, 
+        MIN(m.added_by) as added_by,
+        MIN(m.added_by_name) as added_by_name,
+        MIN(u.full_name) as added_by_full_name,
+        MIN(b.name) as branch_name,
         SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') THEN m.quantity ELSE 0 END) as total_quantity,
-        MIN(m.reorder_level) as reorder_level, MIN(m.unit_cost) as unit_cost, MIN(m.selling_price) as selling_price,
-        MIN(m.supplier) as supplier, MIN(m.expiry_date) as expiry_date,
-        GROUP_CONCAT(m.id) as batch_ids, GROUP_CONCAT(m.batch_number SEPARATOR '|') as batch_numbers,
-        GROUP_CONCAT(m.quantity SEPARATOR '|') as batch_quantities, GROUP_CONCAT(m.expiry_date SEPARATOR '|') as batch_expiries,
-        GROUP_CONCAT(m.status SEPARATOR '|') as batch_statuses,
+        MIN(m.reorder_level) as reorder_level,
+        MIN(m.unit_cost) as unit_cost,
+        MIN(m.selling_price) as selling_price,
+        MIN(m.supplier) as supplier,
+        MIN(CASE WHEN m.expiry_date IS NOT NULL AND m.expiry_date != '0000-00-00' THEN m.expiry_date ELSE NULL END) as expiry_date,
+        GROUP_CONCAT(m.id ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR ',') as batch_ids,
+        GROUP_CONCAT(m.batch_number ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_numbers,
+        GROUP_CONCAT(m.quantity ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_quantities,
+        GROUP_CONCAT(m.expiry_date ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_expiries,
+        GROUP_CONCAT(m.status ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_statuses,
+        GROUP_CONCAT(m.category ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_categories,
+        GROUP_CONCAT(m.supplier ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_suppliers,
+        GROUP_CONCAT(m.added_by_name ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_added_bys,
         MIN(DATEDIFF(CASE WHEN m.expiry_date = '0000-00-00' THEN NULL ELSE m.expiry_date END, CURDATE())) as days_remaining,
         CASE 
             WHEN SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') THEN 1 ELSE 0 END) > 0 
@@ -594,7 +609,7 @@ if (!empty($category_filter)) { $med_query .= " AND m.category = ?"; $med_params
 if ($expiry_filter === 'expiring') { $med_query .= " AND m.expiry_date IS NOT NULL AND m.expiry_date != '0000-00-00' AND m.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"; }
 if ($expiry_filter === 'expired') { $med_query .= " AND m.expiry_date IS NOT NULL AND m.expiry_date != '0000-00-00' AND m.expiry_date < CURDATE()"; }
 
-$med_query .= " GROUP BY m.medication_name, m.category, m.unit, m.branch_id";
+$med_query .= " GROUP BY m.medication_name, m.unit, m.branch_id";
 
 if ($status_filter === 'active') { $med_query .= " HAVING computed_status = 'active'"; }
 elseif ($status_filter === 'inactive') { $med_query .= " HAVING computed_status = 'inactive'"; }
@@ -613,14 +628,29 @@ $medicines = $stmt->fetchAll();
 // ================================================================
 $equip_query = "
     SELECT 
-        MIN(e.id) as id, e.equipment_name, e.category, e.unit, e.branch_id, e.added_by, e.added_by_name,
-        u.full_name as added_by_full_name, b.name as branch_name,
+        MIN(e.id) as id, 
+        e.equipment_name, 
+        MIN(e.category) as category,
+        e.unit, 
+        e.branch_id, 
+        MIN(e.added_by) as added_by,
+        MIN(e.added_by_name) as added_by_name,
+        MIN(u.full_name) as added_by_full_name,
+        MIN(b.name) as branch_name,
         SUM(CASE WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') THEN e.quantity ELSE 0 END) as total_quantity,
-        MIN(e.reorder_level) as reorder_level, MIN(e.unit_cost) as unit_cost, MIN(e.selling_price) as selling_price,
-        MIN(e.supplier) as supplier, MIN(e.expiry_date) as expiry_date,
-        GROUP_CONCAT(e.id) as batch_ids, GROUP_CONCAT(e.batch_number SEPARATOR '|') as batch_numbers,
-        GROUP_CONCAT(e.quantity SEPARATOR '|') as batch_quantities, GROUP_CONCAT(e.expiry_date SEPARATOR '|') as batch_expiries,
-        GROUP_CONCAT(e.status SEPARATOR '|') as batch_statuses,
+        MIN(e.reorder_level) as reorder_level,
+        MIN(e.unit_cost) as unit_cost,
+        MIN(e.selling_price) as selling_price,
+        MIN(e.supplier) as supplier,
+        MIN(CASE WHEN e.expiry_date IS NOT NULL AND e.expiry_date != '0000-00-00' THEN e.expiry_date ELSE NULL END) as expiry_date,
+        GROUP_CONCAT(e.id ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR ',') as batch_ids,
+        GROUP_CONCAT(e.batch_number ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_numbers,
+        GROUP_CONCAT(e.quantity ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_quantities,
+        GROUP_CONCAT(e.expiry_date ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_expiries,
+        GROUP_CONCAT(e.status ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_statuses,
+        GROUP_CONCAT(e.category ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_categories,
+        GROUP_CONCAT(e.supplier ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_suppliers,
+        GROUP_CONCAT(e.added_by_name ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_added_bys,
         MIN(DATEDIFF(CASE WHEN e.expiry_date = '0000-00-00' THEN NULL ELSE e.expiry_date END, CURDATE())) as days_remaining,
         CASE 
             WHEN SUM(CASE WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') THEN 1 ELSE 0 END) > 0 
@@ -639,7 +669,7 @@ if (!empty($category_filter)) { $equip_query .= " AND e.category = ?"; $equip_pa
 if ($expiry_filter === 'expiring') { $equip_query .= " AND e.expiry_date IS NOT NULL AND e.expiry_date != '0000-00-00' AND e.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"; }
 if ($expiry_filter === 'expired') { $equip_query .= " AND e.expiry_date IS NOT NULL AND e.expiry_date != '0000-00-00' AND e.expiry_date < CURDATE()"; }
 
-$equip_query .= " GROUP BY e.equipment_name, e.category, e.unit, e.branch_id";
+$equip_query .= " GROUP BY e.equipment_name, e.unit, e.branch_id";
 
 if ($status_filter === 'active') { $equip_query .= " HAVING computed_status = 'active'"; }
 elseif ($status_filter === 'inactive') { $equip_query .= " HAVING computed_status = 'inactive'"; }
@@ -693,9 +723,6 @@ $stmt = $db->prepare($sql); $stmt->execute($stats_params); $med_value = $stmt->f
 $sql = "SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') $stats_branch_condition";
 $stmt = $db->prepare($sql); $stmt->execute($stats_params); $total_equipment = $stmt->fetch()['count'] ?? 0;
 
-$sql = "SELECT COALESCE(SUM(quantity), 0) as total FROM medical_equipment WHERE status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') $stats_branch_condition";
-$stmt = $db->prepare($sql); $stmt->execute($stats_params); $total_equip_quantity = $stmt->fetch()['total'] ?? 0;
-
 $sql = "SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') AND quantity > 0 $stats_branch_condition";
 $stmt = $db->prepare($sql); $stmt->execute($stats_params); $equip_in_stock = $stmt->fetch()['count'] ?? 0;
 
@@ -737,17 +764,16 @@ try {
 } catch (Exception $e) { $unread_notifications = 0; }
 
 // ================================================================
-// ✅ INCLUDE SHARED HEADER + SIDEBAR
+// INCLUDE SHARED HEADER + SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
-<!-- PAGE-SPECIFIC STYLES ONLY (NO duplicates za header/sidebar) -->
+<!-- PAGE-SPECIFIC STYLES -->
 <!-- ================================================================ -->
 <style>
-    /* PAGE-SPECIFIC COLORS (zinatumia --page-* variables kutoka header) */
     .inventory-stat-icon {
         position: absolute;
         top: 14px;
@@ -870,168 +896,791 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .filter-btn:hover { border-color: var(--page-primary); color: var(--page-primary); }
     .filter-btn.active { background: var(--page-primary); border-color: var(--page-primary); color: white; }
     
-    /* TABLE */
+    /* TABLE HEADER BAR */
     .table-header-bar {
-        display: flex; justify-content: space-between; align-items: center;
-        flex-wrap: wrap; gap: 12px; margin-bottom: 12px;
-        padding-bottom: 10px; border-bottom: 2px solid var(--page-border);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-bottom: 14px;
+        padding-bottom: 12px;
+        border-bottom: 2px solid var(--page-border);
     }
-    .table-header-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 1; min-width: 0; }
-    .table-header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .table-header-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        flex: 1;
+        min-width: 0;
+    }
+    .table-header-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+    }
     
-    .table-search-box { position: relative; min-width: 280px; flex: 1; max-width: 400px; }
+    .table-search-box {
+        position: relative;
+        min-width: 280px;
+        flex: 1;
+        max-width: 400px;
+    }
     .table-search-box i {
-        position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
-        color: rgba(255,255,255,0.9); font-size: 0.85rem; pointer-events: none;
+        position: absolute;
+        left: 14px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: rgba(255,255,255,0.95);
+        font-size: 0.9rem;
+        pointer-events: none;
+        z-index: 1;
     }
     .table-search-box input {
-        width: 100%; padding: 10px 14px 10px 40px;
-        border: 2px solid var(--page-primary); border-radius: 10px; font-size: 0.85rem;
+        width: 100%;
+        padding: 11px 16px 11px 44px;
+        border: 2px solid var(--page-primary);
+        border-radius: 10px;
+        font-size: 0.85rem;
         background: linear-gradient(135deg, var(--page-primary), var(--page-primary-dark));
-        color: white; outline: none; font-weight: 500; height: 42px;
+        color: white;
+        outline: none;
+        font-weight: 500;
+        height: 44px;
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
+        transition: all 0.3s ease;
     }
-    .table-search-box input::placeholder { color: rgba(255,255,255,0.85); }
+    .table-search-box input::placeholder {
+        color: rgba(255,255,255,0.85);
+        font-weight: 400;
+    }
+    .table-search-box input:focus {
+        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.25), 0 6px 20px rgba(11, 94, 215, 0.35);
+        transform: translateY(-1px);
+    }
     
     .scroll-btn-header {
-        width: 38px; height: 38px; border-radius: 8px;
-        border: 2px solid var(--page-border); background: var(--page-bg-card);
-        color: var(--page-text-primary); cursor: pointer;
-        display: inline-flex; align-items: center; justify-content: center;
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+        border: 2px solid var(--page-border);
+        background: var(--page-bg-card);
+        color: var(--page-text-primary);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.3s ease;
+        font-size: 0.85rem;
     }
-    .scroll-btn-header:hover { background: var(--page-primary); border-color: var(--page-primary); color: white; }
-    .scroll-btn-header:disabled { opacity: 0.35; cursor: not-allowed; }
+    .scroll-btn-header:hover {
+        background: var(--page-primary);
+        border-color: var(--page-primary);
+        color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+    .scroll-btn-header:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+        transform: none;
+    }
     
     .search-results-info {
-        font-size: 0.7rem; color: var(--page-primary); padding: 6px 12px;
-        background: var(--page-primary-bg); border-radius: 8px;
-        display: none; font-weight: 600; border: 1px solid var(--page-primary);
+        font-size: 0.72rem;
+        color: var(--page-primary);
+        padding: 6px 12px;
+        background: var(--page-primary-bg);
+        border-radius: 8px;
+        display: none;
+        font-weight: 600;
+        border: 1px solid var(--page-primary);
     }
     
-    .card-title { font-size: 0.9rem; font-weight: 600; color: var(--page-text-primary); }
-    .result-count { font-size: 0.75rem; color: var(--page-text-secondary); }
-    .result-count strong { color: var(--page-primary); }
+    .card-title {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--page-text-primary);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .result-count {
+        font-size: 0.75rem;
+        color: var(--page-text-secondary);
+        font-weight: 500;
+    }
+    .result-count strong {
+        color: var(--page-primary);
+        font-weight: 700;
+    }
     
-    .table-scroll-container { overflow-x: auto; overflow-y: auto; max-height: 450px; }
+    /* TABLE CONTAINER */
+    .table-scroll-container {
+        overflow-x: auto;
+        overflow-y: auto;
+        max-height: 560px;
+        border-radius: 12px;
+        border: 2px solid var(--page-border);
+        background: var(--page-bg-card);
+        position: relative;
+    }
+    .table-scroll-container::-webkit-scrollbar { height: 10px; width: 10px; }
+    .table-scroll-container::-webkit-scrollbar-track { 
+        background: var(--page-bg-body); 
+        border-radius: 6px; 
+    }
+    .table-scroll-container::-webkit-scrollbar-thumb { 
+        background: var(--page-primary); 
+        border-radius: 6px;
+        border: 2px solid var(--page-bg-body);
+    }
+    .table-scroll-container::-webkit-scrollbar-thumb:hover { 
+        background: var(--page-primary-dark); 
+    }
     
+    /* DATA TABLE */
     .data-table {
-        width: 100%; min-width: 1400px;
-        border-collapse: separate; border-spacing: 0; font-size: 0.72rem;
+        width: 100%;
+        min-width: 1550px;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 0.8rem;
+        font-family: 'Inter', 'Segoe UI', sans-serif;
     }
+    
     .data-table thead th {
-        position: sticky; top: 0; z-index: 10;
-        background: var(--page-primary); color: white;
-        padding: 6px 10px; font-size: 0.6rem;
-        text-transform: uppercase; font-weight: 700;
-        white-space: nowrap; text-align: left;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: linear-gradient(135deg, var(--page-primary), var(--page-primary-dark));
+        color: white;
+        padding: 14px 14px;
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-weight: 700;
+        white-space: nowrap;
+        text-align: left;
+        border-right: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     }
-    .data-table tbody tr:nth-child(even) { background: var(--page-primary-bg); }
-    .data-table tbody tr:hover td { background: var(--page-success-bg); }
+    .data-table thead th:last-child {
+        border-right: none;
+        text-align: center;
+    }
+    .data-table thead th:first-child { border-radius: 10px 0 0 0; }
+    .data-table thead th:last-child { border-radius: 0 10px 0 0; }
+    
+    .data-table tbody tr {
+        transition: all 0.2s ease;
+        background: var(--page-bg-card);
+    }
+    .data-table tbody tr:nth-child(even) {
+        background: rgba(11, 94, 215, 0.03);
+    }
+    [data-theme="dark"] .data-table tbody tr:nth-child(even) {
+        background: rgba(11, 94, 215, 0.08);
+    }
+    .data-table tbody tr:hover {
+        background: linear-gradient(90deg, rgba(209, 250, 229, 0.5) 0%, rgba(209, 250, 229, 0.15) 100%) !important;
+        box-shadow: inset 4px 0 0 var(--page-success);
+    }
+    [data-theme="dark"] .data-table tbody tr:hover {
+        background: linear-gradient(90deg, rgba(26, 58, 42, 0.7) 0%, rgba(26, 58, 42, 0.3) 100%) !important;
+        box-shadow: inset 4px 0 0 #34D399;
+    }
+    
     .data-table td {
-        padding: 5px 8px; border-bottom: 1px solid var(--page-border);
-        color: var(--page-text-primary); white-space: nowrap;
+        padding: 13px 14px;
+        border-bottom: 1px solid var(--page-border);
+        color: var(--page-text-primary);
+        vertical-align: middle;
+        white-space: nowrap;
+        font-size: 0.8rem;
+        line-height: 1.4;
+        transition: all 0.2s ease;
+    }
+    .data-table tbody tr:last-child td {
+        border-bottom: none;
     }
     
-    .col-sno { width: 30px; text-align: center; }
-    .col-name { min-width: 160px; }
-    .col-category { min-width: 100px; }
-    .col-branch { min-width: 90px; }
-    .col-qty { min-width: 80px; text-align: center; }
-    .col-reorder { min-width: 60px; text-align: center; }
-    .col-stock { min-width: 90px; }
-    .col-price { min-width: 100px; }
-    .col-expiry { min-width: 85px; }
-    .col-days { min-width: 60px; text-align: center; }
-    .col-batch { min-width: 100px; }
-    .col-status { min-width: 70px; text-align: center; }
-    .col-active { min-width: 60px; text-align: center; }
-    .col-added-by { min-width: 110px; }
-    .col-actions { min-width: 80px; text-align: center; }
+    .col-sno {
+        width: 55px;
+        min-width: 55px;
+        text-align: center;
+        font-weight: 700;
+        color: var(--page-text-secondary);
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.75rem;
+    }
+    .col-name {
+        min-width: 220px;
+        max-width: 280px;
+        white-space: normal;
+    }
+    .col-name strong {
+        display: block;
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: var(--page-text-primary);
+        margin-bottom: 2px;
+        line-height: 1.3;
+    }
+    .col-category { min-width: 140px; }
+    .col-branch { min-width: 130px; }
+    .col-qty {
+        min-width: 90px;
+        text-align: center;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .col-qty strong {
+        font-size: 0.95rem;
+        font-weight: 800;
+        color: var(--page-primary);
+        display: inline-block;
+    }
+    .col-reorder {
+        min-width: 80px;
+        text-align: center;
+        font-family: 'JetBrains Mono', monospace;
+        color: var(--page-text-secondary);
+    }
+    .col-stock { min-width: 140px; text-align: center; }
+    .col-price {
+        min-width: 120px;
+        text-align: right;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 700;
+        color: var(--page-success);
+        font-size: 0.85rem;
+    }
+    .col-expiry { min-width: 120px; text-align: center; }
+    .col-days { min-width: 85px; text-align: center; }
+    .col-batch { min-width: 150px; text-align: center; }
+    .col-status { min-width: 105px; text-align: center; }
+    .col-added-by { min-width: 150px; max-width: 180px; }
+    .col-actions { min-width: 240px; text-align: center; padding: 10px 8px; }
     
-    .no-results-row td { text-align: center; padding: 30px 20px !important; color: var(--page-text-secondary); }
+    .no-results-row td {
+        text-align: center;
+        padding: 50px 20px !important;
+        color: var(--page-text-secondary);
+        font-size: 0.9rem;
+    }
+    .no-results-row i {
+        font-size: 2.5rem;
+        color: var(--page-border);
+        display: block;
+        margin-bottom: 10px;
+    }
+    .no-results-row p {
+        font-weight: 600;
+        color: var(--page-text-primary);
+        margin: 0;
+    }
     
-    .status-badge { padding: 1px 6px; border-radius: 8px; font-size: 0.55rem; font-weight: 600; display: inline-flex; align-items: center; gap: 2px; }
-    .status-badge.active { background: var(--page-success-bg); color: var(--page-success); }
-    .status-badge.inactive { background: var(--page-danger-bg); color: var(--page-danger); }
+    /* STATUS BADGES */
+    .status-badge {
+        padding: 5px 14px;
+        border-radius: 20px;
+        font-size: 0.68rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+    .status-badge.active {
+        background: var(--page-success-bg);
+        color: var(--page-success);
+        border: 1px solid rgba(5, 150, 105, 0.3);
+    }
+    .status-badge.inactive {
+        background: var(--page-danger-bg);
+        color: var(--page-danger);
+        border: 1px solid rgba(220, 38, 38, 0.3);
+    }
     
-    .stock-badge { padding: 1px 6px; border-radius: 6px; font-size: 0.6rem; font-weight: 600; display: inline-flex; align-items: center; gap: 2px; }
-    .stock-badge.ok { background: var(--page-success-bg); color: var(--page-success); }
-    .stock-badge.low { background: var(--page-warning-bg); color: var(--page-warning); }
-    .stock-badge.out { background: var(--page-danger-bg); color: var(--page-danger); }
+    /* STOCK BADGES - ✅ LOW NI BLUE SASA */
+    .stock-badge {
+        padding: 6px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+    }
+    .stock-badge.ok {
+        background: var(--page-success-bg);
+        color: var(--page-success);
+        border: 1px solid rgba(5, 150, 105, 0.3);
+    }
+    .stock-badge.low {
+        background: var(--page-primary-bg);
+        color: var(--page-primary);
+        border: 1px solid rgba(11, 94, 215, 0.3);
+        animation: pulse 1.5s infinite;
+    }
+    .stock-badge.out {
+        background: var(--page-danger-bg);
+        color: var(--page-danger);
+        border: 1px solid rgba(220, 38, 38, 0.3);
+        animation: pulse 1s infinite;
+    }
     
-    .zero-qty-warning { font-size: 0.5rem; display: block; color: var(--page-warning); font-weight: 600; margin-top: 1px; }
+    @keyframes pulse { 
+        0%, 100% { opacity: 1; } 
+        50% { opacity: 0.65; } 
+    }
     
-    .expiry-badge { padding: 1px 6px; border-radius: 6px; font-size: 0.55rem; font-weight: 600; display: inline-flex; align-items: center; gap: 2px; }
-    .expiry-badge.valid { background: var(--page-success-bg); color: var(--page-success); }
-    .expiry-badge.expiring { background: var(--page-warning-bg); color: var(--page-warning); }
-    .expiry-badge.expired { background: var(--page-danger-bg); color: var(--page-danger); }
-    .expiry-badge.no-expiry { background: var(--page-border); color: var(--page-text-muted); }
+    .zero-qty-warning {
+        font-size: 0.6rem;
+        display: block;
+        color: var(--page-warning);
+        font-weight: 700;
+        margin-top: 3px;
+    }
     
-    .days-remaining { font-size: 0.6rem; font-weight: 600; padding: 1px 5px; border-radius: 6px; display: inline-flex; align-items: center; gap: 2px; }
-    .days-remaining.good { background: var(--page-success-bg); color: var(--page-success); }
-    .days-remaining.warning { background: var(--page-warning-bg); color: var(--page-warning); }
-    .days-remaining.danger { background: var(--page-danger-bg); color: var(--page-danger); }
-    .days-remaining.forever { background: var(--page-border); color: var(--page-text-muted); }
+    /* EXPIRY BADGES - ✅ EXPIRING NI BLUE SASA */
+    .expiry-badge {
+        padding: 5px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        white-space: nowrap;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .expiry-badge.valid {
+        background: var(--page-success-bg);
+        color: var(--page-success);
+        border: 1px solid rgba(5, 150, 105, 0.3);
+    }
+    .expiry-badge.expiring {
+        background: var(--page-primary-bg);
+        color: var(--page-primary);
+        border: 1px solid rgba(11, 94, 215, 0.3);
+        animation: pulse 1.5s infinite;
+    }
+    .expiry-badge.expired {
+        background: var(--page-danger-bg);
+        color: var(--page-danger);
+        border: 1px solid rgba(220, 38, 38, 0.3);
+        animation: pulse 1s infinite;
+    }
+    .expiry-badge.no-expiry {
+        background: var(--page-border);
+        color: var(--page-text-muted);
+        border: 1px solid rgba(148, 163, 184, 0.3);
+    }
     
-    .batch-number { font-family: monospace; font-size: 0.6rem; font-weight: 600; padding: 1px 6px; border-radius: 3px; background: var(--page-primary-bg); color: var(--page-primary); }
+    /* DAYS REMAINING - ✅ WARNING NI BLUE SASA */
+    .days-remaining {
+        font-size: 0.72rem;
+        font-weight: 700;
+        padding: 5px 12px;
+        border-radius: 20px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-family: 'JetBrains Mono', monospace;
+        white-space: nowrap;
+    }
+    .days-remaining.good {
+        background: var(--page-success-bg);
+        color: var(--page-success);
+    }
+    .days-remaining.warning {
+        background: var(--page-primary-bg);
+        color: var(--page-primary);
+        animation: pulse 1.5s infinite;
+    }
+    .days-remaining.danger {
+        background: var(--page-danger-bg);
+        color: var(--page-danger);
+        animation: pulse 1s infinite;
+    }
+    .days-remaining.forever {
+        background: var(--page-border);
+        color: var(--page-text-muted);
+    }
     
-    .added-by-tag { display: inline-flex; align-items: center; gap: 3px; padding: 1px 8px; border-radius: 10px; font-size: 0.6rem; font-weight: 600; background: var(--page-purple-bg); color: var(--page-purple); }
+    /* BATCH NUMBER */
+    .batch-number {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.72rem;
+        font-weight: 700;
+        padding: 5px 12px;
+        border-radius: 8px;
+        background: var(--page-primary-bg);
+        color: var(--page-primary);
+        display: inline-block;
+        letter-spacing: 0.02em;
+        border: 1px solid rgba(11, 94, 215, 0.2);
+    }
+    [data-theme="dark"] .batch-number {
+        background: #1E3A5F;
+        color: #6EA8FE;
+        border-color: rgba(110, 168, 254, 0.3);
+    }
     
-    .action-group { display: flex; flex-direction: column; gap: 3px; align-items: center; }
+    /* ✅ BATCH COUNT BADGE - BLUE SASA */
+    .batch-count-badge {
+        font-size: 0.6rem;
+        background: var(--page-primary-bg);
+        color: var(--page-primary);
+        padding: 2px 10px;
+        border-radius: 10px;
+        font-weight: 700;
+        border: 1px solid rgba(11, 94, 215, 0.3);
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        box-shadow: 0 1px 3px rgba(11, 94, 215, 0.15);
+    }
+    [data-theme="dark"] .batch-count-badge {
+        background: #1E3A5F;
+        color: #6EA8FE;
+        border-color: rgba(110, 168, 254, 0.3);
+    }
+    
+    /* ADDED BY TAG */
+    .added-by-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 5px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        background: var(--page-purple-bg);
+        color: var(--page-purple);
+        white-space: nowrap;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        border: 1px solid rgba(124, 58, 237, 0.2);
+    }
+    [data-theme="dark"] .added-by-tag {
+        background: #2D1B4E;
+        color: #C4B5FD;
+        border-color: rgba(196, 181, 253, 0.2);
+    }
+    
+    /* ACTION BUTTONS */
+    .action-group {
+        display: flex;
+        flex-direction: row;
+        gap: 6px;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: nowrap;
+    }
+    
     .action-btn {
-        padding: 2px 8px; border-radius: 4px; font-size: 0.55rem;
-        font-weight: 600; border: none; cursor: pointer;
-        display: inline-flex; align-items: center; justify-content: center;
-        gap: 3px; color: white; height: 22px; width: 60px;
+        padding: 8px 14px;
+        border-radius: 8px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        border: none;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+        color: white;
+        min-width: 72px;
+        height: 34px;
+        transition: all 0.25s ease;
+        letter-spacing: 0.02em;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+        white-space: nowrap;
     }
-    .action-btn.view { background: var(--page-purple); }
-    .action-btn.edit { background: var(--page-warning); }
-    .action-btn.delete { background: var(--page-danger); }
     
-    .action-btn-sm { padding: 1px 6px; border-radius: 3px; font-size: 0.5rem; font-weight: 600; border: none; cursor: pointer; color: white; height: 20px; width: 50px; }
-    .action-btn-sm.edit { background: var(--page-warning); }
-    .action-btn-sm.delete { background: var(--page-danger); }
+    .action-btn.view {
+        background: linear-gradient(135deg, var(--page-purple), #6D28D9);
+    }
+    .action-btn.view:hover {
+        background: linear-gradient(135deg, #6D28D9, #5B21B6);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 18px rgba(124, 58, 237, 0.5);
+        color: white;
+    }
+    
+    .action-btn.edit {
+        background: linear-gradient(135deg, var(--page-warning), #B45309);
+    }
+    .action-btn.edit:hover {
+        background: linear-gradient(135deg, #B45309, #92400E);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 18px rgba(217, 119, 6, 0.5);
+        color: white;
+    }
+    
+    .action-btn.delete {
+        background: linear-gradient(135deg, var(--page-danger), #991B1B);
+    }
+    .action-btn.delete:hover {
+        background: linear-gradient(135deg, #991B1B, #7F1D1D);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 18px rgba(220, 38, 38, 0.5);
+        color: white;
+    }
+    
+    .action-btn:active {
+        transform: translateY(0) scale(0.97);
+    }
+    
+    .action-btn i {
+        font-size: 0.78rem;
+    }
+    
+    .action-btn-sm {
+        padding: 5px 10px;
+        border-radius: 6px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        border: none;
+        cursor: pointer;
+        color: white;
+        height: 26px;
+        min-width: 44px;
+        transition: all 0.25s ease;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+    }
+    .action-btn-sm.edit {
+        background: linear-gradient(135deg, var(--page-warning), #B45309);
+    }
+    .action-btn-sm.edit:hover {
+        background: linear-gradient(135deg, #B45309, #92400E);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(217, 119, 6, 0.4);
+    }
+    .action-btn-sm.delete {
+        background: linear-gradient(135deg, var(--page-danger), #991B1B);
+    }
+    .action-btn-sm.delete:hover {
+        background: linear-gradient(135deg, #991B1B, #7F1D1D);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
+    }
     
     /* TABS */
-    .tabs-container { display: flex; gap: 4px; background: var(--page-bg-card); border-radius: 12px; padding: 4px; border: 2px solid var(--page-border); margin-bottom: 20px; }
-    .tab-btn {
-        padding: 10px 24px; border-radius: 10px; font-weight: 600;
-        font-size: 0.85rem; border: none; cursor: pointer;
-        background: transparent; color: var(--page-text-secondary);
-        display: inline-flex; align-items: center; gap: 8px;
-        flex: 1; justify-content: center;
+    .tabs-container {
+        display: flex;
+        gap: 4px;
+        background: var(--page-bg-card);
+        border-radius: 12px;
+        padding: 4px;
+        border: 2px solid var(--page-border);
+        margin-bottom: 20px;
     }
-    .tab-btn:hover { background: var(--page-primary-bg); color: var(--page-primary); }
-    .tab-btn.active { background: var(--page-primary); color: white; }
-    .tab-btn .badge { background: rgba(255,255,255,0.2); color: white; padding: 1px 8px; border-radius: 10px; font-size: 0.65rem; }
-    .tab-btn:not(.active) .badge { background: var(--page-border); color: var(--page-text-secondary); }
+    .tab-btn {
+        padding: 11px 26px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.85rem;
+        border: none;
+        cursor: pointer;
+        background: transparent;
+        color: var(--page-text-secondary);
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1;
+        justify-content: center;
+        transition: all 0.3s ease;
+    }
+    .tab-btn:hover {
+        background: var(--page-primary-bg);
+        color: var(--page-primary);
+    }
+    .tab-btn.active {
+        background: var(--page-primary);
+        color: white;
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+    .tab-btn .badge {
+        background: rgba(255, 255, 255, 0.2);
+        color: white;
+        padding: 1px 9px;
+        border-radius: 10px;
+        font-size: 0.65rem;
+    }
+    .tab-btn:not(.active) .badge {
+        background: var(--page-border);
+        color: var(--page-text-secondary);
+    }
     .tab-content { display: none; }
     .tab-content.active { display: block; }
     
     /* MODAL */
-    .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 2000; justify-content: center; align-items: center; padding: 20px; }
+    .modal-overlay {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 2000;
+        justify-content: center;
+        align-items: center;
+        padding: 20px;
+        backdrop-filter: blur(4px);
+    }
     .modal-overlay.show { display: flex; }
-    .modal-content { background: var(--page-bg-card); border-radius: 14px; padding: 20px 24px; max-width: 850px; width: 95%; max-height: 90vh; overflow-y: auto; border: 2px solid var(--page-border); }
-    .modal-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; border-bottom: 2px solid var(--page-border); margin-bottom: 14px; }
-    .modal-title { font-size: 1rem; font-weight: 700; color: var(--page-text-primary); display: flex; align-items: center; gap: 8px; }
-    .modal-close { background: none; border: none; font-size: 1.3rem; cursor: pointer; color: var(--page-text-secondary); }
+    .modal-content {
+        background: var(--page-bg-card);
+        border-radius: 14px;
+        padding: 22px 26px;
+        max-width: 950px;
+        width: 95%;
+        max-height: 90vh;
+        overflow-y: auto;
+        border: 2px solid var(--page-border);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding-bottom: 12px;
+        border-bottom: 2px solid var(--page-border);
+        margin-bottom: 16px;
+    }
+    .modal-title {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: var(--page-text-primary);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .modal-close {
+        background: none;
+        border: none;
+        font-size: 1.4rem;
+        cursor: pointer;
+        color: var(--page-text-secondary);
+        transition: all 0.2s;
+    }
+    .modal-close:hover {
+        color: var(--page-danger);
+        transform: rotate(90deg);
+    }
     
     /* FORM */
-    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .form-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+    }
     .form-grid .full-width { grid-column: 1 / -1; }
-    .form-label { font-size: 0.8rem; font-weight: 600; color: var(--page-text-primary); margin-bottom: 4px; display: block; }
+    .form-label {
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: var(--page-text-primary);
+        margin-bottom: 5px;
+        display: block;
+    }
     .form-label .required { color: var(--page-danger); }
     .form-control {
-        width: 100%; padding: 8px 12px; border: 2px solid var(--page-border);
-        border-radius: 6px; font-size: 0.9rem; outline: none;
-        background: var(--page-bg-card); color: var(--page-text-primary); height: 42px;
+        width: 100%;
+        padding: 9px 14px;
+        border: 2px solid var(--page-border);
+        border-radius: 8px;
+        font-size: 0.88rem;
+        outline: none;
+        background: var(--page-bg-card);
+        color: var(--page-text-primary);
+        height: 42px;
+        transition: all 0.2s ease;
     }
-    .form-actions { display: flex; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 2px solid var(--page-border); }
-    .btn-save { background: var(--page-primary); color: white; padding: 10px 28px; border-radius: 8px; font-weight: 600; font-size: 0.9rem; border: none; cursor: pointer; height: 44px; }
-    .btn-cancel { background: transparent; color: var(--page-text-secondary); border: 2px solid var(--page-border); padding: 10px 24px; border-radius: 8px; font-weight: 600; font-size: 0.9rem; cursor: pointer; height: 44px; display: inline-flex; align-items: center; gap: 6px; }
+    .form-control:focus {
+        border-color: var(--page-primary);
+        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
+    }
+    .form-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 18px;
+        padding-top: 14px;
+        border-top: 2px solid var(--page-border);
+    }
+    .btn-save {
+        background: var(--page-primary);
+        color: white;
+        padding: 10px 28px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        border: none;
+        cursor: pointer;
+        height: 44px;
+        transition: all 0.25s;
+    }
+    .btn-save:hover {
+        background: var(--page-primary-dark);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+    .btn-cancel {
+        background: transparent;
+        color: var(--page-text-secondary);
+        border: 2px solid var(--page-border);
+        padding: 10px 24px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        cursor: pointer;
+        height: 44px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition: all 0.25s;
+    }
+    .btn-cancel:hover {
+        border-color: var(--page-danger);
+        color: var(--page-danger);
+    }
     
-    .category-input-group, .unit-input-group, .batch-input-group { display: flex; gap: 6px; align-items: center; }
+    .category-input-group, .unit-input-group, .batch-input-group {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+    }
     .category-input-group .form-control, .unit-input-group .form-control { flex: 1; }
-    .btn-toggle { background: var(--page-primary); color: white; border: none; border-radius: 8px; padding: 8px 12px; font-size: 0.7rem; font-weight: 600; cursor: pointer; white-space: nowrap; height: 42px; display: inline-flex; align-items: center; gap: 4px; }
+    .btn-toggle {
+        background: var(--page-primary);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 8px 14px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+        height: 42px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        transition: all 0.25s;
+    }
+    .btn-toggle:hover {
+        background: var(--page-primary-dark);
+        transform: translateY(-1px);
+    }
     
     /* MANAGE PURCHASES */
     .manage-header { background: linear-gradient(135deg, var(--page-primary), var(--page-primary-dark)); border-radius: 16px; padding: 24px 28px; margin-bottom: 24px; color: white; }
@@ -1066,7 +1715,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .empty-purchases { text-align: center; padding: 40px 20px; color: var(--page-text-secondary); }
     .empty-purchases i { font-size: 3rem; color: var(--page-border); display: block; margin-bottom: 12px; }
     
-    /* ✅ Zuia scroll wheel kwenye numeric inputs */
     input[type="number"] { -moz-appearance: textfield; }
     input[type="number"]::-webkit-outer-spin-button,
     input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
@@ -1086,6 +1734,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .tabs-container { flex-direction: column; }
         .purchase-list-grid { grid-template-columns: 1fr; }
         .btn-back-header { width: 100%; justify-content: center; }
+        .action-group { flex-wrap: wrap; }
     }
 </style>
 
@@ -1354,7 +2003,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <th class="col-days">Days</th>
                                 <th class="col-batch">Batch</th>
                                 <th class="col-status">Status</th>
-                                <th class="col-active">Active</th>
                                 <th class="col-added-by">Added By</th>
                                 <th class="col-actions">Actions</th>
                             </tr>
@@ -1393,15 +2041,25 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     $search_data = strtolower(($item['medication_name'] ?? '') . ' ' . $category_display . ' ' . $branch_name . ' ' . $added_by_display . ' ' . ($first_batch ?? '') . ' ' . $stock_label);
                                     
                                     $view_data_json = htmlspecialchars(json_encode([
-                                        'id' => $item['id'], 'name' => $item['medication_name'], 'category' => $category_display,
-                                        'unit' => $item['unit'] ?? 'pcs', 'reorder_level' => $item['reorder_level'],
-                                        'selling_price' => $item['selling_price'] ?? 0, 'supplier' => $item['supplier'] ?? 'N/A',
-                                        'status' => $display_status, 'active_qty' => $active_qty,
-                                        'branch_id' => $item['branch_id'], 'branch_name' => $branch_name,
-                                        'batch_ids' => $batch_ids, 'batch_numbers' => $batch_numbers,
+                                        'id' => $item['id'], 
+                                        'name' => $item['medication_name'], 
+                                        'category' => $category_display,
+                                        'unit' => $item['unit'] ?? 'pcs', 
+                                        'reorder_level' => $item['reorder_level'],
+                                        'selling_price' => $item['selling_price'] ?? 0, 
+                                        'supplier' => $item['supplier'] ?? 'N/A',
+                                        'status' => $display_status, 
+                                        'active_qty' => $active_qty,
+                                        'branch_id' => $item['branch_id'], 
+                                        'branch_name' => $branch_name,
+                                        'batch_ids' => $batch_ids, 
+                                        'batch_numbers' => $batch_numbers,
                                         'batch_quantities' => $item['batch_quantities'] ?? '',
                                         'batch_expiries' => $item['batch_expiries'] ?? '',
-                                        'batch_statuses' => $item['batch_statuses'] ?? ''
+                                        'batch_statuses' => $item['batch_statuses'] ?? '',
+                                        'batch_categories' => $item['batch_categories'] ?? '',
+                                        'batch_suppliers' => $item['batch_suppliers'] ?? '',
+                                        'batch_added_bys' => $item['batch_added_bys'] ?? ''
                                     ]), ENT_QUOTES, 'UTF-8');
                                 ?>
                                 <tr class="med-row" data-search="<?= htmlspecialchars($search_data) ?>">
@@ -1409,15 +2067,30 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     <td class="col-name">
                                         <strong><?= htmlspecialchars($item['medication_name']) ?></strong>
                                         <?php if ($batch_count > 1): ?>
-                                            <span style="font-size:0.5rem;background:var(--page-primary-bg);color:var(--page-primary);padding:0 6px;border-radius:8px;"><?= $batch_count ?> batches</span>
+                                            <span class="batch-count-badge">
+                                                <i class="fas fa-layer-group"></i> <?= $batch_count ?> batches
+                                            </span>
                                         <?php endif; ?>
+                                        <div style="font-size:0.65rem;color:var(--page-text-muted);margin-top:2px;">
+                                            <i class="fas fa-cube"></i> <?= htmlspecialchars($item['unit'] ?? 'pcs') ?>
+                                        </div>
                                     </td>
-                                    <td class="col-category"><?= htmlspecialchars($category_display) ?></td>
-                                    <td class="col-branch"><span style="font-weight:600;color:var(--page-primary);font-size:0.65rem;">🏥 <?= htmlspecialchars($branch_name) ?></span></td>
+                                    <td class="col-category">
+                                        <span style="background:var(--page-primary-bg);color:var(--page-primary);padding:4px 12px;border-radius:12px;font-size:0.7rem;font-weight:600;">
+                                            <?= htmlspecialchars($category_display) ?>
+                                        </span>
+                                    </td>
+                                    <td class="col-branch">
+                                        <span style="background:var(--page-success-bg);color:var(--page-success);padding:4px 12px;border-radius:12px;font-size:0.7rem;font-weight:600;border:1px solid rgba(5,150,105,0.2);">
+                                            <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name) ?>
+                                        </span>
+                                    </td>
                                     <td class="col-qty">
-                                        <strong><?= $active_qty ?></strong>
+                                        <strong><?= number_format($active_qty) ?></strong>
                                         <?php if ($active_qty == 0 && $display_status === 'active'): ?>
-                                            <span class="zero-qty-warning"><i class="fas fa-exclamation-triangle"></i> 0 Qty</span>
+                                            <span class="zero-qty-warning">
+                                                <i class="fas fa-exclamation-triangle"></i> Cannot sell
+                                            </span>
                                         <?php endif; ?>
                                     </td>
                                     <td class="col-reorder"><?= $item['reorder_level'] ?></td>
@@ -1438,33 +2111,51 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     <td class="col-days">
                                         <?php if (!empty($expiry_date) && $expiry_date !== '0000-00-00' && $days !== '-'): ?>
                                             <span class="days-remaining <?= $days_class ?>">
-                                                <?php if ($days < 0): ?>EXP
-                                                <?php else: ?><?= $days ?>d<?php endif; ?>
+                                                <?php if ($days < 0): ?><i class="fas fa-skull"></i> EXP
+                                                <?php elseif ($days <= 30): ?><i class="fas fa-clock"></i> <?= $days ?>d
+                                                <?php else: ?><i class="fas fa-check"></i> <?= $days ?>d<?php endif; ?>
                                             </span>
                                         <?php else: ?>
-                                            <span class="days-remaining forever">∞</span>
+                                            <span class="days-remaining forever"><i class="fas fa-infinity"></i> ∞</span>
                                         <?php endif; ?>
                                     </td>
                                     <td class="col-batch">
                                         <?php if (!empty($first_batch)): ?>
                                             <span class="batch-number"><?= htmlspecialchars($first_batch) ?></span>
+                                            <?php if ($batch_count > 1): ?>
+                                                <span style="font-size:0.65rem;color:var(--page-text-muted);margin-left:4px;font-weight:600;">+<?= $batch_count - 1 ?></span>
+                                            <?php endif; ?>
                                         <?php else: ?>
-                                            <span style="color:var(--page-text-secondary);font-size:0.6rem;">N/A</span>
+                                            <span style="color:var(--page-text-muted);font-size:0.75rem;">N/A</span>
                                         <?php endif; ?>
                                     </td>
-                                    <td class="col-status"><span class="status-badge <?= $display_status ?>"><?= ucfirst($display_status) ?></span></td>
-                                    <td class="col-active"><span class="stock-badge <?= $active_qty > 0 ? 'ok' : 'out' ?>"><?= $active_qty > 0 ? 'YES' : 'NO' ?></span></td>
-                                    <td class="col-added-by"><span class="added-by-tag"><i class="fas fa-user-circle"></i> <?= htmlspecialchars($added_by_display) ?></span></td>
+                                    <td class="col-status">
+                                        <span class="status-badge <?= $display_status ?>">
+                                            <i class="fas <?= $display_status === 'active' ? 'fa-circle-check' : 'fa-circle-xmark' ?>"></i>
+                                            <?= ucfirst($display_status) ?>
+                                        </span>
+                                    </td>
+                                    <td class="col-added-by">
+                                        <span class="added-by-tag">
+                                            <i class="fas fa-user-circle"></i> <?= htmlspecialchars($added_by_display) ?>
+                                        </span>
+                                    </td>
                                     <td class="col-actions">
                                         <div class="action-group">
-                                            <button class="action-btn view" onclick='openViewModal(<?= $view_data_json ?>, "medicine")'><i class="fas fa-eye"></i> View</button>
-                                            <button class="action-btn edit" onclick="openEditMedicineModal(<?= $first_batch_id ?>, '<?= htmlspecialchars($item['medication_name']) ?>')"><i class="fas fa-edit"></i> Edit</button>
-                                            <button class="action-btn delete" onclick="deleteMedicine(<?= $first_batch_id ?>, '<?= addslashes($item['medication_name']) ?>')"><i class="fas fa-trash"></i> Delete</button>
+                                            <button class="action-btn view" onclick='openViewModal(<?= $view_data_json ?>, "medicine")'>
+                                                <i class="fas fa-eye"></i> View
+                                            </button>
+                                            <button class="action-btn edit" onclick="openEditMedicineModal(<?= $first_batch_id ?>, '<?= htmlspecialchars($item['medication_name']) ?>')">
+                                                <i class="fas fa-edit"></i> Edit
+                                            </button>
+                                            <button class="action-btn delete" onclick="deleteMedicine(<?= $first_batch_id ?>, '<?= addslashes($item['medication_name']) ?>')">
+                                                <i class="fas fa-trash"></i> Delete
+                                            </button>
                                         </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
-                            <tr class="no-results-row" id="medNoResults" style="display:none;"><td colspan="15"><i class="fas fa-search-minus"></i><p>No medicines match</p></td></tr>
+                            <tr class="no-results-row" id="medNoResults" style="display:none;"><td colspan="14"><i class="fas fa-search-minus"></i><p>No medicines match</p></td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -1578,7 +2269,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <th class="col-days">Days</th>
                                 <th class="col-batch">Batch</th>
                                 <th class="col-status">Status</th>
-                                <th class="col-active">Active</th>
                                 <th class="col-added-by">Added By</th>
                                 <th class="col-actions">Actions</th>
                             </tr>
@@ -1617,15 +2307,25 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     $search_data = strtolower(($item['equipment_name'] ?? '') . ' ' . $category_display . ' ' . $branch_name . ' ' . $added_by_display . ' ' . ($first_batch ?? '') . ' ' . $stock_label);
                                     
                                     $view_data_json = htmlspecialchars(json_encode([
-                                        'id' => $item['id'], 'name' => $item['equipment_name'], 'category' => $category_display,
-                                        'unit' => $item['unit'] ?? 'pcs', 'reorder_level' => $item['reorder_level'],
-                                        'selling_price' => $item['selling_price'] ?? 0, 'supplier' => $item['supplier'] ?? 'N/A',
-                                        'status' => $display_status, 'active_qty' => $active_qty,
-                                        'branch_id' => $item['branch_id'], 'branch_name' => $branch_name,
-                                        'batch_ids' => $batch_ids, 'batch_numbers' => $batch_numbers,
+                                        'id' => $item['id'], 
+                                        'name' => $item['equipment_name'], 
+                                        'category' => $category_display,
+                                        'unit' => $item['unit'] ?? 'pcs', 
+                                        'reorder_level' => $item['reorder_level'],
+                                        'selling_price' => $item['selling_price'] ?? 0, 
+                                        'supplier' => $item['supplier'] ?? 'N/A',
+                                        'status' => $display_status, 
+                                        'active_qty' => $active_qty,
+                                        'branch_id' => $item['branch_id'], 
+                                        'branch_name' => $branch_name,
+                                        'batch_ids' => $batch_ids, 
+                                        'batch_numbers' => $batch_numbers,
                                         'batch_quantities' => $item['batch_quantities'] ?? '',
                                         'batch_expiries' => $item['batch_expiries'] ?? '',
-                                        'batch_statuses' => $item['batch_statuses'] ?? ''
+                                        'batch_statuses' => $item['batch_statuses'] ?? '',
+                                        'batch_categories' => $item['batch_categories'] ?? '',
+                                        'batch_suppliers' => $item['batch_suppliers'] ?? '',
+                                        'batch_added_bys' => $item['batch_added_bys'] ?? ''
                                     ]), ENT_QUOTES, 'UTF-8');
                                 ?>
                                 <tr class="equip-row" data-search="<?= htmlspecialchars($search_data) ?>">
@@ -1633,15 +2333,30 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     <td class="col-name">
                                         <strong><?= htmlspecialchars($item['equipment_name']) ?></strong>
                                         <?php if ($batch_count > 1): ?>
-                                            <span style="font-size:0.5rem;background:var(--page-primary-bg);color:var(--page-primary);padding:0 6px;border-radius:8px;"><?= $batch_count ?> batches</span>
+                                            <span class="batch-count-badge">
+                                                <i class="fas fa-layer-group"></i> <?= $batch_count ?> batches
+                                            </span>
                                         <?php endif; ?>
+                                        <div style="font-size:0.65rem;color:var(--page-text-muted);margin-top:2px;">
+                                            <i class="fas fa-cube"></i> <?= htmlspecialchars($item['unit'] ?? 'pcs') ?>
+                                        </div>
                                     </td>
-                                    <td class="col-category"><?= htmlspecialchars($category_display) ?></td>
-                                    <td class="col-branch"><span style="font-weight:600;color:var(--page-primary);font-size:0.65rem;">🏥 <?= htmlspecialchars($branch_name) ?></span></td>
+                                    <td class="col-category">
+                                        <span style="background:var(--page-purple-bg);color:var(--page-purple);padding:4px 12px;border-radius:12px;font-size:0.7rem;font-weight:600;">
+                                            <?= htmlspecialchars($category_display) ?>
+                                        </span>
+                                    </td>
+                                    <td class="col-branch">
+                                        <span style="background:var(--page-success-bg);color:var(--page-success);padding:4px 12px;border-radius:12px;font-size:0.7rem;font-weight:600;border:1px solid rgba(5,150,105,0.2);">
+                                            <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name) ?>
+                                        </span>
+                                    </td>
                                     <td class="col-qty">
-                                        <strong><?= $active_qty ?></strong>
+                                        <strong><?= number_format($active_qty) ?></strong>
                                         <?php if ($active_qty == 0 && $display_status === 'active'): ?>
-                                            <span class="zero-qty-warning"><i class="fas fa-exclamation-triangle"></i> 0 Qty</span>
+                                            <span class="zero-qty-warning">
+                                                <i class="fas fa-exclamation-triangle"></i> Cannot sell
+                                            </span>
                                         <?php endif; ?>
                                     </td>
                                     <td class="col-reorder"><?= $item['reorder_level'] ?></td>
@@ -1662,33 +2377,51 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     <td class="col-days">
                                         <?php if (!empty($expiry_date) && $expiry_date !== '0000-00-00' && $days !== '-'): ?>
                                             <span class="days-remaining <?= $days_class ?>">
-                                                <?php if ($days < 0): ?>EXP
-                                                <?php else: ?><?= $days ?>d<?php endif; ?>
+                                                <?php if ($days < 0): ?><i class="fas fa-skull"></i> EXP
+                                                <?php elseif ($days <= 30): ?><i class="fas fa-clock"></i> <?= $days ?>d
+                                                <?php else: ?><i class="fas fa-check"></i> <?= $days ?>d<?php endif; ?>
                                             </span>
                                         <?php else: ?>
-                                            <span class="days-remaining forever">∞</span>
+                                            <span class="days-remaining forever"><i class="fas fa-infinity"></i> ∞</span>
                                         <?php endif; ?>
                                     </td>
                                     <td class="col-batch">
                                         <?php if (!empty($first_batch)): ?>
                                             <span class="batch-number"><?= htmlspecialchars($first_batch) ?></span>
+                                            <?php if ($batch_count > 1): ?>
+                                                <span style="font-size:0.65rem;color:var(--page-text-muted);margin-left:4px;font-weight:600;">+<?= $batch_count - 1 ?></span>
+                                            <?php endif; ?>
                                         <?php else: ?>
-                                            <span style="color:var(--page-text-secondary);font-size:0.6rem;">N/A</span>
+                                            <span style="color:var(--page-text-muted);font-size:0.75rem;">N/A</span>
                                         <?php endif; ?>
                                     </td>
-                                    <td class="col-status"><span class="status-badge <?= $display_status ?>"><?= ucfirst($display_status) ?></span></td>
-                                    <td class="col-active"><span class="stock-badge <?= $active_qty > 0 ? 'ok' : 'out' ?>"><?= $active_qty > 0 ? 'YES' : 'NO' ?></span></td>
-                                    <td class="col-added-by"><span class="added-by-tag"><i class="fas fa-user-circle"></i> <?= htmlspecialchars($added_by_display) ?></span></td>
+                                    <td class="col-status">
+                                        <span class="status-badge <?= $display_status ?>">
+                                            <i class="fas <?= $display_status === 'active' ? 'fa-circle-check' : 'fa-circle-xmark' ?>"></i>
+                                            <?= ucfirst($display_status) ?>
+                                        </span>
+                                    </td>
+                                    <td class="col-added-by">
+                                        <span class="added-by-tag">
+                                            <i class="fas fa-user-circle"></i> <?= htmlspecialchars($added_by_display) ?>
+                                        </span>
+                                    </td>
                                     <td class="col-actions">
                                         <div class="action-group">
-                                            <button class="action-btn view" onclick='openViewModal(<?= $view_data_json ?>, "equipment")'><i class="fas fa-eye"></i> View</button>
-                                            <button class="action-btn edit" onclick="openEditEquipmentModal(<?= $first_batch_id ?>, '<?= htmlspecialchars($item['equipment_name']) ?>')"><i class="fas fa-edit"></i> Edit</button>
-                                            <button class="action-btn delete" onclick="deleteEquipment(<?= $first_batch_id ?>, '<?= addslashes($item['equipment_name']) ?>')"><i class="fas fa-trash"></i> Delete</button>
+                                            <button class="action-btn view" onclick='openViewModal(<?= $view_data_json ?>, "equipment")'>
+                                                <i class="fas fa-eye"></i> View
+                                            </button>
+                                            <button class="action-btn edit" onclick="openEditEquipmentModal(<?= $first_batch_id ?>, '<?= htmlspecialchars($item['equipment_name']) ?>')">
+                                                <i class="fas fa-edit"></i> Edit
+                                            </button>
+                                            <button class="action-btn delete" onclick="deleteEquipment(<?= $first_batch_id ?>, '<?= addslashes($item['equipment_name']) ?>')">
+                                                <i class="fas fa-trash"></i> Delete
+                                            </button>
                                         </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
-                            <tr class="no-results-row" id="equipNoResults" style="display:none;"><td colspan="15"><i class="fas fa-search-minus"></i><p>No equipment match</p></td></tr>
+                            <tr class="no-results-row" id="equipNoResults" style="display:none;"><td colspan="14"><i class="fas fa-search-minus"></i><p>No equipment match</p></td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -1730,12 +2463,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC JAVASCRIPT ONLY (NO dark mode, NO clock, NO search) -->
-<!-- ================================================================ -->
 <script>
 // ================================================================
-// ✅ ZUIA SCROLL WHEEL KUBADILISHA NUMBER INPUTS
+// ZUIA SCROLL WHEEL KUBADILISHA NUMBER INPUTS
 // ================================================================
 document.addEventListener('wheel', function(e) {
     if (document.activeElement && 
@@ -1745,9 +2475,6 @@ document.addEventListener('wheel', function(e) {
     }
 }, { passive: true });
 
-// ================================================================
-// ✅ NUMERIC-ONLY INPUTS
-// ================================================================
 function setupNumericOnlyInputs() {
     document.querySelectorAll('.numeric-only').forEach(function(input) {
         if (input.dataset.numericInit) return;
@@ -1805,7 +2532,7 @@ function deleteEquipment(id, name) {
 }
 
 // ================================================================
-// TAB SWITCHING (preserve branch)
+// TAB SWITCHING
 // ================================================================
 function switchTab(tab) {
     var url = new URL(window.location.href);
@@ -1843,7 +2570,7 @@ function updateEquipScrollBtns() {
 }
 
 // ================================================================
-// AUTO SEARCH (PAGE-SPECIFIC - separate from global search)
+// AUTO SEARCH
 // ================================================================
 document.getElementById('medSearchInput')?.addEventListener('input', function() {
     var q = this.value.toLowerCase().trim();
@@ -1897,6 +2624,9 @@ document.querySelectorAll('.modal-overlay').forEach(function(m) {
     });
 });
 
+// ================================================================
+// VIEW MODAL
+// ================================================================
 function openViewModal(data, type) {
     var m = document.getElementById('viewModal');
     if (!m) return;
@@ -1908,9 +2638,20 @@ function openViewModal(data, type) {
     var bQtys = data.batch_quantities ? data.batch_quantities.split('|') : [];
     var bExps = data.batch_expiries ? data.batch_expiries.split('|') : [];
     var bStats = data.batch_statuses ? data.batch_statuses.split('|') : [];
+    var bCats = data.batch_categories ? data.batch_categories.split('|') : [];
+    var bSups = data.batch_suppliers ? data.batch_suppliers.split('|') : [];
+    var bAdds = data.batch_added_bys ? data.batch_added_bys.split('|') : [];
     
     for (var i = 0; i < bIds.length; i++) {
-        var bId = bIds[i] || 0, bNum = bNums[i] || 'N/A', q = bQtys[i] || 0, exp = bExps[i] || '', st = bStats[i] || 'active';
+        var bId = bIds[i] || 0;
+        var bNum = bNums[i] || 'N/A';
+        var q = parseInt(bQtys[i]) || 0;
+        var exp = bExps[i] || '';
+        var st = bStats[i] || 'active';
+        var cat = bCats[i] || 'N/A';
+        var sup = bSups[i] || 'N/A';
+        var addBy = bAdds[i] || 'System';
+        
         var expDisp = 'No Expiry', expCls = 'no-expiry', dL = '∞', dCls = 'forever', stLbl = 'Active', stCls = 'active';
         
         if (exp && exp !== '0000-00-00') {
@@ -1922,23 +2663,28 @@ function openViewModal(data, type) {
             else { expCls = 'valid'; dCls = 'good'; stLbl = 'Valid'; }
             expDisp = new Date(exp).toLocaleDateString('en-GB');
         }
+        
         if (st === 'inactive') { stLbl = 'Inactive'; stCls = 'inactive'; }
         else if (q == 0) { stLbl = 'Active (0 Qty)'; stCls = 'active'; }
         
         batchesHtml += '<tr style="border-bottom:1px solid var(--page-border);">'
-            + '<td style="padding:5px;"><span class="batch-number">' + bNum + '</span></td>'
-            + '<td style="text-align:center;font-weight:600;">' + q + (q == 0 ? ' <span class="zero-qty-warning"><i class="fas fa-exclamation-triangle"></i> 0 Qty</span>' : '') + '</td>'
-            + '<td><span class="expiry-badge ' + expCls + '">' + expDisp + '</span></td>'
-            + '<td style="text-align:center;"><span class="days-remaining ' + dCls + '">' + (dL === '∞' ? '∞' : (dL < 0 ? 'EXP' : dL + 'd')) + '</span></td>'
-            + '<td style="text-align:center;"><span class="status-badge ' + stCls + '">' + stLbl + '</span></td>'
-            + '<td style="text-align:center;">'
-                + '<button class="action-btn-sm edit" onclick="closeModal(\'viewModal\');openEdit' + (type === 'medicine' ? 'Medicine' : 'Equipment') + 'Modal(' + bId + ', \'' + (data.name || '').replace(/'/g, "\\'") + '\')"><i class="fas fa-edit"></i></button> '
-                + '<button class="action-btn-sm delete" onclick="closeModal(\'viewModal\');' + (type === 'medicine' ? 'deleteMedicine' : 'deleteEquipment') + '(' + bId + ', \'' + (data.name || '').replace(/'/g, "\\'") + '\')"><i class="fas fa-trash"></i></button>'
+            + '<td style="padding:8px;text-align:center;color:var(--page-text-secondary);font-weight:700;">' + (i + 1) + '</td>'
+            + '<td style="padding:8px;"><span class="batch-number">' + bNum + '</span></td>'
+            + '<td style="padding:8px;"><span style="background:var(--page-primary-bg);color:var(--page-primary);padding:3px 10px;border-radius:10px;font-size:0.65rem;font-weight:600;">' + cat + '</span></td>'
+            + '<td style="padding:8px;text-align:center;font-weight:700;font-family:monospace;">' + q + (q == 0 ? ' <span class="zero-qty-warning"><i class="fas fa-exclamation-triangle"></i></span>' : '') + '</td>'
+            + '<td style="padding:8px;"><span class="expiry-badge ' + expCls + '">' + expDisp + '</span></td>'
+            + '<td style="padding:8px;text-align:center;"><span class="days-remaining ' + dCls + '">' + (dL === '∞' ? '∞' : (dL < 0 ? 'EXP' : dL + 'd')) + '</span></td>'
+            + '<td style="padding:8px;text-align:center;"><span class="status-badge ' + stCls + '">' + stLbl + '</span></td>'
+            + '<td style="padding:8px;text-align:center;font-size:0.7rem;color:var(--page-text-secondary);">' + sup + '</td>'
+            + '<td style="padding:8px;text-align:center;"><span class="added-by-tag" style="font-size:0.65rem;"><i class="fas fa-user-circle"></i> ' + addBy + '</span></td>'
+            + '<td style="padding:8px;text-align:center;white-space:nowrap;">'
+                + '<button class="action-btn-sm edit" title="Edit" onclick="closeModal(\'viewModal\');openEdit' + (type === 'medicine' ? 'Medicine' : 'Equipment') + 'Modal(' + bId + ', \'' + (data.name || '').replace(/'/g, "\\'") + '\')"><i class="fas fa-edit"></i></button> '
+                + '<button class="action-btn-sm delete" title="Delete" onclick="closeModal(\'viewModal\');' + (type === 'medicine' ? 'deleteMedicine' : 'deleteEquipment') + '(' + bId + ', \'' + (data.name || '').replace(/'/g, "\\'") + '\')"><i class="fas fa-trash"></i></button>'
             + '</td></tr>';
     }
     
     if (bIds.length === 0) {
-        batchesHtml = '<tr><td colspan="6" style="text-align:center;padding:10px;color:var(--page-text-secondary);">No batches</td></tr>';
+        batchesHtml = '<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--page-text-secondary);"><i class="fas fa-box-open" style="font-size:1.5rem;display:block;margin-bottom:8px;"></i>No batches</td></tr>';
     }
     
     var total = data.active_qty || 0;
@@ -1946,25 +2692,62 @@ function openViewModal(data, type) {
     if (total <= 0) { stockBadge = 'out'; stockText = 'Out of Stock'; }
     else if (total <= (data.reorder_level || 0)) { stockBadge = 'low'; stockText = 'Low Stock'; }
     
-    var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">'
-        + '<div style="grid-column:1/-1;padding:8px;background:var(--page-bg-body);border-radius:6px;"><div style="font-size:0.55rem;text-transform:uppercase;color:var(--page-text-secondary);font-weight:600;">Name</div><div style="font-size:0.85rem;font-weight:600;">' + (data.name || 'N/A') + '</div></div>'
-        + '<div style="padding:8px;background:var(--page-bg-body);border-radius:6px;"><div style="font-size:0.55rem;text-transform:uppercase;color:var(--page-text-secondary);font-weight:600;">Category</div><div style="font-size:0.85rem;font-weight:600;">' + (data.category || 'N/A') + '</div></div>'
-        + '<div style="padding:8px;background:var(--page-bg-body);border-radius:6px;"><div style="font-size:0.55rem;text-transform:uppercase;color:var(--page-text-secondary);font-weight:600;">Unit</div><div style="font-size:0.85rem;font-weight:600;">' + (data.unit || 'pcs') + '</div></div>'
-        + '<div style="padding:8px;background:var(--page-bg-body);border-radius:6px;"><div style="font-size:0.55rem;text-transform:uppercase;color:var(--page-text-secondary);font-weight:600;">Total Qty</div><div style="font-size:0.85rem;font-weight:600;">' + total + ' <span class="stock-badge ' + stockBadge + '">' + stockText + '</span>'
-            + (total === 0 ? ' <span style="font-size:0.6rem;color:var(--page-warning);font-weight:600;"><i class="fas fa-exclamation-triangle"></i> Cannot be sold</span>' : '')
-        + '</div></div>'
-        + '<div style="padding:8px;background:var(--page-bg-body);border-radius:6px;"><div style="font-size:0.55rem;text-transform:uppercase;color:var(--page-text-secondary);font-weight:600;">Selling Price</div><div style="font-size:0.85rem;font-weight:600;">' + (data.selling_price > 0 ? 'TSh ' + Number(data.selling_price).toLocaleString() : 'FREE') + '</div></div>'
+    var html = ''
+        + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">'
+            + '<div style="grid-column:1/-1;padding:10px 12px;background:var(--page-bg-body);border-radius:8px;border-left:4px solid var(--page-primary);">'
+                + '<div style="font-size:0.55rem;text-transform:uppercase;color:var(--page-text-secondary);font-weight:600;letter-spacing:0.05em;">Name</div>'
+                + '<div style="font-size:0.95rem;font-weight:700;color:var(--page-text-primary);margin-top:2px;">' + (data.name || 'N/A') + '</div>'
+            + '</div>'
+            + '<div style="padding:8px 12px;background:var(--page-bg-body);border-radius:8px;">'
+                + '<div style="font-size:0.55rem;text-transform:uppercase;color:var(--page-text-secondary);font-weight:600;">Category</div>'
+                + '<div style="font-size:0.85rem;font-weight:600;margin-top:2px;">' + (data.category || 'N/A') + '</div>'
+            + '</div>'
+            + '<div style="padding:8px 12px;background:var(--page-bg-body);border-radius:8px;">'
+                + '<div style="font-size:0.55rem;text-transform:uppercase;color:var(--page-text-secondary);font-weight:600;">Unit</div>'
+                + '<div style="font-size:0.85rem;font-weight:600;margin-top:2px;">' + (data.unit || 'pcs') + '</div>'
+            + '</div>'
+            + '<div style="padding:8px 12px;background:var(--page-bg-body);border-radius:8px;">'
+                + '<div style="font-size:0.55rem;text-transform:uppercase;color:var(--page-text-secondary);font-weight:600;">Total Quantity (Active)</div>'
+                + '<div style="font-size:0.85rem;font-weight:600;margin-top:2px;display:flex;align-items:center;gap:6px;">'
+                    + '<span style="font-family:monospace;font-size:1rem;color:var(--page-primary);">' + total + '</span> '
+                    + '<span class="stock-badge ' + stockBadge + '">' + stockText + '</span>'
+                + '</div>'
+            + '</div>'
+            + '<div style="padding:8px 12px;background:var(--page-bg-body);border-radius:8px;">'
+                + '<div style="font-size:0.55rem;text-transform:uppercase;color:var(--page-text-secondary);font-weight:600;">Selling Price</div>'
+                + '<div style="font-size:0.85rem;font-weight:600;margin-top:2px;color:var(--page-success);font-family:monospace;">' 
+                    + (data.selling_price > 0 ? 'TSh ' + Number(data.selling_price).toLocaleString() : 'FREE') 
+                + '</div>'
+            + '</div>'
+            + '<div style="padding:8px 12px;background:var(--page-bg-body);border-radius:8px;">'
+                + '<div style="font-size:0.55rem;text-transform:uppercase;color:var(--page-text-secondary);font-weight:600;">Branch</div>'
+                + '<div style="font-size:0.85rem;font-weight:600;margin-top:2px;"><i class="fas fa-store-alt" style="color:var(--page-primary);"></i> ' + (data.branch_name || 'N/A') + '</div>'
+            + '</div>'
         + '</div>'
-        + '<div style="font-size:0.75rem;font-weight:600;margin-bottom:6px;"><i class="fas fa-layer-group"></i> Batches (' + bIds.length + ')</div>'
-        + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:0.7rem;">'
-        + '<thead><tr style="background:var(--page-primary);color:white;">'
-        + '<th style="padding:5px;font-size:0.55rem;text-transform:uppercase;text-align:left;">Batch</th>'
-        + '<th style="padding:5px;font-size:0.55rem;text-transform:uppercase;text-align:center;">Qty</th>'
-        + '<th style="padding:5px;font-size:0.55rem;text-transform:uppercase;text-align:left;">Expiry</th>'
-        + '<th style="padding:5px;font-size:0.55rem;text-transform:uppercase;text-align:center;">Days</th>'
-        + '<th style="padding:5px;font-size:0.55rem;text-transform:uppercase;text-align:center;">Status</th>'
-        + '<th style="padding:5px;font-size:0.55rem;text-transform:uppercase;text-align:center;">Actions</th>'
-        + '</tr></thead><tbody>' + batchesHtml + '</tbody></table></div>';
+        
+        + '<div style="background:linear-gradient(135deg,var(--page-primary),var(--page-primary-dark));color:white;padding:10px 16px;border-radius:10px 10px 0 0;display:flex;align-items:center;justify-content:space-between;">'
+            + '<div style="font-size:0.85rem;font-weight:700;display:flex;align-items:center;gap:8px;">'
+                + '<i class="fas fa-layer-group"></i> ALL BATCHES (' + bIds.length + ')'
+            + '</div>'
+            + '<div style="font-size:0.7rem;opacity:0.9;">Sorted by expiry date (earliest first)</div>'
+        + '</div>'
+        + '<div style="overflow-x:auto;border:2px solid var(--page-primary);border-top:none;border-radius:0 0 10px 10px;">'
+            + '<table style="width:100%;border-collapse:collapse;font-size:0.75rem;">'
+                + '<thead><tr style="background:var(--page-primary-bg);color:var(--page-primary);">'
+                    + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:center;font-weight:700;border-bottom:1px solid var(--page-primary);">#</th>'
+                    + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:left;font-weight:700;border-bottom:1px solid var(--page-primary);">Batch Number</th>'
+                    + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:left;font-weight:700;border-bottom:1px solid var(--page-primary);">Category</th>'
+                    + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:center;font-weight:700;border-bottom:1px solid var(--page-primary);">Qty</th>'
+                    + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:left;font-weight:700;border-bottom:1px solid var(--page-primary);">Expiry Date</th>'
+                    + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:center;font-weight:700;border-bottom:1px solid var(--page-primary);">Days</th>'
+                    + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:center;font-weight:700;border-bottom:1px solid var(--page-primary);">Status</th>'
+                    + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:center;font-weight:700;border-bottom:1px solid var(--page-primary);">Supplier</th>'
+                    + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:center;font-weight:700;border-bottom:1px solid var(--page-primary);">Added By</th>'
+                    + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:center;font-weight:700;border-bottom:1px solid var(--page-primary);">Actions</th>'
+                + '</tr></thead>'
+                + '<tbody>' + batchesHtml + '</tbody>'
+            + '</table>'
+        + '</div>';
     
     document.getElementById('viewModalBody').innerHTML = html;
     m.classList.add('show');
@@ -2060,10 +2843,11 @@ setTimeout(function() {
     if (m) m.style.display = 'none';
 }, 5000);
 
-console.log('%c📦 Admin Inventory', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ Inatumia SHARED header + sidebar', 'font-size:13px;color:#34D399;font-weight:bold;');
-console.log('%c✅ Ondoa duplicates za dark mode, clock, search, branch', 'font-size:13px;color:#34D399;');
-console.log('%c✅ Dark mode inatoka kwa header pekee', 'font-size:13px;color:#34D399;');
+console.log('%c📦 Admin Inventory V8.9', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ Batch count badge ni BLUE', 'font-size:13px;color:#34D399;font-weight:bold;');
+console.log('%c✅ Stock low, days warning, expiry expiring ni BLUE', 'font-size:13px;color:#34D399;font-weight:bold;');
+console.log('%c✅ GROUP BY name + unit + branch', 'font-size:13px;color:#34D399;font-weight:bold;');
+console.log('%c✅ Batches zote zinaonekana kwenye View Modal', 'font-size:13px;color:#34D399;font-weight:bold;');
 </script>
 
 </body>

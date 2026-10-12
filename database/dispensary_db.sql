@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Oct 05, 2026 at 07:28 PM
+-- Generation Time: Oct 12, 2026 at 11:03 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -1005,6 +1005,32 @@ INSERT INTO `branches` (`id`, `name`, `location`, `phone`, `email`, `logo`, `sta
 (2, 'Arusha', 'Arusha City, Tanzania', '+255 700 000 002', 'arusha@braick.com', NULL, 'active', '2026-08-23 12:26:09', '2026-08-23 12:26:09'),
 (3, 'Dar es Salaam', 'Dar es Salaam, Tanzania', '+255 700 000 003', 'dar@braick.com', NULL, 'active', '2026-08-23 12:26:09', '2026-08-23 12:26:09'),
 (4, 'KAHAMA', 'KIGOMA', '+255623693303', 'jacksonmyula773@gmail.com', NULL, 'active', '2026-09-15 15:25:24', '2026-09-15 15:25:24');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `daily_activities`
+--
+
+CREATE TABLE `daily_activities` (
+  `id` int(11) NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `activity_date` date NOT NULL,
+  `title` varchar(255) NOT NULL,
+  `description` text DEFAULT NULL,
+  `category` varchar(100) DEFAULT NULL,
+  `start_time` time DEFAULT NULL,
+  `end_time` time DEFAULT NULL,
+  `duration_minutes` int(11) DEFAULT NULL,
+  `status` enum('pending','in_progress','completed','cancelled') DEFAULT 'completed',
+  `priority` enum('low','medium','high','urgent') DEFAULT 'medium',
+  `patient_id` int(11) DEFAULT NULL,
+  `visit_id` int(11) DEFAULT NULL,
+  `notes` text DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
 
@@ -3147,6 +3173,19 @@ ALTER TABLE `branches`
   ADD PRIMARY KEY (`id`);
 
 --
+-- Indexes for table `daily_activities`
+--
+ALTER TABLE `daily_activities`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `user_id` (`user_id`),
+  ADD KEY `branch_id` (`branch_id`),
+  ADD KEY `activity_date` (`activity_date`),
+  ADD KEY `idx_user_date` (`user_id`,`activity_date`),
+  ADD KEY `idx_date_time` (`activity_date`,`start_time`,`end_time`),
+  ADD KEY `daily_activities_ibfk_3` (`patient_id`),
+  ADD KEY `daily_activities_ibfk_4` (`visit_id`);
+
+--
 -- Indexes for table `diseases`
 --
 ALTER TABLE `diseases`
@@ -3526,6 +3565,12 @@ ALTER TABLE `branches`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
+-- AUTO_INCREMENT for table `daily_activities`
+--
+ALTER TABLE `daily_activities`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
 -- AUTO_INCREMENT for table `diseases`
 --
 ALTER TABLE `diseases`
@@ -3763,6 +3808,15 @@ ALTER TABLE `bills`
 ALTER TABLE `bill_items`
   ADD CONSTRAINT `bill_items_ibfk_1` FOREIGN KEY (`bill_id`) REFERENCES `bills` (`id`) ON DELETE CASCADE,
   ADD CONSTRAINT `bill_items_ibfk_3` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `daily_activities`
+--
+ALTER TABLE `daily_activities`
+  ADD CONSTRAINT `daily_activities_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `daily_activities_ibfk_2` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `daily_activities_ibfk_3` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `daily_activities_ibfk_4` FOREIGN KEY (`visit_id`) REFERENCES `visits` (`id`) ON DELETE SET NULL;
 
 --
 -- Constraints for table `employee_departments`

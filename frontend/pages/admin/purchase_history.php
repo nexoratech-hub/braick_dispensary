@@ -1,12 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/purchase_history.php
-// ADMIN - PURCHASE HISTORY WITH VIEW, EDIT, DELETE, CANCEL REASON
-// ✅ Uses SHARED admin_header.php & admin_sidebar.php
-// ✅ Page-specific CSS only (no duplicates)
-// ✅ Dark mode via header toggle
-// DELETE removes from purchases/purchase_items ONLY
-// Inventory stock REMAINS (does not delete stock)
+// ADMIN - PURCHASE HISTORY V9.1
+// ✅ Table header search (auto-filter, no submit)
+// ✅ Rows & columns kubwa, zinaonekana vizuri
+// ✅ Group dawa kwa invoice zao + margin per invoice
+// ✅ Search inatafuta dawa, batch, category pia
+// ✅ Column "Added By" kwenye View Modal (per item)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -154,13 +154,16 @@ $type_filter = isset($_GET['type']) ? $_GET['type'] : 'all';
 $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
-// BUILD QUERY
+// BUILD QUERY - Ongeza search ya dawa kwenye purchase_items
 $query = "
     SELECT 
         p.*,
         u.full_name as creator_name,
         (SELECT COUNT(*) FROM purchase_items WHERE purchase_id = p.id) as items_count,
-        (SELECT SUM(quantity) FROM purchase_items WHERE purchase_id = p.id) as total_qty
+        (SELECT SUM(quantity) FROM purchase_items WHERE purchase_id = p.id) as total_qty,
+        (SELECT GROUP_CONCAT(DISTINCT item_name SEPARATOR ', ') 
+         FROM purchase_items 
+         WHERE purchase_id = p.id AND item_name IS NOT NULL) as items_list
     FROM purchases p
     LEFT JOIN users u ON p.created_by = u.id
     WHERE 1=1
@@ -184,7 +187,23 @@ if ($type_filter !== 'all') {
 }
 
 if (!empty($search)) {
-    $query .= " AND (p.invoice_number LIKE ? OR p.created_by_name LIKE ? OR p.cancelled_reason LIKE ?)";
+    $query .= " AND (
+        p.invoice_number LIKE ? 
+        OR p.created_by_name LIKE ? 
+        OR p.cancelled_reason LIKE ?
+        OR EXISTS (
+            SELECT 1 FROM purchase_items pi 
+            WHERE pi.purchase_id = p.id 
+            AND (
+                pi.item_name LIKE ? 
+                OR pi.item_batch_number LIKE ?
+                OR pi.item_category LIKE ?
+            )
+        )
+    )";
+    $params[] = "%$search%";
+    $params[] = "%$search%";
+    $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
@@ -230,32 +249,41 @@ if ($view_id > 0) {
     $view_purchase = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($view_purchase) {
+        // Chukua items zote - tumia columns mpya za purchase_items
         $stmt = $db->prepare("
             SELECT 
                 pi.*,
-                CASE 
-                    WHEN pi.item_type = 'medicine' THEN mi.medication_name 
-                    WHEN pi.item_type = 'equipment' THEN eq.equipment_name 
-                END as item_name,
-                CASE 
-                    WHEN pi.item_type = 'medicine' THEN mi.category 
-                    WHEN pi.item_type = 'equipment' THEN eq.category 
-                END as category,
-                CASE 
-                    WHEN pi.item_type = 'medicine' THEN mi.unit 
-                    WHEN pi.item_type = 'equipment' THEN eq.unit 
-                END as unit,
-                CASE 
-                    WHEN pi.item_type = 'medicine' THEN mi.batch_number 
-                    WHEN pi.item_type = 'equipment' THEN eq.batch_number 
-                END as batch_number,
-                u.full_name as added_by_full_name
+                COALESCE(pi.item_name, 
+                    CASE WHEN pi.item_type = 'medicine' THEN mi.medication_name 
+                         WHEN pi.item_type = 'equipment' THEN eq.equipment_name END
+                ) as item_name,
+                COALESCE(pi.item_category,
+                    CASE WHEN pi.item_type = 'medicine' THEN mi.category 
+                         WHEN pi.item_type = 'equipment' THEN eq.category END
+                ) as category,
+                COALESCE(pi.item_unit,
+                    CASE WHEN pi.item_type = 'medicine' THEN mi.unit 
+                         WHEN pi.item_type = 'equipment' THEN eq.unit END
+                ) as unit,
+                COALESCE(pi.item_batch_number,
+                    CASE WHEN pi.item_type = 'medicine' THEN mi.batch_number 
+                         WHEN pi.item_type = 'equipment' THEN eq.batch_number END
+                ) as batch_number,
+                COALESCE(pi.item_expiry_date,
+                    CASE WHEN pi.item_type = 'medicine' THEN mi.expiry_date 
+                         WHEN pi.item_type = 'equipment' THEN eq.expiry_date END
+                ) as expiry_date,
+                COALESCE(pi.item_supplier,
+                    CASE WHEN pi.item_type = 'medicine' THEN mi.supplier 
+                         WHEN pi.item_type = 'equipment' THEN eq.supplier END
+                ) as supplier,
+                COALESCE(pi.added_by_name, u.full_name) as added_by_full_name
             FROM purchase_items pi
             LEFT JOIN medications_inventory mi ON pi.item_id = mi.id AND pi.item_type = 'medicine'
             LEFT JOIN medical_equipment eq ON pi.item_id = eq.id AND pi.item_type = 'equipment'
             LEFT JOIN users u ON pi.added_by = u.id
             WHERE pi.purchase_id = ?
-            ORDER BY pi.added_at DESC
+            ORDER BY pi.item_name ASC, pi.added_at DESC
         ");
         $stmt->execute([$view_id]);
         $view_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -341,7 +369,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 }
 
 // ================================================================
-// ✅ INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
@@ -351,9 +379,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- PAGE-SPECIFIC CSS -->
 <!-- ================================================================ -->
 <style>
-    /* ================================================================
-       PAGE VARIABLES
-       ================================================================ */
     :root {
         --ph-primary: #0B5ED7;
         --ph-primary-dark: #0A4CA8;
@@ -375,9 +400,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         --ph-text-primary: #1E293B;
         --ph-text-secondary: #64748B;
         --ph-text-muted: #94A3B8;
-        --ph-radius: 12px;
-        --ph-shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-        --ph-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
     }
 
     [data-theme="dark"] {
@@ -389,20 +411,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         --ph-text-muted: #64748B;
     }
 
-    /* ================================================================
-       DARK MODE - PAGE YOTE
-       ================================================================ */
-    html[data-theme="dark"] body {
-        background: #0F172A !important;
-    }
-
-    html[data-theme="dark"] .main-content {
-        background: #0F172A !important;
-        color: #F1F5F9;
-    }
+    html[data-theme="dark"] body { background: #0F172A !important; }
+    html[data-theme="dark"] .main-content { background: #0F172A !important; color: #F1F5F9; }
 
     /* ================================================================
-       PAGE HEADER BOX
+       PAGE HEADER
        ================================================================ */
     .page-header-box-ph {
         background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
@@ -518,11 +531,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         min-height: 80px;
     }
 
-    .stat-card-ph:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-    }
-
+    .stat-card-ph:hover { transform: translateY(-4px); box-shadow: 0 8px 25px rgba(0,0,0,0.15); }
     .stat-card-ph .stat-number { font-size: 1.4rem; font-weight: 700; line-height: 1.2; }
     .stat-card-ph .stat-label { font-size: 0.6rem; color: rgba(255,255,255,0.85); font-weight: 500; margin-top: 2px; }
     .stat-card-ph .stat-icon { font-size: 1.2rem; opacity: 0.8; float: right; }
@@ -548,11 +557,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         margin-bottom: 20px;
     }
 
-    .card-ph:hover {
-        border-color: var(--ph-primary);
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06);
-    }
-
     .card-header-ph {
         display: flex;
         justify-content: space-between;
@@ -570,7 +574,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     .card-title-ph .title-blue { color: var(--ph-primary); }
-    .card-title-ph .title-green { color: var(--ph-success); }
 
     .result-count-ph {
         font-size: 0.8rem;
@@ -580,49 +583,114 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .result-count-ph strong { color: var(--ph-primary); }
 
     /* ================================================================
-       SCROLL BUTTONS
+       TABLE HEADER BAR
        ================================================================ */
-    .scroll-arrows-ph {
+    .table-header-bar-ph {
         display: flex;
-        gap: 5px;
+        justify-content: space-between;
         align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-bottom: 14px;
+        padding-bottom: 12px;
+        border-bottom: 2px solid var(--ph-border-color);
     }
 
-    .scroll-arrow-btn-ph {
-        width: 30px;
-        height: 30px;
-        border-radius: 50%;
+    .table-header-left-ph {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .table-header-right-ph {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+    }
+
+    .table-search-box-ph {
+        position: relative;
+        min-width: 320px;
+        flex: 1;
+        max-width: 500px;
+    }
+
+    .table-search-box-ph i {
+        position: absolute;
+        left: 14px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: rgba(255,255,255,0.95);
+        font-size: 0.9rem;
+        pointer-events: none;
+        z-index: 1;
+    }
+
+    .table-search-box-ph input {
+        width: 100%;
+        padding: 11px 16px 11px 44px;
+        border: 2px solid var(--ph-primary);
+        border-radius: 10px;
+        font-size: 0.85rem;
+        background: linear-gradient(135deg, var(--ph-primary), var(--ph-primary-dark));
+        color: white;
+        outline: none;
+        font-weight: 500;
+        height: 44px;
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
+        transition: all 0.3s ease;
+        font-family: inherit;
+    }
+
+    .table-search-box-ph input::placeholder {
+        color: rgba(255,255,255,0.85);
+        font-weight: 400;
+    }
+
+    .table-search-box-ph input:focus {
+        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.25), 0 6px 20px rgba(11, 94, 215, 0.35);
+        transform: translateY(-1px);
+    }
+
+    .scroll-btn-header-ph {
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
         border: 2px solid var(--ph-border-color);
         background: var(--ph-bg-card);
-        color: var(--ph-text-secondary);
+        color: var(--ph-text-primary);
         cursor: pointer;
-        transition: all 0.3s ease;
-        display: flex;
+        display: inline-flex;
         align-items: center;
         justify-content: center;
-        font-size: 0.75rem;
+        transition: all 0.3s ease;
+        font-size: 0.85rem;
     }
 
-    .scroll-arrow-btn-ph:hover {
+    .scroll-btn-header-ph:hover {
+        background: var(--ph-primary);
         border-color: var(--ph-primary);
+        color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+
+    .scroll-btn-header-ph:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+
+    .search-results-info-ph {
+        font-size: 0.72rem;
         color: var(--ph-primary);
+        padding: 6px 12px;
         background: var(--ph-primary-light);
-        transform: scale(1.05);
+        border-radius: 8px;
+        display: none;
+        font-weight: 600;
+        border: 1px solid var(--ph-primary);
     }
-
-    .table-wrapper-ph { position: relative; }
-
-    .table-scroll-container-ph {
-        overflow-x: auto;
-        overflow-y: auto;
-        max-height: 500px;
-        scroll-behavior: smooth;
-        -webkit-overflow-scrolling: touch;
-    }
-
-    .table-scroll-container-ph::-webkit-scrollbar { height: 6px; width: 5px; }
-    .table-scroll-container-ph::-webkit-scrollbar-track { background: var(--ph-bg-body); border-radius: 4px; }
-    .table-scroll-container-ph::-webkit-scrollbar-thumb { background: var(--ph-primary); border-radius: 4px; }
 
     /* ================================================================
        FILTERS
@@ -667,17 +735,18 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .search-form-ph input[type="text"],
     .search-form-ph select,
     .search-form-ph input[type="date"] {
-        padding: 6px 12px;
+        padding: 8px 14px;
         border: 2px solid var(--ph-border-color);
         border-radius: 8px;
-        font-size: 0.8rem;
+        font-size: 0.82rem;
         background: var(--ph-bg-card);
         color: var(--ph-text-primary);
         outline: none;
         transition: all 0.3s ease;
         flex: 1;
-        min-width: 100px;
+        min-width: 120px;
         font-family: inherit;
+        height: 40px;
     }
 
     .search-form-ph input:focus,
@@ -697,6 +766,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         cursor: pointer;
         transition: all 0.3s ease;
         font-family: inherit;
+        height: 40px;
     }
 
     .btn-search-ph:hover {
@@ -716,6 +786,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         cursor: pointer;
         transition: all 0.3s ease;
         text-decoration: none;
+        height: 40px;
+        display: inline-flex;
+        align-items: center;
     }
 
     .btn-reset-ph:hover { border-color: var(--ph-danger); color: var(--ph-danger); }
@@ -723,89 +796,144 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     /* ================================================================
        TABLE
        ================================================================ */
+    .table-wrapper-ph { position: relative; }
+
+    .table-scroll-container-ph {
+        overflow-x: auto;
+        overflow-y: auto;
+        max-height: 600px;
+        scroll-behavior: smooth;
+        border-radius: 12px;
+        border: 2px solid var(--ph-border-color);
+        background: var(--ph-bg-card);
+    }
+
+    .table-scroll-container-ph::-webkit-scrollbar { height: 10px; width: 10px; }
+    .table-scroll-container-ph::-webkit-scrollbar-track { background: var(--ph-bg-body); border-radius: 6px; }
+    .table-scroll-container-ph::-webkit-scrollbar-thumb { 
+        background: var(--ph-primary); 
+        border-radius: 6px;
+        border: 2px solid var(--ph-bg-body);
+    }
+    .table-scroll-container-ph::-webkit-scrollbar-thumb:hover { background: var(--ph-primary-dark); }
+
     .data-table-ph {
         width: 100%;
-        min-width: 1300px;
+        min-width: 1600px;
         border-collapse: separate;
         border-spacing: 0;
-        font-size: 0.78rem;
+        font-size: 0.82rem;
+        font-family: 'Inter', 'Segoe UI', sans-serif;
     }
 
     .data-table-ph thead th {
         position: sticky;
         top: 0;
         z-index: 10;
-        background: var(--ph-primary);
+        background: linear-gradient(135deg, var(--ph-primary), var(--ph-primary-dark));
         color: white;
-        padding: 8px 12px;
-        font-size: 0.65rem;
+        padding: 14px 16px;
+        font-size: 0.7rem;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
+        letter-spacing: 0.06em;
         font-weight: 700;
         white-space: nowrap;
         text-align: left;
+        border-right: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     }
 
-    .data-table-ph thead th:first-child { border-radius: 8px 0 0 0; }
-    .data-table-ph thead th:last-child { border-radius: 0 8px 0 0; }
+    .data-table-ph thead th:last-child { border-right: none; text-align: center; }
+    .data-table-ph thead th:first-child { border-radius: 10px 0 0 0; }
+    .data-table-ph thead th:last-child { border-radius: 0 10px 0 0; }
 
-    .data-table-ph tbody tr:nth-child(even) { background: #E8F0FE; }
-    .data-table-ph tbody tr:hover td { background: #D1FAE5; }
+    .data-table-ph tbody tr {
+        transition: all 0.2s ease;
+        background: var(--ph-bg-card);
+    }
 
-    [data-theme="dark"] .data-table-ph tbody tr:nth-child(even) { background: #1E293B; }
-    [data-theme="dark"] .data-table-ph tbody tr:hover td { background: #1A3A2A; }
+    .data-table-ph tbody tr:nth-child(even) {
+        background: rgba(11, 94, 215, 0.03);
+    }
+
+    [data-theme="dark"] .data-table-ph tbody tr:nth-child(even) {
+        background: rgba(11, 94, 215, 0.08);
+    }
+
+    .data-table-ph tbody tr:hover {
+        background: linear-gradient(90deg, rgba(209, 250, 229, 0.5) 0%, rgba(209, 250, 229, 0.15) 100%) !important;
+        box-shadow: inset 4px 0 0 var(--ph-success);
+    }
+
+    [data-theme="dark"] .data-table-ph tbody tr:hover {
+        background: linear-gradient(90deg, rgba(26, 58, 42, 0.7) 0%, rgba(26, 58, 42, 0.3) 100%) !important;
+        box-shadow: inset 4px 0 0 #34D399;
+    }
 
     .data-table-ph td {
-        padding: 8px 12px;
+        padding: 14px 16px;
         border-bottom: 1px solid var(--ph-border-color);
         color: var(--ph-text-primary);
         vertical-align: middle;
+        font-size: 0.82rem;
+        line-height: 1.45;
+        transition: all 0.2s ease;
     }
 
-    .col-sno-ph { width: 35px; text-align: center; }
-    .col-invoice-ph { min-width: 140px; }
-    .col-type-ph { min-width: 80px; }
-    .col-creator-ph { min-width: 140px; }
-    .col-items-ph { min-width: 60px; text-align: center; }
-    .col-qty-ph { min-width: 60px; text-align: center; }
-    .col-buying-ph { min-width: 120px; }
-    .col-selling-ph { min-width: 120px; }
-    .col-profit-ph { min-width: 120px; }
-    .col-status-ph { min-width: 150px; text-align: center; }
-    .col-reason-ph { min-width: 200px; }
-    .col-date-ph { min-width: 140px; }
-    .col-actions-ph { min-width: 220px; text-align: center; }
+    .data-table-ph tbody tr:last-child td { border-bottom: none; }
+
+    /* Column widths */
+    .col-sno-ph { width: 55px; min-width: 55px; text-align: center; font-weight: 700; color: var(--ph-text-secondary); font-family: 'JetBrains Mono', monospace; }
+    .col-invoice-ph { min-width: 180px; }
+    .col-invoice-ph strong { font-size: 0.85rem; }
+    .col-type-ph { min-width: 100px; }
+    .col-creator-ph { min-width: 170px; }
+    .col-items-ph { min-width: 90px; text-align: center; }
+    .col-qty-ph { min-width: 80px; text-align: center; font-family: 'JetBrains Mono', monospace; }
+    .col-buying-ph { min-width: 140px; text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #DC2626; }
+    .col-selling-ph { min-width: 140px; text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #059669; }
+    .col-profit-ph { min-width: 140px; text-align: right; font-family: 'JetBrains Mono', monospace; }
+    .col-status-ph { min-width: 160px; text-align: center; }
+    .col-reason-ph { min-width: 240px; max-width: 300px; white-space: normal; }
+    .col-date-ph { min-width: 160px; }
+    .col-actions-ph { min-width: 260px; text-align: center; padding: 12px 8px; }
 
     /* ================================================================
        BADGES
        ================================================================ */
     .status-badge-ph {
-        padding: 2px 8px;
-        border-radius: 10px;
-        font-size: 0.6rem;
-        font-weight: 600;
+        padding: 5px 14px;
+        border-radius: 20px;
+        font-size: 0.68rem;
+        font-weight: 700;
         display: inline-flex;
         align-items: center;
-        gap: 3px;
+        gap: 4px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        white-space: nowrap;
     }
 
-    .status-badge-ph.completed { background: #D1FAE5; color: #059669; }
-    .status-badge-ph.in-progress { background: #FEF3C7; color: #D97706; }
-    .status-badge-ph.cancelled { background: #FEE2E2; color: #DC2626; }
+    .status-badge-ph.completed { background: #D1FAE5; color: #059669; border: 1px solid rgba(5, 150, 105, 0.3); }
+    .status-badge-ph.in-progress { background: #FEF3C7; color: #D97706; border: 1px solid rgba(217, 119, 6, 0.3); }
+    .status-badge-ph.cancelled { background: #FEE2E2; color: #DC2626; border: 1px solid rgba(220, 38, 38, 0.3); }
 
     [data-theme="dark"] .status-badge-ph.completed { background: #1A3A2A; color: #34D399; }
     [data-theme="dark"] .status-badge-ph.in-progress { background: #3D2E0A; color: #FBBF24; }
     [data-theme="dark"] .status-badge-ph.cancelled { background: #3A1A1A; color: #F87171; }
 
     .type-badge-ph {
-        padding: 2px 8px;
-        border-radius: 10px;
-        font-size: 0.55rem;
-        font-weight: 600;
+        padding: 4px 12px;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
     }
 
-    .type-badge-ph.medicine { background: #E8F0FE; color: #0B5ED7; }
-    .type-badge-ph.equipment { background: #EDE9FE; color: #7C3AED; }
+    .type-badge-ph.medicine { background: #E8F0FE; color: #0B5ED7; border: 1px solid rgba(11, 94, 215, 0.2); }
+    .type-badge-ph.equipment { background: #EDE9FE; color: #7C3AED; border: 1px solid rgba(124, 58, 237, 0.2); }
 
     [data-theme="dark"] .type-badge-ph.medicine { background: #1E3A5F; color: #6EA8FE; }
     [data-theme="dark"] .type-badge-ph.equipment { background: #2D1B5F; color: #A78BFA; }
@@ -817,26 +945,25 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
        CANCEL REASON CELL
        ================================================================ */
     .cancel-reason-cell-ph {
-        font-size: 0.7rem;
+        font-size: 0.75rem;
         color: #DC2626;
         background: #FEE2E2;
-        padding: 4px 8px;
-        border-radius: 6px;
-        border-left: 3px solid #DC2626;
-        max-width: 200px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        border-left: 4px solid #DC2626;
         word-wrap: break-word;
         white-space: normal;
-        line-height: 1.3;
+        line-height: 1.4;
     }
 
     [data-theme="dark"] .cancel-reason-cell-ph { background: #3A1A1A; }
 
     .cancel-reason-cell-ph .reason-label-ph {
         font-weight: 700;
-        font-size: 0.6rem;
+        font-size: 0.65rem;
         text-transform: uppercase;
         display: block;
-        margin-bottom: 2px;
+        margin-bottom: 4px;
         color: #991B1B;
     }
 
@@ -847,78 +974,104 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
        ================================================================ */
     .action-group-ph {
         display: flex;
-        gap: 4px;
+        gap: 6px;
         flex-wrap: wrap;
         justify-content: center;
     }
 
     .action-btn-ph {
-        padding: 3px 8px;
-        border-radius: 4px;
-        font-size: 0.6rem;
-        font-weight: 600;
+        padding: 8px 14px;
+        border-radius: 8px;
+        font-size: 0.72rem;
+        font-weight: 700;
         border: none;
         cursor: pointer;
-        transition: all 0.2s ease;
+        transition: all 0.25s ease;
         text-decoration: none;
         display: inline-flex;
         align-items: center;
-        gap: 3px;
+        justify-content: center;
+        gap: 5px;
         color: white;
-        height: 26px;
+        min-width: 72px;
+        height: 34px;
         white-space: nowrap;
         font-family: inherit;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
     }
 
-    .action-btn-ph.view { background: var(--ph-primary); }
-    .action-btn-ph.view:hover { background: var(--ph-primary-dark); transform: scale(1.03); color: white; }
+    .action-btn-ph.view { background: linear-gradient(135deg, var(--ph-primary), var(--ph-primary-dark)); }
+    .action-btn-ph.view:hover { background: linear-gradient(135deg, var(--ph-primary-dark), #083B87); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(11, 94, 215, 0.5); color: white; }
 
-    .action-btn-ph.edit { background: var(--ph-warning); }
-    .action-btn-ph.edit:hover { background: #B45309; transform: scale(1.03); color: white; }
+    .action-btn-ph.edit { background: linear-gradient(135deg, var(--ph-warning), #B45309); }
+    .action-btn-ph.edit:hover { background: linear-gradient(135deg, #B45309, #92400E); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(217, 119, 6, 0.5); color: white; }
 
-    .action-btn-ph.delete { background: var(--ph-danger); }
-    .action-btn-ph.delete:hover { background: #991B1B; transform: scale(1.03); color: white; }
+    .action-btn-ph.delete { background: linear-gradient(135deg, var(--ph-danger), #991B1B); }
+    .action-btn-ph.delete:hover { background: linear-gradient(135deg, #991B1B, #7F1D1D); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(220, 38, 38, 0.5); color: white; }
 
-    .action-btn-ph i { font-size: 0.5rem; }
+    .action-btn-ph i { font-size: 0.72rem; }
 
     .btn-pdf-new-window-ph {
-        background: var(--ph-danger);
+        background: linear-gradient(135deg, #DC2626, #991B1B);
         color: white;
-        padding: 3px 8px;
-        border-radius: 4px;
-        font-size: 0.6rem;
-        font-weight: 600;
+        padding: 8px 14px;
+        border-radius: 8px;
+        font-size: 0.72rem;
+        font-weight: 700;
         border: none;
         cursor: pointer;
-        transition: all 0.2s ease;
+        transition: all 0.25s ease;
         text-decoration: none;
         display: inline-flex;
         align-items: center;
-        gap: 3px;
-        height: 26px;
+        justify-content: center;
+        gap: 5px;
+        height: 34px;
+        min-width: 72px;
         white-space: nowrap;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
     }
 
-    .btn-pdf-new-window-ph:hover { background: #991B1B; transform: scale(1.03); color: white; }
-    .btn-pdf-new-window-ph i { font-size: 0.5rem; }
+    .btn-pdf-new-window-ph:hover { background: linear-gradient(135deg, #991B1B, #7F1D1D); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(220, 38, 38, 0.5); color: white; }
+    .btn-pdf-new-window-ph i { font-size: 0.72rem; }
 
     /* ================================================================
        EMPTY STATE
        ================================================================ */
     .empty-state-ph {
         text-align: center;
-        padding: 40px 20px;
+        padding: 50px 20px;
         color: var(--ph-text-secondary);
     }
 
     .empty-state-ph i {
+        font-size: 3rem;
+        color: var(--ph-border-color);
+        display: block;
+        margin-bottom: 12px;
+    }
+
+    .empty-state-ph p { font-size: 0.95rem; font-weight: 600; margin-bottom: 6px; }
+    .empty-state-ph .sub { font-size: 0.8rem; font-weight: 400; }
+
+    .no-results-row-ph td {
+        text-align: center;
+        padding: 50px 20px !important;
+        color: var(--ph-text-secondary);
+    }
+
+    .no-results-row-ph i {
         font-size: 2.5rem;
         color: var(--ph-border-color);
         display: block;
         margin-bottom: 10px;
     }
 
-    .empty-state-ph .sub { font-size: 0.8rem; margin-top: 4px; }
+    .no-results-row-ph p {
+        font-weight: 600;
+        color: var(--ph-text-primary);
+        margin: 0;
+    }
 
     /* ================================================================
        MESSAGE
@@ -952,10 +1105,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .modal-overlay-ph {
         display: none;
         position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
+        top: 0; left: 0; right: 0; bottom: 0;
         background: rgba(0,0,0,0.7);
         z-index: 2000;
         justify-content: center;
@@ -969,7 +1119,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .modal-content-ph {
         background: var(--ph-bg-card);
         border-radius: 12px;
-        max-width: 900px;
+        max-width: 1200px;
         width: 100%;
         max-height: 90vh;
         overflow-y: auto;
@@ -1036,6 +1186,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         transition: all 0.3s ease;
         text-decoration: none;
         font-family: inherit;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
     }
 
     .btn-close-modal-ph:hover { border-color: var(--ph-danger); color: var(--ph-danger); }
@@ -1063,30 +1216,30 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .view-grid-ph {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 10px;
+        gap: 12px;
         margin-bottom: 14px;
     }
 
     .view-item-ph {
-        padding: 8px 12px;
+        padding: 12px 16px;
         background: var(--ph-bg-body);
-        border-radius: 6px;
+        border-radius: 8px;
         border: 1px solid var(--ph-border-color);
     }
 
     .view-item-ph .label {
-        font-size: 0.55rem;
+        font-size: 0.6rem;
         text-transform: uppercase;
         color: var(--ph-text-secondary);
-        font-weight: 600;
+        font-weight: 700;
         letter-spacing: 0.05em;
     }
 
     .view-item-ph .value {
-        font-size: 0.85rem;
+        font-size: 0.92rem;
         font-weight: 600;
         color: var(--ph-text-primary);
-        margin-top: 2px;
+        margin-top: 3px;
     }
 
     .view-item-ph.full-width { grid-column: 1 / -1; }
@@ -1107,13 +1260,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     [data-theme="dark"] .cancelled-info-box-ph { background: linear-gradient(135deg, #3A1A1A, #4A1F1F); }
 
-    .cancelled-info-box-ph i {
-        color: #DC2626;
-        font-size: 1.5rem;
-        flex-shrink: 0;
-        margin-top: 2px;
-    }
-
+    .cancelled-info-box-ph i { color: #DC2626; font-size: 1.5rem; flex-shrink: 0; margin-top: 2px; }
     .cancelled-info-box-ph .info-text-ph { flex: 1; }
 
     .cancelled-info-box-ph .info-text-ph .info-title-ph {
@@ -1139,47 +1286,186 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     [data-theme="dark"] .cancelled-info-box-ph .info-text-ph .info-row-ph { color: #FCA5A5; }
 
-    .cancelled-info-box-ph .info-text-ph .info-row-ph .info-label-ph {
-        font-weight: 600;
-        min-width: 100px;
-    }
-
-    .cancelled-info-box-ph .info-text-ph .info-row-ph .info-value-ph {
-        font-weight: 600;
-        color: #450A0A;
-        word-break: break-word;
-    }
+    .cancelled-info-box-ph .info-text-ph .info-row-ph .info-label-ph { font-weight: 600; min-width: 100px; }
+    .cancelled-info-box-ph .info-text-ph .info-row-ph .info-value-ph { font-weight: 600; color: #450A0A; word-break: break-word; }
 
     [data-theme="dark"] .cancelled-info-box-ph .info-text-ph .info-row-ph .info-value-ph { color: #FECACA; }
 
     /* ================================================================
-       VIEW ITEMS TABLE
+       ITEMS GROUPED BY INVOICE (View Modal)
+       ================================================================ */
+    .invoice-group-ph {
+        border: 2px solid var(--ph-border-color);
+        border-radius: 10px;
+        margin-bottom: 14px;
+        overflow: hidden;
+        background: var(--ph-bg-card);
+    }
+
+    .invoice-group-header-ph {
+        background: linear-gradient(135deg, var(--ph-primary), var(--ph-primary-dark));
+        color: white;
+        padding: 12px 18px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .invoice-group-header-ph .ig-title-ph {
+        font-size: 0.9rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .invoice-group-header-ph .ig-stats-ph {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .invoice-group-header-ph .ig-stat-ph {
+        background: rgba(255,255,255,0.2);
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+    }
+
+    .invoice-group-header-ph .ig-margin-ph {
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+    }
+
+    .invoice-group-header-ph .ig-margin-ph.positive {
+        background: #D1FAE5;
+        color: #059669;
+    }
+
+    .invoice-group-header-ph .ig-margin-ph.negative {
+        background: #FEE2E2;
+        color: #DC2626;
+    }
+
+    .invoice-group-body-ph { padding: 0; overflow-x: auto; }
+
+    /* ================================================================
+       ✅ VIEW ITEMS TABLE - Kwa invoice moja, na column ya Added By
        ================================================================ */
     .view-items-table-ph {
         width: 100%;
         border-collapse: collapse;
         font-size: 0.75rem;
-        margin-top: 10px;
+        table-layout: auto;
+        min-width: 1100px;
     }
 
     .view-items-table-ph thead th {
-        background: var(--ph-primary);
-        color: white;
-        padding: 6px 10px;
+        background: rgba(11, 94, 215, 0.08);
+        color: var(--ph-primary);
+        padding: 10px 10px;
         font-size: 0.6rem;
         text-transform: uppercase;
         font-weight: 700;
         text-align: left;
+        border-bottom: 2px solid var(--ph-primary);
+        letter-spacing: 0.04em;
+        white-space: nowrap;
+    }
+
+    [data-theme="dark"] .view-items-table-ph thead th {
+        background: rgba(110, 168, 254, 0.1);
+        color: #6EA8FE;
     }
 
     .view-items-table-ph tbody td {
-        padding: 5px 10px;
+        padding: 10px 10px;
         border-bottom: 1px solid var(--ph-border-color);
+        color: var(--ph-text-primary);
+        font-size: 0.76rem;
+        white-space: nowrap;
+    }
+
+    .view-items-table-ph tbody tr:nth-child(even) { background: rgba(11, 94, 215, 0.03); }
+    [data-theme="dark"] .view-items-table-ph tbody tr:nth-child(even) { background: rgba(11, 94, 215, 0.08); }
+
+    .view-items-table-ph tbody tr:hover { background: rgba(209, 250, 229, 0.4); }
+    [data-theme="dark"] .view-items-table-ph tbody tr:hover { background: rgba(26, 58, 42, 0.5); }
+
+    .item-name-cell-ph {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        white-space: normal;
+        min-width: 200px;
+    }
+
+    .item-name-cell-ph strong {
+        font-size: 0.82rem;
+        font-weight: 700;
         color: var(--ph-text-primary);
     }
 
-    .view-items-table-ph tbody tr:nth-child(even) { background: #E8F0FE; }
-    [data-theme="dark"] .view-items-table-ph tbody tr:nth-child(even) { background: #1E293B; }
+    .item-name-cell-ph .item-meta-ph {
+        font-size: 0.65rem;
+        color: var(--ph-text-muted);
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .item-name-cell-ph .item-meta-ph span {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+    }
+
+    .item-batch-tag-ph {
+        background: #FEF3C7;
+        color: #D97706;
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-size: 0.62rem;
+        font-weight: 700;
+        font-family: 'JetBrains Mono', monospace;
+    }
+
+    [data-theme="dark"] .item-batch-tag-ph {
+        background: #3D2E0A;
+        color: #FBBF24;
+    }
+
+    /* ✅ ADDED BY TAG */
+    .added-by-tag-ph {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 5px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        background: #EDE9FE;
+        color: #7C3AED;
+        white-space: nowrap;
+        border: 1px solid rgba(124, 58, 237, 0.2);
+    }
+
+    [data-theme="dark"] .added-by-tag-ph {
+        background: #2D1B4E;
+        color: #C4B5FD;
+        border-color: rgba(196, 181, 253, 0.2);
+    }
 
     /* ================================================================
        DELETE MODAL
@@ -1303,11 +1589,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .stat-card-ph { padding: 10px 12px; min-height: 65px; }
         .header-actions-ph { flex-direction: column; align-items: stretch; width: 100%; }
         .header-actions-ph .btn-back-ph { width: 100%; justify-content: center; }
-        .data-table-ph { min-width: 1000px; font-size: 0.65rem; }
-        .data-table-ph th, .data-table-ph td { padding: 4px 6px; }
+        .data-table-ph { min-width: 1200px; font-size: 0.72rem; }
+        .data-table-ph th, .data-table-ph td { padding: 10px 12px; }
         .view-grid-ph { grid-template-columns: 1fr; }
         .modal-content-ph { padding: 16px; }
         .delete-modal-content-ph { padding: 16px; }
+        .table-search-box-ph { min-width: 100%; max-width: 100%; }
+        .table-header-bar-ph { flex-direction: column; align-items: stretch; }
+        .view-items-table-ph { min-width: 1000px; }
     }
 
     @media (max-width: 480px) {
@@ -1319,7 +1608,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     @media print {
         .btn-back-ph, .btn-search-ph, .btn-reset-ph, .action-group-ph,
-        .scroll-arrows-ph, .filter-group-ph, .search-form-ph { display: none !important; }
+        .scroll-arrows-ph, .filter-group-ph, .search-form-ph, .table-search-box-ph { display: none !important; }
         .page-header-box-ph { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     }
 </style>
@@ -1424,7 +1713,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
             <input type="hidden" name="status" value="<?= $status_filter ?>">
             <input type="hidden" name="type" value="<?= $type_filter ?>">
-            <input type="text" name="search" placeholder="🔍 Search invoice, creator, or cancel reason..." value="<?= htmlspecialchars($search) ?>">
+            <input type="text" name="search" placeholder="🔍 Search invoice, creator, cancel reason..." value="<?= htmlspecialchars($search) ?>">
             <input type="date" name="date_from" value="<?= $date_from ?>" placeholder="From">
             <input type="date" name="date_to" value="<?= $date_to ?>" placeholder="To">
             <button type="submit" class="btn-search-ph"><i class="fas fa-search"></i> Filter</button>
@@ -1434,21 +1723,32 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     <!-- PURCHASE TABLE -->
     <div class="card-ph animate-fade-in-up-ph" style="animation-delay:0.15s;">
-        <div class="card-header-ph">
-            <h3 class="card-title-ph">
-                <i class="fas fa-list title-blue"></i> Purchase List
-                <span class="result-count-ph">(<strong><?= count($purchases) ?></strong> purchases)</span>
+        
+        <!-- TABLE HEADER BAR -->
+        <div class="table-header-bar-ph">
+            <div class="table-header-left-ph">
+                <div class="table-search-box-ph">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="phSearchInput" placeholder="🔍 Auto-search invoice, item, batch, creator, reason..." autocomplete="off">
+                </div>
+                <h3 class="card-title-ph" style="margin:0;">
+                    <i class="fas fa-list title-blue"></i> Purchase List
+                    <span class="result-count-ph" id="phCountDisplay">(<strong><?= count($purchases) ?></strong> purchases)</span>
+                </h3>
+                <span class="search-results-info-ph" id="phSearchInfo">
+                    <strong id="phSearchCount">0</strong> match
+                </span>
                 <?php if ($status_filter === 'CANCELLED'): ?>
-                    <span style="font-size:0.7rem;color:#DC2626;font-weight:600;margin-left:6px;">
-                        <i class="fas fa-ban"></i> Showing Cancelled Purchases with Reasons
+                    <span style="font-size:0.7rem;color:#DC2626;font-weight:600;">
+                        <i class="fas fa-ban"></i> Cancelled Only
                     </span>
                 <?php endif; ?>
-            </h3>
-            <div class="scroll-arrows-ph">
-                <button class="scroll-arrow-btn-ph" onclick="scrollTable('left')" title="Scroll Left">
+            </div>
+            <div class="table-header-right-ph">
+                <button class="scroll-btn-header-ph" id="phScrollBtnLeft" onclick="scrollTable('left')" title="Scroll Left">
                     <i class="fas fa-chevron-left"></i>
                 </button>
-                <button class="scroll-arrow-btn-ph" onclick="scrollTable('right')" title="Scroll Right">
+                <button class="scroll-btn-header-ph" id="phScrollBtnRight" onclick="scrollTable('right')" title="Scroll Right">
                     <i class="fas fa-chevron-right"></i>
                 </button>
             </div>
@@ -1475,7 +1775,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <th class="col-actions-ph">Actions</th>
                             </tr>
                         </thead>
-                        <tbody>
+                        <tbody id="purchaseTableBody">
                             <?php $counter = 1; ?>
                             <?php foreach ($purchases as $purchase): ?>
                                 <?php 
@@ -1486,8 +1786,18 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     $has_items = ($purchase['items_count'] ?? 0) > 0;
                                     $can_edit = ($purchase['status'] === 'IN_PROGRESS');
                                     $is_cancelled = ($purchase['status'] === 'CANCELLED');
+                                    
+                                    $search_data = strtolower(
+                                        ($purchase['invoice_number'] ?? '') . ' ' .
+                                        ($purchase['purchase_type'] ?? '') . ' ' .
+                                        ($purchase['creator_name'] ?? $purchase['created_by_name'] ?? '') . ' ' .
+                                        ($purchase['cancelled_reason'] ?? '') . ' ' .
+                                        ($purchase['cancelled_by_name'] ?? '') . ' ' .
+                                        ($purchase['status'] ?? '') . ' ' .
+                                        ($purchase['items_list'] ?? '')
+                                    );
                                 ?>
-                                <tr style="<?= $is_cancelled ? 'background:rgba(220,38,38,0.05);' : '' ?>">
+                                <tr class="ph-row" data-search="<?= htmlspecialchars($search_data) ?>" style="<?= $is_cancelled ? 'background:rgba(220,38,38,0.05);' : '' ?>">
                                     <td class="col-sno-ph"><?= $counter++ ?></td>
                                     <td class="col-invoice-ph">
                                         <strong style="<?= $is_cancelled ? 'text-decoration:line-through;color:#DC2626;' : '' ?>">
@@ -1496,26 +1806,27 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     </td>
                                     <td class="col-type-ph">
                                         <span class="type-badge-ph <?= $purchase['purchase_type'] ?>">
+                                            <i class="fas <?= $purchase['purchase_type'] === 'medicine' ? 'fa-pills' : 'fa-tools' ?>"></i>
                                             <?= ucfirst($purchase['purchase_type']) ?>
                                         </span>
                                     </td>
                                     <td class="col-creator-ph">
-                                        <i class="fas fa-user" style="color:#0B5ED7;font-size:0.65rem;"></i>
+                                        <i class="fas fa-user" style="color:#0B5ED7;font-size:0.7rem;"></i>
                                         <?= htmlspecialchars($purchase['creator_name'] ?? $purchase['created_by_name'] ?? 'Unknown') ?>
                                     </td>
                                     <td class="col-items-ph"><?= number_format($purchase['items_count'] ?? 0) ?></td>
                                     <td class="col-qty-ph"><?= number_format($purchase['total_qty'] ?? 0) ?></td>
-                                    <td class="col-buying-ph" style="color:#DC2626;font-weight:600;">
+                                    <td class="col-buying-ph">
                                         TSh <?= number_format($purchase['total_buying_cost'] ?? 0) ?>
                                     </td>
-                                    <td class="col-selling-ph" style="color:#059669;font-weight:600;">
+                                    <td class="col-selling-ph">
                                         TSh <?= number_format($purchase['total_selling_value'] ?? 0) ?>
                                     </td>
                                     <td class="col-profit-ph">
-                                        <span class="<?= $profit_class ?>" style="font-weight:600;">
+                                        <span class="<?= $profit_class ?>" style="font-weight:700;">
                                             TSh <?= number_format($profit) ?>
                                             <?php if ($purchase['total_buying_cost'] > 0 && $purchase['status'] === 'COMPLETED'): ?>
-                                                <span style="font-size:0.55rem;">
+                                                <span style="font-size:0.62rem;display:block;color:var(--ph-text-muted);">
                                                     (<?= round(($profit / $purchase['total_buying_cost']) * 100, 1) ?>%)
                                                 </span>
                                             <?php endif; ?>
@@ -1527,7 +1838,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                             <?= $purchase['status'] ?>
                                         </span>
                                         <?php if ($is_cancelled && !empty($purchase['cancelled_at'])): ?>
-                                            <div style="font-size:0.55rem;color:var(--ph-text-muted);margin-top:3px;">
+                                            <div style="font-size:0.6rem;color:var(--ph-text-muted);margin-top:4px;">
                                                 <i class="fas fa-clock"></i>
                                                 <?= date('d/m/Y H:i', strtotime($purchase['cancelled_at'])) ?>
                                             </div>
@@ -1541,19 +1852,19 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                                 </span>
                                                 <?= htmlspecialchars($purchase['cancelled_reason'] ?? 'No reason provided') ?>
                                                 <?php if (!empty($purchase['cancelled_by_name'])): ?>
-                                                    <div style="font-size:0.6rem;margin-top:3px;color:#7F1D1D;font-style:italic;">
+                                                    <div style="font-size:0.65rem;margin-top:4px;color:#7F1D1D;font-style:italic;">
                                                         <i class="fas fa-user-slash"></i> By: <?= htmlspecialchars($purchase['cancelled_by_name']) ?>
                                                     </div>
                                                 <?php endif; ?>
                                             </div>
                                         <?php else: ?>
-                                            <span style="font-size:0.7rem;color:var(--ph-text-muted);">—</span>
+                                            <span style="font-size:0.75rem;color:var(--ph-text-muted);">—</span>
                                         <?php endif; ?>
                                     </td>
                                     <td class="col-date-ph">
                                         <?= date('d/m/Y H:i', strtotime($purchase['created_at'])) ?>
                                         <?php if ($purchase['status'] === 'COMPLETED' && $purchase['completed_at']): ?>
-                                            <br><span style="font-size:0.55rem;color:var(--ph-text-muted);">
+                                            <br><span style="font-size:0.6rem;color:var(--ph-text-muted);">
                                                 <i class="fas fa-check-circle" style="color:#059669;"></i>
                                                 <?= date('d/m/Y H:i', strtotime($purchase['completed_at'])) ?>
                                             </span>
@@ -1591,6 +1902,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
+                            <tr class="no-results-row-ph" id="phNoResults" style="display:none;">
+                                <td colspan="13">
+                                    <i class="fas fa-search-minus"></i>
+                                    <p>No purchases match your search</p>
+                                </td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -1710,71 +2027,145 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 $view_profit = ($view_purchase['total_selling_value'] ?? 0) - ($view_purchase['total_buying_cost'] ?? 0);
                 $view_profit_class = $view_profit >= 0 ? 'profit-positive-ph' : 'profit-negative-ph';
             ?>
-            <div class="view-item-ph" style="background:<?= $view_profit >= 0 ? '#D1FAE5' : '#FEE2E2' ?>;border:2px solid <?= $view_profit >= 0 ? '#059669' : '#DC2626' ?>;">
-                <div class="label" style="color:<?= $view_profit >= 0 ? '#059669' : '#DC2626' ?>;">Expected Profit</div>
-                <div class="value <?= $view_profit_class ?>">
+            <div class="view-item-ph full-width" style="background:<?= $view_profit >= 0 ? '#D1FAE5' : '#FEE2E2' ?>;border:2px solid <?= $view_profit >= 0 ? '#059669' : '#DC2626' ?>;">
+                <div class="label" style="color:<?= $view_profit >= 0 ? '#059669' : '#DC2626' ?>;">
+                    <i class="fas fa-chart-line"></i> Margin / Expected Profit (Per Invoice)
+                </div>
+                <div class="value <?= $view_profit_class ?>" style="font-size:1.1rem;">
                     TSh <?= number_format($view_profit) ?>
                     <?php if ($view_purchase['total_buying_cost'] > 0): ?>
-                        <span style="font-size:0.6rem;">
-                            (<?= round(($view_profit / $view_purchase['total_buying_cost']) * 100, 1) ?>% margin)
+                        <span style="font-size:0.75rem;font-weight:600;background:<?= $view_profit >= 0 ? '#059669' : '#DC2626' ?>;color:white;padding:3px 10px;border-radius:12px;margin-left:8px;">
+                            <?= round(($view_profit / $view_purchase['total_buying_cost']) * 100, 1) ?>% margin
                         </span>
                     <?php endif; ?>
                 </div>
             </div>
         </div>
         
+        <!-- ITEMS GROUPED BY INVOICE -->
         <?php if (count($view_items) > 0): ?>
-            <div style="margin-top:12px;">
-                <div style="font-size:0.8rem;font-weight:600;margin-bottom:8px;color:var(--ph-text-primary);">
-                    <i class="fas fa-list"></i> Items (<?= count($view_items) ?>)
-                </div>
-                <div style="overflow-x:auto;">
-                    <table class="view-items-table-ph">
-                        <thead>
-                            <tr>
-                                <th style="width:30px;">#</th>
-                                <th>Item</th>
-                                <th style="text-align:center;width:50px;">Qty</th>
-                                <th style="text-align:right;width:100px;">Buy Price</th>
-                                <th style="text-align:right;width:100px;">Buy Total</th>
-                                <th style="text-align:right;width:100px;">Sell Price</th>
-                                <th style="text-align:right;width:100px;">Sell Total</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php $vcounter = 1; ?>
-                            <?php foreach ($view_items as $item): ?>
+            <div style="margin-top:16px;">
+                <div class="invoice-group-ph">
+                    <div class="invoice-group-header-ph">
+                        <div class="ig-title-ph">
+                            <i class="fas fa-file-invoice"></i>
+                            Invoice: <?= htmlspecialchars($view_purchase['invoice_number']) ?>
+                        </div>
+                        <div class="ig-stats-ph">
+                            <span class="ig-stat-ph">
+                                <i class="fas fa-boxes"></i> <?= count($view_items) ?> items
+                            </span>
+                            <span class="ig-stat-ph">
+                                <i class="fas fa-coins"></i> Buy: TSh <?= number_format($view_purchase['total_buying_cost'] ?? 0) ?>
+                            </span>
+                            <span class="ig-stat-ph">
+                                <i class="fas fa-tag"></i> Sell: TSh <?= number_format($view_purchase['total_selling_value'] ?? 0) ?>
+                            </span>
+                            <span class="ig-margin-ph <?= $view_profit >= 0 ? 'positive' : 'negative' ?>">
+                                <i class="fas <?= $view_profit >= 0 ? 'fa-arrow-up' : 'fa-arrow-down' ?>"></i>
+                                Margin: TSh <?= number_format($view_profit) ?>
+                                <?php if ($view_purchase['total_buying_cost'] > 0): ?>
+                                    (<?= round(($view_profit / $view_purchase['total_buying_cost']) * 100, 1) ?>%)
+                                <?php endif; ?>
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <div class="invoice-group-body-ph">
+                        <table class="view-items-table-ph">
+                            <thead>
                                 <tr>
-                                    <td style="text-align:center;"><?= $vcounter++ ?></td>
-                                    <td>
-                                        <strong><?= htmlspecialchars($item['item_name'] ?? 'Unknown') ?></strong>
-                                        <div style="font-size:0.6rem;color:var(--ph-text-muted);">
-                                            <?= htmlspecialchars($item['unit'] ?? 'pcs') ?> | 
-                                            Batch: <?= htmlspecialchars($item['batch_number'] ?? 'N/A') ?> |
-                                            Added by: <?= htmlspecialchars($item['added_by_full_name'] ?? 'Unknown') ?>
-                                        </div>
-                                    </td>
-                                    <td style="text-align:center;"><?= number_format($item['quantity']) ?></td>
-                                    <td style="text-align:right;color:#DC2626;">TSh <?= number_format($item['buying_price'] ?? 0) ?></td>
-                                    <td style="text-align:right;color:#DC2626;font-weight:600;">TSh <?= number_format($item['total_buying_cost'] ?? 0) ?></td>
-                                    <td style="text-align:right;color:#059669;">TSh <?= number_format($item['selling_price'] ?? 0) ?></td>
-                                    <td style="text-align:right;color:#059669;font-weight:600;">TSh <?= number_format($item['total_selling_value'] ?? 0) ?></td>
+                                    <th style="width:40px;text-align:center;">#</th>
+                                    <th style="min-width:200px;">Item</th>
+                                    <th style="min-width:110px;">Category</th>
+                                    <th style="text-align:center;width:60px;">Qty</th>
+                                    <th style="text-align:center;width:65px;">Unit</th>
+                                    <th style="text-align:right;width:105px;">Buy Price</th>
+                                    <th style="text-align:right;width:115px;">Buy Total</th>
+                                    <th style="text-align:right;width:105px;">Sell Price</th>
+                                    <th style="text-align:right;width:115px;">Sell Total</th>
+                                    <th style="text-align:right;width:105px;">Profit</th>
+                                    <th style="min-width:150px;text-align:center;">Added By</th>
                                 </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                        <tfoot>
-                            <tr>
-                                <td colspan="4"></td>
-                                <td style="text-align:right;font-weight:700;color:#DC2626;border-top:2px solid #DC2626;">
-                                    TSh <?= number_format($view_purchase['total_buying_cost'] ?? 0) ?>
-                                </td>
-                                <td></td>
-                                <td style="text-align:right;font-weight:700;color:#059669;border-top:2px solid #059669;">
-                                    TSh <?= number_format($view_purchase['total_selling_value'] ?? 0) ?>
-                                </td>
-                            </tr>
-                        </tfoot>
-                    </table>
+                            </thead>
+                            <tbody>
+                                <?php $vcounter = 1; $item_total_profit = 0; ?>
+                                <?php foreach ($view_items as $item): 
+                                    $item_profit = ($item['total_selling_value'] ?? 0) - ($item['total_buying_cost'] ?? 0);
+                                    $item_total_profit += $item_profit;
+                                ?>
+                                    <tr>
+                                        <td style="text-align:center;font-weight:700;color:var(--ph-text-secondary);"><?= $vcounter++ ?></td>
+                                        <td>
+                                            <div class="item-name-cell-ph">
+                                                <strong><?= htmlspecialchars($item['item_name'] ?? 'Unknown') ?></strong>
+                                                <div class="item-meta-ph">
+                                                    <?php if (!empty($item['batch_number']) && $item['batch_number'] !== 'N/A'): ?>
+                                                        <span class="item-batch-tag-ph">
+                                                            <i class="fas fa-barcode"></i> <?= htmlspecialchars($item['batch_number']) ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                    <?php if (!empty($item['expiry_date']) && $item['expiry_date'] !== '0000-00-00'): ?>
+                                                        <span style="color:#DC2626;font-weight:600;">
+                                                            <i class="fas fa-calendar-times"></i>
+                                                            Exp: <?= date('d/m/Y', strtotime($item['expiry_date'])) ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                    <?php if (!empty($item['supplier'])): ?>
+                                                        <span>
+                                                            <i class="fas fa-truck"></i> <?= htmlspecialchars($item['supplier']) ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span style="background:var(--ph-primary-light);color:var(--ph-primary);padding:3px 10px;border-radius:10px;font-size:0.68rem;font-weight:600;">
+                                                <?= htmlspecialchars($item['category'] ?? 'N/A') ?>
+                                            </span>
+                                        </td>
+                                        <td style="text-align:center;font-weight:700;font-family:monospace;"><?= number_format($item['quantity']) ?></td>
+                                        <td style="text-align:center;">
+                                            <span style="background:#CCFBF1;color:#0D9488;padding:2px 8px;border-radius:6px;font-size:0.68rem;font-weight:700;">
+                                                <?= htmlspecialchars($item['unit'] ?? 'pcs') ?>
+                                            </span>
+                                        </td>
+                                        <td style="text-align:right;color:#DC2626;font-weight:600;">TSh <?= number_format($item['buying_price'] ?? 0) ?></td>
+                                        <td style="text-align:right;color:#DC2626;font-weight:700;">TSh <?= number_format($item['total_buying_cost'] ?? 0) ?></td>
+                                        <td style="text-align:right;color:#059669;font-weight:600;">TSh <?= number_format($item['selling_price'] ?? 0) ?></td>
+                                        <td style="text-align:right;color:#059669;font-weight:700;">TSh <?= number_format($item['total_selling_value'] ?? 0) ?></td>
+                                        <td style="text-align:right;font-weight:700;color:<?= $item_profit >= 0 ? '#059669' : '#DC2626' ?>;">
+                                            TSh <?= number_format($item_profit) ?>
+                                        </td>
+                                        <td style="text-align:center;">
+                                            <span class="added-by-tag-ph">
+                                                <i class="fas fa-user-circle"></i>
+                                                <?= htmlspecialchars($item['added_by_full_name'] ?? 'Unknown') ?>
+                                            </span>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                            <tfoot>
+                                <tr style="background:rgba(11, 94, 215, 0.08);">
+                                    <td colspan="6" style="text-align:right;font-weight:700;color:var(--ph-text-primary);padding:12px 14px;font-size:0.75rem;">
+                                        TOTALS:
+                                    </td>
+                                    <td style="text-align:right;font-weight:800;color:#DC2626;padding:12px 14px;font-size:0.85rem;border-top:2px solid #DC2626;">
+                                        TSh <?= number_format($view_purchase['total_buying_cost'] ?? 0) ?>
+                                    </td>
+                                    <td></td>
+                                    <td style="text-align:right;font-weight:800;color:#059669;padding:12px 14px;font-size:0.85rem;border-top:2px solid #059669;">
+                                        TSh <?= number_format($view_purchase['total_selling_value'] ?? 0) ?>
+                                    </td>
+                                    <td style="text-align:right;font-weight:800;color:<?= $item_total_profit >= 0 ? '#059669' : '#DC2626' ?>;padding:12px 14px;font-size:0.85rem;border-top:2px solid <?= $item_total_profit >= 0 ? '#059669' : '#DC2626' ?>;">
+                                        TSh <?= number_format($item_total_profit) ?>
+                                    </td>
+                                    <td></td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
                 </div>
             </div>
         <?php else: ?>
@@ -1860,18 +2251,99 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // TABLE SCROLL
+    // AUTO-SEARCH
+    // ================================================================
+    (function() {
+        var searchInput = document.getElementById('phSearchInput');
+        var countDisplay = document.getElementById('phCountDisplay');
+        var searchInfo = document.getElementById('phSearchInfo');
+        var searchCount = document.getElementById('phSearchCount');
+        var noResults = document.getElementById('phNoResults');
+        
+        if (!searchInput) return;
+        
+        searchInput.addEventListener('input', function() {
+            var q = this.value.toLowerCase().trim();
+            var rows = document.querySelectorAll('.ph-row');
+            var total = rows.length;
+            var visible = 0;
+            
+            rows.forEach(function(row) {
+                var searchData = row.getAttribute('data-search') || '';
+                if (q === '' || searchData.includes(q)) {
+                    row.style.display = '';
+                    visible++;
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+            
+            if (countDisplay) {
+                if (q === '') {
+                    countDisplay.innerHTML = '(<strong>' + total + '</strong> purchases)';
+                } else {
+                    countDisplay.innerHTML = '(<strong>' + visible + '</strong> of ' + total + ')';
+                }
+            }
+            
+            if (searchInfo && searchCount) {
+                if (q === '') {
+                    searchInfo.style.display = 'none';
+                } else {
+                    searchInfo.style.display = 'inline-flex';
+                    searchCount.textContent = visible;
+                }
+            }
+            
+            if (noResults) {
+                noResults.style.display = (visible === 0 && q !== '') ? '' : 'none';
+            }
+        });
+        
+        document.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                searchInput.focus();
+                searchInput.select();
+            }
+        });
+    })();
+
+    // ================================================================
+    // SCROLL BUTTONS
     // ================================================================
     function scrollTable(direction) {
         var container = document.getElementById('tableScrollContainer');
         if (!container) return;
-        var scrollAmount = 300;
+        var scrollAmount = 400;
         if (direction === 'left') {
             container.scrollLeft -= scrollAmount;
         } else {
             container.scrollLeft += scrollAmount;
         }
     }
+    
+    function updateScrollButtons() {
+        var container = document.getElementById('tableScrollContainer');
+        var btnLeft = document.getElementById('phScrollBtnLeft');
+        var btnRight = document.getElementById('phScrollBtnRight');
+        
+        if (!container || !btnLeft || !btnRight) return;
+        
+        var scrollLeft = container.scrollLeft;
+        var maxScroll = container.scrollWidth - container.clientWidth;
+        
+        btnLeft.disabled = scrollLeft <= 5;
+        btnRight.disabled = scrollLeft >= maxScroll - 5 || maxScroll <= 0;
+    }
+    
+    document.addEventListener('DOMContentLoaded', function() {
+        var container = document.getElementById('tableScrollContainer');
+        if (container) {
+            container.addEventListener('scroll', updateScrollButtons);
+            setTimeout(updateScrollButtons, 200);
+        }
+    });
 
     // ================================================================
     // DELETE MODAL
@@ -1897,18 +2369,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     document.getElementById('deleteModal')?.addEventListener('click', function(e) {
-        if (e.target === this) {
-            closeDeleteModal();
-        }
+        if (e.target === this) closeDeleteModal();
     });
 
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            closeDeleteModal();
-        }
+        if (e.key === 'Escape') closeDeleteModal();
     });
 
-    // Auto-hide message after 5 seconds
     setTimeout(function() {
         var messageBox = document.getElementById('messageBox');
         if (messageBox) messageBox.style.display = 'none';
@@ -1926,15 +2393,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         if (ftEl) ftEl.textContent = timeStr;
     }, 1000);
 
-    console.log('%c📜 Braick - Admin Purchase History', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Uses SHARED header & sidebar', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ No duplicate CSS/JS', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Total Purchases: <?= $total_purchases ?>', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Completed: <?= $completed_count ?> | In Progress: <?= $in_progress_count ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c❌ Cancelled: <?= $cancelled_count ?>', 'font-size:13px; color:#DC2626; font-weight:bold;');
-    console.log('%c💰 Total Spending: TSh <?= formatMoney($total_spending) ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c📈 Total Profit: TSh <?= formatMoney($total_profit) ?>', 'font-size:13px; color:<?= $total_profit >= 0 ? '#059669' : '#DC2626' ?>;');
-    console.log('%c🌙 Dark mode: Handled by header (shared)', 'font-size:13px; color:#34D399;');
+    console.log('%c📜 Braick - Admin Purchase History V9.1', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Column "Added By" kwenye View Modal (per item)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Table header search (auto-filter, no submit)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Group dawa kwa invoice zao + margin per invoice', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ TOTALS haikatwi (min-width 1100px)', 'font-size:13px; color:#34D399;');
+    console.log('%c💡 Press Ctrl+K to focus search', 'font-size:13px; color:#D97706; font-weight:bold;');
 </script>
 
 </body>
