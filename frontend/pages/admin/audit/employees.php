@@ -1,11 +1,10 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/employees.php
-// ADMIN AUDIT - EMPLOYEES PERFORMANCE REPORT (V6 - NO REVENUE)
-// ✅ ONDOA "Revenue Generated" cards
-// ✅ ONDOA "Revenue" column kwenye table
-// ✅ ONDOA "Total Revenue" kwenye Role Summary
-// ✅ Baki: Total Employees + Activity metrics tu
+// ADMIN AUDIT - EMPLOYEES PERFORMANCE REPORT (V7)
+// ✅ Ondoa ADMIN kwenye list (WHERE role != 'admin')
+// ✅ Top 5 rows na background color nzuri
+// ✅ NO Revenue cards / columns
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -125,7 +124,9 @@ function buildDateCond($quick, $column, &$params, $date_from, $date_to) {
     }
 }
 
-// EMPLOYEES LIST
+// ================================================================
+// EMPLOYEES LIST - ✅ Ondoa ADMIN kwenye list
+// ================================================================
 $employees = [];
 try {
     $sql = "SELECT u.id, u.username, u.full_name, u.email, u.phone, u.role,
@@ -134,17 +135,17 @@ try {
             FROM users u
             LEFT JOIN branches b ON u.branch_id = b.id
             WHERE u.status = 'active'
+            AND u.role != 'admin'
             $branch_cond_u
             ORDER BY 
                 CASE u.role
-                    WHEN 'admin' THEN 1
-                    WHEN 'doctor' THEN 2
-                    WHEN 'pharmacy' THEN 3
-                    WHEN 'laboratory' THEN 4
-                    WHEN 'cashier' THEN 5
-                    WHEN 'reception' THEN 6
-                    WHEN 'audit' THEN 7
-                    ELSE 8
+                    WHEN 'doctor' THEN 1
+                    WHEN 'pharmacy' THEN 2
+                    WHEN 'laboratory' THEN 3
+                    WHEN 'cashier' THEN 4
+                    WHEN 'reception' THEN 5
+                    WHEN 'audit' THEN 6
+                    ELSE 7
                 END,
                 u.full_name ASC";
     $stmt = $db->prepare($sql);
@@ -152,7 +153,9 @@ try {
     $employees = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $employees = []; }
 
+// ================================================================
 // PERFORMANCE METRICS
+// ================================================================
 $performance = [];
 
 foreach ($employees as $emp) {
@@ -416,71 +419,9 @@ foreach ($employees as $emp) {
                 $perf['metric_label'] = 'Activities';
             } catch (Exception $e) {}
             break;
-        
-        // ADMIN
-        case 'admin':
-            $admin_activities = 0;
-            $admin_bills_created = 0;
-            $admin_otc_created = 0;
-            $admin_payments = 0;
-            
-            try {
-                $d_params = [$emp_id];
-                $dc = buildDateCond($quick_filter, 'al.created_at', $d_params, $date_from, $date_to);
-                $sql = "SELECT COUNT(*) as cnt FROM activity_logs al WHERE al.user_id = ? $dc";
-                $stmt = $db->prepare($sql);
-                $stmt->execute($d_params);
-                $admin_activities = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
-            } catch (Exception $e) {}
-            
-            try {
-                $d_params = [$emp_id];
-                $dc = buildDateCond($quick_filter, 'b.created_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
-                $sql = "SELECT COUNT(*) as cnt FROM bills b WHERE b.created_by = ? $dc";
-                if ($filter_by_branch) $sql .= " AND b.branch_id = ?";
-                $stmt = $db->prepare($sql);
-                $stmt->execute($d_params);
-                $admin_bills_created = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
-            } catch (Exception $e) {}
-            
-            try {
-                $d_params = [$emp_id];
-                $dc = buildDateCond($quick_filter, 'o.created_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
-                $sql = "SELECT COUNT(*) as cnt FROM otc_sales o WHERE o.sold_by = ? AND o.payment_status = 'paid' $dc";
-                if ($filter_by_branch) $sql .= " AND o.branch_id = ?";
-                $stmt = $db->prepare($sql);
-                $stmt->execute($d_params);
-                $admin_otc_created = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
-            } catch (Exception $e) {}
-            
-            try {
-                $d_params = [$emp_id];
-                $dc = buildDateCond($quick_filter, 'p.received_at', $d_params, $date_from, $date_to);
-                if ($filter_by_branch) $d_params[] = $filter_branch_id;
-                $sql = "SELECT COUNT(*) as cnt FROM payments p 
-                        WHERE p.received_by = ? AND p.bill_id IS NOT NULL AND p.amount > 0 $dc";
-                if ($filter_by_branch) $sql .= " AND p.branch_id = ?";
-                $stmt = $db->prepare($sql);
-                $stmt->execute($d_params);
-                $admin_payments = (int)($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
-            } catch (Exception $e) {}
-            
-            $perf['transactions'] = $admin_activities + $admin_bills_created + $admin_otc_created + $admin_payments;
-            $perf['activities'] = $admin_activities;
-            $perf['items_processed'] = $admin_bills_created + $admin_otc_created;
-            $perf['metric_label'] = 'Actions';
-            $perf['sub_details'] = [
-                'activities' => $admin_activities,
-                'bills_created' => $admin_bills_created,
-                'otc_created' => $admin_otc_created,
-                'payments' => $admin_payments,
-            ];
-            break;
     }
     
-    if ($role !== 'admin' && $role !== 'audit') {
+    if ($role !== 'audit') {
         try {
             $a_params = [$emp_id];
             $ac = buildDateCond($quick_filter, 'al.created_at', $a_params, $date_from, $date_to);
@@ -511,10 +452,11 @@ foreach ($performance as $p) {
 
 $top_performers = array_slice($performance, 0, 5);
 
-// ROLE SUMMARY
+// ROLE SUMMARY - ✅ Skip admin
 $role_summary = [];
 foreach ($performance as $p) {
     $r = $p['role'];
+    if ($r === 'admin') continue;
     if (!isset($role_summary[$r])) {
         $role_summary[$r] = ['count' => 0, 'transactions' => 0];
     }
@@ -894,11 +836,98 @@ mark.search-highlight {
     padding: 9px 12px; border-bottom: 1px solid var(--border-color);
     color: var(--text-primary); vertical-align: middle; font-weight: 500;
 }
-.data-table tbody tr { transition: background 0.2s ease; }
-.data-table tbody tr:hover td { background: var(--primary-bg); }
-[data-theme="dark"] .data-table tbody tr:hover td { background: #0A2E5C; }
+.data-table tbody tr { transition: all 0.3s ease; }
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table tbody tr.hidden-row { display: none !important; }
+
+/* ================================================================
+   ✅ TOP 5 ROWS - RANGI NZURI KWA KILA ROW
+   ================================================================ */
+
+/* Rank 1 - GOLD */
+.data-table tbody tr.top-row-1 {
+    background: linear-gradient(90deg, #FEF3C7 0%, #FFFBEB 50%, #FFFFFF 100%) !important;
+    border-left: 5px solid #F59E0B !important;
+    box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.15);
+}
+.data-table tbody tr.top-row-1:hover {
+    background: linear-gradient(90deg, #FDE68A 0%, #FEF3C7 50%, #FFFBEB 100%) !important;
+}
+[data-theme="dark"] .data-table tbody tr.top-row-1 {
+    background: linear-gradient(90deg, rgba(245, 158, 11, 0.18) 0%, rgba(245, 158, 11, 0.05) 100%) !important;
+    border-left-color: #FCD34D !important;
+}
+[data-theme="dark"] .data-table tbody tr.top-row-1:hover {
+    background: linear-gradient(90deg, rgba(245, 158, 11, 0.28) 0%, rgba(245, 158, 11, 0.1) 100%) !important;
+}
+
+/* Rank 2 - SILVER */
+.data-table tbody tr.top-row-2 {
+    background: linear-gradient(90deg, #F1F5F9 0%, #F8FAFC 50%, #FFFFFF 100%) !important;
+    border-left: 5px solid #94A3B8 !important;
+    box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.15);
+}
+.data-table tbody tr.top-row-2:hover {
+    background: linear-gradient(90deg, #E2E8F0 0%, #F1F5F9 50%, #F8FAFC 100%) !important;
+}
+[data-theme="dark"] .data-table tbody tr.top-row-2 {
+    background: linear-gradient(90deg, rgba(148, 163, 184, 0.18) 0%, rgba(148, 163, 184, 0.05) 100%) !important;
+    border-left-color: #CBD5E1 !important;
+}
+[data-theme="dark"] .data-table tbody tr.top-row-2:hover {
+    background: linear-gradient(90deg, rgba(148, 163, 184, 0.28) 0%, rgba(148, 163, 184, 0.1) 100%) !important;
+}
+
+/* Rank 3 - BRONZE */
+.data-table tbody tr.top-row-3 {
+    background: linear-gradient(90deg, #FFEDD5 0%, #FEF3C7 50%, #FFFFFF 100%) !important;
+    border-left: 5px solid #D97706 !important;
+    box-shadow: inset 0 0 0 1px rgba(217, 119, 6, 0.15);
+}
+.data-table tbody tr.top-row-3:hover {
+    background: linear-gradient(90deg, #FED7AA 0%, #FFEDD5 50%, #FEF3C7 100%) !important;
+}
+[data-theme="dark"] .data-table tbody tr.top-row-3 {
+    background: linear-gradient(90deg, rgba(217, 119, 6, 0.18) 0%, rgba(217, 119, 6, 0.05) 100%) !important;
+    border-left-color: #FDBA74 !important;
+}
+[data-theme="dark"] .data-table tbody tr.top-row-3:hover {
+    background: linear-gradient(90deg, rgba(217, 119, 6, 0.28) 0%, rgba(217, 119, 6, 0.1) 100%) !important;
+}
+
+/* Rank 4 - BLUE */
+.data-table tbody tr.top-row-4 {
+    background: linear-gradient(90deg, #DBEAFE 0%, #EFF6FF 50%, #FFFFFF 100%) !important;
+    border-left: 5px solid #3B82F6 !important;
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.15);
+}
+.data-table tbody tr.top-row-4:hover {
+    background: linear-gradient(90deg, #BFDBFE 0%, #DBEAFE 50%, #EFF6FF 100%) !important;
+}
+[data-theme="dark"] .data-table tbody tr.top-row-4 {
+    background: linear-gradient(90deg, rgba(59, 130, 246, 0.18) 0%, rgba(59, 130, 246, 0.05) 100%) !important;
+    border-left-color: #60A5FA !important;
+}
+[data-theme="dark"] .data-table tbody tr.top-row-4:hover {
+    background: linear-gradient(90deg, rgba(59, 130, 246, 0.28) 0%, rgba(59, 130, 246, 0.1) 100%) !important;
+}
+
+/* Rank 5 - PURPLE */
+.data-table tbody tr.top-row-5 {
+    background: linear-gradient(90deg, #EDE9FE 0%, #F5F3FF 50%, #FFFFFF 100%) !important;
+    border-left: 5px solid #8B5CF6 !important;
+    box-shadow: inset 0 0 0 1px rgba(139, 92, 246, 0.15);
+}
+.data-table tbody tr.top-row-5:hover {
+    background: linear-gradient(90deg, #DDD6FE 0%, #EDE9FE 50%, #F5F3FF 100%) !important;
+}
+[data-theme="dark"] .data-table tbody tr.top-row-5 {
+    background: linear-gradient(90deg, rgba(139, 92, 246, 0.18) 0%, rgba(139, 92, 246, 0.05) 100%) !important;
+    border-left-color: #A78BFA !important;
+}
+[data-theme="dark"] .data-table tbody tr.top-row-5:hover {
+    background: linear-gradient(90deg, rgba(139, 92, 246, 0.28) 0%, rgba(139, 92, 246, 0.1) 100%) !important;
+}
 
 /* Top 5 Rank Badges */
 .rank-cell { text-align: center; position: relative; padding: 8px 6px !important; }
@@ -1028,13 +1057,6 @@ mark.search-highlight {
     border: 2px solid var(--border-color);
 }
 
-/* Row highlighting */
-.top-row-1 { background: linear-gradient(90deg, rgba(252, 211, 77, 0.12), transparent) !important; border-left: 4px solid #FCD34D !important; }
-.top-row-2 { background: linear-gradient(90deg, rgba(156, 163, 175, 0.12), transparent) !important; border-left: 4px solid #9CA3AF !important; }
-.top-row-3 { background: linear-gradient(90deg, rgba(217, 119, 6, 0.12), transparent) !important; border-left: 4px solid #D97706 !important; }
-.top-row-4 { background: linear-gradient(90deg, rgba(59, 130, 246, 0.08), transparent) !important; border-left: 4px solid #3B82F6 !important; }
-.top-row-5 { background: linear-gradient(90deg, rgba(139, 92, 246, 0.08), transparent) !important; border-left: 4px solid #8B5CF6 !important; }
-
 .rank-badge {
     display: inline-flex; align-items: center; justify-content: center;
     width: 28px; height: 28px; border-radius: 50%;
@@ -1142,11 +1164,15 @@ mark.search-highlight {
     box-shadow: 0 8px 20px rgba(11, 94, 215, 0.12);
 }
 .top-performer-card.rank-1 { border-color: #FCD34D; background: linear-gradient(135deg, #FFFBEB, var(--bg-card)); }
-.top-performer-card.rank-2 { border-color: #9CA3AF; }
-.top-performer-card.rank-3 { border-color: #D97706; }
-.top-performer-card.rank-4 { border-color: #3B82F6; }
-.top-performer-card.rank-5 { border-color: #8B5CF6; }
+.top-performer-card.rank-2 { border-color: #9CA3AF; background: linear-gradient(135deg, #F8FAFC, var(--bg-card)); }
+.top-performer-card.rank-3 { border-color: #D97706; background: linear-gradient(135deg, #FEF3C7, var(--bg-card)); }
+.top-performer-card.rank-4 { border-color: #3B82F6; background: linear-gradient(135deg, #EFF6FF, var(--bg-card)); }
+.top-performer-card.rank-5 { border-color: #8B5CF6; background: linear-gradient(135deg, #F5F3FF, var(--bg-card)); }
 [data-theme="dark"] .top-performer-card.rank-1 { background: linear-gradient(135deg, #422006, var(--bg-card)); }
+[data-theme="dark"] .top-performer-card.rank-2 { background: linear-gradient(135deg, #1E293B, var(--bg-card)); }
+[data-theme="dark"] .top-performer-card.rank-3 { background: linear-gradient(135deg, #3D2E0A, var(--bg-card)); }
+[data-theme="dark"] .top-performer-card.rank-4 { background: linear-gradient(135deg, #1E3A5F, var(--bg-card)); }
+[data-theme="dark"] .top-performer-card.rank-5 { background: linear-gradient(135deg, #2D1B4E, var(--bg-card)); }
 
 @media (max-width: 1200px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 1024px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
@@ -1166,6 +1192,11 @@ mark.search-highlight {
     .btn-header, .filter-card, .table-toolbar, .scroll-btn, .sub-details-toggle { display: none !important; }
     .sub-details-row { display: table-row !important; }
     .page-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .data-table tbody tr.top-row-1,
+    .data-table tbody tr.top-row-2,
+    .data-table tbody tr.top-row-3,
+    .data-table tbody tr.top-row-4,
+    .data-table tbody tr.top-row-5 { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
     </style>
 </head>
@@ -1269,7 +1300,7 @@ mark.search-highlight {
         </form>
     </div>
 
-    <!-- SUMMARY STATS - 2 CARDS TU (No Revenue) -->
+    <!-- SUMMARY STATS - 2 CARDS TU -->
     <div class="stats-grid">
         <div class="stat-card blue">
             <div class="stat-icon"><i class="fas fa-users"></i></div>
@@ -1349,7 +1380,7 @@ mark.search-highlight {
     </div>
     <?php endif; ?>
 
-    <!-- ALL EMPLOYEES PERFORMANCE TABLE - NO REVENUE COLUMN -->
+    <!-- ALL EMPLOYEES PERFORMANCE TABLE -->
     <div class="table-card">
         <div class="table-header">
             <span class="title"><i class="fas fa-chart-line"></i> Employee Performance Report</span>
@@ -1556,7 +1587,7 @@ mark.search-highlight {
         </div>
     </div>
 
-    <!-- ROLE SUMMARY - NO REVENUE COLUMNS -->
+    <!-- ROLE SUMMARY -->
     <div class="table-card">
         <div class="table-header">
             <span class="title"><i class="fas fa-chart-pie"></i> Performance by Role</span>
@@ -1865,11 +1896,14 @@ function openPDFWindow() {
     w.document.close();
 }
 
-console.log('%c👑 Admin Employee Performance V6 - NO REVENUE', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ ONDOA Revenue cards (zote)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ ONDOA Revenue column kwenye table', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ ONDOA Total Revenue + Avg Revenue kwenye Role Summary', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Baki: Total Employees + Total Activities', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c👑 Admin Employee Performance V7', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ Admin HAONEKANI kwenye list', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Top 5 rows na background color nzuri', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c🥇 Rank 1: Gold (#FEF3C7)', 'font-size:12px; color:#D97706; font-weight:bold;');
+console.log('%c🥈 Rank 2: Silver (#F1F5F9)', 'font-size:12px; color:#64748B; font-weight:bold;');
+console.log('%c🥉 Rank 3: Bronze (#FFEDD5)', 'font-size:12px; color:#B45309; font-weight:bold;');
+console.log('%c⭐ Rank 4: Blue (#DBEAFE)', 'font-size:12px; color:#2563EB; font-weight:bold;');
+console.log('%c💎 Rank 5: Purple (#EDE9FE)', 'font-size:12px; color:#7C3AED; font-weight:bold;');
 console.log('%c👥 Total Employees: <?= $total_employees ?>', 'font-size:13px; color:#0B5ED7;');
 console.log('%c📊 Total Activities: <?= $total_transactions ?>', 'font-size:13px; color:#7C3AED;');
 </script>
