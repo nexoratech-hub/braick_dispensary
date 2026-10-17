@@ -1,14 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/consultation.php
-// V29 FINAL - COMPLETED VIEW INA SECTIONS ZOTE + CSS NZURI
+// V31 FINAL - BILL AUTO-CREATE, ERROR LOGGING, BEAUTIFUL CSS
 // ================================================================
-// ✅ V29: CSS NZURI kwa Prescribed Medications, Procedures, Equipment
-// ✅ V29: Cards zina border za rangi, icons, badges nzuri
-// ✅ V28: Completed View ina: Diagnosis + Medications + Procedures & Equipment + All Bills
-// ✅ V28: Medications zinaonyesha status: Pending, Confirmed, Dispensed
-// ✅ V27: Quick Picks 8 + Fields zote CHINI (Compact)
-// ✅ V25: Diagnosis inasave KABLA ya ku-add
+// ✅ V31: ensureBillExists() - inaunda bill hata kama ni FREE (0 charge)
+// ✅ V31: Error logging kamili - errors zinaonekana kwenye toast
+// ✅ V31: Status auto-promotion: waiting → lab_test / prescribed
+// ✅ V31: BLUE CARDS kwa lab tests zilizo-linked na equipment
+// ✅ V31: Search filter kwa procedures na equipment
+// ✅ V31: CSS nzuri zaidi kwa medications, lab tests, procedures, equipment
+// ✅ V30: Fixed bill_id NULL error
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -82,7 +83,42 @@ function deleteBillItemByReference($db, $bill_id, $reference_id, $reference_type
             $deleted = $stmt->rowCount();
         }
         return $deleted;
-    } catch (Exception $e) { return 0; }
+    } catch (Exception $e) {
+        error_log("deleteBillItemByReference ERROR: " . $e->getMessage());
+        return 0;
+    }
+}
+
+// ✅ V31 FIX: ensureBillExists - inaunda bill hata kama ni FREE (0 charge)
+function ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, &$bill_id) {
+    try {
+        // Kama bill_id ipo, hakikisha ni ya visit hii
+        if ($bill_id && $bill_id > 0) {
+            $stmt = $db->prepare("SELECT id FROM bills WHERE id = ? AND visit_id = ?");
+            $stmt->execute([$bill_id, $visit_id]);
+            if ($stmt->fetch()) return $bill_id;
+        }
+        
+        // Angalia kama bill ipo kwa visit
+        $stmt = $db->prepare("SELECT id FROM bills WHERE visit_id = ? ORDER BY id ASC LIMIT 1");
+        $stmt->execute([$visit_id]);
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($existing) {
+            $bill_id = $existing['id'];
+            return $bill_id;
+        }
+        
+        // Kama haipo, tengeneza mpya (hata kama ni free visit - bill ya 0)
+        $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 6, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
+        $db->prepare("INSERT INTO bills (bill_number, patient_id, visit_id, subtotal, total_amount, balance, status, created_by, branch_id, created_at) VALUES (?, ?, ?, 0, 0, 0, 'pending', ?, ?, NOW())")
+           ->execute([$bill_number, $patient_id, $visit_id, $doctor_id, $doctor_branch_id]);
+        $bill_id = $db->lastInsertId();
+        error_log("ensureBillExists: Created new bill #$bill_id for visit #$visit_id (FREE/0)");
+        return $bill_id;
+    } catch (Exception $e) {
+        error_log("ensureBillExists ERROR: " . $e->getMessage());
+        return $bill_id;
+    }
 }
 
 function getBMIStatus($bmi) {
@@ -267,7 +303,7 @@ $is_lab_test = ($visit['status'] === 'lab_test');
 $visit_status = $visit['status'] ?? 'assigned';
 
 // ================================================================
-// GET OR CREATE BILL
+// GET OR CREATE BILL - ✅ V31: HATA KAMA NI FREE (0 CHARGE)
 // ================================================================
 $bill_id = null;
 $bill_status = 'pending';
@@ -275,7 +311,7 @@ $bill_total = 0; $bill_paid = 0; $bill_balance = 0; $bill_subtotal = 0;
 $bill_discount = 0; $bill_total_discount = 0; $bill_premium = 0;
 
 try {
-    $stmt = $db->prepare("SELECT id, status, total_amount, paid_amount, balance, subtotal, discount_amount, pharmacy_discount, cashier_discount, total_discount, premium_amount FROM bills WHERE visit_id = ?");
+    $stmt = $db->prepare("SELECT id, status, total_amount, paid_amount, balance, subtotal, discount_amount, pharmacy_discount, cashier_discount, total_discount, premium_amount FROM bills WHERE visit_id = ? ORDER BY id ASC LIMIT 1");
     $stmt->execute([$visit_id]);
     $bill = $stmt->fetch(PDO::FETCH_ASSOC);
     
@@ -290,14 +326,24 @@ try {
         $bill_total_discount = $bill['total_discount'] ?? 0;
         $bill_premium = $bill['premium_amount'] ?? 0;
     } else {
-        $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 6, '0', STR_PAD_LEFT);
+        // ✅ V31 FIX: Tengeneza bill hata kama ni free visit (0 charge)
+        $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 6, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
         $db->prepare("INSERT INTO bills (bill_number, patient_id, visit_id, subtotal, total_amount, balance, status, created_by, branch_id, created_at) VALUES (?, ?, ?, 0, 0, 0, 'pending', ?, ?, NOW())")
            ->execute([$bill_number, $patient_id, $visit_id, $doctor_id, $doctor_branch_id]);
         $bill_id = $db->lastInsertId();
     }
-} catch (Exception $e) { error_log("Bill error: " . $e->getMessage()); }
+} catch (Exception $e) { 
+    error_log("Bill fetch/create ERROR: " . $e->getMessage());
+}
+
+// ✅ V31 FIX: Hakikisha bill_id sio null KABISA
+$bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
 
 function updateBillTotal($db, $bill_id) {
+    if (!$bill_id || $bill_id <= 0) {
+        return ['subtotal' => 0, 'total' => 0, 'discount' => 0, 'discount_amount' => 0, 'pharmacy_discount' => 0, 'cashier_discount' => 0, 'premium' => 0, 'paid' => 0, 'balance' => 0, 'status' => 'pending'];
+    }
+    
     $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ? AND status != 'cancelled'");
     $stmt->execute([$bill_id]);
     $subtotal = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
@@ -336,15 +382,18 @@ function updateBillTotal($db, $bill_id) {
 }
 
 function getBillDiscount($db, $bill_id) {
+    if (!$bill_id) return ['total_discount' => 0, 'premium_amount' => 0];
     $stmt = $db->prepare("SELECT discount_amount, pharmacy_discount, cashier_discount, total_discount, premium_amount FROM bills WHERE id = ?");
     $stmt->execute([$bill_id]);
     $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$data) return ['total_discount' => 0, 'premium_amount' => 0];
     if (($data['pharmacy_discount'] ?? 0) == 0 && ($data['discount_amount'] ?? 0) > 0) $data['pharmacy_discount'] = $data['discount_amount'];
     if (($data['total_discount'] ?? 0) == 0) $data['total_discount'] = (float)($data['pharmacy_discount'] ?? 0) + (float)($data['cashier_discount'] ?? 0);
     return $data;
 }
 
 function isBillItemPaid($db, $bill_id, $reference_id, $reference_type) {
+    if (!$bill_id) return false;
     try {
         $stmt = $db->prepare("SELECT COUNT(*) as paid_count FROM bill_items WHERE bill_id = ? AND reference_id = ? AND reference_type = ? AND status = 'paid'");
         $stmt->execute([$bill_id, $reference_id, $reference_type]);
@@ -354,7 +403,10 @@ function isBillItemPaid($db, $bill_id, $reference_id, $reference_type) {
         $stmt->execute([$bill_id, $reference_id, $reference_type]);
         $result2 = $stmt->fetch(PDO::FETCH_ASSOC);
         return ($result2 && $result2['paid_count'] > 0);
-    } catch (Exception $e) { return false; }
+    } catch (Exception $e) { 
+        error_log("isBillItemPaid ERROR: " . $e->getMessage());
+        return false; 
+    }
 }
 
 function checkAndAutoCompleteVisit($db, $visit_id, $bill_id) {
@@ -374,7 +426,10 @@ function checkAndAutoCompleteVisit($db, $visit_id, $bill_id) {
         $stmt = $db->prepare("UPDATE visits SET status = 'completed', is_completed = 1, completed_at = NOW(), updated_at = NOW() WHERE id = ? AND status = 'waiting'");
         $stmt->execute([$visit_id]);
         return $stmt->rowCount() > 0;
-    } catch (Exception $e) { return false; }
+    } catch (Exception $e) { 
+        error_log("checkAndAutoCompleteVisit ERROR: " . $e->getMessage());
+        return false; 
+    }
 }
 
 function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, $data, $fallback_from_db = false) {
@@ -818,6 +873,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     
     if ($action === 'get_bill_totals') {
         header('Content-Type: application/json');
+        // ✅ V31 FIX: Hakikisha bill ipo
+        $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
+        
         $lab_total = 0; $medication_total = 0; $procedure_total_bill = 0; $equipment_total = 0;
         $total_bill_amount = 0; $paid_total = 0; $pending_total = 0;
         
@@ -860,7 +918,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         header('Content-Type: application/json');
         $input = json_decode(file_get_contents('php://input'), true);
         $visit_id_input = (int)($input['visit_id'] ?? 0);
-        if ($visit_id_input <= 0) { echo json_encode(['success' => false]); exit; }
+        if ($visit_id_input <= 0) { echo json_encode(['success' => false, 'message' => 'Invalid visit ID']); exit; }
         try {
             $result = saveDiagnosisToDatabase($db, $visit_id_input, $doctor_id, $doctor_branch_id, $input, false);
             echo json_encode([
@@ -873,7 +931,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 ]
             ]);
         } catch (Exception $e) { 
-            echo json_encode(['success' => false, 'message' => $e->getMessage()]); 
+            error_log("save_diagnosis ERROR: " . $e->getMessage());
+            echo json_encode(['success' => false, 'message' => '❌ Error: ' . $e->getMessage()]); 
         }
         exit;
     }
@@ -900,7 +959,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                         $response['cart_items'] = $_SESSION['lab_cart'];
                     } else $response['message'] = '⚠️ Already in cart';
                 }
-            } catch (Exception $e) { $response['message'] = '❌ Error'; }
+            } catch (Exception $e) { 
+                error_log("add_lab_test_cart ERROR: " . $e->getMessage());
+                $response['message'] = '❌ Error: ' . $e->getMessage(); 
+            }
         }
         echo json_encode($response);
         exit;
@@ -927,6 +989,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $test_id = (int)($_POST['test_id'] ?? 0);
         $response = ['success' => false, 'message' => ''];
         try {
+            $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
+            
             $stmt = $db->prepare("SELECT lt.* FROM lab_tests lt WHERE lt.id = ? AND lt.visit_id = ?");
             $stmt->execute([$test_id, $visit_id]);
             $test = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -944,7 +1008,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             } else $response['message'] = '❌ Cannot remove';
         } catch (Exception $e) {
             if ($db->inTransaction()) $db->rollBack();
-            $response['message'] = '❌ Error';
+            error_log("remove_lab_test ERROR: " . $e->getMessage());
+            $response['message'] = '❌ Error: ' . $e->getMessage();
         }
         echo json_encode($response);
         exit;
@@ -955,6 +1020,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $test_id = (int)($_POST['test_id'] ?? 0);
         $response = ['success' => false, 'message' => ''];
         try {
+            $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
+            
             $stmt = $db->prepare("SELECT lt.* FROM lab_tests lt WHERE lt.id = ? AND lt.visit_id = ?");
             $stmt->execute([$test_id, $visit_id]);
             $test = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -972,7 +1039,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             } else $response['message'] = '❌ Not completed';
         } catch (Exception $e) {
             if ($db->inTransaction()) $db->rollBack();
-            $response['message'] = '❌ Error';
+            error_log("cancel_completed_lab_test ERROR: " . $e->getMessage());
+            $response['message'] = '❌ Error: ' . $e->getMessage();
         }
         echo json_encode($response);
         exit;
@@ -998,8 +1066,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 'notes' => $_POST['notes'] ?? ''
             ], true);
         } catch (Exception $e) {
-            error_log("Failed to save diagnosis before add_medication: " . $e->getMessage());
+            error_log("add_medication diagnosis save failed: " . $e->getMessage());
         }
+        
+        // ✅ V31 FIX: Hakikisha bill ipo KABLA ya ku-insert
+        $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
         
         $inventory_id = (int)($_POST['inventory_id'] ?? 0);
         $quantity = (int)($_POST['quantity'] ?? 1);
@@ -1034,6 +1105,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                     $db->prepare("INSERT INTO bill_items (bill_id, patient_id, branch_id, item_type, item_name, quantity, unit_price, total_price, status, reference_id, reference_type, created_at) VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, 'pending', ?, 'prescription', NOW())")
                        ->execute([$bill_id, $patient_id, $doctor_branch_id, $med['medication_name'] . ' (Batch: ' . ($med['batch_number'] ?? 'N/A') . ')', $quantity, $unit_price, $total_price, $prescription_id]);
                     
+                    // ✅ V31 FIX: Rudisha status kuwa prescribed (pamoja na waiting)
+                    $db->prepare("UPDATE visits SET status = 'prescribed', updated_at = NOW() WHERE id = ? AND status IN ('assigned', 'waiting', 'lab_test')")->execute([$visit_id]);
+                    
                     $db->commit();
                     $bill_data = updateBillTotal($db, $bill_id);
                     
@@ -1044,6 +1118,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 } else $response['message'] = '❌ Insufficient stock';
             } catch (Exception $e) {
                 if ($db->inTransaction()) $db->rollBack();
+                error_log("add_medication ERROR: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
                 $response['message'] = '❌ Error: ' . $e->getMessage();
             }
         }
@@ -1056,6 +1131,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $prescription_id = (int)($_POST['prescription_id'] ?? 0);
         $response = ['success' => false, 'message' => ''];
         try {
+            $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
+            
             $stmt = $db->prepare("SELECT p.* FROM prescriptions p WHERE p.id = ? AND p.visit_id = ?");
             $stmt->execute([$prescription_id, $visit_id]);
             $presc = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -1074,7 +1151,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             } else $response['message'] = '❌ Cannot remove';
         } catch (Exception $e) {
             if ($db->inTransaction()) $db->rollBack();
-            $response['message'] = '❌ Error';
+            error_log("remove_medication ERROR: " . $e->getMessage());
+            $response['message'] = '❌ Error: ' . $e->getMessage();
         }
         echo json_encode($response);
         exit;
@@ -1099,7 +1177,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 'physical_exam' => $_POST['physical_exam'] ?? '',
                 'notes' => $_POST['notes'] ?? ''
             ], true);
-        } catch (Exception $e) {}
+        } catch (Exception $e) {
+            error_log("add_procedures_batch diagnosis save failed: " . $e->getMessage());
+        }
+        
+        // ✅ V31 FIX: Hakikisha bill ipo KABLA ya ku-insert
+        $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
         
         $procedure_ids = isset($_POST['procedure_ids']) ? json_decode($_POST['procedure_ids'], true) : [];
         $response = ['success' => false, 'message' => '', 'added' => 0];
@@ -1122,13 +1205,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                        ->execute([$bill_id, $patient_id, $doctor_branch_id, $proc_id, $procedure['procedure_name'], $procedure_price, $procedure_price, $proc_id_inserted]);
                     $response['added']++;
                 }
+                
+                // ✅ V31 FIX: Rudisha status kuwa prescribed (pamoja na waiting)
+                $db->prepare("UPDATE visits SET status = 'prescribed', updated_at = NOW() WHERE id = ? AND status IN ('assigned', 'waiting', 'lab_test')")->execute([$visit_id]);
+                
                 $db->commit();
                 updateBillTotal($db, $bill_id);
                 $response['success'] = true;
                 $response['message'] = '✅ ' . $response['added'] . ' procedure(s) added!';
             } catch (Exception $e) {
                 if ($db->inTransaction()) $db->rollBack();
-                $response['message'] = '❌ Error';
+                error_log("add_procedures_batch ERROR: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
+                $response['message'] = '❌ Error: ' . $e->getMessage();
             }
         }
         echo json_encode($response);
@@ -1154,7 +1242,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 'physical_exam' => $_POST['physical_exam'] ?? '',
                 'notes' => $_POST['notes'] ?? ''
             ], true);
-        } catch (Exception $e) {}
+        } catch (Exception $e) {
+            error_log("add_equipment_batch diagnosis save failed: " . $e->getMessage());
+        }
+        
+        // ✅ V31 FIX: Hakikisha bill ipo KABLA ya ku-insert
+        $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
         
         $equipment_data = isset($_POST['equipment_data']) ? json_decode($_POST['equipment_data'], true) : [];
         $response = ['success' => false, 'message' => '', 'added' => 0];
@@ -1178,13 +1271,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                        ->execute([$bill_id, $patient_id, $doctor_branch_id, $equipment_id, $equipment['equipment_name'], $quantity, $unit_price, $total_price, $equipment_id]);
                     $response['added']++;
                 }
+                
+                // ✅ V31 FIX: Rudisha status kuwa prescribed (pamoja na waiting)
+                $db->prepare("UPDATE visits SET status = 'prescribed', updated_at = NOW() WHERE id = ? AND status IN ('assigned', 'waiting', 'lab_test')")->execute([$visit_id]);
+                
                 $db->commit();
                 updateBillTotal($db, $bill_id);
                 $response['success'] = true;
                 $response['message'] = '✅ ' . $response['added'] . ' equipment added!';
             } catch (Exception $e) {
                 if ($db->inTransaction()) $db->rollBack();
-                $response['message'] = '❌ Error';
+                error_log("add_equipment_batch ERROR: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
+                $response['message'] = '❌ Error: ' . $e->getMessage();
             }
         }
         echo json_encode($response);
@@ -1197,6 +1295,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $item_id = (int)($_POST['id'] ?? 0);
         $response = ['success' => false, 'message' => ''];
         try {
+            $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
+            
             $db->beginTransaction();
             if ($type === 'procedure') {
                 deleteBillItemByReference($db, $bill_id, $item_id, 'procedure', 'procedure');
@@ -1216,7 +1316,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $response['success'] = true;
         } catch (Exception $e) {
             if ($db->inTransaction()) $db->rollBack();
-            $response['message'] = '❌ Error';
+            error_log("remove_added_item ERROR: " . $e->getMessage());
+            $response['message'] = '❌ Error: ' . $e->getMessage();
         }
         echo json_encode($response);
         exit;
@@ -1242,7 +1343,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 'physical_exam' => $_POST['physical_exam'] ?? '',
                 'notes' => $_POST['notes'] ?? ''
             ], true);
-        } catch (Exception $e) {}
+        } catch (Exception $e) {
+            error_log("send_lab diagnosis save failed: " . $e->getMessage());
+        }
+        
+        // ✅ V31 FIX: Hakikisha bill ipo KABLA ya ku-insert
+        $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
         
         $lab_tests_sent = 0;
         $total_lab_price = 0;
@@ -1266,12 +1372,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             }
             
             if ($lab_tests_sent > 0) {
+                // ✅ V31 FIX: Rudisha status kuwa lab_test (pamoja na waiting)
                 $db->prepare("UPDATE visits SET status = 'lab_test', updated_at = NOW() WHERE id = ? AND status IN ('assigned', 'prescribed', 'waiting')")->execute([$visit_id]);
                 updateBillTotal($db, $bill_id);
             }
             $db->commit();
         } catch (Exception $e) {
             if ($db->inTransaction()) $db->rollBack();
+            error_log("send_lab ERROR: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
+            $_SESSION['flash_message'] = "❌ Error sending lab tests: " . $e->getMessage();
+            $_SESSION['flash_type'] = 'error';
+            header('Location: consultation.php?visit_id=' . $visit_id);
+            exit;
         }
         
         unset($_SESSION['lab_cart']);
@@ -1387,6 +1499,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             --purple-gradient: linear-gradient(135deg, #7C3AED 0%, #8B5CF6 100%);
             --sky: #0EA5E9; --sky-dark: #0284C7; --sky-bg: #E0F2FE;
             --sky-gradient: linear-gradient(135deg, #0EA5E9 0%, #38BDF8 100%);
+            --blue-linked: #1E40AF; --blue-linked-bg: #DBEAFE; --blue-linked-light: #93C5FD;
             --gray-50: #F8FAFC; --gray-100: #F1F5F9; --gray-200: #E2E8F0; --gray-300: #CBD5E1;
             --gray-400: #94A3B8; --gray-500: #64748B; --gray-600: #475569; --gray-700: #334155;
             --radius: 12px; --radius-lg: 16px; --radius-xl: 20px;
@@ -1405,6 +1518,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             --gray-50: #1E293B; --gray-100: #1E293B; --gray-200: #334155;
             --primary-bg: #1E3A5F; --success-bg: #064E3B; --danger-bg: #7F1D1D;
             --warning-bg: #78350F; --purple-bg: #4C1D95; --sky-bg: #0C2A3A;
+            --blue-linked-bg: #1E3A5F;
         }
         
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1475,9 +1589,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         .bill-card .bill-label { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); margin-bottom: 6px; display: block; }
-        
         .bill-card .bill-value { font-size: 1.1rem; font-weight: 800; font-family: 'JetBrains Mono', monospace; line-height: 1.2; word-break: break-all; overflow-wrap: anywhere; max-width: 100%; display: block; }
-        
         .bill-card .bill-sub { font-size: 0.6rem; color: var(--text-secondary); margin-top: 6px; font-weight: 500; }
         
         .bill-card.total { border-color: #0B5ED7; }
@@ -1672,10 +1784,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .vital-status.critical { background: linear-gradient(135deg, #FEE2E2, #FECACA); color: #991B1B; border: 1px solid #FCA5A5; }
         .vital-status.low { background: linear-gradient(135deg, #DBEAFE, #BFDBFE); color: #1E40AF; border: 1px solid #93C5FD; }
         .vital-status.unknown { background: var(--gray-200); color: var(--text-secondary); }
-        .vital-status.underweight { background: linear-gradient(135deg, #DBEAFE, #BFDBFE); color: #1E40AF; border: 1px solid #93C5FD; }
-        .vital-status.normal-bmi { background: linear-gradient(135deg, #D1FAE5, #A7F3D0); color: #047857; border: 1px solid #6EE7B7; }
-        .vital-status.overweight { background: linear-gradient(135deg, #FEF3C7, #FDE68A); color: #B45309; border: 1px solid #FCD34D; }
-        .vital-status.obese { background: linear-gradient(135deg, #FEE2E2, #FECACA); color: #991B1B; border: 1px solid #FCA5A5; }
         
         .vitals-footer {
             margin-top: 16px; padding: 12px 18px;
@@ -1685,7 +1793,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-size: 0.75rem; color: var(--text-secondary);
         }
         
-        /* CHIEF COMPLAINT */
+        /* COMPLAINT */
         .complaint-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
         
         .complaint-box {
@@ -1874,20 +1982,75 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .item-card.disabled:hover { transform: none !important; box-shadow: none !important; }
         .item-card.disabled .item-name { color: var(--danger) !important; text-decoration: line-through; }
         
+        /* ✅ V31: RANGI TOFAUTI KWA KILA AINA YA ITEM */
         .item-card.medication-card.selected { border-color: #059669; background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%); }
         .item-card.medication-card.selected .item-check { background: #059669; border-color: #059669; }
+        
         .item-card.labtest-card.selected { border-color: #0284C7; background: linear-gradient(135deg, #E0F2FE 0%, #BAE6FD 100%); }
         .item-card.labtest-card.selected .item-check { background: #0284C7; border-color: #0284C7; }
+        
+        /* ✅ V31: BLUE CARD KWA LAB TEST ZILIZO-LINK NA EQUIPMENT */
+        .item-card.labtest-card.linked-equipment {
+            border-color: var(--blue-linked);
+            background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 50%, #BFDBFE 100%);
+            box-shadow: 0 4px 16px rgba(30, 64, 175, 0.15);
+        }
+        .item-card.labtest-card.linked-equipment::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0;
+            width: 5px; height: 100%;
+            background: linear-gradient(180deg, #1E40AF, #3B82F6, #60A5FA);
+            border-radius: 12px 0 0 12px;
+        }
+        .item-card.labtest-card.linked-equipment .item-name {
+            color: var(--blue-linked);
+            font-weight: 900;
+        }
+        .item-card.labtest-card.linked-equipment .item-price {
+            background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+            color: var(--blue-linked);
+            border-color: var(--blue-linked-light);
+        }
+        .item-card.labtest-card.linked-equipment .item-tag.category {
+            background: var(--blue-linked-bg);
+            color: var(--blue-linked);
+            border-color: var(--blue-linked-light);
+        }
+        .item-card.labtest-card.linked-equipment.selected {
+            border-color: var(--blue-linked);
+            background: linear-gradient(135deg, #BFDBFE 0%, #93C5FD 100%);
+            box-shadow: 0 8px 24px rgba(30, 64, 175, 0.25);
+        }
+        .item-card.labtest-card.linked-equipment.selected .item-check {
+            background: var(--blue-linked);
+            border-color: var(--blue-linked);
+        }
+        
+        [data-theme="dark"] .item-card.labtest-card.linked-equipment {
+            background: linear-gradient(135deg, #1E3A5F 0%, #1E40AF 100%);
+            border-color: #60A5FA;
+        }
+        [data-theme="dark"] .item-card.labtest-card.linked-equipment .item-name {
+            color: #93C5FD;
+        }
+        
         .item-card.procedure-card.selected { border-color: #7C3AED; background: linear-gradient(135deg, #EDE9FE 0%, #DDD6FE 100%); }
         .item-card.procedure-card.selected .item-check { background: #7C3AED; border-color: #7C3AED; }
+        
         .item-card.equipment-card.selected { border-color: #D97706; background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%); }
         .item-card.equipment-card.selected .item-check { background: #D97706; border-color: #D97706; }
         
+        /* ✅ V31: EQUIPMENT LIST NDANI YA LAB TEST CARD */
         .item-card .equipment-list {
             margin-top: 8px; padding: 8px 10px;
             background: linear-gradient(135deg, #F0F9FF 0%, #E0F2FE 100%);
             border-radius: 8px; border: 1px solid rgba(14, 165, 233, 0.3);
             display: flex; flex-direction: column; gap: 5px;
+        }
+        [data-theme="dark"] .item-card .equipment-list {
+            background: linear-gradient(135deg, #0C2A3A 0%, #1E3A5F 100%);
+            border-color: rgba(96, 165, 250, 0.3);
         }
         .item-card .equipment-list-header {
             font-size: 0.65rem; font-weight: 800; color: #0284C7;
@@ -1900,6 +2063,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             gap: 6px; font-size: 0.65rem; padding: 4px 6px;
             background: rgba(255, 255, 255, 0.8); border-radius: 6px;
             border: 1px solid rgba(14, 165, 233, 0.15); flex-wrap: wrap;
+        }
+        [data-theme="dark"] .item-card .equipment-item-row {
+            background: rgba(15, 23, 42, 0.6);
         }
         .item-card .equipment-item-row .eq-name {
             font-weight: 700; color: #0369A1;
@@ -1919,6 +2085,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .empty-state-grid { grid-column: 1 / -1; text-align: center; padding: 40px 20px; color: var(--text-secondary); }
         .empty-state-grid i { font-size: 3rem; display: block; margin-bottom: 12px; opacity: 0.3; }
         
+        /* DROPDOWN SEARCH ROW */
         .dropdown-search-row { display: flex; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
         .dropdown-search-row .search-input-wrap { position: relative; flex: 1; min-width: 220px; }
         .dropdown-search-row .search-input-wrap i { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); font-size: 0.85rem; }
@@ -2029,7 +2196,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             50% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
         }
         
-        /* MEDICATION FORM CARD */
+        /* MED FORM CARD */
         .med-form-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -2205,10 +2372,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
         .data-table thead th { text-align: left; padding: 12px 14px; font-weight: 800; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em; color: white; white-space: nowrap; }
         .data-table thead th.th-primary { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .data-table thead th.th-success { background: linear-gradient(135deg, #065F46, #047857); }
-        .data-table thead th.th-purple { background: linear-gradient(135deg, #5B21B6, #6D28D9); }
-        .data-table thead th.th-warning { background: linear-gradient(135deg, #B45309, #D97706); }
-        .data-table thead th.th-sky { background: linear-gradient(135deg, #0E7490, #0284C7); }
         .data-table tbody td { padding: 11px 14px; border-bottom: 1px solid var(--border-color); vertical-align: middle; }
         .data-table tbody tr:hover { background: var(--gray-50); }
         .data-table tbody tr:last-child td { border-bottom: none; }
@@ -2246,16 +2409,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             overflow: hidden;
             box-shadow: 0 12px 40px rgba(217, 119, 6, 0.25);
             position: relative;
-        }
-        
-        .locked-card::before {
-            content: '';
-            position: absolute;
-            top: -50%; right: -20%;
-            width: 400px; height: 400px;
-            background: radial-gradient(circle, rgba(217, 119, 6, 0.1) 0%, transparent 70%);
-            border-radius: 50%;
-            pointer-events: none;
         }
         
         .locked-card-inner { padding: 40px 32px; text-align: center; position: relative; z-index: 1; }
@@ -2344,26 +2497,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .locked-refresh-btn:hover i { transform: rotate(180deg); }
         
         /* ================================================================ */
-        /* ✅ V29: ADDED ITEMS CARDS - CSS NZURI                          */
+        /* ✅ V31: ADDED ITEMS CARDS - CSS NZURI ZAIDI                     */
         /* ================================================================ */
         
-        /* Container ya Prescribed Medications */
-        #medicationsList {
+        #medicationsList, #addedItemsList {
             display: flex;
             flex-direction: column;
             gap: 10px;
         }
         
-        /* Container ya Added Procedures & Equipment */
-        #addedItemsList {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        
-        /* ================================================================ */
-        /* ✅ V29: MEDICATION CARD - PRESCRIBED ITEMS (GREEN THEME)       */
-        /* ================================================================ */
+        /* MEDICATION CARD - GREEN THEME */
         .medication-item {
             display: flex;
             align-items: flex-start;
@@ -2384,7 +2527,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             background: linear-gradient(135deg, #1E293B 0%, #1A3A2A 100%);
             border-color: #34D399;
             border-left-color: #10B981;
-            box-shadow: 0 2px 8px rgba(16, 185, 129, 0.15);
         }
         
         .medication-item::before {
@@ -2470,7 +2612,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border-radius: 12px;
             font-weight: 800;
             font-family: 'JetBrains Mono', monospace;
-            border: none;
             box-shadow: 0 3px 8px rgba(5, 150, 105, 0.25);
             display: inline-flex;
             align-items: center;
@@ -2496,7 +2637,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border-color: #34D399;
         }
         
-        /* Badge ya Instructions */
         .medication-item .med-instruction-tag {
             font-size: 0.7rem;
             color: #0B5ED7;
@@ -2517,13 +2657,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-size: 0.65rem;
         }
         
-        [data-theme="dark"] .medication-item .med-instruction-tag {
-            background: linear-gradient(135deg, #1E3A5F, #1E40AF);
-            color: #93C5FD;
-            border-color: #3B82F6;
-        }
-        
-        /* Badges za Status */
         .medication-item .med-status-pending,
         .medication-item .badge-pending {
             font-size: 0.62rem;
@@ -2546,43 +2679,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             50% { box-shadow: 0 0 0 6px rgba(217, 119, 6, 0); }
         }
         
-        [data-theme="dark"] .medication-item .med-status-pending,
-        [data-theme="dark"] .medication-item .badge-pending {
-            background: linear-gradient(135deg, #3D2E0A, #4A3A12);
-            color: #FCD34D;
-            border-color: #D97706;
-        }
-        
-        /* Button ya Remove */
-        .medication-item .btn-remove {
-            width: 34px;
-            height: 34px;
-            border-radius: 10px;
-            border: 2px solid #FCA5A5;
-            background: linear-gradient(135deg, #FEE2E2, #FECACA);
-            color: #DC2626;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            font-size: 0.8rem;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .medication-item .btn-remove:hover {
-            background: linear-gradient(135deg, #DC2626, #B91C1C);
-            color: white;
-            border-color: #DC2626;
-            transform: scale(1.12) rotate(90deg);
-            box-shadow: 0 4px 14px rgba(220, 38, 38, 0.4);
-        }
-        
-        /* ================================================================ */
-        /* ✅ V29: PROCEDURE CARD (PURPLE THEME)                          */
-        /* ================================================================ */
+        /* PROCEDURE CARD - PURPLE THEME */
         .medication-item.procedure-item {
             background: linear-gradient(135deg, #FFFFFF 0%, #F5F3FF 100%);
             border-color: #A78BFA;
@@ -2624,13 +2721,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border-color: #8B5CF6;
         }
         
-        .medication-item.procedure-item::before {
-            background: radial-gradient(circle at top right, rgba(124, 58, 237, 0.08) 0%, transparent 60%);
-        }
-        
-        /* ================================================================ */
-        /* ✅ V29: EQUIPMENT CARD (AMBER THEME)                           */
-        /* ================================================================ */
+        /* EQUIPMENT CARD - AMBER THEME */
         .medication-item.equipment-item {
             background: linear-gradient(135deg, #FFFFFF 0%, #FFFBEB 100%);
             border-color: #FCD34D;
@@ -2677,13 +2768,80 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border-color: #F59E0B;
         }
         
-        .medication-item.equipment-item::before {
-            background: radial-gradient(circle at top right, rgba(217, 119, 6, 0.08) 0%, transparent 60%);
+        /* ✅ V31: LAB TEST CARD - BLUE THEME (linked with equipment) */
+        .medication-item.labtest-item {
+            background: linear-gradient(135deg, #FFFFFF 0%, #EFF6FF 100%);
+            border-color: #93C5FD;
+            border-left-color: #2563EB;
+            box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
         }
         
-        /* ================================================================ */
-        /* ✅ V29: EMPTY STATE                                           */
-        /* ================================================================ */
+        [data-theme="dark"] .medication-item.labtest-item {
+            background: linear-gradient(135deg, #1E293B 0%, #1E3A5F 100%);
+            border-color: #60A5FA;
+            border-left-color: #2563EB;
+        }
+        
+        .medication-item.labtest-item .med-name {
+            color: #1E40AF;
+        }
+        
+        [data-theme="dark"] .medication-item.labtest-item .med-name {
+            color: #93C5FD;
+        }
+        
+        .medication-item.labtest-item .med-name::before {
+            content: '\f492';
+            font-family: 'Font Awesome 6 Free';
+            font-weight: 900;
+            background: linear-gradient(135deg, #3B82F6, #2563EB);
+            box-shadow: 0 3px 8px rgba(37, 99, 235, 0.3);
+        }
+        
+        .medication-item.labtest-item .med-qty {
+            background: linear-gradient(135deg, #2563EB, #1E40AF);
+        }
+        
+        .medication-item.labtest-item .med-price {
+            color: #1E40AF;
+            background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+            border-color: #3B82F6;
+        }
+        
+        [data-theme="dark"] .medication-item.labtest-item .med-price {
+            background: linear-gradient(135deg, #1E3A5F, #1E40AF);
+            color: #93C5FD;
+            border-color: #60A5FA;
+        }
+        
+        /* REMOVE BUTTON */
+        .medication-item .btn-remove {
+            width: 34px;
+            height: 34px;
+            border-radius: 10px;
+            border: 2px solid #FCA5A5;
+            background: linear-gradient(135deg, #FEE2E2, #FECACA);
+            color: #DC2626;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            font-size: 0.8rem;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .medication-item .btn-remove:hover {
+            background: linear-gradient(135deg, #DC2626, #B91C1C);
+            color: white;
+            border-color: #DC2626;
+            transform: scale(1.12) rotate(90deg);
+            box-shadow: 0 4px 14px rgba(220, 38, 38, 0.4);
+        }
+        
+        /* EMPTY STATE */
         #medicationsList .empty-medications,
         #addedItemsList .empty-added {
             text-align: center;
@@ -3001,9 +3159,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <div class="title-icon" style="background: var(--danger-gradient);"><i class="fas fa-heartbeat"></i></div>
                 Vital Signs
             </div>
-            <span style="font-size:0.7rem;color:var(--text-secondary);">
-                <i class="fas fa-lungs" style="color:var(--sky);"></i> SpO2 Normal: 95-100%
-            </span>
         </div>
         <div class="section-body">
             <?php if ($vital_signs): 
@@ -3239,8 +3394,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 $has_equipment = !empty($test['equipment_links']);
                                 $all_available = $test['all_equipment_available'] ?? true;
                                 $is_disabled = $has_equipment && !$all_available;
+                                $is_linked_class = $has_equipment ? 'linked-equipment' : '';
                             ?>
-                                <div class="item-card labtest-card <?= $is_disabled ? 'disabled' : '' ?>" 
+                                <div class="item-card labtest-card <?= $is_disabled ? 'disabled' : '' ?> <?= $is_linked_class ?>" 
                                      data-test-id="<?= $test['id'] ?>"
                                      data-test-name="<?= htmlspecialchars($test['test_name']) ?>"
                                      onclick="toggleLabTestCheckbox(this)">
@@ -3389,7 +3545,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <div class="section-body">
             <div style="display:flex;flex-direction:column;gap:16px;">
                 <?php foreach ($lab_results as $result): 
-                    $is_paid = isBillItemPaid($db, $bill_id, $result['id'], 'lab_test');
                     $result_text = $result['results'] ?? '';
                     $is_long = strlen($result_text) > 150;
                     $ref_range = $result['reference_range'] ?? '';
@@ -3866,6 +4021,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </span>
         </div>
         <div class="section-body">
+            <!-- PROCEDURES -->
             <div class="dropdown-section">
                 <div class="dropdown-header" onclick="toggleDropdownSection('proceduresToggle')">
                     <div class="dh-left">
@@ -3883,6 +4039,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     </div>
                 </div>
                 <div class="dropdown-body" id="proceduresToggle">
+                    <!-- ✅ V31: SEARCH FILTER KWA PROCEDURES -->
+                    <div class="dropdown-search-row">
+                        <div class="search-input-wrap">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="procedureSearch" placeholder="🔍 Search procedures..." oninput="filterProceduresInside()">
+                        </div>
+                    </div>
                     <div class="items-grid" id="proceduresGrid">
                         <?php foreach ($procedures_list as $proc): ?>
                             <div class="item-card procedure-card" 
@@ -3918,6 +4081,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
             
+            <!-- EQUIPMENT -->
             <div class="dropdown-section">
                 <div class="dropdown-header" onclick="toggleDropdownSection('equipmentToggle')">
                     <div class="dh-left">
@@ -3935,6 +4099,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     </div>
                 </div>
                 <div class="dropdown-body" id="equipmentToggle">
+                    <!-- ✅ V31: SEARCH FILTER KWA EQUIPMENT -->
+                    <div class="dropdown-search-row">
+                        <div class="search-input-wrap">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="equipmentSearch" placeholder="🔍 Search equipment..." oninput="filterEquipmentInside()">
+                        </div>
+                    </div>
                     <div class="items-grid" id="equipmentGrid">
                         <?php foreach ($equipment_list as $eq): 
                             $expiry_status = 'no-expiry'; $expiry_label = 'No Expiry';
@@ -4071,10 +4242,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     
     <?php else: ?>
     <!-- ═══════════════════════════════════════════════════════════ -->
-    <!-- ✅ V29: COMPLETED VIEW - SECTIONS ZOTE + CSS NZURI         -->
+    <!-- COMPLETED VIEW                                              -->
     <!-- ═══════════════════════════════════════════════════════════ -->
     
-    <!-- 1. DIAGNOSIS & TREATMENT -->
+    <!-- 1. DIAGNOSIS -->
     <div class="section-card section-purple">
         <div class="section-header">
             <div class="section-title">
@@ -4126,7 +4297,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     $is_paid_med = isBillItemPaid($db, $bill_id, $med['id'], 'prescription');
                     $status_info = getPrescriptionStatusInfo($med_rx_status, $is_paid_med);
                 ?>
-                    <div class="medication-item medication-prescription" id="med-item-<?= $med['id'] ?>">
+                    <div class="medication-item medication-prescription">
                         <div class="medication-item-info">
                             <span class="med-name"><?= htmlspecialchars($med['medication_name'] ?? 'Unknown') ?></span>
                             <span class="med-details">
@@ -4137,9 +4308,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             <span class="med-qty">x<?= $med['quantity'] ?? 0 ?></span>
                             <span class="med-price">TSh <?= formatMoneyDisplay($med['total_price'] ?? 0) ?></span>
                             <?php if (!empty($med['instructions'])): ?>
-                                <span class="med-instruction-tag">
-                                    <?= htmlspecialchars($med['instructions']) ?>
-                                </span>
+                                <span class="med-instruction-tag"><?= htmlspecialchars($med['instructions']) ?></span>
                             <?php endif; ?>
                             <span class="<?= $status_info['class'] ?>" style="font-size:0.62rem;padding:4px 12px;border-radius:12px;font-weight:800;display:inline-flex;align-items:center;gap:4px;text-transform:uppercase;">
                                 <i class="fas <?= $status_info['icon'] ?>"></i> <?= $status_info['label'] ?>
@@ -4237,7 +4406,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
     <?php endif; ?>
 
-    <!-- 5. BILL / BILL ITEMS -->
+    <!-- 5. BILL ITEMS -->
     <?php if (count($bill_items) > 0): ?>
     <div class="section-card section-primary">
         <div class="section-header">
@@ -4277,7 +4446,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         elseif ($item['item_type'] === 'lab_test') $item_icon_type = 'fa-flask';
                         elseif ($item['item_type'] === 'procedure') $item_icon_type = 'fa-syringe';
                         elseif ($item['item_type'] === 'equipment') $item_icon_type = 'fa-tools';
-                        elseif ($item['item_type'] === 'consultation') $item_icon_type = 'fa-stethoscope';
                     ?>
                         <tr>
                             <td style="font-family:'JetBrains Mono',monospace;font-size:0.72rem;color:var(--text-secondary);"><?= $bi_num++ ?></td>
@@ -4307,20 +4475,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <td style="text-align:right;padding:12px 14px;color:var(--primary);font-family:'JetBrains Mono',monospace;font-size:0.9rem;">TSh <?= formatMoneyDisplay($bill_subtotal) ?></td>
                         <td></td>
                     </tr>
-                    <?php if ($total_discount > 0): ?>
-                    <tr style="background:linear-gradient(135deg, var(--purple-bg), var(--bg-card));">
-                        <td colspan="5" style="text-align:right;padding:10px 14px;font-size:0.75rem;color:var(--purple);text-transform:uppercase;">Discount:</td>
-                        <td style="text-align:right;padding:10px 14px;color:var(--purple);font-family:'JetBrains Mono',monospace;">- TSh <?= formatMoneyDisplay($total_discount) ?></td>
-                        <td></td>
-                    </tr>
-                    <?php endif; ?>
-                    <?php if ($total_premium > 0): ?>
-                    <tr style="background:linear-gradient(135deg, var(--warning-bg), var(--bg-card));">
-                        <td colspan="5" style="text-align:right;padding:10px 14px;font-size:0.75rem;color:var(--warning);text-transform:uppercase;">Premium:</td>
-                        <td style="text-align:right;padding:10px 14px;color:var(--warning);font-family:'JetBrains Mono',monospace;">+ TSh <?= formatMoneyDisplay($total_premium) ?></td>
-                        <td></td>
-                    </tr>
-                    <?php endif; ?>
                     <tr style="background:linear-gradient(135deg, var(--success-bg), var(--bg-card));border-top:3px solid var(--success);">
                         <td colspan="5" style="text-align:right;padding:12px 14px;font-size:0.85rem;color:var(--success);text-transform:uppercase;">Grand Total:</td>
                         <td style="text-align:right;padding:12px 14px;color:var(--success);font-family:'JetBrains Mono',monospace;font-size:1.05rem;font-weight:900;">TSh <?= formatMoneyDisplay($bill_total) ?></td>
@@ -4348,7 +4502,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <p>
             <span style="color:var(--primary);font-weight:700;">Braick Dispensary</span> Management System
             <span style="margin:0 8px;color:var(--border-color);">|</span>
-            Consultation V29 (CSS NZURI)
+            Consultation V31
             <span style="margin:0 8px;color:var(--border-color);">|</span>
             <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>
             <span style="margin:0 8px;color:var(--border-color);">|</span>
@@ -4369,7 +4523,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
 <script>
 // ================================================================
-// CONSULTATION V29 - COMPLETED VIEW WITH CSS NZURI
+// CONSULTATION V31 - FULL JAVASCRIPT
 // ================================================================
 
 var pauseAutoUpdate = false;
@@ -4774,6 +4928,24 @@ function filterMedicationsInside() {
     });
 }
 
+// ✅ V31: FILTER KWA PROCEDURES
+function filterProceduresInside() {
+    var filter = document.getElementById('procedureSearch').value.toLowerCase().trim();
+    document.querySelectorAll('#proceduresGrid .item-card').forEach(function(item) {
+        var name = (item.getAttribute('data-procedure-name') || '').toLowerCase();
+        item.style.display = (!filter || name.includes(filter)) ? 'flex' : 'none';
+    });
+}
+
+// ✅ V31: FILTER KWA EQUIPMENT
+function filterEquipmentInside() {
+    var filter = document.getElementById('equipmentSearch').value.toLowerCase().trim();
+    document.querySelectorAll('#equipmentGrid .item-card').forEach(function(item) {
+        var name = (item.getAttribute('data-equipment-name') || '').toLowerCase();
+        item.style.display = (!filter || name.includes(filter)) ? 'flex' : 'none';
+    });
+}
+
 function toggleLabTestCheckbox(element) {
     if (element.classList.contains('disabled')) { showToast('⚠️ Cannot Select', 'This test requires equipment that is not available', 'warning'); return; }
     element.classList.toggle('selected');
@@ -4918,6 +5090,10 @@ function addMedicationAjax() {
         .then(r => r.json())
         .then(data => {
             if (data.success) { added++; if (data.medication) addMedicationToList(data.medication); }
+            else { 
+                showToast('❌ Error', data.message || 'Unknown error', 'error'); 
+                console.error('add_medication failed:', data);
+            }
             completed++;
             if (completed === total) {
                 btn.disabled = false;
@@ -5032,7 +5208,14 @@ function addSelectedProcedures() {
             showSavedIndicator('✅ Procedures added + Diagnosis saved');
             setTimeout(() => window.location.reload(), 1200); 
         }
-        else showToast('❌ Error', data.message, 'error');
+        else {
+            showToast('❌ Error', data.message || 'Unknown error', 'error');
+            console.error('add_procedures_batch failed:', data);
+        }
+    })
+    .catch(err => {
+        showToast('❌ Network Error', err.message, 'error');
+        console.error('Fetch error:', err);
     });
 }
 
@@ -5069,7 +5252,14 @@ function addSelectedEquipment() {
             showSavedIndicator('✅ Equipment added + Diagnosis saved');
             setTimeout(() => window.location.reload(), 1200); 
         }
-        else showToast('❌ Error', data.message, 'error');
+        else {
+            showToast('❌ Error', data.message || 'Unknown error', 'error');
+            console.error('add_equipment_batch failed:', data);
+        }
+    })
+    .catch(err => {
+        showToast('❌ Network Error', err.message, 'error');
+        console.error('Fetch error:', err);
     });
 }
 
@@ -5098,12 +5288,12 @@ document.addEventListener('DOMContentLoaded', function() {
     updateComplaintsUI();
 });
 
-console.log('%c🩺 Braick Consultation V29 FINAL', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ V29: CSS NZURI kwa Prescribed Medications, Procedures, Equipment', 'font-size:12px; color:#059669; font-weight:bold;');
-console.log('%c✅ V29: Medication cards - GREEN theme with icons', 'font-size:12px; color:#059669;');
-console.log('%c✅ V29: Procedure cards - PURPLE theme with icons', 'font-size:12px; color:#7C3AED;');
-console.log('%c✅ V29: Equipment cards - AMBER theme with icons', 'font-size:12px; color:#D97706;');
-console.log('%c✅ V28: Completed View INA SECTIONS ZOTE', 'font-size:12px; color:#059669;');
+console.log('%c🩺 Braick Consultation V31 FINAL', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ V31: ensureBillExists() - inaunda bill hata kama ni FREE (0 charge)', 'font-size:12px; color:#059669; font-weight:bold;');
+console.log('%c✅ V31: BLUE CARDS kwa lab tests zilizo-linked na equipment', 'font-size:12px; color:#1E40AF; font-weight:bold;');
+console.log('%c✅ V31: Search filter kwa procedures na equipment', 'font-size:12px; color:#7C3AED;');
+console.log('%c✅ V31: Error logging kamili - errors zinaonekana kwenye toast', 'font-size:12px; color:#DC2626;');
+console.log('%c✅ V31: Status auto-promotion: waiting → lab_test / prescribed', 'font-size:12px; color:#D97706;');
 </script>
 
 </body>
