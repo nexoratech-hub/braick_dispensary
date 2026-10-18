@@ -1,15 +1,18 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/consultation.php
-// V31 FINAL - BILL AUTO-CREATE, ERROR LOGGING, BEAUTIFUL CSS
+// V32 FINAL - MULTI-BATCH STOCK DISTRIBUTION
 // ================================================================
-// ✅ V31: ensureBillExists() - inaunda bill hata kama ni FREE (0 charge)
-// ✅ V31: Error logging kamili - errors zinaonekana kwenye toast
+// ✅ V32: Multi-batch stock distribution (FIFO by expiry)
+// ✅ V32: Medication inachukua batches zote ikiisha ya kwanza
+// ✅ V32: Stock validation kwa total available kwenye batches zote
+// ✅ V32: Bill items + prescription items kwa kila batch
+// ✅ V32: Display batches zilizotumika kwenye prescribed meds
+// ✅ V31: ensureBillExists() - bill hata kama FREE (0 charge)
+// ✅ V31: Error logging kamili
 // ✅ V31: Status auto-promotion: waiting → lab_test / prescribed
 // ✅ V31: BLUE CARDS kwa lab tests zilizo-linked na equipment
 // ✅ V31: Search filter kwa procedures na equipment
-// ✅ V31: CSS nzuri zaidi kwa medications, lab tests, procedures, equipment
-// ✅ V30: Fixed bill_id NULL error
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -89,17 +92,13 @@ function deleteBillItemByReference($db, $bill_id, $reference_id, $reference_type
     }
 }
 
-// ✅ V31 FIX: ensureBillExists - inaunda bill hata kama ni FREE (0 charge)
 function ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, &$bill_id) {
     try {
-        // Kama bill_id ipo, hakikisha ni ya visit hii
         if ($bill_id && $bill_id > 0) {
             $stmt = $db->prepare("SELECT id FROM bills WHERE id = ? AND visit_id = ?");
             $stmt->execute([$bill_id, $visit_id]);
             if ($stmt->fetch()) return $bill_id;
         }
-        
-        // Angalia kama bill ipo kwa visit
         $stmt = $db->prepare("SELECT id FROM bills WHERE visit_id = ? ORDER BY id ASC LIMIT 1");
         $stmt->execute([$visit_id]);
         $existing = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -107,13 +106,11 @@ function ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branc
             $bill_id = $existing['id'];
             return $bill_id;
         }
-        
-        // Kama haipo, tengeneza mpya (hata kama ni free visit - bill ya 0)
         $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 6, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
         $db->prepare("INSERT INTO bills (bill_number, patient_id, visit_id, subtotal, total_amount, balance, status, created_by, branch_id, created_at) VALUES (?, ?, ?, 0, 0, 0, 'pending', ?, ?, NOW())")
            ->execute([$bill_number, $patient_id, $visit_id, $doctor_id, $doctor_branch_id]);
         $bill_id = $db->lastInsertId();
-        error_log("ensureBillExists: Created new bill #$bill_id for visit #$visit_id (FREE/0)");
+        error_log("ensureBillExists: Created new bill #$bill_id for visit #$visit_id");
         return $bill_id;
     } catch (Exception $e) {
         error_log("ensureBillExists ERROR: " . $e->getMessage());
@@ -303,7 +300,7 @@ $is_lab_test = ($visit['status'] === 'lab_test');
 $visit_status = $visit['status'] ?? 'assigned';
 
 // ================================================================
-// GET OR CREATE BILL - ✅ V31: HATA KAMA NI FREE (0 CHARGE)
+// GET OR CREATE BILL
 // ================================================================
 $bill_id = null;
 $bill_status = 'pending';
@@ -326,7 +323,6 @@ try {
         $bill_total_discount = $bill['total_discount'] ?? 0;
         $bill_premium = $bill['premium_amount'] ?? 0;
     } else {
-        // ✅ V31 FIX: Tengeneza bill hata kama ni free visit (0 charge)
         $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 6, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
         $db->prepare("INSERT INTO bills (bill_number, patient_id, visit_id, subtotal, total_amount, balance, status, created_by, branch_id, created_at) VALUES (?, ?, ?, 0, 0, 0, 'pending', ?, ?, NOW())")
            ->execute([$bill_number, $patient_id, $visit_id, $doctor_id, $doctor_branch_id]);
@@ -336,7 +332,6 @@ try {
     error_log("Bill fetch/create ERROR: " . $e->getMessage());
 }
 
-// ✅ V31 FIX: Hakikisha bill_id sio null KABISA
 $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
 
 function updateBillTotal($db, $bill_id) {
@@ -637,27 +632,59 @@ try {
     unset($test);
 } catch (Exception $e) { $lab_tests_catalog = []; }
 
+// ✅ V32: Medications grouped - FIFO by expiry for batch selection
 $medications_grouped = [];
 try {
-    $stmt = $db->prepare("SELECT id, medication_name, category, unit, selling_price, quantity, batch_number, expiry_date, status FROM medications_inventory WHERE branch_id = ? ORDER BY CASE WHEN quantity > 0 AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE()) AND status = 'active' THEN 0 ELSE 1 END ASC, medication_name ASC");
+    $stmt = $db->prepare("
+        SELECT id, medication_name, category, unit, selling_price, quantity, batch_number, expiry_date, status 
+        FROM medications_inventory 
+        WHERE branch_id = ? 
+        ORDER BY 
+            CASE WHEN quantity > 0 AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE()) AND status = 'active' THEN 0 ELSE 1 END ASC, 
+            medication_name ASC,
+            CASE WHEN expiry_date IS NULL OR expiry_date = '0000-00-00' THEN 1 ELSE 0 END ASC,
+            expiry_date ASC,
+            id ASC
+    ");
     $stmt->execute([$doctor_branch_id]);
     $medications_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($medications_list as $med) {
         $key = $med['medication_name'] . '|' . $med['category'];
         if (!isset($medications_grouped[$key])) {
-            $medications_grouped[$key] = ['name' => $med['medication_name'], 'category' => $med['category'], 'selling_price' => $med['selling_price'], 'total_quantity' => 0, 'available_quantity' => 0, 'batches' => [], 'has_available' => false, 'has_expired' => false, 'has_out_of_stock' => false, 'has_inactive' => false];
+            $medications_grouped[$key] = [
+                'name' => $med['medication_name'], 
+                'category' => $med['category'], 
+                'selling_price' => $med['selling_price'], 
+                'total_quantity' => 0, 
+                'available_quantity' => 0, 
+                'batches' => [], 
+                'has_available' => false, 
+                'has_expired' => false, 
+                'has_out_of_stock' => false, 
+                'has_inactive' => false
+            ];
         }
         $is_expired = (!empty($med['expiry_date']) && $med['expiry_date'] !== '0000-00-00' && strtotime($med['expiry_date']) < strtotime('today'));
         $is_available = ($med['quantity'] > 0 && $med['status'] === 'active' && !$is_expired);
         
-        if ($is_available) { $medications_grouped[$key]['has_available'] = true; $medications_grouped[$key]['available_quantity'] += $med['quantity']; }
+        if ($is_available) { 
+            $medications_grouped[$key]['has_available'] = true; 
+            $medications_grouped[$key]['available_quantity'] += $med['quantity']; 
+        }
         if ($is_expired) $medications_grouped[$key]['has_expired'] = true;
         if ($med['quantity'] <= 0) $medications_grouped[$key]['has_out_of_stock'] = true;
         if ($med['status'] !== 'active') $medications_grouped[$key]['has_inactive'] = true;
         
         $medications_grouped[$key]['total_quantity'] += $med['quantity'];
-        $medications_grouped[$key]['batches'][] = ['id' => $med['id'], 'quantity' => $med['quantity'], 'batch_number' => $med['batch_number'], 'expiry_date' => $med['expiry_date'], 'selling_price' => $med['selling_price'], 'is_available' => $is_available];
+        $medications_grouped[$key]['batches'][] = [
+            'id' => $med['id'], 
+            'quantity' => $med['quantity'], 
+            'batch_number' => $med['batch_number'], 
+            'expiry_date' => $med['expiry_date'], 
+            'selling_price' => $med['selling_price'], 
+            'is_available' => $is_available
+        ];
     }
     uasort($medications_grouped, function($a, $b) {
         if ($a['has_available'] && !$b['has_available']) return -1;
@@ -749,11 +776,13 @@ try {
                pi.unit_price, pi.total_price, pi.dispensed_at, pi.dispensed_by, pi.inventory_id,
                pi.confirmed_at, pi.confirmed_by, pi.cancelled_at, pi.cancelled_by,
                p.status as prescription_status,
+               mi.batch_number, mi.expiry_date,
                confirmer.full_name as confirmed_by_name,
                dispenser.full_name as dispensed_by_name,
                canceller.full_name as cancelled_by_name
         FROM prescriptions p
         INNER JOIN prescription_items pi ON p.id = pi.prescription_id
+        LEFT JOIN medications_inventory mi ON pi.inventory_id = mi.id
         LEFT JOIN users confirmer ON pi.confirmed_by = confirmer.id
         LEFT JOIN users dispenser ON pi.dispensed_by = dispenser.id
         LEFT JOIN users canceller ON pi.cancelled_by = canceller.id
@@ -873,7 +902,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     
     if ($action === 'get_bill_totals') {
         header('Content-Type: application/json');
-        // ✅ V31 FIX: Hakikisha bill ipo
         $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
         
         $lab_total = 0; $medication_total = 0; $procedure_total_bill = 0; $equipment_total = 0;
@@ -990,7 +1018,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $response = ['success' => false, 'message' => ''];
         try {
             $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
-            
             $stmt = $db->prepare("SELECT lt.* FROM lab_tests lt WHERE lt.id = ? AND lt.visit_id = ?");
             $stmt->execute([$test_id, $visit_id]);
             $test = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -1021,7 +1048,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $response = ['success' => false, 'message' => ''];
         try {
             $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
-            
             $stmt = $db->prepare("SELECT lt.* FROM lab_tests lt WHERE lt.id = ? AND lt.visit_id = ?");
             $stmt->execute([$test_id, $visit_id]);
             $test = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -1046,6 +1072,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
+    // ✅ V32: MULTI-BATCH add_medication
     if ($action === 'add_medication') {
         header('Content-Type: application/json');
         
@@ -1069,10 +1096,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             error_log("add_medication diagnosis save failed: " . $e->getMessage());
         }
         
-        // ✅ V31 FIX: Hakikisha bill ipo KABLA ya ku-insert
         $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
         
-        $inventory_id = (int)($_POST['inventory_id'] ?? 0);
+        $medication_name = trim($_POST['medication_name'] ?? '');
+        $medication_category = trim($_POST['medication_category'] ?? '');
         $quantity = (int)($_POST['quantity'] ?? 1);
         $dosage = trim($_POST['dosage'] ?? '');
         $frequency = trim($_POST['frequency'] ?? '');
@@ -1082,45 +1109,146 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         
         $response = ['success' => false, 'message' => ''];
         
-        if ($inventory_id > 0 && $quantity > 0) {
+        if (!empty($medication_name) && $quantity > 0) {
             try {
-                $stmt = $db->prepare("SELECT id, medication_name, selling_price, quantity as stock, batch_number, expiry_date FROM medications_inventory WHERE id = ? AND status = 'active' AND branch_id = ?");
-                $stmt->execute([$inventory_id, $doctor_branch_id]);
-                $med = $stmt->fetch(PDO::FETCH_ASSOC);
+                // ✅ V32: FIFO - batches zote zenye stock, expiry ya karibu kwanza
+                $stmt = $db->prepare("
+                    SELECT id, medication_name, selling_price, quantity as stock, batch_number, expiry_date 
+                    FROM medications_inventory 
+                    WHERE medication_name = ? 
+                      AND (category = ? OR (? = '' AND category IS NULL))
+                      AND status = 'active' 
+                      AND branch_id = ?
+                      AND quantity > 0
+                      AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE())
+                    ORDER BY 
+                        CASE WHEN expiry_date IS NULL OR expiry_date = '0000-00-00' THEN 1 ELSE 0 END ASC,
+                        expiry_date ASC,
+                        id ASC
+                ");
+                $stmt->execute([$medication_name, $medication_category, $medication_category, $doctor_branch_id]);
+                $available_batches = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
-                if ($med && $med['stock'] >= $quantity) {
-                    $db->beginTransaction();
-                    $prescription_number = 'PRES-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
+                if (empty($available_batches)) {
+                    echo json_encode(['success' => false, 'message' => '❌ Medication not available in stock']);
+                    exit;
+                }
+                
+                $total_available = 0;
+                foreach ($available_batches as $b) { $total_available += (int)$b['stock']; }
+                
+                if ($total_available < $quantity) {
+                    echo json_encode(['success' => false, 'message' => '❌ Insufficient stock. Available: ' . $total_available . ', Requested: ' . $quantity]);
+                    exit;
+                }
+                
+                // ✅ V32: Chukua kwenye batches zote (FIFO)
+                $remaining_to_dispense = $quantity;
+                $batches_used = [];
+                $total_price = 0;
+                
+                foreach ($available_batches as $batch) {
+                    if ($remaining_to_dispense <= 0) break;
+                    $batch_stock = (int)$batch['stock'];
+                    if ($batch_stock <= 0) continue;
                     
-                    $db->prepare("INSERT INTO prescriptions (prescription_number, visit_id, patient_id, doctor_id, status, branch_id, created_at) VALUES (?, ?, ?, ?, 'pending', ?, NOW())")
-                       ->execute([$prescription_number, $visit_id, $patient_id, $doctor_id, $doctor_branch_id]);
-                    $prescription_id = $db->lastInsertId();
+                    $take_from_batch = min($batch_stock, $remaining_to_dispense);
+                    $batch_price = (float)$batch['selling_price'];
+                    $batch_total = $batch_price * $take_from_batch;
                     
-                    $unit_price = $med['selling_price'];
-                    $total_price = $unit_price * $quantity;
+                    $batches_used[] = [
+                        'inventory_id' => $batch['id'],
+                        'batch_number' => $batch['batch_number'],
+                        'expiry_date' => $batch['expiry_date'],
+                        'unit_price' => $batch_price,
+                        'quantity' => $take_from_batch,
+                        'total_price' => $batch_total
+                    ];
                     
-                    $db->prepare("INSERT INTO prescription_items (prescription_id, patient_id, inventory_id, medication_name, dosage, frequency, quantity, duration, route, instructions, unit_price, total_price, branch_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())")
-                       ->execute([$prescription_id, $patient_id, $inventory_id, $med['medication_name'], $dosage, $frequency, $quantity, $duration, $route, $instructions, $unit_price, $total_price, $doctor_branch_id]);
+                    $remaining_to_dispense -= $take_from_batch;
+                    $total_price += $batch_total;
+                }
+                
+                if ($remaining_to_dispense > 0) {
+                    echo json_encode(['success' => false, 'message' => '❌ Could not dispense full quantity. Remaining: ' . $remaining_to_dispense]);
+                    exit;
+                }
+                
+                $db->beginTransaction();
+                
+                $prescription_number = 'PRES-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
+                $db->prepare("INSERT INTO prescriptions (prescription_number, visit_id, patient_id, doctor_id, status, branch_id, created_at) VALUES (?, ?, ?, ?, 'pending', ?, NOW())")
+                   ->execute([$prescription_number, $visit_id, $patient_id, $doctor_id, $doctor_branch_id]);
+                $prescription_id = $db->lastInsertId();
+                
+                $batch_numbers_list = [];
+                foreach ($batches_used as $batch_used) {
+                    $db->prepare("
+                        INSERT INTO prescription_items 
+                        (prescription_id, patient_id, inventory_id, medication_name, dosage, frequency, quantity, duration, route, instructions, unit_price, total_price, branch_id, created_at) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                    ")->execute([
+                        $prescription_id, 
+                        $patient_id, 
+                        $batch_used['inventory_id'], 
+                        $medication_name, 
+                        $dosage, 
+                        $frequency, 
+                        $batch_used['quantity'], 
+                        $duration, 
+                        $route, 
+                        $instructions, 
+                        $batch_used['unit_price'], 
+                        $batch_used['total_price'], 
+                        $doctor_branch_id
+                    ]);
                     
-                    $db->prepare("INSERT INTO bill_items (bill_id, patient_id, branch_id, item_type, item_name, quantity, unit_price, total_price, status, reference_id, reference_type, created_at) VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, 'pending', ?, 'prescription', NOW())")
-                       ->execute([$bill_id, $patient_id, $doctor_branch_id, $med['medication_name'] . ' (Batch: ' . ($med['batch_number'] ?? 'N/A') . ')', $quantity, $unit_price, $total_price, $prescription_id]);
+                    $batch_label = ' (Batch: ' . ($batch_used['batch_number'] ?: 'N/A') . ')';
+                    $batch_numbers_list[] = $batch_used['batch_number'] ?: 'N/A';
                     
-                    // ✅ V31 FIX: Rudisha status kuwa prescribed (pamoja na waiting)
-                    $db->prepare("UPDATE visits SET status = 'prescribed', updated_at = NOW() WHERE id = ? AND status IN ('assigned', 'waiting', 'lab_test')")->execute([$visit_id]);
-                    
-                    $db->commit();
-                    $bill_data = updateBillTotal($db, $bill_id);
-                    
-                    $response['success'] = true;
-                    $response['message'] = '✅ Medication added!';
-                    $response['medication'] = ['id' => $prescription_id, 'name' => $med['medication_name'], 'dosage' => $dosage, 'frequency' => $frequency, 'duration' => $duration, 'quantity' => $quantity, 'instructions' => $instructions, 'total_price' => $total_price];
-                    $response['bill_data'] = $bill_data;
-                } else $response['message'] = '❌ Insufficient stock';
+                    $db->prepare("
+                        INSERT INTO bill_items 
+                        (bill_id, patient_id, branch_id, item_type, item_name, quantity, unit_price, total_price, status, reference_id, reference_type, created_at) 
+                        VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, 'pending', ?, 'prescription', NOW())
+                    ")->execute([
+                        $bill_id, 
+                        $patient_id, 
+                        $doctor_branch_id, 
+                        $medication_name . $batch_label, 
+                        $batch_used['quantity'], 
+                        $batch_used['unit_price'], 
+                        $batch_used['total_price'], 
+                        $prescription_id
+                    ]);
+                }
+                
+                $db->prepare("UPDATE visits SET status = 'prescribed', updated_at = NOW() WHERE id = ? AND status IN ('assigned', 'waiting', 'lab_test')")->execute([$visit_id]);
+                
+                $db->commit();
+                $bill_data = updateBillTotal($db, $bill_id);
+                
+                $response['success'] = true;
+                $response['message'] = '✅ Medication added! (' . count($batches_used) . ' batch' . (count($batches_used) > 1 ? 'es' : '') . ' used: ' . implode(', ', $batch_numbers_list) . ')';
+                $response['medication'] = [
+                    'id' => $prescription_id, 
+                    'name' => $medication_name, 
+                    'dosage' => $dosage, 
+                    'frequency' => $frequency, 
+                    'duration' => $duration, 
+                    'quantity' => $quantity, 
+                    'instructions' => $instructions, 
+                    'total_price' => $total_price,
+                    'batches_used' => $batches_used
+                ];
+                $response['bill_data'] = $bill_data;
+                
             } catch (Exception $e) {
                 if ($db->inTransaction()) $db->rollBack();
                 error_log("add_medication ERROR: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
                 $response['message'] = '❌ Error: ' . $e->getMessage();
             }
+        } else {
+            $response['message'] = '❌ Invalid medication name or quantity';
         }
         echo json_encode($response);
         exit;
@@ -1132,7 +1260,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $response = ['success' => false, 'message' => ''];
         try {
             $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
-            
             $stmt = $db->prepare("SELECT p.* FROM prescriptions p WHERE p.id = ? AND p.visit_id = ?");
             $stmt->execute([$prescription_id, $visit_id]);
             $presc = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -1140,7 +1267,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $is_paid = isBillItemPaid($db, $bill_id, $prescription_id, 'prescription');
                 if (!$is_paid) {
                     $db->beginTransaction();
-                    deleteBillItemByReference($db, $bill_id, $prescription_id, 'prescription', 'medication');
+                    $db->prepare("DELETE FROM bill_items WHERE bill_id = ? AND reference_id = ? AND reference_type = 'prescription'")->execute([$bill_id, $prescription_id]);
                     $db->prepare("DELETE FROM prescription_items WHERE prescription_id = ?")->execute([$prescription_id]);
                     $db->prepare("DELETE FROM prescriptions WHERE id = ?")->execute([$prescription_id]);
                     $db->commit();
@@ -1160,28 +1287,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     
     if ($action === 'add_procedures_batch') {
         header('Content-Type: application/json');
-        
-        if ($lock_sections) {
-            echo json_encode(['success' => false, 'message' => '🔒 Cannot add procedures.']);
-            exit;
-        }
+        if ($lock_sections) { echo json_encode(['success' => false, 'message' => '🔒 Cannot add procedures.']); exit; }
         
         try {
             saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, [
-                'diagnosis_ids' => $_POST['diagnosis_ids'] ?? [],
-                'manual_diseases' => $_POST['manual_diseases'] ?? [],
-                'manual_disease_codes' => $_POST['manual_disease_codes'] ?? [],
-                'treatment' => $_POST['treatment'] ?? '',
-                'symptoms' => $_POST['symptoms'] ?? '',
-                'hpi' => $_POST['hpi'] ?? '',
-                'physical_exam' => $_POST['physical_exam'] ?? '',
-                'notes' => $_POST['notes'] ?? ''
+                'diagnosis_ids' => $_POST['diagnosis_ids'] ?? [], 'manual_diseases' => $_POST['manual_diseases'] ?? [],
+                'manual_disease_codes' => $_POST['manual_disease_codes'] ?? [], 'treatment' => $_POST['treatment'] ?? '',
+                'symptoms' => $_POST['symptoms'] ?? '', 'hpi' => $_POST['hpi'] ?? '',
+                'physical_exam' => $_POST['physical_exam'] ?? '', 'notes' => $_POST['notes'] ?? ''
             ], true);
-        } catch (Exception $e) {
-            error_log("add_procedures_batch diagnosis save failed: " . $e->getMessage());
-        }
+        } catch (Exception $e) { error_log("add_procedures_batch diagnosis save failed: " . $e->getMessage()); }
         
-        // ✅ V31 FIX: Hakikisha bill ipo KABLA ya ku-insert
         $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
         
         $procedure_ids = isset($_POST['procedure_ids']) ? json_decode($_POST['procedure_ids'], true) : [];
@@ -1205,10 +1321,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                        ->execute([$bill_id, $patient_id, $doctor_branch_id, $proc_id, $procedure['procedure_name'], $procedure_price, $procedure_price, $proc_id_inserted]);
                     $response['added']++;
                 }
-                
-                // ✅ V31 FIX: Rudisha status kuwa prescribed (pamoja na waiting)
                 $db->prepare("UPDATE visits SET status = 'prescribed', updated_at = NOW() WHERE id = ? AND status IN ('assigned', 'waiting', 'lab_test')")->execute([$visit_id]);
-                
                 $db->commit();
                 updateBillTotal($db, $bill_id);
                 $response['success'] = true;
@@ -1225,28 +1338,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     
     if ($action === 'add_equipment_batch') {
         header('Content-Type: application/json');
-        
-        if ($lock_sections) {
-            echo json_encode(['success' => false, 'message' => '🔒 Cannot add equipment.']);
-            exit;
-        }
+        if ($lock_sections) { echo json_encode(['success' => false, 'message' => '🔒 Cannot add equipment.']); exit; }
         
         try {
             saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, [
-                'diagnosis_ids' => $_POST['diagnosis_ids'] ?? [],
-                'manual_diseases' => $_POST['manual_diseases'] ?? [],
-                'manual_disease_codes' => $_POST['manual_disease_codes'] ?? [],
-                'treatment' => $_POST['treatment'] ?? '',
-                'symptoms' => $_POST['symptoms'] ?? '',
-                'hpi' => $_POST['hpi'] ?? '',
-                'physical_exam' => $_POST['physical_exam'] ?? '',
-                'notes' => $_POST['notes'] ?? ''
+                'diagnosis_ids' => $_POST['diagnosis_ids'] ?? [], 'manual_diseases' => $_POST['manual_diseases'] ?? [],
+                'manual_disease_codes' => $_POST['manual_disease_codes'] ?? [], 'treatment' => $_POST['treatment'] ?? '',
+                'symptoms' => $_POST['symptoms'] ?? '', 'hpi' => $_POST['hpi'] ?? '',
+                'physical_exam' => $_POST['physical_exam'] ?? '', 'notes' => $_POST['notes'] ?? ''
             ], true);
-        } catch (Exception $e) {
-            error_log("add_equipment_batch diagnosis save failed: " . $e->getMessage());
-        }
+        } catch (Exception $e) { error_log("add_equipment_batch diagnosis save failed: " . $e->getMessage()); }
         
-        // ✅ V31 FIX: Hakikisha bill ipo KABLA ya ku-insert
         $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
         
         $equipment_data = isset($_POST['equipment_data']) ? json_decode($_POST['equipment_data'], true) : [];
@@ -1271,10 +1373,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                        ->execute([$bill_id, $patient_id, $doctor_branch_id, $equipment_id, $equipment['equipment_name'], $quantity, $unit_price, $total_price, $equipment_id]);
                     $response['added']++;
                 }
-                
-                // ✅ V31 FIX: Rudisha status kuwa prescribed (pamoja na waiting)
                 $db->prepare("UPDATE visits SET status = 'prescribed', updated_at = NOW() WHERE id = ? AND status IN ('assigned', 'waiting', 'lab_test')")->execute([$visit_id]);
-                
                 $db->commit();
                 updateBillTotal($db, $bill_id);
                 $response['success'] = true;
@@ -1296,7 +1395,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $response = ['success' => false, 'message' => ''];
         try {
             $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
-            
             $db->beginTransaction();
             if ($type === 'procedure') {
                 deleteBillItemByReference($db, $bill_id, $item_id, 'procedure', 'procedure');
@@ -1334,20 +1432,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         
         try {
             saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, [
-                'diagnosis_ids' => $_POST['diagnosis_ids'] ?? [],
-                'manual_diseases' => $_POST['manual_diseases'] ?? [],
-                'manual_disease_codes' => $_POST['manual_disease_codes'] ?? [],
-                'treatment' => $_POST['treatment'] ?? '',
-                'symptoms' => $_POST['symptoms'] ?? '',
-                'hpi' => $_POST['hpi'] ?? '',
-                'physical_exam' => $_POST['physical_exam'] ?? '',
-                'notes' => $_POST['notes'] ?? ''
+                'diagnosis_ids' => $_POST['diagnosis_ids'] ?? [], 'manual_diseases' => $_POST['manual_diseases'] ?? [],
+                'manual_disease_codes' => $_POST['manual_disease_codes'] ?? [], 'treatment' => $_POST['treatment'] ?? '',
+                'symptoms' => $_POST['symptoms'] ?? '', 'hpi' => $_POST['hpi'] ?? '',
+                'physical_exam' => $_POST['physical_exam'] ?? '', 'notes' => $_POST['notes'] ?? ''
             ], true);
-        } catch (Exception $e) {
-            error_log("send_lab diagnosis save failed: " . $e->getMessage());
-        }
+        } catch (Exception $e) { error_log("send_lab diagnosis save failed: " . $e->getMessage()); }
         
-        // ✅ V31 FIX: Hakikisha bill ipo KABLA ya ku-insert
         $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
         
         $lab_tests_sent = 0;
@@ -1372,7 +1463,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             }
             
             if ($lab_tests_sent > 0) {
-                // ✅ V31 FIX: Rudisha status kuwa lab_test (pamoja na waiting)
                 $db->prepare("UPDATE visits SET status = 'lab_test', updated_at = NOW() WHERE id = ? AND status IN ('assigned', 'prescribed', 'waiting')")->execute([$visit_id]);
                 updateBillTotal($db, $bill_id);
             }
@@ -1403,9 +1493,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $backend_labs = $stmt_check->fetchAll(PDO::FETCH_ASSOC);
         foreach ($backend_labs as $bl) {
             $backend_total_lab++;
-            if ($bl['status'] === 'completed' && !empty(trim($bl['results'] ?? ''))) {
-                $backend_has_completed_lab = true;
-            }
+            if ($bl['status'] === 'completed' && !empty(trim($bl['results'] ?? ''))) $backend_has_completed_lab = true;
         }
         $backend_lock = ($backend_total_lab > 0 && !$backend_has_completed_lab);
         
@@ -1419,14 +1507,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $save_result = null;
         try {
             $save_result = saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, [
-                'diagnosis_ids' => $_POST['diagnosis_ids'] ?? [],
-                'manual_diseases' => $_POST['manual_diseases'] ?? [],
-                'manual_disease_codes' => $_POST['manual_disease_codes'] ?? [],
-                'treatment' => $_POST['treatment'] ?? '',
-                'symptoms' => $_POST['symptoms'] ?? '',
-                'hpi' => $_POST['hpi'] ?? '',
-                'physical_exam' => $_POST['physical_exam'] ?? '',
-                'notes' => $_POST['notes'] ?? ''
+                'diagnosis_ids' => $_POST['diagnosis_ids'] ?? [], 'manual_diseases' => $_POST['manual_diseases'] ?? [],
+                'manual_disease_codes' => $_POST['manual_disease_codes'] ?? [], 'treatment' => $_POST['treatment'] ?? '',
+                'symptoms' => $_POST['symptoms'] ?? '', 'hpi' => $_POST['hpi'] ?? '',
+                'physical_exam' => $_POST['physical_exam'] ?? '', 'notes' => $_POST['notes'] ?? ''
             ], true);
         } catch (Exception $e) {
             $_SESSION['flash_message'] = "❌ Error saving diagnosis: " . $e->getMessage();
@@ -1436,15 +1520,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         }
         
         $has_diagnosis = false;
-        if ($save_result && !empty($save_result['disease_names'])) {
-            $has_diagnosis = true;
-        } else {
+        if ($save_result && !empty($save_result['disease_names'])) $has_diagnosis = true;
+        else {
             $stmt_check_diag = $db->prepare("SELECT diagnosis, disease_id FROM visits WHERE id = ?");
             $stmt_check_diag->execute([$visit_id]);
             $diag_row = $stmt_check_diag->fetch(PDO::FETCH_ASSOC);
-            if ($diag_row && (!empty($diag_row['diagnosis']) || !empty($diag_row['disease_id']))) {
-                $has_diagnosis = true;
-            }
+            if ($diag_row && (!empty($diag_row['diagnosis']) || !empty($diag_row['disease_id']))) $has_diagnosis = true;
         }
         
         if (!$has_diagnosis) {
@@ -1471,6 +1552,23 @@ $lab_cart_count = count($lab_cart);
 $valid_prescriptions = array_filter($prescriptions, function($med) {
     return !empty($med['medication_name']) && !empty($med['item_id']);
 });
+
+// ✅ V32: Group prescriptions by prescription_id (kwa batches nyingi)
+$grouped_prescriptions = [];
+foreach ($valid_prescriptions as $med) {
+    $pid = $med['id'];
+    if (!isset($grouped_prescriptions[$pid])) {
+        $grouped_prescriptions[$pid] = [
+            'prescription' => $med,
+            'items' => [],
+            'total_qty' => 0,
+            'total_price' => 0
+        ];
+    }
+    $grouped_prescriptions[$pid]['items'][] = $med;
+    $grouped_prescriptions[$pid]['total_qty'] += $med['quantity'] ?? 0;
+    $grouped_prescriptions[$pid]['total_price'] += $med['total_price'] ?? 0;
+}
 
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
@@ -1511,7 +1609,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             --bg-body: #F1F5F9; --bg-card: #ffffff;
             --text-primary: #1E293B; --text-secondary: #64748B; --border-color: #E2E8F0;
         }
-        
         [data-theme="dark"] {
             --bg-body: #0F172A; --bg-card: #1E293B;
             --text-primary: #E2E8F0; --text-secondary: #94A3B8; --border-color: #334155;
@@ -1520,16 +1617,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             --warning-bg: #78350F; --purple-bg: #4C1D95; --sky-bg: #0C2A3A;
             --blue-linked-bg: #1E3A5F;
         }
-        
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        
         body { background: var(--bg-body); color: var(--text-primary); font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif; line-height: 1.6; -webkit-font-smoothing: antialiased; }
-        
         .mono, .big-number { font-family: 'JetBrains Mono', monospace !important; font-variant-numeric: tabular-nums; }
-        
         .main-content { margin-left: 270px; margin-top: 68px; padding: 24px 28px; min-height: calc(100vh - 68px); max-width: 1400px; }
         
-        /* PAGE HEADER */
         .page-header {
             display: flex; justify-content: space-between; align-items: flex-start;
             flex-wrap: wrap; gap: 16px; margin-bottom: 24px; padding: 24px 28px;
@@ -1543,35 +1635,25 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border-radius: 50%; pointer-events: none;
         }
         .page-header * { color: #ffffff !important; position: relative; z-index: 1; }
-        
         .page-title { font-size: 1.5rem; font-weight: 800; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0; }
         .page-title i { font-size: 1.8rem; }
-        
         .page-badge { font-size: 0.7rem; font-weight: 700; background: rgba(255,255,255,0.2); padding: 5px 16px; border-radius: 20px; font-family: 'JetBrains Mono', monospace; border: 1px solid rgba(255,255,255,0.25); }
-        
         .page-subtitle { font-size: 0.85rem; opacity: 0.9; margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-        
         .status-badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 14px; border-radius: 20px; font-size: 0.7rem; font-weight: 700; background: rgba(255,255,255,0.2) !important; color: #ffffff !important; border: 1px solid rgba(255,255,255,0.3); text-transform: uppercase; }
         
-        /* SAVED INDICATOR */
         .saved-indicator {
             position: fixed; top: 80px; right: 30px;
             background: linear-gradient(135deg, #059669, #10B981);
-            color: white; padding: 12px 20px;
-            border-radius: 12px;
-            box-shadow: 0 8px 24px rgba(5,150,105,0.4);
-            z-index: 9999;
+            color: white; padding: 12px 20px; border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(5,150,105,0.4); z-index: 9999;
             display: flex; align-items: center; gap: 10px;
             font-size: 0.85rem; font-weight: 700;
-            transform: translateX(400px);
-            opacity: 0;
+            transform: translateX(400px); opacity: 0;
             transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
         }
         .saved-indicator.show { transform: translateX(0); opacity: 1; }
         
-        /* BILL SUMMARY CARDS */
         .bill-summary-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 20px; }
-        
         .bill-card {
             background: var(--bg-card); border-radius: var(--radius-lg);
             padding: 20px 16px 16px; border: 2px solid var(--border-color);
@@ -1580,89 +1662,73 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             text-align: center; min-height: 160px; box-shadow: var(--shadow);
         }
         .bill-card:hover { transform: translateY(-5px); box-shadow: var(--shadow-lg); }
-        
         .bill-card .bill-icon {
             width: 52px; height: 52px; border-radius: 16px;
             display: flex; align-items: center; justify-content: center;
             font-size: 1.4rem; margin-bottom: 12px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
-        
         .bill-card .bill-label { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); margin-bottom: 6px; display: block; }
         .bill-card .bill-value { font-size: 1.1rem; font-weight: 800; font-family: 'JetBrains Mono', monospace; line-height: 1.2; word-break: break-all; overflow-wrap: anywhere; max-width: 100%; display: block; }
         .bill-card .bill-sub { font-size: 0.6rem; color: var(--text-secondary); margin-top: 6px; font-weight: 500; }
-        
         .bill-card.total { border-color: #0B5ED7; }
         .bill-card.total .bill-icon { background: var(--primary-gradient); color: white; }
         .bill-card.total .bill-value { color: #0B5ED7; }
-        
         .bill-card.paid { border-color: #059669; }
         .bill-card.paid .bill-icon { background: var(--success-gradient); color: white; }
         .bill-card.paid .bill-value { color: #059669; }
-        
         .bill-card.remaining { border-color: #DC2626; }
         .bill-card.remaining .bill-icon { background: var(--danger-gradient); color: white; }
         .bill-card.remaining .bill-value { color: #DC2626; }
         .bill-card.remaining.zero { border-color: #059669; }
         .bill-card.remaining.zero .bill-icon { background: var(--success-gradient); }
         .bill-card.remaining.zero .bill-value { color: #059669; }
-        
         .bill-card.discount { border-color: #7C3AED; }
         .bill-card.discount .bill-icon { background: var(--purple-gradient); color: white; }
         .bill-card.discount .bill-value { color: #7C3AED; }
-        
         .bill-card.premium { border-color: #D97706; }
         .bill-card.premium .bill-icon { background: var(--warning-gradient); color: white; }
         .bill-card.premium .bill-value { color: #D97706; }
         
-        /* SECTION CARDS */
         .section-card {
             background: var(--bg-card); border-radius: var(--radius-lg);
             border: 3px solid var(--border-color); margin-bottom: 20px;
             box-shadow: var(--shadow); overflow: hidden; transition: var(--transition);
         }
         .section-card:hover { box-shadow: var(--shadow-md); }
-        
         .section-card.section-primary { border-color: var(--primary); }
         .section-card.section-success { border-color: var(--success); }
         .section-card.section-warning { border-color: var(--warning); }
         .section-card.section-purple { border-color: var(--purple); }
         .section-card.section-sky { border-color: var(--sky); }
         .section-card.section-danger { border-color: var(--danger); }
-        
         .section-header {
             display: flex; align-items: center; justify-content: space-between;
             padding: 18px 24px; border-bottom: 3px solid var(--border-color);
             flex-wrap: wrap; gap: 12px;
             background: linear-gradient(135deg, var(--gray-50), var(--bg-card));
         }
-        
         .section-card.section-primary .section-header { background: linear-gradient(135deg, var(--primary-bg), var(--bg-card)); border-bottom-color: var(--primary); }
         .section-card.section-success .section-header { background: linear-gradient(135deg, var(--success-bg), var(--bg-card)); border-bottom-color: var(--success); }
         .section-card.section-warning .section-header { background: linear-gradient(135deg, var(--warning-bg), var(--bg-card)); border-bottom-color: var(--warning); }
         .section-card.section-purple .section-header { background: linear-gradient(135deg, var(--purple-bg), var(--bg-card)); border-bottom-color: var(--purple); }
         .section-card.section-sky .section-header { background: linear-gradient(135deg, var(--sky-bg), var(--bg-card)); border-bottom-color: var(--sky); }
         .section-card.section-danger .section-header { background: linear-gradient(135deg, var(--danger-bg), var(--bg-card)); border-bottom-color: var(--danger); }
-        
         .section-title { display: flex; align-items: center; gap: 12px; font-size: 1rem; font-weight: 800; color: var(--text-primary); }
-        
         .section-title .title-icon {
             width: 42px; height: 42px; border-radius: 12px;
             display: flex; align-items: center; justify-content: center;
             font-size: 1.15rem; color: white;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
-        
         .section-body { padding: 20px 24px; }
         
-        /* PATIENT INFO */
         .patient-info-wrapper {
             display: flex; align-items: center; gap: 24px; padding: 24px;
             background: linear-gradient(135deg, var(--primary-bg), var(--bg-card));
             border-radius: var(--radius-lg); margin-bottom: 20px;
             border: 2px solid var(--primary-light); flex-wrap: wrap;
         }
-        
         .patient-avatar-large {
             width: 90px; height: 90px; border-radius: 50%;
             display: flex; align-items: center; justify-content: center;
@@ -1671,31 +1737,22 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             box-shadow: 0 8px 24px rgba(0,0,0,0.2);
             border: 4px solid var(--bg-card);
         }
-        
         .patient-info-main { flex: 1; min-width: 250px; }
         .patient-info-main h2 { font-size: 1.4rem; font-weight: 800; color: var(--text-primary); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
-        
         .patient-id-badge { font-size: 0.7rem; font-weight: 700; font-family: 'JetBrains Mono', monospace; background: var(--primary); color: white; padding: 3px 12px; border-radius: 12px; }
-        
         .patient-demographics { display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.8rem; color: var(--text-secondary); margin-top: 6px; }
         .patient-demographics span { display: inline-flex; align-items: center; gap: 5px; }
         .patient-demographics i { color: var(--primary); }
-        
         .patient-info-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; width: 100%; }
-        
         .info-cell { background: var(--bg-card); padding: 12px 16px; border-radius: var(--radius); border: 1px solid var(--border-color); transition: var(--transition); }
         .info-cell:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: var(--shadow); }
-        
         .info-cell .info-label { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); display: flex; align-items: center; gap: 5px; margin-bottom: 4px; }
         .info-cell .info-label i { color: var(--primary); font-size: 0.7rem; }
         .info-cell .info-value { font-size: 0.88rem; font-weight: 600; color: var(--text-primary); }
-        
         .blood-group-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 800; background: linear-gradient(135deg, #DC2626, #EF4444); color: white; }
         .allergy-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 700; background: linear-gradient(135deg, #D97706, #F59E0B); color: white; }
         
-        /* VISIT INFO */
         .visit-info-wrapper { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-        
         .visit-info-cell {
             background: linear-gradient(135deg, var(--gray-50), var(--bg-card));
             padding: 16px 18px; border-radius: var(--radius);
@@ -1703,20 +1760,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             display: flex; align-items: center; gap: 14px;
         }
         .visit-info-cell:hover { border-color: var(--primary); transform: translateY(-3px); box-shadow: var(--shadow-md); }
-        
         .visit-info-cell .cell-icon { width: 44px; height: 44px; border-radius: 12px; background: var(--primary-bg); color: var(--primary); display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0; }
         .visit-info-cell.visit-number .cell-icon { background: var(--warning-bg); color: var(--warning); }
         .visit-info-cell.visit-date .cell-icon { background: var(--success-bg); color: var(--success); }
         .visit-info-cell.doctor .cell-icon { background: var(--purple-bg); color: var(--purple); }
         .visit-info-cell.branch .cell-icon { background: var(--sky-bg); color: var(--sky-dark); }
-        
         .visit-info-cell .cell-content { flex: 1; min-width: 0; }
         .visit-info-cell .cell-label { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); margin-bottom: 3px; }
         .visit-info-cell .cell-value { font-size: 0.9rem; font-weight: 700; color: var(--text-primary); font-family: 'JetBrains Mono', monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         
-        /* VITAL SIGNS */
         .vitals-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
-        
         .vital-card {
             background: var(--bg-card); border-radius: var(--radius-lg);
             padding: 18px 16px; border: 2px solid var(--border-color);
@@ -1725,66 +1778,51 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .vital-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; }
         .vital-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-md); }
-        
         .vital-card .vital-icon-wrap {
             width: 48px; height: 48px; margin: 0 auto 10px;
             border-radius: 14px; display: flex; align-items: center;
             justify-content: center; font-size: 1.3rem; color: white;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
-        
         .vital-card .vital-name { font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); margin-bottom: 6px; }
-        
         .vital-card .vital-reading { font-size: 1.4rem; font-weight: 800; font-family: 'JetBrains Mono', monospace; line-height: 1.1; word-break: break-all; }
         .vital-card .vital-reading .unit { font-size: 0.7rem; font-weight: 600; color: var(--text-secondary); margin-left: 3px; }
-        
         .vital-card .vital-range { font-size: 0.6rem; color: var(--text-secondary); margin-top: 6px; font-weight: 500; }
-        
         .vital-card .vital-status {
             display: inline-block; margin-top: 8px; padding: 3px 12px;
             border-radius: 12px; font-size: 0.6rem; font-weight: 800;
             text-transform: uppercase; letter-spacing: 0.05em;
         }
-        
         .vital-card.temp::before { background: linear-gradient(90deg, #EF4444, #F87171); }
         .vital-card.temp .vital-icon-wrap { background: linear-gradient(135deg, #EF4444, #F87171); }
         .vital-card.temp .vital-name, .vital-card.temp .vital-reading { color: #DC2626; }
-        
         .vital-card.bp::before { background: linear-gradient(90deg, #3B82F6, #60A5FA); }
         .vital-card.bp .vital-icon-wrap { background: linear-gradient(135deg, #3B82F6, #60A5FA); }
         .vital-card.bp .vital-name, .vital-card.bp .vital-reading { color: #2563EB; }
-        
         .vital-card.pulse::before { background: linear-gradient(90deg, #EC4899, #F472B6); }
         .vital-card.pulse .vital-icon-wrap { background: linear-gradient(135deg, #EC4899, #F472B6); }
         .vital-card.pulse .vital-name, .vital-card.pulse .vital-reading { color: #DB2777; }
-        
         .vital-card.spo2::before { background: linear-gradient(90deg, #0EA5E9, #38BDF8); }
         .vital-card.spo2 .vital-icon-wrap { background: linear-gradient(135deg, #0EA5E9, #38BDF8); }
         .vital-card.spo2 .vital-name, .vital-card.spo2 .vital-reading { color: #0284C7; }
-        
         .vital-card.weight::before { background: linear-gradient(90deg, #8B5CF6, #A78BFA); }
         .vital-card.weight .vital-icon-wrap { background: linear-gradient(135deg, #8B5CF6, #A78BFA); }
         .vital-card.weight .vital-name, .vital-card.weight .vital-reading { color: #7C3AED; }
-        
         .vital-card.height::before { background: linear-gradient(90deg, #22C55E, #4ADE80); }
         .vital-card.height .vital-icon-wrap { background: linear-gradient(135deg, #22C55E, #4ADE80); }
         .vital-card.height .vital-name, .vital-card.height .vital-reading { color: #16A34A; }
-        
         .vital-card.bmi::before { background: linear-gradient(90deg, #F59E0B, #FBBF24); }
         .vital-card.bmi .vital-icon-wrap { background: linear-gradient(135deg, #F59E0B, #FBBF24); }
         .vital-card.bmi .vital-name, .vital-card.bmi .vital-reading { color: #D97706; }
-        
         .vital-card.notes-card::before { background: linear-gradient(90deg, #64748B, #94A3B8); }
         .vital-card.notes-card .vital-icon-wrap { background: linear-gradient(135deg, #64748B, #94A3B8); }
         .vital-card.notes-card .vital-name { color: #475569; }
         .vital-card.notes-card .vital-reading { font-size: 0.85rem; font-family: 'Inter', sans-serif; font-weight: 600; color: #475569; }
-        
         .vital-status.normal { background: linear-gradient(135deg, #D1FAE5, #A7F3D0); color: #047857; border: 1px solid #6EE7B7; }
         .vital-status.warning { background: linear-gradient(135deg, #FEF3C7, #FDE68A); color: #B45309; border: 1px solid #FCD34D; }
         .vital-status.critical { background: linear-gradient(135deg, #FEE2E2, #FECACA); color: #991B1B; border: 1px solid #FCA5A5; }
         .vital-status.low { background: linear-gradient(135deg, #DBEAFE, #BFDBFE); color: #1E40AF; border: 1px solid #93C5FD; }
         .vital-status.unknown { background: var(--gray-200); color: var(--text-secondary); }
-        
         .vitals-footer {
             margin-top: 16px; padding: 12px 18px;
             background: linear-gradient(135deg, var(--gray-50), var(--primary-bg));
@@ -1793,9 +1831,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-size: 0.75rem; color: var(--text-secondary);
         }
         
-        /* COMPLAINT */
         .complaint-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-        
         .complaint-box {
             background: linear-gradient(135deg, var(--gray-50), var(--bg-card));
             border-radius: var(--radius-lg); padding: 18px 20px;
@@ -1804,40 +1840,31 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             transition: var(--transition); min-height: 220px;
         }
         .complaint-box:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
-        
         .complaint-box.complaint-notes { border-color: var(--purple); }
         .complaint-box.complaint-chief { border-color: var(--warning); }
         .complaint-box.complaint-hpi { border-color: var(--sky); }
         .complaint-box.complaint-exam { border-color: var(--success); }
-        
         .complaint-box .box-header {
             display: flex; align-items: center; gap: 10px;
             margin-bottom: 12px; padding-bottom: 10px;
             border-bottom: 3px dashed var(--border-color);
             font-size: 0.9rem; font-weight: 800; color: var(--text-primary);
         }
-        
         .complaint-box .box-header .box-icon {
             width: 36px; height: 36px; border-radius: 10px;
             display: flex; align-items: center; justify-content: center;
             font-size: 0.95rem; color: white;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
-        
         .complaint-box.complaint-notes .box-header { color: var(--purple); }
         .complaint-box.complaint-notes .box-icon { background: var(--purple-gradient); }
-        
         .complaint-box.complaint-chief .box-header { color: var(--warning); }
         .complaint-box.complaint-chief .box-icon { background: var(--warning-gradient); }
-        
         .complaint-box.complaint-hpi .box-header { color: var(--sky-dark); }
         .complaint-box.complaint-hpi .box-icon { background: var(--sky-gradient); }
-        
         .complaint-box.complaint-exam .box-header { color: var(--success); }
         .complaint-box.complaint-exam .box-icon { background: var(--success-gradient); }
-        
         .complaint-box .box-body { flex: 1; display: flex; flex-direction: column; }
-        
         .complaint-box textarea {
             flex: 1; width: 100%; padding: 12px 14px;
             border: 2px solid var(--border-color); border-radius: var(--radius);
@@ -1846,7 +1873,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-family: inherit; resize: vertical; min-height: 90px;
         }
         .complaint-box textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11,94,215,0.12); }
-        
         .complaint-chip {
             padding: 4px 12px; border-radius: 16px;
             background: var(--primary-bg); color: var(--primary);
@@ -1857,14 +1883,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .complaint-chip .chip-remove { cursor: pointer; font-weight: 800; opacity: 0.7; font-size: 0.9rem; line-height: 1; }
         .complaint-chip .chip-remove:hover { opacity: 1; }
         
-        /* DROPDOWN SECTIONS */
         .dropdown-section {
             border: 3px solid var(--border-color); border-radius: var(--radius-lg);
             margin-bottom: 16px; overflow: hidden; transition: var(--transition);
             background: var(--bg-card); box-shadow: var(--shadow-sm);
         }
         .dropdown-section:hover { box-shadow: var(--shadow-md); }
-        
         .dropdown-header {
             display: flex; align-items: center; justify-content: space-between;
             padding: 18px 24px; cursor: pointer; user-select: none;
@@ -1873,30 +1897,24 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             gap: 12px; flex-wrap: wrap;
         }
         .dropdown-header:hover { background: linear-gradient(135deg, var(--primary-bg), var(--bg-card)); }
-        
         .dropdown-header .dh-left { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 200px; }
-        
         .dropdown-header .dh-icon {
             width: 42px; height: 42px; border-radius: 12px;
             display: flex; align-items: center; justify-content: center;
             font-size: 1.1rem; color: white; flex-shrink: 0;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
-        
         .dropdown-header .dh-title { display: flex; flex-direction: column; gap: 2px; }
         .dropdown-header .dh-title h4 { font-size: 0.95rem; font-weight: 800; color: var(--text-primary); margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .dropdown-header .dh-title p { font-size: 0.72rem; color: var(--text-secondary); margin: 0; font-weight: 500; }
-        
         .dropdown-header .dh-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
         .dropdown-header .dh-stat {
             padding: 4px 12px; border-radius: 12px; font-size: 0.7rem; font-weight: 700;
             font-family: 'JetBrains Mono', monospace;
             display: inline-flex; align-items: center; gap: 5px;
         }
-        
         .dropdown-header .dh-chevron { color: var(--text-secondary); font-size: 0.9rem; transition: var(--transition); }
         .dropdown-header.active .dh-chevron { transform: rotate(180deg); }
-        
         .dropdown-body {
             padding: 0; max-height: 0; overflow: hidden;
             transition: max-height 0.5s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s ease;
@@ -1904,17 +1922,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .dropdown-body.open { max-height: 2500px; padding: 20px 24px 24px; border-top: 3px solid var(--border-color); }
         
-        /* ITEMS GRID */
         .items-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 14px;
-            padding: 16px;
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; padding: 16px;
             background: linear-gradient(135deg, var(--gray-50) 0%, var(--gray-100) 100%);
             border-radius: var(--radius); max-height: 520px; overflow-y: auto;
             border: 2px solid var(--border-color);
         }
-        
         .items-grid::-webkit-scrollbar { width: 10px; }
         .items-grid::-webkit-scrollbar-track { background: var(--gray-100); border-radius: 5px; }
         .items-grid::-webkit-scrollbar-thumb { background: linear-gradient(135deg, var(--primary-light), var(--primary)); border-radius: 5px; border: 2px solid var(--gray-100); }
@@ -1929,7 +1942,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             box-shadow: 0 1px 3px rgba(0,0,0,0.04);
             flex-direction: column;
         }
-        
         .item-card .item-check {
             width: 26px; height: 26px; border: 2px solid var(--border-color);
             border-radius: 8px; display: flex; align-items: center;
@@ -1939,22 +1951,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .item-card .item-check i { font-size: 0.75rem; color: white; opacity: 0; transition: var(--transition); }
         .item-card.selected .item-check { background: var(--primary); border-color: var(--primary); transform: scale(1.1); }
         .item-card.selected .item-check i { opacity: 1; }
-        
         .item-card .item-info { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 8px; width: 100%; }
         .item-card .item-name {
             font-weight: 800; font-size: 0.92rem; color: var(--text-primary);
             line-height: 1.3; display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
         }
         .item-card .item-details { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-        
         .item-card .item-price {
             font-size: 0.78rem; color: var(--success); font-weight: 800;
             padding: 4px 12px; background: var(--success-bg); border-radius: 20px;
             display: inline-flex; align-items: center; gap: 4px;
-            font-family: 'JetBrains Mono', monospace;
-            border: 1px solid var(--success);
+            font-family: 'JetBrains Mono', monospace; border: 1px solid var(--success);
         }
-        
         .item-card .item-tag { font-size: 0.65rem; padding: 4px 12px; border-radius: 20px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; }
         .item-card .item-tag.category { color: var(--purple); background: var(--purple-bg); border: 1px solid var(--purple); }
         .item-card .item-tag.stock { color: var(--text-secondary); background: var(--gray-100); border: 1px solid var(--border-color); }
@@ -1965,7 +1973,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .item-card .item-tag.expiry.expiring { color: var(--warning); background: var(--warning-bg); border: 1px solid var(--warning); }
         .item-card .item-tag.expiry.expired { color: var(--danger); background: var(--danger-bg); border: 1px solid var(--danger); font-weight: 700; }
         .item-card .item-tag.expiry.no-expiry { color: var(--text-secondary); background: var(--gray-100); border: 1px solid var(--border-color); }
-        
         .item-card .item-status-badge {
             font-size: 0.55rem; font-weight: 800; padding: 3px 10px;
             border-radius: 10px; letter-spacing: 0.05em; text-transform: uppercase;
@@ -1973,7 +1980,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .item-card .item-status-badge.expired { background: linear-gradient(135deg, #DC2626, #EF4444); color: white; }
         .item-card .item-status-badge.out { background: linear-gradient(135deg, #D97706, #F59E0B); color: white; }
         .item-card .item-status-badge.inactive { background: linear-gradient(135deg, #64748B, #94A3B8); color: white; }
-        
         .item-card.disabled {
             opacity: 0.55; cursor: not-allowed !important;
             border-color: var(--danger);
@@ -1982,40 +1988,29 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .item-card.disabled:hover { transform: none !important; box-shadow: none !important; }
         .item-card.disabled .item-name { color: var(--danger) !important; text-decoration: line-through; }
         
-        /* ✅ V31: RANGI TOFAUTI KWA KILA AINA YA ITEM */
         .item-card.medication-card.selected { border-color: #059669; background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%); }
         .item-card.medication-card.selected .item-check { background: #059669; border-color: #059669; }
-        
         .item-card.labtest-card.selected { border-color: #0284C7; background: linear-gradient(135deg, #E0F2FE 0%, #BAE6FD 100%); }
         .item-card.labtest-card.selected .item-check { background: #0284C7; border-color: #0284C7; }
         
-        /* ✅ V31: BLUE CARD KWA LAB TEST ZILIZO-LINK NA EQUIPMENT */
         .item-card.labtest-card.linked-equipment {
             border-color: var(--blue-linked);
             background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 50%, #BFDBFE 100%);
             box-shadow: 0 4px 16px rgba(30, 64, 175, 0.15);
         }
         .item-card.labtest-card.linked-equipment::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0;
+            content: ''; position: absolute; top: 0; left: 0;
             width: 5px; height: 100%;
             background: linear-gradient(180deg, #1E40AF, #3B82F6, #60A5FA);
             border-radius: 12px 0 0 12px;
         }
-        .item-card.labtest-card.linked-equipment .item-name {
-            color: var(--blue-linked);
-            font-weight: 900;
-        }
+        .item-card.labtest-card.linked-equipment .item-name { color: var(--blue-linked); font-weight: 900; }
         .item-card.labtest-card.linked-equipment .item-price {
             background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
-            color: var(--blue-linked);
-            border-color: var(--blue-linked-light);
+            color: var(--blue-linked); border-color: var(--blue-linked-light);
         }
         .item-card.labtest-card.linked-equipment .item-tag.category {
-            background: var(--blue-linked-bg);
-            color: var(--blue-linked);
-            border-color: var(--blue-linked-light);
+            background: var(--blue-linked-bg); color: var(--blue-linked); border-color: var(--blue-linked-light);
         }
         .item-card.labtest-card.linked-equipment.selected {
             border-color: var(--blue-linked);
@@ -2023,25 +2018,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             box-shadow: 0 8px 24px rgba(30, 64, 175, 0.25);
         }
         .item-card.labtest-card.linked-equipment.selected .item-check {
-            background: var(--blue-linked);
-            border-color: var(--blue-linked);
+            background: var(--blue-linked); border-color: var(--blue-linked);
         }
-        
         [data-theme="dark"] .item-card.labtest-card.linked-equipment {
-            background: linear-gradient(135deg, #1E3A5F 0%, #1E40AF 100%);
-            border-color: #60A5FA;
+            background: linear-gradient(135deg, #1E3A5F 0%, #1E40AF 100%); border-color: #60A5FA;
         }
-        [data-theme="dark"] .item-card.labtest-card.linked-equipment .item-name {
-            color: #93C5FD;
-        }
+        [data-theme="dark"] .item-card.labtest-card.linked-equipment .item-name { color: #93C5FD; }
         
         .item-card.procedure-card.selected { border-color: #7C3AED; background: linear-gradient(135deg, #EDE9FE 0%, #DDD6FE 100%); }
         .item-card.procedure-card.selected .item-check { background: #7C3AED; border-color: #7C3AED; }
-        
         .item-card.equipment-card.selected { border-color: #D97706; background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%); }
         .item-card.equipment-card.selected .item-check { background: #D97706; border-color: #D97706; }
         
-        /* ✅ V31: EQUIPMENT LIST NDANI YA LAB TEST CARD */
         .item-card .equipment-list {
             margin-top: 8px; padding: 8px 10px;
             background: linear-gradient(135deg, #F0F9FF 0%, #E0F2FE 100%);
@@ -2064,9 +2052,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             background: rgba(255, 255, 255, 0.8); border-radius: 6px;
             border: 1px solid rgba(14, 165, 233, 0.15); flex-wrap: wrap;
         }
-        [data-theme="dark"] .item-card .equipment-item-row {
-            background: rgba(15, 23, 42, 0.6);
-        }
+        [data-theme="dark"] .item-card .equipment-item-row { background: rgba(15, 23, 42, 0.6); }
         .item-card .equipment-item-row .eq-name {
             font-weight: 700; color: #0369A1;
             display: flex; align-items: center; gap: 4px;
@@ -2082,10 +2068,22 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .item-card .equipment-item-row .eq-stock-badge.low { background: linear-gradient(135deg, #FEF3C7, #FDE68A); color: #B45309; border: 1px solid #FCD34D; }
         .item-card .equipment-item-row .eq-stock-badge.out { background: linear-gradient(135deg, #FEE2E2, #FECACA); color: #991B1B; border: 1px solid #FCA5A5; }
         
+        /* ✅ V32: Multi-batch badge */
+        .item-card .multi-batch-badge {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 3px 10px; background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+            color: #1E40AF; border-radius: 10px; font-size: 0.6rem; font-weight: 800;
+            border: 1px solid #60A5FA; margin-top: 6px; width: 100%;
+            justify-content: center; text-transform: uppercase; letter-spacing: 0.03em;
+        }
+        [data-theme="dark"] .item-card .multi-batch-badge {
+            background: linear-gradient(135deg, #1E3A5F, #1E40AF);
+            color: #93C5FD; border-color: #3B82F6;
+        }
+        
         .empty-state-grid { grid-column: 1 / -1; text-align: center; padding: 40px 20px; color: var(--text-secondary); }
         .empty-state-grid i { font-size: 3rem; display: block; margin-bottom: 12px; opacity: 0.3; }
         
-        /* DROPDOWN SEARCH ROW */
         .dropdown-search-row { display: flex; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
         .dropdown-search-row .search-input-wrap { position: relative; flex: 1; min-width: 220px; }
         .dropdown-search-row .search-input-wrap i { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); font-size: 0.85rem; }
@@ -2102,7 +2100,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             align-items: center; padding-top: 16px;
             border-top: 2px dashed var(--border-color);
         }
-        
         .selected-badge {
             padding: 6px 14px; border-radius: 20px; font-size: 0.75rem; font-weight: 700;
             font-family: 'JetBrains Mono', monospace;
@@ -2111,11 +2108,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border: 1px solid var(--primary-light);
         }
         
-        /* FORMS */
         .form-group { margin-bottom: 14px; }
         .form-label { display: block; font-size: 0.75rem; font-weight: 700; color: var(--text-secondary); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
         .required { color: var(--danger); margin-left: 3px; }
-        
         .form-control {
             width: 100%; padding: 11px 14px;
             border: 2px solid var(--border-color); border-radius: var(--radius);
@@ -2123,9 +2118,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             outline: none; transition: var(--transition); font-family: inherit;
         }
         .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11,94,215,0.12); }
-        
         .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-        
         .btn-manual-toggle {
             display: inline-flex; align-items: center; gap: 4px;
             padding: 3px 12px; margin-left: 8px;
@@ -2140,7 +2133,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .manual-input-field { display: none; margin-top: 8px; border-color: var(--success) !important; }
         .manual-input-field.show { display: block; }
         
-        /* BUTTONS */
         .btn {
             display: inline-flex; align-items: center; justify-content: center;
             gap: 8px; padding: 10px 22px; border-radius: 10px;
@@ -2159,7 +2151,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .btn-sm { padding: 6px 14px; font-size: 0.72rem; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
         
-        /* STATUS FLOW */
         .status-flow {
             display: flex; align-items: center; gap: 6px;
             padding: 12px 16px; background: linear-gradient(135deg, var(--gray-50), var(--bg-card));
@@ -2174,7 +2165,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .status-step.completed { background: var(--success); color: white; }
         .status-arrow { color: var(--text-secondary); font-size: 0.7rem; }
         
-        /* BADGES */
         .badge-pending { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
         .badge-confirmed { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); }
         .badge-dispensed { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
@@ -2186,189 +2176,106 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             padding: 4px 12px; border-radius: 12px;
             font-size: 0.65rem; font-weight: 800;
             background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
-            color: #047857;
-            border: 1px solid #10B981;
+            color: #047857; border: 1px solid #10B981;
             animation: pulseGreen 2s ease-in-out infinite;
         }
-        
         @keyframes pulseGreen {
             0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
             50% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
         }
         
-        /* MED FORM CARD */
         .med-form-card {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 3px solid var(--success);
-            overflow: hidden;
-            box-shadow: var(--shadow-md);
-            margin-top: 16px;
+            background: var(--bg-card); border-radius: var(--radius-lg);
+            border: 3px solid var(--success); overflow: hidden;
+            box-shadow: var(--shadow-md); margin-top: 16px;
         }
-        
         .med-form-header {
             background: linear-gradient(135deg, var(--success), var(--success-dark));
-            padding: 16px 20px;
-            position: relative;
-            overflow: hidden;
+            padding: 16px 20px; position: relative; overflow: hidden;
         }
-        
         .med-form-header::before {
-            content: '';
-            position: absolute;
-            top: -50%; right: -10%;
+            content: ''; position: absolute; top: -50%; right: -10%;
             width: 300px; height: 300px;
             background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
-            border-radius: 50%;
-            pointer-events: none;
+            border-radius: 50%; pointer-events: none;
         }
-        
         .med-form-header .header-title {
-            color: white;
-            font-size: 0.85rem;
-            font-weight: 800;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 10px;
-            position: relative;
-            z-index: 1;
+            color: white; font-size: 0.85rem; font-weight: 800;
+            display: flex; align-items: center; gap: 8px;
+            margin-bottom: 10px; position: relative; z-index: 1;
         }
-        
         .med-form-header .header-title i {
-            font-size: 1rem;
-            width: 28px; height: 28px;
-            background: rgba(255,255,255,0.2);
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            font-size: 1rem; width: 28px; height: 28px;
+            background: rgba(255,255,255,0.2); border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
             border: 1px solid rgba(255,255,255,0.3);
         }
-        
         .med-form-header .quick-picks {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 5px;
-            margin-bottom: 10px;
-            position: relative;
-            z-index: 1;
+            display: flex; flex-wrap: wrap; gap: 5px;
+            margin-bottom: 10px; position: relative; z-index: 1;
         }
-        
         .med-form-header .quick-pick-btn {
-            padding: 4px 10px;
-            border-radius: 14px;
-            font-size: 0.62rem;
-            font-weight: 700;
+            padding: 4px 10px; border-radius: 14px;
+            font-size: 0.62rem; font-weight: 700;
             border: 1.5px solid rgba(255,255,255,0.3);
-            background: rgba(255,255,255,0.15);
-            color: white;
-            cursor: pointer;
-            transition: var(--transition);
+            background: rgba(255,255,255,0.15); color: white;
+            cursor: pointer; transition: var(--transition);
             font-family: 'Inter', sans-serif;
         }
-        
         .med-form-header .quick-pick-btn:hover {
-            background: rgba(255,255,255,0.3);
-            border-color: white;
-            transform: translateY(-1px);
+            background: rgba(255,255,255,0.3); border-color: white; transform: translateY(-1px);
         }
-        
         .med-form-header .quick-pick-btn.selected {
-            background: white;
-            color: var(--success);
-            border-color: white;
-            font-weight: 800;
+            background: white; color: var(--success); border-color: white; font-weight: 800;
         }
-        
         .med-form-header .instr-textarea {
-            width: 100%;
-            padding: 8px 12px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-radius: var(--radius);
-            font-size: 0.8rem;
-            background: rgba(255,255,255,0.15);
-            color: white;
-            outline: none;
-            transition: var(--transition);
-            font-family: inherit;
-            resize: vertical;
-            min-height: 38px;
-            position: relative;
-            z-index: 1;
+            width: 100%; padding: 8px 12px;
+            border: 2px solid rgba(255,255,255,0.3); border-radius: var(--radius);
+            font-size: 0.8rem; background: rgba(255,255,255,0.15);
+            color: white; outline: none; transition: var(--transition);
+            font-family: inherit; resize: vertical; min-height: 38px;
+            position: relative; z-index: 1;
         }
-        
         .med-form-header .instr-textarea::placeholder { color: rgba(255,255,255,0.6); }
-        
         .med-form-header .instr-textarea:focus {
-            background: rgba(255,255,255,0.25);
-            border-color: white;
+            background: rgba(255,255,255,0.25); border-color: white;
             box-shadow: 0 0 0 3px rgba(255,255,255,0.2);
         }
-        
         .med-form-body { padding: 16px 20px; }
-        
         .med-fields-grid {
-            display: grid;
-            grid-template-columns: 0.7fr 1fr 1fr 0.7fr 1fr;
-            gap: 10px;
-            margin-bottom: 14px;
+            display: grid; grid-template-columns: 0.7fr 1fr 1fr 0.7fr 1fr;
+            gap: 10px; margin-bottom: 14px;
         }
-        
         .med-field { display: flex; flex-direction: column; gap: 4px; }
-        
         .med-field label {
-            font-size: 0.6rem;
-            font-weight: 800;
-            color: var(--text-secondary);
-            text-transform: uppercase;
+            font-size: 0.6rem; font-weight: 800;
+            color: var(--text-secondary); text-transform: uppercase;
             letter-spacing: 0.04em;
         }
-        
-        .med-field input,
-        .med-field select {
-            padding: 8px 10px;
-            border: 2px solid var(--border-color);
-            border-radius: 8px;
-            font-size: 0.8rem;
-            background: var(--bg-card);
-            color: var(--text-primary);
-            outline: none;
-            transition: var(--transition);
-            height: 38px;
+        .med-field input, .med-field select {
+            padding: 8px 10px; border: 2px solid var(--border-color);
+            border-radius: 8px; font-size: 0.8rem;
+            background: var(--bg-card); color: var(--text-primary);
+            outline: none; transition: var(--transition); height: 38px;
         }
-        
-        .med-field input:focus,
-        .med-field select:focus {
-            border-color: var(--success);
-            box-shadow: 0 0 0 3px rgba(5,150,105,0.12);
+        .med-field input:focus, .med-field select:focus {
+            border-color: var(--success); box-shadow: 0 0 0 3px rgba(5,150,105,0.12);
         }
-        
         .med-field .field-with-toggle { display: flex; gap: 4px; align-items: center; }
         .med-field .field-with-toggle select,
         .med-field .field-with-toggle input { flex: 1; }
-        
         .med-field .btn-manual-toggle {
-            padding: 0;
-            width: 32px;
-            height: 32px;
-            margin-left: 0;
-            border-radius: 8px;
-            justify-content: center;
-            flex-shrink: 0;
+            padding: 0; width: 32px; height: 32px;
+            margin-left: 0; border-radius: 8px;
+            justify-content: center; flex-shrink: 0;
         }
-        
         .med-field .manual-input-field { display: none; margin-top: 6px; }
         .med-field .manual-input-field.show { display: block; }
-        
         .med-form-footer {
-            display: flex;
-            justify-content: flex-end;
-            padding-top: 12px;
-            border-top: 2px dashed var(--border-color);
+            display: flex; justify-content: flex-end;
+            padding-top: 12px; border-top: 2px dashed var(--border-color);
         }
         
-        /* TABLE */
         .data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
         .data-table thead th { text-align: left; padding: 12px 14px; font-weight: 800; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em; color: white; white-space: nowrap; }
         .data-table thead th.th-primary { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
@@ -2376,7 +2283,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .data-table tbody tr:hover { background: var(--gray-50); }
         .data-table tbody tr:last-child td { border-bottom: none; }
         
-        /* ALERTS */
         .alert { padding: 14px 20px; border-radius: var(--radius); margin-bottom: 20px; display: flex; align-items: center; gap: 12px; font-size: 0.85rem; border: 2px solid transparent; font-weight: 500; }
         .alert-success { background: var(--success-bg); color: var(--success); border-color: var(--success); }
         .alert-error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
@@ -2399,20 +2305,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .toast-custom .toast-content { flex: 1; }
         .toast-custom .toast-close { background: none; border: none; font-size: 1.3rem; cursor: pointer; }
         
-        /* LOCKED CARD */
         .locked-card {
             background: linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 50%, #FDE68A 100%);
-            border: 4px solid var(--warning);
-            border-radius: var(--radius-xl);
-            padding: 0;
-            margin-bottom: 20px;
-            overflow: hidden;
-            box-shadow: 0 12px 40px rgba(217, 119, 6, 0.25);
-            position: relative;
+            border: 4px solid var(--warning); border-radius: var(--radius-xl);
+            padding: 0; margin-bottom: 20px; overflow: hidden;
+            box-shadow: 0 12px 40px rgba(217, 119, 6, 0.25); position: relative;
         }
-        
         .locked-card-inner { padding: 40px 32px; text-align: center; position: relative; z-index: 1; }
-        
         .locked-icon-circle {
             width: 96px; height: 96px; border-radius: 50%;
             background: linear-gradient(135deg, #F59E0B, #D97706);
@@ -2421,53 +2320,36 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             box-shadow: 0 12px 32px rgba(217,119,6,0.4);
             animation: pulseLock 2.5s ease-in-out infinite;
         }
-        
         @keyframes pulseLock {
             0%, 100% { box-shadow: 0 12px 32px rgba(217,119,6,0.4); transform: scale(1); }
             50% { box-shadow: 0 16px 48px rgba(217,119,6,0.6); transform: scale(1.03); }
         }
-        
         .locked-icon-circle i { font-size: 2.6rem; color: white; }
-        
         .locked-title { font-size: 1.5rem; font-weight: 900; color: #92400E; margin-bottom: 10px; letter-spacing: -0.02em; }
-        
         .locked-description {
-            font-size: 0.92rem; color: #78350F;
-            font-weight: 600; max-width: 680px;
-            margin: 0 auto 24px; line-height: 1.7;
+            font-size: 0.92rem; color: #78350F; font-weight: 600;
+            max-width: 680px; margin: 0 auto 24px; line-height: 1.7;
         }
-        
         .locked-description strong { color: #92400E; font-weight: 800; background: rgba(255,255,255,0.6); padding: 1px 6px; border-radius: 6px; }
-        
         .locked-stats-box {
             display: inline-flex; align-items: center; gap: 20px;
-            padding: 16px 28px; background: white;
-            border-radius: 16px;
+            padding: 16px 28px; background: white; border-radius: 16px;
             box-shadow: 0 4px 16px rgba(0,0,0,0.08);
-            border: 2px solid #FCD34D;
-            margin-bottom: 24px;
+            border: 2px solid #FCD34D; margin-bottom: 24px;
         }
-        
         .locked-stat-item { text-align: center; min-width: 60px; }
         .locked-stat-value { font-size: 1.8rem; font-weight: 900; font-family: 'JetBrains Mono', monospace; line-height: 1; }
         .locked-stat-label { font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 4px; }
         .locked-stat-divider { width: 2px; height: 44px; background: #FCD34D; }
-        
         .locked-instruction-box {
             max-width: 680px; margin: 0 auto;
-            padding: 20px 24px;
-            background: rgba(255,255,255,0.85);
-            border-radius: 14px;
-            border: 2px solid #FCD34D;
-            text-align: left;
-            backdrop-filter: blur(10px);
+            padding: 20px 24px; background: rgba(255,255,255,0.85);
+            border-radius: 14px; border: 2px solid #FCD34D;
+            text-align: left; backdrop-filter: blur(10px);
         }
-        
         .locked-instruction-title { font-size: 0.82rem; font-weight: 800; color: #78350F; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
-        
         .locked-instruction-list { list-style: none; padding: 0; margin: 0; font-size: 0.78rem; color: #78350F; line-height: 1.9; font-weight: 500; }
         .locked-instruction-list li { display: flex; align-items: flex-start; gap: 10px; padding: 4px 0; }
-        
         .locked-instruction-list li .list-icon {
             flex-shrink: 0; width: 20px; height: 20px;
             border-radius: 50%; display: flex;
@@ -2476,391 +2358,245 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .locked-instruction-list li .list-icon.check { background: linear-gradient(135deg, #10B981, #059669); color: white; }
         .locked-instruction-list li .list-icon.clock { background: linear-gradient(135deg, #F59E0B, #D97706); color: white; }
-        
         .locked-refresh-btn {
             display: inline-flex; align-items: center; gap: 10px;
             padding: 14px 32px;
             background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            color: white; border: none;
-            border-radius: 12px;
-            font-size: 0.9rem; font-weight: 800;
-            cursor: pointer;
+            color: white; border: none; border-radius: 12px;
+            font-size: 0.9rem; font-weight: 800; cursor: pointer;
             transition: var(--transition);
             box-shadow: 0 6px 20px rgba(11,94,215,0.35);
-            margin-top: 24px;
-            font-family: inherit;
-            letter-spacing: 0.02em;
+            margin-top: 24px; font-family: inherit; letter-spacing: 0.02em;
         }
-        
         .locked-refresh-btn:hover { transform: translateY(-3px); box-shadow: 0 10px 28px rgba(11,94,215,0.45); background: linear-gradient(135deg, #0A4CA8, #083C8A); }
         .locked-refresh-btn i { font-size: 1rem; transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1); }
         .locked-refresh-btn:hover i { transform: rotate(180deg); }
         
-        /* ================================================================ */
-        /* ✅ V31: ADDED ITEMS CARDS - CSS NZURI ZAIDI                     */
-        /* ================================================================ */
-        
         #medicationsList, #addedItemsList {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
+            display: flex; flex-direction: column; gap: 10px;
         }
         
-        /* MEDICATION CARD - GREEN THEME */
         .medication-item {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: 14px;
-            padding: 14px 18px;
+            display: flex; align-items: flex-start; justify-content: space-between;
+            gap: 14px; padding: 14px 18px;
             background: linear-gradient(135deg, #FFFFFF 0%, #F0FDF4 100%);
-            border: 2px solid #10B981;
-            border-left: 6px solid #059669;
+            border: 2px solid #10B981; border-left: 6px solid #059669;
             border-radius: 14px;
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            position: relative;
-            overflow: hidden;
+            position: relative; overflow: hidden;
             box-shadow: 0 2px 8px rgba(5, 150, 105, 0.08);
         }
-        
         [data-theme="dark"] .medication-item {
             background: linear-gradient(135deg, #1E293B 0%, #1A3A2A 100%);
-            border-color: #34D399;
-            border-left-color: #10B981;
+            border-color: #34D399; border-left-color: #10B981;
         }
-        
         .medication-item::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0;
+            content: ''; position: absolute; top: 0; left: 0;
             width: 100%; height: 100%;
             background: radial-gradient(circle at top right, rgba(16, 185, 129, 0.08) 0%, transparent 60%);
             pointer-events: none;
         }
-        
         .medication-item:hover {
             transform: translateY(-3px);
             box-shadow: 0 8px 24px rgba(5, 150, 105, 0.2);
             border-color: #059669;
         }
-        
         .medication-item .medication-item-info {
-            flex: 1;
-            min-width: 0;
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 8px 12px;
-            position: relative;
-            z-index: 1;
+            flex: 1; min-width: 0; display: flex;
+            flex-wrap: wrap; align-items: center; gap: 8px 12px;
+            position: relative; z-index: 1;
         }
-        
         .medication-item .med-name {
-            font-weight: 800;
-            font-size: 0.95rem;
-            color: #047857;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
+            font-weight: 800; font-size: 0.95rem; color: #047857;
+            display: inline-flex; align-items: center; gap: 8px;
             margin-right: 4px;
         }
-        
-        [data-theme="dark"] .medication-item .med-name {
-            color: #34D399;
-        }
-        
+        [data-theme="dark"] .medication-item .med-name { color: #34D399; }
         .medication-item .med-name::before {
-            content: '\f484';
-            font-family: 'Font Awesome 6 Free';
-            font-weight: 900;
-            font-size: 0.9rem;
-            background: linear-gradient(135deg, #10B981, #059669);
-            color: white;
-            width: 28px;
-            height: 28px;
-            border-radius: 8px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 3px 8px rgba(5, 150, 105, 0.3);
-            flex-shrink: 0;
+            content: '\f484'; font-family: 'Font Awesome 6 Free'; font-weight: 900;
+            font-size: 0.9rem; background: linear-gradient(135deg, #10B981, #059669);
+            color: white; width: 28px; height: 28px; border-radius: 8px;
+            display: inline-flex; align-items: center; justify-content: center;
+            box-shadow: 0 3px 8px rgba(5, 150, 105, 0.3); flex-shrink: 0;
         }
-        
         .medication-item .med-details {
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            background: rgba(255, 255, 255, 0.7);
-            padding: 4px 10px;
-            border-radius: 8px;
-            font-weight: 600;
+            font-size: 0.75rem; color: var(--text-secondary);
+            background: rgba(255, 255, 255, 0.7); padding: 4px 10px;
+            border-radius: 8px; font-weight: 600;
             border: 1px solid rgba(5, 150, 105, 0.15);
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
+            display: inline-flex; align-items: center; gap: 4px;
         }
-        
         [data-theme="dark"] .medication-item .med-details {
             background: rgba(15, 23, 42, 0.5);
             border-color: rgba(52, 211, 153, 0.2);
         }
-        
         .medication-item .med-qty {
-            font-size: 0.72rem;
-            color: white;
+            font-size: 0.72rem; color: white;
             background: linear-gradient(135deg, #059669, #047857);
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-weight: 800;
-            font-family: 'JetBrains Mono', monospace;
+            padding: 4px 12px; border-radius: 12px;
+            font-weight: 800; font-family: 'JetBrains Mono', monospace;
             box-shadow: 0 3px 8px rgba(5, 150, 105, 0.25);
-            display: inline-flex;
-            align-items: center;
-            gap: 3px;
+            display: inline-flex; align-items: center; gap: 3px;
         }
-        
         .medication-item .med-price {
-            font-size: 0.88rem;
-            font-weight: 800;
-            color: #059669;
+            font-size: 0.88rem; font-weight: 800; color: #059669;
             font-family: 'JetBrains Mono', monospace;
             background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
-            padding: 4px 14px;
-            border-radius: 12px;
-            border: 1px solid #10B981;
-            margin-left: auto;
+            padding: 4px 14px; border-radius: 12px;
+            border: 1px solid #10B981; margin-left: auto;
             box-shadow: 0 2px 6px rgba(5, 150, 105, 0.15);
         }
-        
         [data-theme="dark"] .medication-item .med-price {
             background: linear-gradient(135deg, #064E3B, #065F46);
-            color: #6EE7B7;
-            border-color: #34D399;
+            color: #6EE7B7; border-color: #34D399;
         }
-        
         .medication-item .med-instruction-tag {
-            font-size: 0.7rem;
-            color: #0B5ED7;
+            font-size: 0.7rem; color: #0B5ED7;
             background: linear-gradient(135deg, #E8F0FE, #DBEAFE);
-            padding: 3px 12px;
-            border-radius: 12px;
-            border: 1px solid #6EA8FE;
-            font-weight: 700;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
+            padding: 3px 12px; border-radius: 12px;
+            border: 1px solid #6EA8FE; font-weight: 700;
+            display: inline-flex; align-items: center; gap: 4px;
         }
-        
         .medication-item .med-instruction-tag::before {
-            content: '\f0f6';
-            font-family: 'Font Awesome 6 Free';
-            font-weight: 900;
-            font-size: 0.65rem;
+            content: '\f0f6'; font-family: 'Font Awesome 6 Free';
+            font-weight: 900; font-size: 0.65rem;
         }
-        
-        .medication-item .med-status-pending,
-        .medication-item .badge-pending {
-            font-size: 0.62rem;
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-weight: 800;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
+        .medication-item .med-status-pending, .medication-item .badge-pending {
+            font-size: 0.62rem; padding: 4px 12px; border-radius: 12px;
+            font-weight: 800; display: inline-flex; align-items: center; gap: 4px;
             background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-            color: #B45309;
-            border: 1px solid #F59E0B;
-            text-transform: uppercase;
-            letter-spacing: 0.03em;
+            color: #B45309; border: 1px solid #F59E0B;
+            text-transform: uppercase; letter-spacing: 0.03em;
             animation: pulsePending 2s ease-in-out infinite;
         }
-        
         @keyframes pulsePending {
             0%, 100% { box-shadow: 0 0 0 0 rgba(217, 119, 6, 0.4); }
             50% { box-shadow: 0 0 0 6px rgba(217, 119, 6, 0); }
         }
         
-        /* PROCEDURE CARD - PURPLE THEME */
+        /* ✅ V32: Batch info list */
+        .medication-item .batch-info-list {
+            margin-top: 8px; padding: 8px 10px;
+            background: linear-gradient(135deg, #EFF6FF, #DBEAFE);
+            border-radius: 8px; border: 1px solid #93C5FD;
+            width: 100%; display: flex; flex-direction: column; gap: 4px;
+        }
+        [data-theme="dark"] .medication-item .batch-info-list {
+            background: linear-gradient(135deg, #1E3A5F, #1E40AF);
+            border-color: #60A5FA;
+        }
+        .medication-item .batch-info-header {
+            font-size: 0.62rem; font-weight: 800;
+            color: #1E40AF; text-transform: uppercase;
+            letter-spacing: 0.05em; display: flex;
+            align-items: center; gap: 5px;
+            padding-bottom: 4px; border-bottom: 1px dashed #93C5FD;
+        }
+        [data-theme="dark"] .medication-item .batch-info-header {
+            color: #93C5FD; border-color: #3B82F6;
+        }
+        .medication-item .batch-info-row {
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 8px; font-size: 0.68rem; padding: 3px 6px;
+            background: rgba(255, 255, 255, 0.7);
+            border-radius: 6px; flex-wrap: wrap;
+        }
+        [data-theme="dark"] .medication-item .batch-info-row {
+            background: rgba(15, 23, 42, 0.5);
+        }
+        .medication-item .batch-info-row .batch-num {
+            font-weight: 700; color: #0369A1;
+            display: flex; align-items: center; gap: 4px;
+        }
+        .medication-item .batch-info-row .batch-qty {
+            font-weight: 800; font-family: 'JetBrains Mono', monospace;
+            color: #1E40AF; background: #DBEAFE;
+            padding: 2px 8px; border-radius: 8px; font-size: 0.65rem;
+        }
+        
         .medication-item.procedure-item {
             background: linear-gradient(135deg, #FFFFFF 0%, #F5F3FF 100%);
-            border-color: #A78BFA;
-            border-left-color: #7C3AED;
+            border-color: #A78BFA; border-left-color: #7C3AED;
             box-shadow: 0 2px 8px rgba(124, 58, 237, 0.08);
         }
-        
         [data-theme="dark"] .medication-item.procedure-item {
             background: linear-gradient(135deg, #1E293B 0%, #2D1B4E 100%);
-            border-color: #8B5CF6;
-            border-left-color: #7C3AED;
+            border-color: #8B5CF6; border-left-color: #7C3AED;
         }
-        
-        .medication-item.procedure-item .med-name {
-            color: #6D28D9;
-        }
-        
-        [data-theme="dark"] .medication-item.procedure-item .med-name {
-            color: #C4B5FD;
-        }
-        
+        .medication-item.procedure-item .med-name { color: #6D28D9; }
+        [data-theme="dark"] .medication-item.procedure-item .med-name { color: #C4B5FD; }
         .medication-item.procedure-item .med-name::before {
-            content: '\f0f1';
-            font-family: 'Font Awesome 6 Free';
-            font-weight: 900;
+            content: '\f0f1'; font-family: 'Font Awesome 6 Free'; font-weight: 900;
             background: linear-gradient(135deg, #8B5CF6, #7C3AED);
             box-shadow: 0 3px 8px rgba(124, 58, 237, 0.3);
         }
-        
         .medication-item.procedure-item .med-price {
-            color: #7C3AED;
-            background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
+            color: #7C3AED; background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
             border-color: #A78BFA;
         }
-        
         [data-theme="dark"] .medication-item.procedure-item .med-price {
             background: linear-gradient(135deg, #4C1D95, #5B21B6);
-            color: #C4B5FD;
-            border-color: #8B5CF6;
+            color: #C4B5FD; border-color: #8B5CF6;
         }
         
-        /* EQUIPMENT CARD - AMBER THEME */
         .medication-item.equipment-item {
             background: linear-gradient(135deg, #FFFFFF 0%, #FFFBEB 100%);
-            border-color: #FCD34D;
-            border-left-color: #D97706;
+            border-color: #FCD34D; border-left-color: #D97706;
             box-shadow: 0 2px 8px rgba(217, 119, 6, 0.08);
         }
-        
         [data-theme="dark"] .medication-item.equipment-item {
             background: linear-gradient(135deg, #1E293B 0%, #3D2E0A 100%);
-            border-color: #F59E0B;
-            border-left-color: #D97706;
+            border-color: #F59E0B; border-left-color: #D97706;
         }
-        
-        .medication-item.equipment-item .med-name {
-            color: #B45309;
-        }
-        
-        [data-theme="dark"] .medication-item.equipment-item .med-name {
-            color: #FCD34D;
-        }
-        
+        .medication-item.equipment-item .med-name { color: #B45309; }
+        [data-theme="dark"] .medication-item.equipment-item .med-name { color: #FCD34D; }
         .medication-item.equipment-item .med-name::before {
-            content: '\f7d9';
-            font-family: 'Font Awesome 6 Free';
-            font-weight: 900;
+            content: '\f7d9'; font-family: 'Font Awesome 6 Free'; font-weight: 900;
             background: linear-gradient(135deg, #F59E0B, #D97706);
             box-shadow: 0 3px 8px rgba(217, 119, 6, 0.3);
         }
-        
         .medication-item.equipment-item .med-qty {
             background: linear-gradient(135deg, #D97706, #B45309);
             box-shadow: 0 3px 8px rgba(217, 119, 6, 0.25);
         }
-        
         .medication-item.equipment-item .med-price {
-            color: #D97706;
-            background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+            color: #D97706; background: linear-gradient(135deg, #FEF3C7, #FDE68A);
             border-color: #F59E0B;
         }
-        
         [data-theme="dark"] .medication-item.equipment-item .med-price {
             background: linear-gradient(135deg, #3D2E0A, #4A3A12);
-            color: #FCD34D;
-            border-color: #F59E0B;
+            color: #FCD34D; border-color: #F59E0B;
         }
         
-        /* ✅ V31: LAB TEST CARD - BLUE THEME (linked with equipment) */
-        .medication-item.labtest-item {
-            background: linear-gradient(135deg, #FFFFFF 0%, #EFF6FF 100%);
-            border-color: #93C5FD;
-            border-left-color: #2563EB;
-            box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
-        }
-        
-        [data-theme="dark"] .medication-item.labtest-item {
-            background: linear-gradient(135deg, #1E293B 0%, #1E3A5F 100%);
-            border-color: #60A5FA;
-            border-left-color: #2563EB;
-        }
-        
-        .medication-item.labtest-item .med-name {
-            color: #1E40AF;
-        }
-        
-        [data-theme="dark"] .medication-item.labtest-item .med-name {
-            color: #93C5FD;
-        }
-        
-        .medication-item.labtest-item .med-name::before {
-            content: '\f492';
-            font-family: 'Font Awesome 6 Free';
-            font-weight: 900;
-            background: linear-gradient(135deg, #3B82F6, #2563EB);
-            box-shadow: 0 3px 8px rgba(37, 99, 235, 0.3);
-        }
-        
-        .medication-item.labtest-item .med-qty {
-            background: linear-gradient(135deg, #2563EB, #1E40AF);
-        }
-        
-        .medication-item.labtest-item .med-price {
-            color: #1E40AF;
-            background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
-            border-color: #3B82F6;
-        }
-        
-        [data-theme="dark"] .medication-item.labtest-item .med-price {
-            background: linear-gradient(135deg, #1E3A5F, #1E40AF);
-            color: #93C5FD;
-            border-color: #60A5FA;
-        }
-        
-        /* REMOVE BUTTON */
         .medication-item .btn-remove {
-            width: 34px;
-            height: 34px;
-            border-radius: 10px;
+            width: 34px; height: 34px; border-radius: 10px;
             border: 2px solid #FCA5A5;
             background: linear-gradient(135deg, #FEE2E2, #FECACA);
-            color: #DC2626;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            color: #DC2626; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
             flex-shrink: 0;
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            font-size: 0.8rem;
-            position: relative;
-            z-index: 1;
+            font-size: 0.8rem; position: relative; z-index: 1;
         }
-        
         .medication-item .btn-remove:hover {
             background: linear-gradient(135deg, #DC2626, #B91C1C);
-            color: white;
-            border-color: #DC2626;
+            color: white; border-color: #DC2626;
             transform: scale(1.12) rotate(90deg);
             box-shadow: 0 4px 14px rgba(220, 38, 38, 0.4);
         }
         
-        /* EMPTY STATE */
         #medicationsList .empty-medications,
         #addedItemsList .empty-added {
-            text-align: center;
-            padding: 40px 20px;
+            text-align: center; padding: 40px 20px;
             color: var(--text-secondary);
             background: linear-gradient(135deg, var(--gray-50), var(--bg-card));
-            border-radius: 14px;
-            border: 2px dashed var(--border-color);
+            border-radius: 14px; border: 2px dashed var(--border-color);
         }
-        
         #medicationsList .empty-medications i,
         #addedItemsList .empty-added i {
-            font-size: 2.5rem;
-            display: block;
-            margin-bottom: 12px;
-            opacity: 0.3;
+            font-size: 2.5rem; display: block; margin-bottom: 12px; opacity: 0.3;
         }
         
-        /* RESPONSIVE */
         @media (max-width: 1200px) {
             .bill-summary-grid { grid-template-columns: repeat(3, 1fr); }
             .items-grid { grid-template-columns: repeat(2, 1fr); }
@@ -2868,7 +2604,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .visit-info-wrapper { grid-template-columns: repeat(2, 1fr); }
             .med-fields-grid { grid-template-columns: 1fr 1fr 1fr; }
         }
-        
         @media (max-width: 992px) {
             .main-content { margin-left: 0; padding: 16px; }
             .patient-info-grid { grid-template-columns: repeat(2, 1fr); }
@@ -2877,7 +2612,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .complaint-grid { grid-template-columns: 1fr; }
             .med-fields-grid { grid-template-columns: 1fr 1fr; }
         }
-        
         @media (max-width: 768px) {
             .page-header { flex-direction: column; }
             .bill-summary-grid { grid-template-columns: repeat(2, 1fr); }
@@ -2889,29 +2623,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .locked-stats-box { flex-wrap: wrap; gap: 12px; padding: 14px 18px; }
             .locked-stat-divider { display: none; }
             .med-fields-grid { grid-template-columns: 1fr; }
-            
-            .medication-item {
-                flex-direction: column;
-                align-items: stretch;
-                gap: 10px;
-            }
-            
-            .medication-item .med-price {
-                margin-left: 0;
-                align-self: flex-start;
-            }
-            
-            .medication-item .btn-remove {
-                align-self: flex-end;
-                margin-top: -40px;
-            }
+            .medication-item { flex-direction: column; align-items: stretch; gap: 10px; }
+            .medication-item .med-price { margin-left: 0; align-self: flex-start; }
+            .medication-item .btn-remove { align-self: flex-end; margin-top: -40px; }
         }
-        
         @media (max-width: 480px) {
             .bill-summary-grid { grid-template-columns: 1fr; }
             .vitals-grid { grid-template-columns: 1fr; }
         }
-        
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: var(--gray-100); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 3px; }
@@ -3266,9 +2985,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <?php if (!$is_completed): ?>
-    <!-- ═══════════════════════════════════════════════════════════ -->
-    <!-- EDITABLE VIEW                                              -->
-    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- EDITABLE VIEW -->
     <form method="POST" action="consultation.php?visit_id=<?= $visit_id ?>" id="consultationForm">
     
     <!-- CHIEF COMPLAINT & HISTORY -->
@@ -3412,7 +3129,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                             </div>
                                         </div>
                                     </div>
-                                    
                                     <?php if ($has_equipment): ?>
                                         <div class="equipment-list">
                                             <div class="equipment-list-header">
@@ -3599,13 +3315,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <div class="locked-icon-circle">
                 <i class="fas fa-lock"></i>
             </div>
-            
             <h2 class="locked-title">🔒 Sections Locked</h2>
-            
             <p class="locked-description">
                 The <strong>Diagnosis</strong>, <strong>Medications</strong>, <strong>Procedures</strong>, and <strong>Equipment</strong> sections will unlock <strong>AFTER</strong> at least one lab test is <strong>COMPLETED</strong> and its <strong>RESULT is filled in</strong> by the Laboratory.
             </p>
-            
             <div class="locked-stats-box">
                 <div class="locked-stat-item">
                     <div class="locked-stat-value" style="color:#D97706;"><?= $pending_lab_count ?></div>
@@ -3622,31 +3335,19 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <div class="locked-stat-label" style="color:#0A4CA8;">Total</div>
                 </div>
             </div>
-            
             <div class="locked-instruction-box">
                 <div class="locked-instruction-title">
                     <i class="fas fa-info-circle" style="color:#D97706;"></i>
                     What you can do now:
                 </div>
                 <ul class="locked-instruction-list">
-                    <li>
-                        <span class="list-icon check"><i class="fas fa-check"></i></span>
-                        <span>You can <strong>continue adding lab tests</strong> to the cart</span>
-                    </li>
-                    <li>
-                        <span class="list-icon check"><i class="fas fa-check"></i></span>
-                        <span>You can <strong>fill in Chief Complaint, HPI, Physical Exam, and Notes</strong></span>
-                    </li>
-                    <li>
-                        <span class="list-icon clock"><i class="fas fa-clock"></i></span>
-                        <span>Wait for at least <strong>1 lab test to be COMPLETED</strong> with a result filled in</span>
-                    </li>
+                    <li><span class="list-icon check"><i class="fas fa-check"></i></span><span>You can <strong>continue adding lab tests</strong> to the cart</span></li>
+                    <li><span class="list-icon check"><i class="fas fa-check"></i></span><span>You can <strong>fill in Chief Complaint, HPI, Physical Exam, and Notes</strong></span></li>
+                    <li><span class="list-icon clock"><i class="fas fa-clock"></i></span><span>Wait for at least <strong>1 lab test to be COMPLETED</strong> with a result filled in</span></li>
                 </ul>
             </div>
-            
             <button type="button" class="locked-refresh-btn" onclick="checkLabStatusNow(this)">
-                <i class="fas fa-sync-alt"></i>
-                Check Lab Status Now
+                <i class="fas fa-sync-alt"></i> Check Lab Status Now
             </button>
         </div>
     </div>
@@ -3785,12 +3486,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <div class="items-grid" id="medicationsGrid">
                         <?php foreach ($medications_grouped as $key => $group): 
                             $available_stock = $group['available_quantity'];
-                            $first_available_batch = null;
-                            foreach ($group['batches'] as $b) {
-                                if ($b['is_available']) { $first_available_batch = $b; break; }
-                            }
-                            $first_batch = $first_available_batch ?? $group['batches'][0];
                             $is_selectable = $group['has_available'] && $available_stock > 0;
+                            $batch_count = count($group['batches']);
                             
                             $status_badge = '';
                             $status_class = '';
@@ -3801,10 +3498,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             }
                         ?>
                             <div class="item-card medication-card <?= !$is_selectable ? 'disabled' : '' ?>" 
-                                 data-inventory-id="<?= $first_batch['id'] ?>"
                                  data-medication-name="<?= htmlspecialchars($group['name']) ?>"
+                                 data-medication-category="<?= htmlspecialchars($group['category'] ?? '') ?>"
                                  data-price="<?= $group['selling_price'] ?>"
-                                 data-stock="<?= $available_stock ?>"
+                                 data-total-stock="<?= $available_stock ?>"
+                                 data-batch-count="<?= $batch_count ?>"
                                  data-selectable="<?= $is_selectable ? '1' : '0' ?>"
                                  onclick="toggleMedicationCheckbox(this)">
                                 <div style="display:flex;align-items:flex-start;gap:10px;width:100%;">
@@ -3819,12 +3517,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                         <div class="item-details">
                                             <span class="item-price">TSh <?= formatMoneyDisplay($group['selling_price'] ?? 0) ?></span>
                                             <?php if ($is_selectable): ?>
-                                                <span class="item-tag stock ok"><i class="fas fa-check-circle"></i> <?= $available_stock ?></span>
+                                                <span class="item-tag stock ok"><i class="fas fa-check-circle"></i> <?= $available_stock ?> total</span>
                                             <?php endif; ?>
                                             <?php if (!empty($group['category'])): ?>
                                                 <span class="item-tag category"><?= htmlspecialchars($group['category']) ?></span>
                                             <?php endif; ?>
                                         </div>
+                                        <?php if ($batch_count > 1 && $is_selectable): ?>
+                                            <div class="multi-batch-badge">
+                                                <i class="fas fa-layer-group"></i> <?= $batch_count ?> BATCHES — TOTAL: <?= $available_stock ?> UNITS
+                                            </div>
+                                        <?php endif; ?>
                                     </div>
                                 </div>
                             </div>
@@ -3845,7 +3548,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <i class="fas fa-prescription-bottle-medical"></i>
                         Instructions — Quick Picks
                     </div>
-                    
                     <div class="quick-picks" id="quickPicksContainer">
                         <?php foreach ($instruction_quick_picks as $pick): ?>
                             <button type="button" class="quick-pick-btn" onclick="addInstructionQuickPick('<?= htmlspecialchars($pick) ?>', this)">
@@ -3853,7 +3555,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             </button>
                         <?php endforeach; ?>
                     </div>
-                    
                     <textarea id="medInstructions" class="instr-textarea" rows="2" placeholder="Instructions (click quick picks above or type custom)..."></textarea>
                 </div>
                 
@@ -3863,7 +3564,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             <label><i class="fas fa-sort-numeric-up"></i> Qty</label>
                             <input type="number" id="medQuantity" value="1" min="1" max="999">
                         </div>
-                        
                         <div class="med-field">
                             <label><i class="fas fa-prescription-bottle"></i> Dosage</label>
                             <div class="field-with-toggle">
@@ -3895,7 +3595,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             </div>
                             <input type="text" id="medDosageManual" class="manual-input-field" placeholder="Custom dosage...">
                         </div>
-                        
                         <div class="med-field">
                             <label><i class="fas fa-clock"></i> Frequency <span style="color:var(--danger);">*</span></label>
                             <div class="field-with-toggle">
@@ -3920,12 +3619,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             </div>
                             <input type="text" id="medFrequencyManual" class="manual-input-field" placeholder="Custom frequency...">
                         </div>
-                        
                         <div class="med-field">
                             <label><i class="fas fa-calendar-alt"></i> Days</label>
                             <input type="number" id="medDuration" value="7" min="1" max="90">
                         </div>
-                        
                         <div class="med-field">
                             <label><i class="fas fa-route"></i> Route <span style="color:var(--danger);">*</span></label>
                             <div class="field-with-toggle">
@@ -3950,7 +3647,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             <input type="text" id="medRouteManual" class="manual-input-field" placeholder="Custom route...">
                         </div>
                     </div>
-                    
                     <div class="med-form-footer">
                         <button type="button" class="btn btn-success" onclick="addMedicationAjax()" id="addMedicationBtn" style="padding:10px 28px;font-size:0.85rem;">
                             <i class="fas fa-plus"></i> Add Medication
@@ -3963,36 +3659,54 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
                     <h4 style="font-size:0.9rem;font-weight:800;color:var(--text-secondary);margin:0;display:flex;align-items:center;gap:8px;">
                         <i class="fas fa-list" style="color:var(--success);"></i> Prescribed Medications
-                        <span style="font-size:0.7rem;font-family:'JetBrains Mono',monospace;" id="medCount">(<?= count($valid_prescriptions) ?> items)</span>
+                        <span style="font-size:0.7rem;font-family:'JetBrains Mono',monospace;" id="medCount">(<?= count($grouped_prescriptions) ?> items)</span>
                     </h4>
                 </div>
                 <div id="medicationsList">
-                    <?php if (count($valid_prescriptions) > 0): ?>
-                        <?php foreach ($valid_prescriptions as $med): 
-                            $is_paid_med = isBillItemPaid($db, $bill_id, $med['id'], 'prescription');
+                    <?php if (count($grouped_prescriptions) > 0): ?>
+                        <?php foreach ($grouped_prescriptions as $pid => $group): 
+                            $main_med = $group['prescription'];
+                            $is_paid_med = isBillItemPaid($db, $bill_id, $pid, 'prescription');
                             $can_remove = !$is_paid_med && !$is_completed;
+                            $is_multi_batch = count($group['items']) > 1;
                         ?>
-                            <div class="medication-item medication-prescription" id="med-item-<?= $med['id'] ?>">
+                            <div class="medication-item medication-prescription" id="med-item-<?= $pid ?>">
                                 <div class="medication-item-info">
-                                    <span class="med-name"><?= htmlspecialchars($med['medication_name'] ?? 'Unknown') ?></span>
+                                    <span class="med-name"><?= htmlspecialchars($main_med['medication_name'] ?? 'Unknown') ?></span>
                                     <span class="med-details">
-                                        <?= htmlspecialchars($med['dosage'] ?? '') ?> • 
-                                        <?= htmlspecialchars($med['frequency'] ?? '') ?> • 
-                                        <?= htmlspecialchars($med['duration'] ?? '') ?> days
+                                        <?= htmlspecialchars($main_med['dosage'] ?? '') ?> • 
+                                        <?= htmlspecialchars($main_med['frequency'] ?? '') ?> • 
+                                        <?= htmlspecialchars($main_med['duration'] ?? '') ?> days
                                     </span>
-                                    <span class="med-qty">x<?= $med['quantity'] ?? 0 ?></span>
-                                    <span class="med-price">TSh <?= formatMoneyDisplay($med['total_price'] ?? 0) ?></span>
-                                    <?php if (!empty($med['instructions'])): ?>
-                                        <span class="med-instruction-tag">
-                                            <?= htmlspecialchars($med['instructions']) ?>
-                                        </span>
+                                    <span class="med-qty">x<?= $group['total_qty'] ?></span>
+                                    <span class="med-price">TSh <?= formatMoneyDisplay($group['total_price']) ?></span>
+                                    <?php if (!empty($main_med['instructions'])): ?>
+                                        <span class="med-instruction-tag"><?= htmlspecialchars($main_med['instructions']) ?></span>
                                     <?php endif; ?>
                                     <span class="med-status-pending">
                                         <i class="fas fa-clock"></i> Pending
                                     </span>
+                                    
+                                    <?php if ($is_multi_batch): ?>
+                                        <div class="batch-info-list">
+                                            <div class="batch-info-header">
+                                                <i class="fas fa-layer-group"></i> 
+                                                Batches Used: <?= count($group['items']) ?>
+                                            </div>
+                                            <?php foreach ($group['items'] as $batch_item): ?>
+                                                <div class="batch-info-row">
+                                                    <span class="batch-num">
+                                                        <i class="fas fa-box"></i>
+                                                        Batch: <?= htmlspecialchars($batch_item['batch_number'] ?? 'N/A') ?>
+                                                    </span>
+                                                    <span class="batch-qty">× <?= $batch_item['quantity'] ?? 0 ?></span>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php endif; ?>
                                 </div>
                                 <?php if ($can_remove): ?>
-                                    <button type="button" class="btn-remove" onclick="removeMedication(<?= $med['id'] ?>)" title="Remove">
+                                    <button type="button" class="btn-remove" onclick="removeMedication(<?= $pid ?>)" title="Remove">
                                         <i class="fas fa-times"></i>
                                     </button>
                                 <?php endif; ?>
@@ -4039,7 +3753,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     </div>
                 </div>
                 <div class="dropdown-body" id="proceduresToggle">
-                    <!-- ✅ V31: SEARCH FILTER KWA PROCEDURES -->
                     <div class="dropdown-search-row">
                         <div class="search-input-wrap">
                             <i class="fas fa-search"></i>
@@ -4099,7 +3812,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     </div>
                 </div>
                 <div class="dropdown-body" id="equipmentToggle">
-                    <!-- ✅ V31: SEARCH FILTER KWA EQUIPMENT -->
                     <div class="dropdown-search-row">
                         <div class="search-input-wrap">
                             <i class="fas fa-search"></i>
@@ -4241,11 +3953,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </form>
     
     <?php else: ?>
-    <!-- ═══════════════════════════════════════════════════════════ -->
-    <!-- COMPLETED VIEW                                              -->
-    <!-- ═══════════════════════════════════════════════════════════ -->
-    
-    <!-- 1. DIAGNOSIS -->
+    <!-- COMPLETED VIEW -->
     <div class="section-card section-purple">
         <div class="section-header">
             <div class="section-title">
@@ -4278,8 +3986,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     </div>
 
-    <!-- 2. MEDICATIONS -->
-    <?php if (count($valid_prescriptions) > 0): ?>
+    <?php if (count($grouped_prescriptions) > 0): ?>
     <div class="section-card section-success">
         <div class="section-header">
             <div class="section-title">
@@ -4287,32 +3994,51 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 Prescribed Medications
             </div>
             <span style="background:var(--success-bg);color:var(--success);padding:5px 14px;border-radius:12px;font-size:0.7rem;font-weight:800;font-family:'JetBrains Mono',monospace;border:1px solid var(--success);">
-                💊 TSh <?= formatMoneyDisplay($medications_total) ?> (<?= count($valid_prescriptions) ?>)
+                💊 TSh <?= formatMoneyDisplay($medications_total) ?> (<?= count($grouped_prescriptions) ?>)
             </span>
         </div>
         <div class="section-body">
             <div id="medicationsList">
-                <?php foreach ($valid_prescriptions as $med): 
-                    $med_rx_status = $med['prescription_status'] ?? 'pending';
-                    $is_paid_med = isBillItemPaid($db, $bill_id, $med['id'], 'prescription');
+                <?php foreach ($grouped_prescriptions as $pid => $group): 
+                    $main_med = $group['prescription'];
+                    $med_rx_status = $main_med['prescription_status'] ?? 'pending';
+                    $is_paid_med = isBillItemPaid($db, $bill_id, $pid, 'prescription');
                     $status_info = getPrescriptionStatusInfo($med_rx_status, $is_paid_med);
+                    $is_multi_batch = count($group['items']) > 1;
                 ?>
                     <div class="medication-item medication-prescription">
                         <div class="medication-item-info">
-                            <span class="med-name"><?= htmlspecialchars($med['medication_name'] ?? 'Unknown') ?></span>
+                            <span class="med-name"><?= htmlspecialchars($main_med['medication_name'] ?? 'Unknown') ?></span>
                             <span class="med-details">
-                                <?= htmlspecialchars($med['dosage'] ?? '') ?> • 
-                                <?= htmlspecialchars($med['frequency'] ?? '') ?> • 
-                                <?= htmlspecialchars($med['duration'] ?? '') ?> days
+                                <?= htmlspecialchars($main_med['dosage'] ?? '') ?> • 
+                                <?= htmlspecialchars($main_med['frequency'] ?? '') ?> • 
+                                <?= htmlspecialchars($main_med['duration'] ?? '') ?> days
                             </span>
-                            <span class="med-qty">x<?= $med['quantity'] ?? 0 ?></span>
-                            <span class="med-price">TSh <?= formatMoneyDisplay($med['total_price'] ?? 0) ?></span>
-                            <?php if (!empty($med['instructions'])): ?>
-                                <span class="med-instruction-tag"><?= htmlspecialchars($med['instructions']) ?></span>
+                            <span class="med-qty">x<?= $group['total_qty'] ?></span>
+                            <span class="med-price">TSh <?= formatMoneyDisplay($group['total_price']) ?></span>
+                            <?php if (!empty($main_med['instructions'])): ?>
+                                <span class="med-instruction-tag"><?= htmlspecialchars($main_med['instructions']) ?></span>
                             <?php endif; ?>
                             <span class="<?= $status_info['class'] ?>" style="font-size:0.62rem;padding:4px 12px;border-radius:12px;font-weight:800;display:inline-flex;align-items:center;gap:4px;text-transform:uppercase;">
                                 <i class="fas <?= $status_info['icon'] ?>"></i> <?= $status_info['label'] ?>
                             </span>
+                            <?php if ($is_multi_batch): ?>
+                                <div class="batch-info-list">
+                                    <div class="batch-info-header">
+                                        <i class="fas fa-layer-group"></i> 
+                                        Batches Used: <?= count($group['items']) ?>
+                                    </div>
+                                    <?php foreach ($group['items'] as $batch_item): ?>
+                                        <div class="batch-info-row">
+                                            <span class="batch-num">
+                                                <i class="fas fa-box"></i>
+                                                Batch: <?= htmlspecialchars($batch_item['batch_number'] ?? 'N/A') ?>
+                                            </span>
+                                            <span class="batch-qty">× <?= $batch_item['quantity'] ?? 0 ?></span>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
                         </div>
                     </div>
                 <?php endforeach; ?>
@@ -4321,7 +4047,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
     <?php endif; ?>
 
-    <!-- 3. PROCEDURES -->
     <?php if (count($procedures) > 0): ?>
     <div class="section-card section-purple">
         <div class="section-header">
@@ -4362,7 +4087,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
     <?php endif; ?>
 
-    <!-- 4. MEDICAL EQUIPMENT -->
     <?php if (count($equipment_items_display) > 0): ?>
     <div class="section-card section-warning">
         <div class="section-header">
@@ -4406,7 +4130,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
     <?php endif; ?>
 
-    <!-- 5. BILL ITEMS -->
     <?php if (count($bill_items) > 0): ?>
     <div class="section-card section-primary">
         <div class="section-header">
@@ -4502,7 +4225,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <p>
             <span style="color:var(--primary);font-weight:700;">Braick Dispensary</span> Management System
             <span style="margin:0 8px;color:var(--border-color);">|</span>
-            Consultation V31
+            Consultation V32
             <span style="margin:0 8px;color:var(--border-color);">|</span>
             <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>
             <span style="margin:0 8px;color:var(--border-color);">|</span>
@@ -4522,10 +4245,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 </div>
 
 <script>
-// ================================================================
-// CONSULTATION V31 - FULL JAVASCRIPT
-// ================================================================
-
 var pauseAutoUpdate = false;
 var visitId = <?= $visit_id ?>;
 var isCompleted = <?= $is_completed ? 'true' : 'false' ?>;
@@ -4546,10 +4265,8 @@ var manualModes = { dosage: false, frequency: false, route: false };
 function addInstructionQuickPick(text, btn) {
     var textarea = document.getElementById('medInstructions');
     if (!textarea) return;
-    
     var currentValue = textarea.value.trim();
     var parts = currentValue ? currentValue.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; }) : [];
-    
     if (parts.indexOf(text) > -1) {
         parts = parts.filter(function(p) { return p !== text; });
         if (btn) btn.classList.remove('selected');
@@ -4557,7 +4274,6 @@ function addInstructionQuickPick(text, btn) {
         parts.push(text);
         if (btn) btn.classList.add('selected');
     }
-    
     textarea.value = parts.join(', ');
 }
 
@@ -4582,25 +4298,20 @@ function debouncedAutoSave() {
 
 function autoSaveFormData() {
     if (isCompleted || isWaiting || lockSections) return;
-    
     var symptoms = document.getElementById('symptomsTextarea')?.value || '';
     var hpi = document.getElementById('hpiTextarea')?.value || '';
     var physical_exam = document.getElementById('physicalExamTextarea')?.value || '';
     var notes = document.getElementById('notesTextarea')?.value || '';
     var treatment = document.getElementById('treatmentTextarea')?.value || '';
-    
     if (!symptoms && !hpi && !physical_exam && !notes && !treatment) return;
-    
     var currentHash = JSON.stringify({ s: symptoms, h: hpi, p: physical_exam, n: notes, t: treatment });
     if (currentHash === lastSavedHash) return;
     lastSavedHash = currentHash;
-    
     var diagnosis_ids = [];
     document.querySelectorAll('input[name="diagnosis_ids[]"]:checked').forEach(function(cb) {
         var val = parseInt(cb.value);
         if (val > 0) diagnosis_ids.push(val);
     });
-    
     var manual_diseases = [];
     var manual_disease_codes = [];
     document.querySelectorAll('#manualDiseasesContainer > span').forEach(function(tag) {
@@ -4612,21 +4323,13 @@ function autoSaveFormData() {
         var codeInput = tag.querySelector('input[name="manual_disease_codes[]"]');
         manual_disease_codes.push(codeInput ? codeInput.value.trim() : '');
     });
-    
     fetch(window.location.href, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-            action: 'save_diagnosis', 
-            visit_id: visitId, 
-            diagnosis_ids: diagnosis_ids, 
-            manual_diseases: manual_diseases, 
-            manual_disease_codes: manual_disease_codes, 
-            treatment: treatment, 
-            symptoms: symptoms, 
-            hpi: hpi, 
-            physical_exam: physical_exam, 
-            notes: notes 
+            action: 'save_diagnosis', visit_id: visitId, diagnosis_ids: diagnosis_ids, 
+            manual_diseases: manual_diseases, manual_disease_codes: manual_disease_codes, 
+            treatment: treatment, symptoms: symptoms, hpi: hpi, physical_exam: physical_exam, notes: notes 
         })
     })
     .then(r => r.json())
@@ -4638,13 +4341,11 @@ function autoSaveFormData() {
 
 function saveDiagnosisImmediately() {
     if (isCompleted || isWaiting) return;
-    
     var diagnosis_ids = [];
     document.querySelectorAll('input[name="diagnosis_ids[]"]:checked').forEach(function(cb) {
         var val = parseInt(cb.value);
         if (val > 0) diagnosis_ids.push(val);
     });
-    
     var manual_diseases = [];
     var manual_disease_codes = [];
     document.querySelectorAll('#manualDiseasesContainer > span').forEach(function(tag) {
@@ -4656,27 +4357,18 @@ function saveDiagnosisImmediately() {
         var codeInput = tag.querySelector('input[name="manual_disease_codes[]"]');
         manual_disease_codes.push(codeInput ? codeInput.value.trim() : '');
     });
-    
     var symptoms = document.getElementById('symptomsTextarea')?.value || '';
     var hpi = document.getElementById('hpiTextarea')?.value || '';
     var physical_exam = document.getElementById('physicalExamTextarea')?.value || '';
     var notes = document.getElementById('notesTextarea')?.value || '';
     var treatment = document.getElementById('treatmentTextarea')?.value || '';
-    
     fetch(window.location.href, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-            action: 'save_diagnosis', 
-            visit_id: visitId, 
-            diagnosis_ids: diagnosis_ids, 
-            manual_diseases: manual_diseases, 
-            manual_disease_codes: manual_disease_codes, 
-            treatment: treatment, 
-            symptoms: symptoms, 
-            hpi: hpi, 
-            physical_exam: physical_exam, 
-            notes: notes 
+            action: 'save_diagnosis', visit_id: visitId, diagnosis_ids: diagnosis_ids, 
+            manual_diseases: manual_diseases, manual_disease_codes: manual_disease_codes, 
+            treatment: treatment, symptoms: symptoms, hpi: hpi, physical_exam: physical_exam, notes: notes 
         })
     })
     .then(r => r.json())
@@ -4695,13 +4387,11 @@ function saveDiagnosisImmediately() {
 
 function collectFormData() {
     var formData = new FormData();
-    
     var diagnosis_ids = [];
     document.querySelectorAll('input[name="diagnosis_ids[]"]:checked').forEach(function(cb) {
         var val = parseInt(cb.value);
         if (val > 0) diagnosis_ids.push(val);
     });
-    
     var manual_diseases = [];
     var manual_disease_codes = [];
     document.querySelectorAll('#manualDiseasesContainer > span').forEach(function(tag) {
@@ -4713,7 +4403,6 @@ function collectFormData() {
         var codeInput = tag.querySelector('input[name="manual_disease_codes[]"]');
         manual_disease_codes.push(codeInput ? codeInput.value.trim() : '');
     });
-    
     formData.append('diagnosis_ids', JSON.stringify(diagnosis_ids));
     formData.append('manual_diseases', JSON.stringify(manual_diseases));
     formData.append('manual_disease_codes', JSON.stringify(manual_disease_codes));
@@ -4722,26 +4411,18 @@ function collectFormData() {
     formData.append('hpi', document.getElementById('hpiTextarea')?.value || '');
     formData.append('physical_exam', document.getElementById('physicalExamTextarea')?.value || '');
     formData.append('notes', document.getElementById('notesTextarea')?.value || '');
-    
     return formData;
 }
 
 function checkLabStatusNow(btn) {
-    var originalHtml = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
-    
     var formData = new FormData();
     formData.append('action', 'get_bill_totals');
-    
     fetch(window.location.href, { method: 'POST', body: formData })
     .then(r => r.json())
-    .then(function() {
-        setTimeout(function() { window.location.reload(); }, 500);
-    })
-    .catch(function() {
-        setTimeout(function() { window.location.reload(); }, 500);
-    });
+    .then(function() { setTimeout(function() { window.location.reload(); }, 500); })
+    .catch(function() { setTimeout(function() { window.location.reload(); }, 500); });
 }
 
 function showToast(title, message, type) {
@@ -4786,7 +4467,6 @@ function toggleMedManual(field) {
     else if (field === 'frequency') { selectEl = document.getElementById('medFrequency'); manualEl = document.getElementById('medFrequencyManual'); btn = document.getElementById('btnManualFrequency'); }
     else if (field === 'route') { selectEl = document.getElementById('medRoute'); manualEl = document.getElementById('medRouteManual'); btn = document.getElementById('btnManualRoute'); }
     else return;
-    
     var isManual = manualModes[field];
     if (isManual) {
         selectEl.style.display = 'block';
@@ -4835,9 +4515,7 @@ function resetMedicationForm() {
     document.getElementById('medQuantity').value = '1';
     document.getElementById('medDuration').value = '7';
     document.getElementById('medInstructions').value = '';
-    
     document.querySelectorAll('.quick-pick-btn.selected').forEach(function(b) { b.classList.remove('selected'); });
-    
     ['dosage', 'frequency', 'route'].forEach(function(field) {
         var selectId = 'med' + field.charAt(0).toUpperCase() + field.slice(1);
         var manualId = selectId + 'Manual';
@@ -4928,7 +4606,6 @@ function filterMedicationsInside() {
     });
 }
 
-// ✅ V31: FILTER KWA PROCEDURES
 function filterProceduresInside() {
     var filter = document.getElementById('procedureSearch').value.toLowerCase().trim();
     document.querySelectorAll('#proceduresGrid .item-card').forEach(function(item) {
@@ -4937,7 +4614,6 @@ function filterProceduresInside() {
     });
 }
 
-// ✅ V31: FILTER KWA EQUIPMENT
 function filterEquipmentInside() {
     var filter = document.getElementById('equipmentSearch').value.toLowerCase().trim();
     document.querySelectorAll('#equipmentGrid .item-card').forEach(function(item) {
@@ -5038,11 +4714,18 @@ function toggleMedicationCheckbox(element) {
     var isSelectable = element.getAttribute('data-selectable') === '1';
     if (!isSelectable) { showToast('⚠️ Cannot Select', 'This medication is not available', 'warning'); return; }
     element.classList.toggle('selected');
-    var invId = element.getAttribute('data-inventory-id');
-    var name = element.getAttribute('data-medication-name');
-    var idx = selectedMedications.findIndex(m => m.id === invId);
-    if (idx > -1) selectedMedications.splice(idx, 1);
-    else selectedMedications.push({ id: invId, name: name });
+    var medName = element.getAttribute('data-medication-name');
+    var medCategory = element.getAttribute('data-medication-category');
+    var totalStock = parseInt(element.getAttribute('data-total-stock')) || 0;
+    var batchCount = parseInt(element.getAttribute('data-batch-count')) || 1;
+    var idx = selectedMedications.findIndex(m => m.name === medName && m.category === medCategory);
+    if (idx > -1) {
+        selectedMedications.splice(idx, 1);
+    } else {
+        selectedMedications.push({ 
+            name: medName, category: medCategory, total_stock: totalStock, batch_count: batchCount 
+        });
+    }
     updateMedSelectedInfo();
 }
 
@@ -5050,7 +4733,7 @@ function updateMedSelectedInfo() {
     var info = document.getElementById('medSelectedInfo');
     if (!info) return;
     if (selectedMedications.length === 0) { info.textContent = 'None'; return; }
-    info.textContent = selectedMedications.map(m => m.name).join(', ') + ' (' + selectedMedications.length + ')';
+    info.textContent = selectedMedications.map(m => m.name + ' (' + m.total_stock + ' avail' + (m.batch_count > 1 ? ', ' + m.batch_count + ' batches' : '') + ')').join(', ');
 }
 
 function addMedicationAjax() {
@@ -5059,26 +4742,33 @@ function addMedicationAjax() {
     var qty = parseInt(document.getElementById('medQuantity').value) || 0;
     var duration = document.getElementById('medDuration').value;
     var instructions = document.getElementById('medInstructions').value;
-    
     var dosage = getMedFieldValue('dosage');
     var frequency = getMedFieldValue('frequency');
     var route = getMedFieldValue('route');
-    
     if (qty < 1) { showToast('❌ Error', 'Quantity must be at least 1', 'error'); return; }
     if (!frequency) { showToast('❌ Error', 'Please enter frequency', 'error'); return; }
     if (!route) { showToast('❌ Error', 'Please enter route', 'error'); return; }
+    
+    for (var i = 0; i < selectedMedications.length; i++) {
+        var m = selectedMedications[i];
+        if (m.total_stock < qty) {
+            showToast('❌ Insufficient Stock', m.name + ': Requested ' + qty + ', Available ' + m.total_stock, 'error');
+            return;
+        }
+    }
     
     var btn = document.getElementById('addMedicationBtn');
     var originalHtml = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Adding...';
-    
     var added = 0, completed = 0, total = selectedMedications.length;
+    var messages = [];
     
     selectedMedications.forEach(function(med) {
         var formData = collectFormData();
         formData.append('action', 'add_medication');
-        formData.append('inventory_id', med.id);
+        formData.append('medication_name', med.name);
+        formData.append('medication_category', med.category || '');
         formData.append('quantity', qty);
         formData.append('dosage', dosage);
         formData.append('frequency', frequency);
@@ -5089,8 +4779,11 @@ function addMedicationAjax() {
         fetch(window.location.href, { method: 'POST', body: formData })
         .then(r => r.json())
         .then(data => {
-            if (data.success) { added++; if (data.medication) addMedicationToList(data.medication); }
-            else { 
+            if (data.success) { 
+                added++; 
+                messages.push(data.message);
+                if (data.medication) addMedicationToList(data.medication); 
+            } else { 
                 showToast('❌ Error', data.message || 'Unknown error', 'error'); 
                 console.error('add_medication failed:', data);
             }
@@ -5102,8 +4795,9 @@ function addMedicationAjax() {
                 selectedMedications = [];
                 updateMedSelectedInfo();
                 if (added > 0) { 
-                    showToast('✅ Success', 'Added ' + added + ' medication(s). Status: PENDING.', 'success'); 
+                    showToast('✅ Success', messages.join(' | '), 'success'); 
                     showSavedIndicator('✅ Medication added + Diagnosis saved');
+                    setTimeout(function() { window.location.reload(); }, 2000);
                 }
                 resetMedicationForm();
             }
@@ -5123,6 +4817,13 @@ function addMedicationToList(med) {
     div.id = 'med-item-' + med.id;
     
     var instructions = med.instructions ? '<span class="med-instruction-tag">' + escapeHtml(med.instructions) + '</span>' : '';
+    var batchesInfo = '';
+    if (med.batches_used && med.batches_used.length > 1) {
+        var batchRows = med.batches_used.map(function(b) {
+            return '<div class="batch-info-row"><span class="batch-num"><i class="fas fa-box"></i> Batch: ' + escapeHtml(b.batch_number || 'N/A') + '</span><span class="batch-qty">× ' + b.quantity + '</span></div>';
+        }).join('');
+        batchesInfo = '<div class="batch-info-list"><div class="batch-info-header"><i class="fas fa-layer-group"></i> Batches Used: ' + med.batches_used.length + '</div>' + batchRows + '</div>';
+    }
     
     div.innerHTML = 
         '<div class="medication-item-info">' +
@@ -5136,6 +4837,7 @@ function addMedicationToList(med) {
             '<span class="med-price">TSh ' + Number(med.total_price || 0).toLocaleString() + '</span>' +
             instructions +
             '<span class="med-status-pending"><i class="fas fa-clock"></i> Pending</span>' +
+            batchesInfo +
         '</div>' +
         '<button type="button" class="btn-remove" onclick="removeMedication(' + med.id + ')" title="Remove">' +
             '<i class="fas fa-times"></i>' +
@@ -5195,11 +4897,9 @@ function addSelectedProcedures() {
     if (lockSections) { showToast('🔒 Locked', 'Sections are locked. Wait for lab results.', 'warning'); return; }
     if (selectedProcedures.length === 0) { showToast('⚠️ Warning', 'Please select procedures', 'warning'); return; }
     var procedureIds = selectedProcedures.map(p => p.id);
-    
     var formData = collectFormData();
     formData.append('action', 'add_procedures_batch');
     formData.append('procedure_ids', JSON.stringify(procedureIds));
-    
     fetch(window.location.href, { method: 'POST', body: formData })
     .then(r => r.json())
     .then(data => {
@@ -5207,8 +4907,7 @@ function addSelectedProcedures() {
             showToast('✅ Success', data.message, 'success'); 
             showSavedIndicator('✅ Procedures added + Diagnosis saved');
             setTimeout(() => window.location.reload(), 1200); 
-        }
-        else {
+        } else {
             showToast('❌ Error', data.message || 'Unknown error', 'error');
             console.error('add_procedures_batch failed:', data);
         }
@@ -5239,11 +4938,9 @@ function addSelectedEquipment() {
     if (selectedEquipment.length === 0) { showToast('⚠️ Warning', 'Please select equipment', 'warning'); return; }
     var quantity = parseInt(document.getElementById('equipmentQuantity').value) || 1;
     var equipmentData = selectedEquipment.map(eq => ({ id: eq.id, quantity: quantity }));
-    
     var formData = collectFormData();
     formData.append('action', 'add_equipment_batch');
     formData.append('equipment_data', JSON.stringify(equipmentData));
-    
     fetch(window.location.href, { method: 'POST', body: formData })
     .then(r => r.json())
     .then(data => {
@@ -5251,8 +4948,7 @@ function addSelectedEquipment() {
             showToast('✅ Success', data.message, 'success'); 
             showSavedIndicator('✅ Equipment added + Diagnosis saved');
             setTimeout(() => window.location.reload(), 1200); 
-        }
-        else {
+        } else {
             showToast('❌ Error', data.message || 'Unknown error', 'error');
             console.error('add_equipment_batch failed:', data);
         }
@@ -5288,12 +4984,11 @@ document.addEventListener('DOMContentLoaded', function() {
     updateComplaintsUI();
 });
 
-console.log('%c🩺 Braick Consultation V31 FINAL', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ V31: ensureBillExists() - inaunda bill hata kama ni FREE (0 charge)', 'font-size:12px; color:#059669; font-weight:bold;');
-console.log('%c✅ V31: BLUE CARDS kwa lab tests zilizo-linked na equipment', 'font-size:12px; color:#1E40AF; font-weight:bold;');
-console.log('%c✅ V31: Search filter kwa procedures na equipment', 'font-size:12px; color:#7C3AED;');
-console.log('%c✅ V31: Error logging kamili - errors zinaonekana kwenye toast', 'font-size:12px; color:#DC2626;');
-console.log('%c✅ V31: Status auto-promotion: waiting → lab_test / prescribed', 'font-size:12px; color:#D97706;');
+console.log('%c🩺 Braick Consultation V32 FINAL', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ V32: MULTI-BATCH STOCK DISTRIBUTION (FIFO)', 'font-size:12px; color:#059669; font-weight:bold;');
+console.log('%c✅ V32: Inachukua batches zote ikiisha ya kwanza', 'font-size:12px; color:#1E40AF; font-weight:bold;');
+console.log('%c✅ V32: Bill items kwa kila batch', 'font-size:12px; color:#7C3AED;');
+console.log('%c✅ V32: Display batches zilizotumika', 'font-size:12px; color:#D97706;');
 </script>
 
 </body>
