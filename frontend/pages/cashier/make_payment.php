@@ -1,14 +1,16 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/make_payment.php
-// CASHIER - MAKE PAYMENT - V19.0 FINAL
+// CASHIER - MAKE PAYMENT - V20.0 FINAL - MULTI-BATCH FIX
 // ================================================================
-// ✅ V19.0: Inatumia LOGIC sawa na process_payment.php
-// ✅ V19.0: HAINA global isStockAlreadyDeducted() check
+// ✅ V20.0: FIX MULTI-BATCH MEDICATION DEDUCTION (sawa na process_payment V28)
+// ✅ V20.0: Group prescription_items by medication_name kabla ya deduct
+// ✅ V20.0: Inachukua jumla ya quantity kwenye batches zote
+// ✅ V20.0: Safety check inatumia reference_id TU (sio inventory_id)
+// ✅ V19.0: NO global isStockAlreadyDeducted() check
 // ✅ V19.0: Kila item ina safety check yake
 // ✅ V19.0: Lab-linked equipment query HAINA lte.branch_id = lt.branch_id
 // ✅ V19.0: Inatumia bill_items.id kwa reference_id (SAHIHI)
-// ✅ V19.0: Inatumia visit_id kwa lab equipment (kama process_payment)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -65,20 +67,22 @@ $message_type = '';
 $currency = 'TSh';
 
 // ================================================================
-// ✅ V19.0: SAFETY CHECK - Check if item already deducted
+// ✅ V20.0: SAFETY CHECK - Check if item already deducted
+// ✅ FIX: Kwa medication, tumia reference_id TU (sio inventory_id)
 // ================================================================
 function isStockAlreadyDeductedForItem($db, $item_type, $reference_type, $reference_id, $stock_id, $branch_id) {
     try {
         if ($item_type === 'medication') {
+            // ✅ V20.0 FIX: Check kwa reference_type + reference_id TU
+            // Sababu multi-batch inaweza kuwa na inventory_id tofauti kwa prescription moja
             $stmt = $db->prepare("
                 SELECT COUNT(*) as cnt FROM stock_movements 
-                WHERE inventory_id = ? 
-                  AND reference_type = ? 
+                WHERE reference_type = ? 
                   AND reference_id = ?
                   AND movement_type = 'out'
                   AND branch_id = ?
             ");
-            $stmt->execute([$stock_id, $reference_type, $reference_id, $branch_id]);
+            $stmt->execute([$reference_type, $reference_id, $branch_id]);
         } else {
             $stmt = $db->prepare("
                 SELECT COUNT(*) as cnt FROM stock_movements 
@@ -99,7 +103,7 @@ function isStockAlreadyDeductedForItem($db, $item_type, $reference_type, $refere
 }
 
 // ================================================================
-// ✅ V19.0: DEDUCT MEDICATION STOCK (FIFO)
+// ✅ V20.0: DEDUCT MEDICATION STOCK (FIFO) - MULTI-BATCH AWARE
 // ================================================================
 function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $user_id, $patient_id, $reference_type = 'prescription', $reference_id = 0, $prescription_number = '') {
     $result = ['deducted' => 0, 'remaining' => $quantity, 'details' => [], 'errors' => [], 'skipped' => false];
@@ -108,7 +112,14 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
         $needed = (int)$quantity;
         if ($needed <= 0) return $result;
         
-        // SAFETY CHECK
+        error_log("═══════════════════════════════════════════════════");
+        error_log("💊 V20.0 deductMedicationStock CALLED");
+        error_log("   medication: $medication_name");
+        error_log("   quantity: $quantity");
+        error_log("   reference: $reference_type #$reference_id");
+        error_log("   branch: $branch_id");
+        
+        // ✅ V20.0: SAFETY CHECK (kwa reference_id TU)
         if ($reference_type === 'prescription' && $reference_id > 0) {
             $stmt_check = $db->prepare("
                 SELECT COUNT(*) as cnt FROM stock_movements 
@@ -121,7 +132,7 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
             $existing = (int)$stmt_check->fetch(PDO::FETCH_ASSOC)['cnt'];
             
             if ($existing > 0) {
-                error_log("⏭️ V19.0: Medication deduction SKIPPED - Rx #$reference_id already deducted");
+                error_log("⏭️ V20.0: Medication deduction SKIPPED - Rx #$reference_id already deducted");
                 $result['skipped'] = true;
                 $result['errors'][] = "Rx #$reference_id already deducted";
                 return $result;
@@ -151,6 +162,7 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
         
         if (empty($batches)) {
             $result['errors'][] = "No active batches found for $clean_name";
+            error_log("⚠️ V20.0: No batches found for $clean_name");
             return $result;
         }
         
@@ -170,7 +182,7 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
             $result['details'][] = "{$batch['batch_number']}: {$available} → {$new_stock}";
             
             try {
-                $notes = "V19.0 - Dispensed at full payment";
+                $notes = "V20.0 - Dispensed at full payment";
                 if (!empty($prescription_number)) $notes .= " - Rx #{$prescription_number}";
                 $notes .= " - Qty: {$deduct} - Batch: " . ($batch['batch_number'] ?? 'N/A');
                 
@@ -184,7 +196,7 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
                     $reference_type, $reference_id, $user_id, $branch_id, $notes
                 ]);
             } catch (Exception $e) {
-                error_log("V19.0 stock_movements insert error (med): " . $e->getMessage());
+                error_log("V20.0 stock_movements insert error (med): " . $e->getMessage());
             }
             
             $needed -= $deduct;
@@ -192,17 +204,18 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
         
         if ($needed > 0) {
             $result['errors'][] = "Insufficient stock for $clean_name (needed {$needed} more)";
+            error_log("⚠️ V20.0: Insufficient stock for $clean_name - needed $needed more");
         }
     } catch (Exception $e) {
         $result['errors'][] = "System error: " . $e->getMessage();
-        error_log("V19.0 deductMedicationStock error: " . $e->getMessage());
+        error_log("V20.0 deductMedicationStock error: " . $e->getMessage());
     }
     
     return $result;
 }
 
 // ================================================================
-// ✅ V19.0: DEDUCT EQUIPMENT STOCK
+// ✅ V20.0: DEDUCT EQUIPMENT STOCK
 // ================================================================
 function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_id, $patient_id, $reference_type = 'procedure', $reference_id = 0, $notes = '') {
     $result = ['deducted' => 0, 'details' => [], 'errors' => [], 'skipped' => false];
@@ -216,7 +229,7 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
             return $result;
         }
         
-        // SAFETY CHECK - Check if already deducted
+        // SAFETY CHECK
         $stmt_check = $db->prepare("
             SELECT COUNT(*) as cnt FROM stock_movements 
             WHERE equipment_id = ? 
@@ -229,7 +242,7 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
         $existing = (int)$stmt_check->fetch(PDO::FETCH_ASSOC)['cnt'];
         
         if ($existing > 0) {
-            error_log("⏭️ V19.0: Equipment #$eq_id SKIPPED - reference $reference_type #$reference_id already deducted");
+            error_log("⏭️ V20.0: Equipment #$eq_id SKIPPED - reference $reference_type #$reference_id already deducted");
             $result['skipped'] = true;
             $result['errors'][] = "Equipment #$eq_id already deducted for $reference_type #$reference_id";
             return $result;
@@ -270,7 +283,7 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
         $result['details'][] = "{$equip['equipment_name']}: {$previous_stock} → {$new_stock}";
         
         try {
-            $log_notes = !empty($notes) ? $notes : "V19.0 - Equipment used";
+            $log_notes = !empty($notes) ? $notes : "V20.0 - Equipment used";
             $log_notes .= " | Batch: " . ($equip['batch_number'] ?? 'N/A');
             $log_notes .= " | Stock: {$previous_stock} → {$new_stock}";
             
@@ -284,23 +297,22 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
                 $reference_type, $reference_id, $user_id, $branch_id, $log_notes
             ]);
             
-            error_log("✅ V19.0: Equipment {$equip['equipment_name']} deducted $qty ($previous_stock → $new_stock) for $reference_type #$reference_id");
+            error_log("✅ V20.0: Equipment {$equip['equipment_name']} deducted $qty ($previous_stock → $new_stock) for $reference_type #$reference_id");
         } catch (Exception $e) {
-            error_log("V19.0 stock_movements insert error (equip): " . $e->getMessage());
+            error_log("V20.0 stock_movements insert error (equip): " . $e->getMessage());
         }
     } catch (Exception $e) {
         $result['errors'][] = "System error: " . $e->getMessage();
-        error_log("V19.0 deductEquipmentStock error: " . $e->getMessage());
+        error_log("V20.0 deductEquipmentStock error: " . $e->getMessage());
     }
     
     return $result;
 }
 
 // ================================================================
-// ✅ V19.0: DEDUCT ALL STOCK FOR PAID BILL (KAMA PROCESS_PAYMENT)
-// ✅ HAINA global isStockAlreadyDeducted() check
-// ✅ Kila item ina safety check yake
-// ✅ Lab equipment query HAINA lte.branch_id = lt.branch_id
+// ✅ V20.0: DEDUCT ALL STOCK FOR PAID BILL - MULTI-BATCH FIX
+// ✅ Group by medication_name kabla ya deduct
+// ✅ Safety check inatumia reference_id TU
 // ================================================================
 function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
     $result = [
@@ -316,7 +328,7 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
     
     try {
         error_log("═══════════════════════════════════════════════════════");
-        error_log("🔍 V19.0: deductAllStockForPaidBill START - Bill #$bill_id");
+        error_log("🔍 V20.0: deductAllStockForPaidBill START - Bill #$bill_id");
         error_log("═══════════════════════════════════════════════════════");
         
         // SAFETY CHECK 1: Verify bill is FULLY PAID
@@ -330,14 +342,14 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
         }
         
         if ($bill_check['status'] !== 'paid' || (float)$bill_check['balance'] > 0.01) {
-            error_log("⏭️ V19.0: Bill #$bill_id NOT fully paid - SKIPPING");
+            error_log("⏭️ V20.0: Bill #$bill_id NOT fully paid - SKIPPING");
             return $result;
         }
         
         $bill_visit_id = (int)$bill_check['visit_id'];
         
         // ============================================================
-        // 1. MEDICATIONS FROM PRESCRIPTIONS
+        // 1. MEDICATIONS FROM PRESCRIPTIONS - ✅ V20 MULTI-BATCH FIX
         // ============================================================
         $stmt = $db->prepare("
             SELECT DISTINCT p.id as prescription_id, p.patient_id, p.prescription_number
@@ -351,7 +363,7 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
         $stmt->execute([$bill_id, $branch_id]);
         $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
-        error_log("💊 V19.0: Found " . count($prescriptions) . " prescriptions");
+        error_log("💊 V20.0: Found " . count($prescriptions) . " prescriptions");
         
         foreach ($prescriptions as $pres) {
             $prescription_id = $pres['prescription_id'];
@@ -368,38 +380,54 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
             $already_dispensed = (int)$stmt_check_disp->fetch(PDO::FETCH_ASSOC)['dispensed_count'];
             
             if ($already_dispensed > 0) {
-                error_log("⏭️ V19.0: Rx #$prescription_number already dispensed - SKIPPING");
+                error_log("⏭️ V20.0: Rx #$prescription_number already dispensed - SKIPPING");
                 $result['skipped']++;
                 continue;
             }
             
+            // ✅ V20 FIX: GROUP prescription_items by medication_name
+            // Kwa multi-batch, prescription moja inaweza kuwa na items 2+ za dawa moja
+            // Mfano: Amoxclave Batch A (qty 6) + Batch B (qty 8) = total 14
             $stmt_items = $db->prepare("
-                SELECT * FROM prescription_items 
+                SELECT 
+                    medication_name,
+                    SUM(quantity) as total_quantity,
+                    COUNT(*) as batch_count,
+                    GROUP_CONCAT(CONCAT('Qty:', quantity) SEPARATOR ' + ') as batch_details
+                FROM prescription_items 
                 WHERE prescription_id = ? 
                   AND cancelled_at IS NULL 
                   AND quantity > 0
+                GROUP BY medication_name
             ");
             $stmt_items->execute([$prescription_id]);
-            $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
+            $grouped_items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
             
-            foreach ($items as $item) {
+            foreach ($grouped_items as $item) {
                 $med_name = preg_replace('/\s*\(Batch:.*?\)\s*/i', '', $item['medication_name']);
                 $med_name = trim($med_name);
+                $total_qty = (int)$item['total_quantity'];
+                $batch_count = (int)$item['batch_count'];
                 
+                error_log("🔍 V20.0: Deducting $med_name qty=$total_qty (from $batch_count batches: {$item['batch_details']})");
+                
+                // ✅ V20 FIX: Deduct JUMLA mara MOJA (sio kila batch)
                 $deduct_result = deductMedicationStock(
-                    $db, $med_name, $item['quantity'], $branch_id, $user_id, $patient_id,
+                    $db, $med_name, $total_qty, $branch_id, $user_id, $patient_id,
                     'prescription', $prescription_id, $prescription_number
                 );
                 
                 if ($deduct_result['deducted'] > 0) {
                     $result['medications_deducted'] += $deduct_result['deducted'];
                     $result['medication_items']++;
+                    error_log("✅ V20.0: $med_name deducted={$deduct_result['deducted']} (details: " . implode(', ', $deduct_result['details']) . ")");
                 }
                 if ($deduct_result['skipped']) {
                     $result['skipped']++;
                 }
                 if (!empty($deduct_result['errors'])) {
                     $result['errors'] = array_merge($result['errors'], $deduct_result['errors']);
+                    error_log("⚠️ V20.0: $med_name errors: " . implode(', ', $deduct_result['errors']));
                 }
             }
             
@@ -434,7 +462,7 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
         $stmt->execute([$bill_id, $branch_id]);
         $equipment_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
-        error_log("🛠️ V19.0: Found " . count($equipment_items) . " direct equipment items");
+        error_log("🛠️ V20.0: Found " . count($equipment_items) . " direct equipment items");
         
         foreach ($equipment_items as $eq) {
             $equipment_id = (int)$eq['equipment_id'];
@@ -450,7 +478,7 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
             $deduct_result = deductEquipmentStock(
                 $db, $equipment_id, $qty_needed, $branch_id, $user_id, $patient_id,
                 'equipment', $bill_item_id,
-                "V19.0 - Equipment - Bill #{$bill_id} - {$eq['equipment_name']}"
+                "V20.0 - Equipment - Bill #{$bill_id} - {$eq['equipment_name']}"
             );
             
             if ($deduct_result['deducted'] > 0) {
@@ -466,12 +494,10 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
         }
         
         // ============================================================
-        // 3. LAB-LINKED EQUIPMENT (V19.0 FIX)
-        // ✅ HAINA lte.branch_id = lt.branch_id
-        // ✅ Inatumia visit_id (kama process_payment.php)
+        // 3. LAB-LINKED EQUIPMENT
         // ============================================================
         if ($bill_visit_id > 0) {
-            error_log("🧪 V19.0: Querying lab-linked equipment for bill #$bill_id (visit_id: $bill_visit_id)");
+            error_log("🧪 V20.0: Querying lab-linked equipment for bill #$bill_id (visit_id: $bill_visit_id)");
             
             $stmt = $db->prepare("
                 SELECT 
@@ -488,7 +514,6 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
                 FROM lab_tests lt
                 INNER JOIN lab_test_equipment lte 
                     ON lte.lab_test_id = lt.test_id
-                    -- ✅ V19.0: HAKUNA lte.branch_id = lt.branch_id!
                 INNER JOIN medical_equipment me 
                     ON lte.equipment_id = me.id
                     AND me.branch_id = lt.branch_id
@@ -500,11 +525,7 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
             $stmt->execute([$branch_id, $bill_visit_id]);
             $lab_equipment_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
-            error_log("🧪 V19.0: Found " . count($lab_equipment_items) . " lab-equipment links");
-            
-            foreach ($lab_equipment_items as $debug) {
-                error_log("   → Lab #{$debug['lab_test_id']} ({$debug['test_name']}) uses Equipment #{$debug['equipment_id']} ({$debug['equipment_name']}) - Stock: {$debug['current_stock']}");
-            }
+            error_log("🧪 V20.0: Found " . count($lab_equipment_items) . " lab-equipment links");
             
             foreach ($lab_equipment_items as $eq) {
                 $equipment_id = (int)$eq['equipment_id'];
@@ -517,13 +538,13 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
                 $deduct_result = deductEquipmentStock(
                     $db, $equipment_id, $quantity_used, $branch_id, $user_id, $patient_id,
                     'lab_test', $lab_test_id,
-                    "V19.0 - Lab equipment - {$eq['test_name']} - Lab #{$lab_test_id}"
+                    "V20.0 - Lab equipment - {$eq['test_name']} - Lab #{$lab_test_id}"
                 );
                 
                 if ($deduct_result['deducted'] > 0) {
                     $result['lab_equipment_deducted'] += $deduct_result['deducted'];
                     $result['lab_equipment_items']++;
-                    error_log("✅ V19.0: Deducted {$deduct_result['deducted']} x {$eq['equipment_name']} for Lab #{$lab_test_id}");
+                    error_log("✅ V20.0: Deducted {$deduct_result['deducted']} x {$eq['equipment_name']} for Lab #{$lab_test_id}");
                 }
                 if ($deduct_result['skipped']) {
                     $result['skipped']++;
@@ -533,11 +554,11 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
                 }
             }
         } else {
-            error_log("⚠️ V19.0: Bill #$bill_id has no visit_id - skipping lab equipment");
+            error_log("⚠️ V20.0: Bill #$bill_id has no visit_id - skipping lab equipment");
         }
         
         error_log("═══════════════════════════════════════════════════════");
-        error_log("✅ V19.0: Bill #$bill_id done");
+        error_log("✅ V20.0: Bill #$bill_id done");
         error_log("   Meds: {$result['medications_deducted']} qty");
         error_log("   Equipment: {$result['equipment_deducted']} qty");
         error_log("   Lab Equipment: {$result['lab_equipment_deducted']} qty");
@@ -546,14 +567,14 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
         
     } catch (Exception $e) {
         $result['errors'][] = "System error: " . $e->getMessage();
-        error_log("V19.0 deductAllStockForPaidBill error: " . $e->getMessage());
+        error_log("V20.0 deductAllStockForPaidBill error: " . $e->getMessage());
     }
     
     return $result;
 }
 
 // ================================================================
-// ✅ V19.0: HELPER FUNCTIONS
+// ✅ V20.0: HELPER FUNCTIONS
 // ================================================================
 function syncProceduresStatus($db, $bill_id, $branch_id) {
     try {
@@ -772,7 +793,6 @@ try {
             try {
                 $db->beginTransaction();
                 
-                // Lock bill FOR UPDATE
                 $stmt = $db->prepare("
                     SELECT b.*, p.full_name as patient_name, p.patient_id as patient_number, p.id as patient_id_ref
                     FROM bills b
@@ -880,8 +900,8 @@ try {
                 $procedures_synced = syncProceduresStatus($db, $bill_id_post, $user_branch_id);
                 
                 // ============================================================
-                // ✅ V19.0: FULL STOCK DEDUCTION ON FULL PAYMENT
-                // ✅ KAMA PROCESS_PAYMENT - Hakuna global check!
+                // ✅ V20.0: FULL STOCK DEDUCTION ON FULL PAYMENT
+                // ✅ MULTI-BATCH FIX - Group by medication_name
                 // ============================================================
                 $stock_result = [
                     'medications_deducted' => 0,
@@ -895,13 +915,11 @@ try {
                 ];
                 
                 if ($is_fully_paid) {
-                    // ✅ V19.0: Hakuna global isStockAlreadyDeducted() check
-                    // Kila item ina safety check yake ya isStockAlreadyDeductedForItem()
                     $stock_result = deductAllStockForPaidBill($db, $bill_id_post, $user_branch_id, $user_id);
-                    error_log("✅ V19.0 STOCK DEDUCTED: Bill #$bill_id_post → Meds: {$stock_result['medications_deducted']}, Equip: {$stock_result['equipment_deducted']}, Lab: {$stock_result['lab_equipment_deducted']}, Skipped: {$stock_result['skipped']}");
+                    error_log("✅ V20.0 STOCK DEDUCTED: Bill #$bill_id_post → Meds: {$stock_result['medications_deducted']}, Equip: {$stock_result['equipment_deducted']}, Lab: {$stock_result['lab_equipment_deducted']}, Skipped: {$stock_result['skipped']}");
                 }
                 
-                $notes = 'V19.0 Payment | Pharm Disc: ' . $currency . ' ' . number_format($total_pharmacy_discount, 0) . ' | Cashier Disc: ' . $currency . ' ' . number_format($total_cashier_discount, 0);
+                $notes = 'V20.0 Payment | Pharm Disc: ' . $currency . ' ' . number_format($total_pharmacy_discount, 0) . ' | Cashier Disc: ' . $currency . ' ' . number_format($total_cashier_discount, 0);
                 if ($total_premium > 0) {
                     $notes .= ' | Pharm Prem: ' . $currency . ' ' . number_format($total_pharmacy_premium, 0);
                     $notes .= ' | Cashier Prem: ' . $currency . ' ' . number_format($total_cashier_premium, 0);
@@ -969,7 +987,7 @@ try {
             } catch (Exception $e) {
                 $db->rollBack();
                 echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
-                error_log("❌ V19.0 Payment error: " . $e->getMessage());
+                error_log("❌ V20.0 Payment error: " . $e->getMessage());
             }
             exit;
         }
@@ -979,7 +997,7 @@ try {
     }
 
     // ================================================================
-    // ✅ V19.0: GET BILL - NO AUTO-REPAIR!
+    // ✅ V20.0: GET BILL - NO AUTO-REPAIR!
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
@@ -1262,7 +1280,7 @@ include_once '../../components/cashier_sidebar.php';
             font-weight: 700;
         }
         
-        .page-header .header-badge.v19-badge {
+        .page-header .header-badge.v20-badge {
             background: rgba(16,185,129,0.35);
             color: #A7F3D0;
             border-color: rgba(16,185,129,0.5);
@@ -1789,8 +1807,8 @@ include_once '../../components/cashier_sidebar.php';
                         <i class="fas fa-crown"></i> Premium: <?= $currency ?> <?= number_format($existing_premium, 0) ?>
                     </span>
                 <?php endif; ?>
-                <span class="header-badge v19-badge">
-                    <i class="fas fa-shield-alt"></i> V19.0 - SAME AS PROCESS_PAYMENT
+                <span class="header-badge v20-badge">
+                    <i class="fas fa-shield-alt"></i> V20.0 - MULTI-BATCH FIX
                 </span>
             </h1>
             <p class="page-subtitle">
@@ -1983,7 +2001,7 @@ include_once '../../components/cashier_sidebar.php';
     <footer class="footer">
         <p>
             <span style="color:var(--success);font-weight:600;">Braick Dispensary</span> Management System
-            <span>|</span> Make Payment V19.0 (Same as Process Payment)
+            <span>|</span> Make Payment V20.0 (Multi-Batch Fix)
             <span>|</span>
             <span>👤 <?= htmlspecialchars($user_full_name) ?></span>
             <span>|</span>
@@ -2095,11 +2113,11 @@ include_once '../../components/cashier_sidebar.php';
     var isPaid = <?= $is_paid ? 'true' : 'false' ?>;
     var visitId = <?= $visit_id_ref ?? 0 ?>;
 
-    console.log('%c💰 Make Payment V19.0 FINAL', 'font-size:16px; font-weight:bold; color:#059669;');
-    console.log('%c✅ SAME LOGIC AS process_payment.php');
-    console.log('%c✅ NO global isStockAlreadyDeducted() check');
-    console.log('%c✅ Kila item ina safety check yake');
-    console.log('%c✅ Lab equipment query HAINA lte.branch_id = lt.branch_id');
+    console.log('%c💰 Make Payment V20.0 FINAL', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c✅ MULTI-BATCH FIX - Group by medication_name');
+    console.log('%c✅ Safety check inatumia reference_id TU');
+    console.log('%c✅ Inachukua jumla ya quantity kwenye batches zote');
+    console.log('%c✅ SAME LOGIC AS process_payment V28');
 
     (function() {
         var htmlElement = document.documentElement;
@@ -2199,7 +2217,7 @@ include_once '../../components/cashier_sidebar.php';
         
         var stockWarning = '';
         if (type === 'full') {
-            stockWarning = '\n\n⚠️ STOCK ITADEDUCT:\n💊 Medications\n🛠️ Equipment\n🧪 Lab-linked equipment\n\n✅ SAFETY: Double deduction imezuiwa';
+            stockWarning = '\n\n⚠️ STOCK ITADEDUCT:\n💊 Medications (MULTI-BATCH)\n🛠️ Equipment\n🧪 Lab-linked equipment\n\n✅ MULTI-BATCH FIX: Batches zote zitadeduct';
         } else {
             stockWarning = '\n\nℹ️ Partial payment — stock HAITADEDUCT.\nStock itadeduct tu kwa FULL payment.';
         }
@@ -2294,10 +2312,9 @@ include_once '../../components/cashier_sidebar.php';
 
     document.addEventListener('DOMContentLoaded', function() {
         updateTotals();
-        console.log('✅ Make Payment V19.0 loaded');
-        console.log('✅ SAME LOGIC AS process_payment.php');
-        console.log('✅ NO global isStockAlreadyDeducted()');
-        console.log('✅ Lab-linked equipment itadeduct');
+        console.log('✅ Make Payment V20.0 loaded');
+        console.log('✅ MULTI-BATCH FIX active');
+        console.log('✅ Group by medication_name kabla ya deduct');
     });
 </script>
 
