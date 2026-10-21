@@ -1,16 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/make_payment.php
-// CASHIER - MAKE PAYMENT - V20.0 FINAL - MULTI-BATCH FIX
+// CASHIER - MAKE PAYMENT - V21.0 FINAL
 // ================================================================
-// ✅ V20.0: FIX MULTI-BATCH MEDICATION DEDUCTION (sawa na process_payment V28)
-// ✅ V20.0: Group prescription_items by medication_name kabla ya deduct
-// ✅ V20.0: Inachukua jumla ya quantity kwenye batches zote
-// ✅ V20.0: Safety check inatumia reference_id TU (sio inventory_id)
-// ✅ V19.0: NO global isStockAlreadyDeducted() check
-// ✅ V19.0: Kila item ina safety check yake
-// ✅ V19.0: Lab-linked equipment query HAINA lte.branch_id = lt.branch_id
-// ✅ V19.0: Inatumia bill_items.id kwa reference_id (SAHIHI)
+// ✅ V21: MULTI-BATCH DISPLAY FIX - Group medications kama 1 row
+// ✅ V21: ZENCOF Batch A + Batch B = 1 row × 100 (2 Batches badge)
+// ✅ V21: Stock deduction inachukua batches zote (FIFO)
+// ✅ V20: Multi-batch medication deduction (group by medication_name)
+// ✅ V20: Safety check inatumia reference_id TU
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -67,14 +64,77 @@ $message_type = '';
 $currency = 'TSh';
 
 // ================================================================
-// ✅ V20.0: SAFETY CHECK - Check if item already deducted
-// ✅ FIX: Kwa medication, tumia reference_id TU (sio inventory_id)
+// ✅ V21: GROUP BILL ITEMS FOR DISPLAY (multi-batch = 1 row)
+// ================================================================
+function groupBillItemsForDisplay($items) {
+    $display_items = [];
+    $medication_groups = [];
+    
+    foreach ($items as $item) {
+        $is_medication = ($item['item_type'] === 'medication');
+        $is_multi_batch = ($is_medication && $item['reference_type'] === 'prescription' && $item['reference_id'] > 0);
+        
+        if ($is_multi_batch) {
+            $clean_name = preg_replace('/\s*\(Batch:.*?\)\s*/i', '', $item['item_name'] ?? '');
+            $clean_name = trim($clean_name);
+            $group_key = 'med_' . $item['reference_id'] . '_' . md5($clean_name);
+            
+            if (!isset($medication_groups[$group_key])) {
+                $medication_groups[$group_key] = [
+                    'type' => 'group',
+                    'item_type' => 'medication',
+                    'item_name' => $clean_name,
+                    'item_ids' => [],
+                    'total_qty' => 0,
+                    'total_price' => 0,
+                    'is_paid' => true,
+                    'is_locked' => false,
+                    'is_partial' => false,
+                    'prescription_status' => $item['prescription_status'] ?? 'pending',
+                    'reference_id' => $item['reference_id'],
+                    'reference_type' => $item['reference_type'],
+                    'batch_count' => 0,
+                    'batch_numbers' => [],
+                    'first_item' => $item
+                ];
+            }
+            
+            $medication_groups[$group_key]['item_ids'][] = $item['id'];
+            $medication_groups[$group_key]['total_qty'] += (int)($item['quantity'] ?? 0);
+            $medication_groups[$group_key]['total_price'] += (float)($item['total_price'] ?? 0);
+            $medication_groups[$group_key]['batch_count']++;
+            
+            if ($item['status'] !== 'paid') $medication_groups[$group_key]['is_paid'] = false;
+            if ($item['status'] === 'partial') $medication_groups[$group_key]['is_partial'] = true;
+            
+            if ($item['status'] !== 'paid' && $item['status'] !== 'cancelled') {
+                $pres_status = $item['prescription_status'] ?? 'pending';
+                if ($pres_status !== 'confirmed' && $pres_status !== 'dispensed') {
+                    $medication_groups[$group_key]['is_locked'] = true;
+                }
+            }
+            
+            if (!empty($item['batch_number'])) {
+                $medication_groups[$group_key]['batch_numbers'][] = $item['batch_number'];
+            }
+        } else {
+            $display_items[] = ['type' => 'single', 'item' => $item];
+        }
+    }
+    
+    foreach ($medication_groups as $group) {
+        $display_items[] = $group;
+    }
+    
+    return $display_items;
+}
+
+// ================================================================
+// ✅ V20: SAFETY CHECK
 // ================================================================
 function isStockAlreadyDeductedForItem($db, $item_type, $reference_type, $reference_id, $stock_id, $branch_id) {
     try {
         if ($item_type === 'medication') {
-            // ✅ V20.0 FIX: Check kwa reference_type + reference_id TU
-            // Sababu multi-batch inaweza kuwa na inventory_id tofauti kwa prescription moja
             $stmt = $db->prepare("
                 SELECT COUNT(*) as cnt FROM stock_movements 
                 WHERE reference_type = ? 
@@ -103,7 +163,7 @@ function isStockAlreadyDeductedForItem($db, $item_type, $reference_type, $refere
 }
 
 // ================================================================
-// ✅ V20.0: DEDUCT MEDICATION STOCK (FIFO) - MULTI-BATCH AWARE
+// ✅ V20: DEDUCT MEDICATION STOCK (FIFO)
 // ================================================================
 function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $user_id, $patient_id, $reference_type = 'prescription', $reference_id = 0, $prescription_number = '') {
     $result = ['deducted' => 0, 'remaining' => $quantity, 'details' => [], 'errors' => [], 'skipped' => false];
@@ -112,14 +172,8 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
         $needed = (int)$quantity;
         if ($needed <= 0) return $result;
         
-        error_log("═══════════════════════════════════════════════════");
-        error_log("💊 V20.0 deductMedicationStock CALLED");
-        error_log("   medication: $medication_name");
-        error_log("   quantity: $quantity");
-        error_log("   reference: $reference_type #$reference_id");
-        error_log("   branch: $branch_id");
+        error_log("💊 V21 deductMedicationStock: $medication_name qty=$quantity ref=$reference_type#$reference_id");
         
-        // ✅ V20.0: SAFETY CHECK (kwa reference_id TU)
         if ($reference_type === 'prescription' && $reference_id > 0) {
             $stmt_check = $db->prepare("
                 SELECT COUNT(*) as cnt FROM stock_movements 
@@ -132,7 +186,7 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
             $existing = (int)$stmt_check->fetch(PDO::FETCH_ASSOC)['cnt'];
             
             if ($existing > 0) {
-                error_log("⏭️ V20.0: Medication deduction SKIPPED - Rx #$reference_id already deducted");
+                error_log("⏭️ V21: SKIPPED - Rx #$reference_id already deducted");
                 $result['skipped'] = true;
                 $result['errors'][] = "Rx #$reference_id already deducted";
                 return $result;
@@ -162,7 +216,6 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
         
         if (empty($batches)) {
             $result['errors'][] = "No active batches found for $clean_name";
-            error_log("⚠️ V20.0: No batches found for $clean_name");
             return $result;
         }
         
@@ -182,7 +235,7 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
             $result['details'][] = "{$batch['batch_number']}: {$available} → {$new_stock}";
             
             try {
-                $notes = "V20.0 - Dispensed at full payment";
+                $notes = "V21 - Dispensed";
                 if (!empty($prescription_number)) $notes .= " - Rx #{$prescription_number}";
                 $notes .= " - Qty: {$deduct} - Batch: " . ($batch['batch_number'] ?? 'N/A');
                 
@@ -196,7 +249,7 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
                     $reference_type, $reference_id, $user_id, $branch_id, $notes
                 ]);
             } catch (Exception $e) {
-                error_log("V20.0 stock_movements insert error (med): " . $e->getMessage());
+                error_log("V21 stock_movements error: " . $e->getMessage());
             }
             
             $needed -= $deduct;
@@ -204,18 +257,17 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
         
         if ($needed > 0) {
             $result['errors'][] = "Insufficient stock for $clean_name (needed {$needed} more)";
-            error_log("⚠️ V20.0: Insufficient stock for $clean_name - needed $needed more");
         }
     } catch (Exception $e) {
         $result['errors'][] = "System error: " . $e->getMessage();
-        error_log("V20.0 deductMedicationStock error: " . $e->getMessage());
+        error_log("V21 deductMedicationStock error: " . $e->getMessage());
     }
     
     return $result;
 }
 
 // ================================================================
-// ✅ V20.0: DEDUCT EQUIPMENT STOCK
+// ✅ V20: DEDUCT EQUIPMENT STOCK
 // ================================================================
 function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_id, $patient_id, $reference_type = 'procedure', $reference_id = 0, $notes = '') {
     $result = ['deducted' => 0, 'details' => [], 'errors' => [], 'skipped' => false];
@@ -229,7 +281,6 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
             return $result;
         }
         
-        // SAFETY CHECK
         $stmt_check = $db->prepare("
             SELECT COUNT(*) as cnt FROM stock_movements 
             WHERE equipment_id = ? 
@@ -242,9 +293,9 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
         $existing = (int)$stmt_check->fetch(PDO::FETCH_ASSOC)['cnt'];
         
         if ($existing > 0) {
-            error_log("⏭️ V20.0: Equipment #$eq_id SKIPPED - reference $reference_type #$reference_id already deducted");
+            error_log("⏭️ V21: Equipment #$eq_id SKIPPED");
             $result['skipped'] = true;
-            $result['errors'][] = "Equipment #$eq_id already deducted for $reference_type #$reference_id";
+            $result['errors'][] = "Equipment #$eq_id already deducted";
             return $result;
         }
         
@@ -258,7 +309,7 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
         $equip = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if (!$equip) {
-            $result['errors'][] = "Equipment #$eq_id not found in branch $branch_id";
+            $result['errors'][] = "Equipment #$eq_id not found";
             return $result;
         }
         
@@ -270,7 +321,7 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
         $previous_stock = (int)$equip['stock'];
         
         if ($previous_stock < $qty) {
-            $result['errors'][] = "Insufficient stock for {$equip['equipment_name']} (have: $previous_stock, need: $qty)";
+            $result['errors'][] = "Insufficient stock for {$equip['equipment_name']}";
             return $result;
         }
         
@@ -283,9 +334,8 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
         $result['details'][] = "{$equip['equipment_name']}: {$previous_stock} → {$new_stock}";
         
         try {
-            $log_notes = !empty($notes) ? $notes : "V20.0 - Equipment used";
+            $log_notes = !empty($notes) ? $notes : "V21 - Equipment used";
             $log_notes .= " | Batch: " . ($equip['batch_number'] ?? 'N/A');
-            $log_notes .= " | Stock: {$previous_stock} → {$new_stock}";
             
             $db->prepare("
                 INSERT INTO stock_movements 
@@ -296,42 +346,32 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
                 $eq_id, $patient_id, $qty, $previous_stock, $new_stock,
                 $reference_type, $reference_id, $user_id, $branch_id, $log_notes
             ]);
-            
-            error_log("✅ V20.0: Equipment {$equip['equipment_name']} deducted $qty ($previous_stock → $new_stock) for $reference_type #$reference_id");
         } catch (Exception $e) {
-            error_log("V20.0 stock_movements insert error (equip): " . $e->getMessage());
+            error_log("V21 stock_movements equipment error: " . $e->getMessage());
         }
     } catch (Exception $e) {
         $result['errors'][] = "System error: " . $e->getMessage();
-        error_log("V20.0 deductEquipmentStock error: " . $e->getMessage());
+        error_log("V21 deductEquipmentStock error: " . $e->getMessage());
     }
     
     return $result;
 }
 
 // ================================================================
-// ✅ V20.0: DEDUCT ALL STOCK FOR PAID BILL - MULTI-BATCH FIX
-// ✅ Group by medication_name kabla ya deduct
-// ✅ Safety check inatumia reference_id TU
+// ✅ V21: DEDUCT ALL STOCK FOR PAID BILL
 // ================================================================
 function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
     $result = [
-        'medications_deducted' => 0,
-        'medication_items' => 0,
-        'equipment_deducted' => 0,
-        'equipment_items' => 0,
-        'lab_equipment_deducted' => 0,
-        'lab_equipment_items' => 0,
-        'skipped' => 0,
-        'errors' => []
+        'medications_deducted' => 0, 'medication_items' => 0,
+        'equipment_deducted' => 0, 'equipment_items' => 0,
+        'lab_equipment_deducted' => 0, 'lab_equipment_items' => 0,
+        'skipped' => 0, 'errors' => []
     ];
     
     try {
-        error_log("═══════════════════════════════════════════════════════");
-        error_log("🔍 V20.0: deductAllStockForPaidBill START - Bill #$bill_id");
-        error_log("═══════════════════════════════════════════════════════");
+        error_log("═══════════════════════════════════════════════════");
+        error_log("🔍 V21: deductAllStockForPaidBill - Bill #$bill_id");
         
-        // SAFETY CHECK 1: Verify bill is FULLY PAID
         $stmt_check = $db->prepare("SELECT status, balance, visit_id FROM bills WHERE id = ? AND branch_id = ? FOR UPDATE");
         $stmt_check->execute([$bill_id, $branch_id]);
         $bill_check = $stmt_check->fetch(PDO::FETCH_ASSOC);
@@ -342,15 +382,13 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
         }
         
         if ($bill_check['status'] !== 'paid' || (float)$bill_check['balance'] > 0.01) {
-            error_log("⏭️ V20.0: Bill #$bill_id NOT fully paid - SKIPPING");
+            error_log("⏭️ V21: Bill #$bill_id NOT fully paid - SKIPPING");
             return $result;
         }
         
         $bill_visit_id = (int)$bill_check['visit_id'];
         
-        // ============================================================
-        // 1. MEDICATIONS FROM PRESCRIPTIONS - ✅ V20 MULTI-BATCH FIX
-        // ============================================================
+        // 1. MEDICATIONS
         $stmt = $db->prepare("
             SELECT DISTINCT p.id as prescription_id, p.patient_id, p.prescription_number
             FROM prescriptions p
@@ -363,14 +401,11 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
         $stmt->execute([$bill_id, $branch_id]);
         $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
-        error_log("💊 V20.0: Found " . count($prescriptions) . " prescriptions");
-        
         foreach ($prescriptions as $pres) {
             $prescription_id = $pres['prescription_id'];
             $patient_id = $pres['patient_id'];
             $prescription_number = $pres['prescription_number'];
             
-            // SAFETY CHECK 2: Check if already dispensed
             $stmt_check_disp = $db->prepare("
                 SELECT COUNT(*) as dispensed_count 
                 FROM prescription_items 
@@ -380,14 +415,12 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
             $already_dispensed = (int)$stmt_check_disp->fetch(PDO::FETCH_ASSOC)['dispensed_count'];
             
             if ($already_dispensed > 0) {
-                error_log("⏭️ V20.0: Rx #$prescription_number already dispensed - SKIPPING");
+                error_log("⏭️ V21: Rx #$prescription_number already dispensed");
                 $result['skipped']++;
                 continue;
             }
             
-            // ✅ V20 FIX: GROUP prescription_items by medication_name
-            // Kwa multi-batch, prescription moja inaweza kuwa na items 2+ za dawa moja
-            // Mfano: Amoxclave Batch A (qty 6) + Batch B (qty 8) = total 14
+            // Group kwa medication_name
             $stmt_items = $db->prepare("
                 SELECT 
                     medication_name,
@@ -409,9 +442,8 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
                 $total_qty = (int)$item['total_quantity'];
                 $batch_count = (int)$item['batch_count'];
                 
-                error_log("🔍 V20.0: Deducting $med_name qty=$total_qty (from $batch_count batches: {$item['batch_details']})");
+                error_log("💊 V21: Deducting $med_name qty=$total_qty (from $batch_count batches)");
                 
-                // ✅ V20 FIX: Deduct JUMLA mara MOJA (sio kila batch)
                 $deduct_result = deductMedicationStock(
                     $db, $med_name, $total_qty, $branch_id, $user_id, $patient_id,
                     'prescription', $prescription_id, $prescription_number
@@ -420,18 +452,13 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
                 if ($deduct_result['deducted'] > 0) {
                     $result['medications_deducted'] += $deduct_result['deducted'];
                     $result['medication_items']++;
-                    error_log("✅ V20.0: $med_name deducted={$deduct_result['deducted']} (details: " . implode(', ', $deduct_result['details']) . ")");
                 }
-                if ($deduct_result['skipped']) {
-                    $result['skipped']++;
-                }
+                if ($deduct_result['skipped']) $result['skipped']++;
                 if (!empty($deduct_result['errors'])) {
                     $result['errors'] = array_merge($result['errors'], $deduct_result['errors']);
-                    error_log("⚠️ V20.0: $med_name errors: " . implode(', ', $deduct_result['errors']));
                 }
             }
             
-            // Mark prescription as dispensed
             $db->prepare("
                 UPDATE prescriptions 
                 SET status = 'dispensed', dispensed_at = NOW(), updated_at = NOW(), pharmacy_id = ?
@@ -445,9 +472,7 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
             ")->execute([$user_id, $prescription_id]);
         }
         
-        // ============================================================
-        // 2. EQUIPMENT (DIRECT BILL ITEMS)
-        // ============================================================
+        // 2. EQUIPMENT
         $stmt = $db->prepare("
             SELECT bi.id as bill_item_id, bi.item_id as equipment_id, bi.quantity, 
                    bi.item_name, me.equipment_name
@@ -461,8 +486,6 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
         ");
         $stmt->execute([$bill_id, $branch_id]);
         $equipment_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        error_log("🛠️ V20.0: Found " . count($equipment_items) . " direct equipment items");
         
         foreach ($equipment_items as $eq) {
             $equipment_id = (int)$eq['equipment_id'];
@@ -478,39 +501,26 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
             $deduct_result = deductEquipmentStock(
                 $db, $equipment_id, $qty_needed, $branch_id, $user_id, $patient_id,
                 'equipment', $bill_item_id,
-                "V20.0 - Equipment - Bill #{$bill_id} - {$eq['equipment_name']}"
+                "V21 - Equipment - Bill #{$bill_id} - {$eq['equipment_name']}"
             );
             
             if ($deduct_result['deducted'] > 0) {
                 $result['equipment_deducted'] += $deduct_result['deducted'];
                 $result['equipment_items']++;
             }
-            if ($deduct_result['skipped']) {
-                $result['skipped']++;
-            }
+            if ($deduct_result['skipped']) $result['skipped']++;
             if (!empty($deduct_result['errors'])) {
                 $result['errors'] = array_merge($result['errors'], $deduct_result['errors']);
             }
         }
         
-        // ============================================================
         // 3. LAB-LINKED EQUIPMENT
-        // ============================================================
         if ($bill_visit_id > 0) {
-            error_log("🧪 V20.0: Querying lab-linked equipment for bill #$bill_id (visit_id: $bill_visit_id)");
-            
             $stmt = $db->prepare("
                 SELECT 
-                    lt.id as lab_test_id,
-                    lt.test_id,
-                    lt.test_name,
-                    lt.patient_id,
-                    lt.branch_id,
-                    lt.visit_id,
-                    lt.doctor_id,
-                    lte.equipment_id,
-                    me.equipment_name,
-                    me.quantity as current_stock
+                    lt.id as lab_test_id, lt.test_id, lt.test_name, lt.patient_id,
+                    lt.branch_id, lt.visit_id,
+                    lte.equipment_id, me.equipment_name, me.quantity as current_stock
                 FROM lab_tests lt
                 INNER JOIN lab_test_equipment lte 
                     ON lte.lab_test_id = lt.test_id
@@ -525,56 +535,42 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
             $stmt->execute([$branch_id, $bill_visit_id]);
             $lab_equipment_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
-            error_log("🧪 V20.0: Found " . count($lab_equipment_items) . " lab-equipment links");
-            
             foreach ($lab_equipment_items as $eq) {
                 $equipment_id = (int)$eq['equipment_id'];
                 $lab_test_id = (int)$eq['lab_test_id'];
                 $patient_id = (int)$eq['patient_id'];
-                $quantity_used = 1;
                 
                 if ($equipment_id <= 0) continue;
                 
                 $deduct_result = deductEquipmentStock(
-                    $db, $equipment_id, $quantity_used, $branch_id, $user_id, $patient_id,
+                    $db, $equipment_id, 1, $branch_id, $user_id, $patient_id,
                     'lab_test', $lab_test_id,
-                    "V20.0 - Lab equipment - {$eq['test_name']} - Lab #{$lab_test_id}"
+                    "V21 - Lab equipment - {$eq['test_name']} - Lab #{$lab_test_id}"
                 );
                 
                 if ($deduct_result['deducted'] > 0) {
                     $result['lab_equipment_deducted'] += $deduct_result['deducted'];
                     $result['lab_equipment_items']++;
-                    error_log("✅ V20.0: Deducted {$deduct_result['deducted']} x {$eq['equipment_name']} for Lab #{$lab_test_id}");
                 }
-                if ($deduct_result['skipped']) {
-                    $result['skipped']++;
-                }
+                if ($deduct_result['skipped']) $result['skipped']++;
                 if (!empty($deduct_result['errors'])) {
                     $result['errors'] = array_merge($result['errors'], $deduct_result['errors']);
                 }
             }
-        } else {
-            error_log("⚠️ V20.0: Bill #$bill_id has no visit_id - skipping lab equipment");
         }
         
-        error_log("═══════════════════════════════════════════════════════");
-        error_log("✅ V20.0: Bill #$bill_id done");
-        error_log("   Meds: {$result['medications_deducted']} qty");
-        error_log("   Equipment: {$result['equipment_deducted']} qty");
-        error_log("   Lab Equipment: {$result['lab_equipment_deducted']} qty");
-        error_log("   Skipped: {$result['skipped']}");
-        error_log("═══════════════════════════════════════════════════════");
+        error_log("✅ V21: Bill #$bill_id done - Meds: {$result['medications_deducted']}, Equip: {$result['equipment_deducted']}, Lab: {$result['lab_equipment_deducted']}");
         
     } catch (Exception $e) {
         $result['errors'][] = "System error: " . $e->getMessage();
-        error_log("V20.0 deductAllStockForPaidBill error: " . $e->getMessage());
+        error_log("V21 deductAllStockForPaidBill error: " . $e->getMessage());
     }
     
     return $result;
 }
 
 // ================================================================
-// ✅ V20.0: HELPER FUNCTIONS
+// HELPER FUNCTIONS
 // ================================================================
 function syncProceduresStatus($db, $bill_id, $branch_id) {
     try {
@@ -899,27 +895,19 @@ try {
                 $items_updated = smartUpdateBillItems($db, $bill_id_post, $amount_to_pay, $is_fully_paid);
                 $procedures_synced = syncProceduresStatus($db, $bill_id_post, $user_branch_id);
                 
-                // ============================================================
-                // ✅ V20.0: FULL STOCK DEDUCTION ON FULL PAYMENT
-                // ✅ MULTI-BATCH FIX - Group by medication_name
-                // ============================================================
                 $stock_result = [
-                    'medications_deducted' => 0,
-                    'medication_items' => 0,
-                    'equipment_deducted' => 0,
-                    'equipment_items' => 0,
-                    'lab_equipment_deducted' => 0,
-                    'lab_equipment_items' => 0,
-                    'skipped' => 0,
-                    'errors' => []
+                    'medications_deducted' => 0, 'medication_items' => 0,
+                    'equipment_deducted' => 0, 'equipment_items' => 0,
+                    'lab_equipment_deducted' => 0, 'lab_equipment_items' => 0,
+                    'skipped' => 0, 'errors' => []
                 ];
                 
                 if ($is_fully_paid) {
                     $stock_result = deductAllStockForPaidBill($db, $bill_id_post, $user_branch_id, $user_id);
-                    error_log("✅ V20.0 STOCK DEDUCTED: Bill #$bill_id_post → Meds: {$stock_result['medications_deducted']}, Equip: {$stock_result['equipment_deducted']}, Lab: {$stock_result['lab_equipment_deducted']}, Skipped: {$stock_result['skipped']}");
+                    error_log("✅ V21 STOCK DEDUCTED: Bill #$bill_id_post → Meds: {$stock_result['medications_deducted']}, Equip: {$stock_result['equipment_deducted']}, Lab: {$stock_result['lab_equipment_deducted']}");
                 }
                 
-                $notes = 'V20.0 Payment | Pharm Disc: ' . $currency . ' ' . number_format($total_pharmacy_discount, 0) . ' | Cashier Disc: ' . $currency . ' ' . number_format($total_cashier_discount, 0);
+                $notes = 'V21 Payment | Pharm Disc: ' . $currency . ' ' . number_format($total_pharmacy_discount, 0) . ' | Cashier Disc: ' . $currency . ' ' . number_format($total_cashier_discount, 0);
                 if ($total_premium > 0) {
                     $notes .= ' | Pharm Prem: ' . $currency . ' ' . number_format($total_pharmacy_premium, 0);
                     $notes .= ' | Cashier Prem: ' . $currency . ' ' . number_format($total_cashier_premium, 0);
@@ -952,19 +940,16 @@ try {
                     if ($procedures_synced > 0) $message .= "<br>🩺 " . $procedures_synced . " procedure(s) SYNCED";
                     
                     if ($stock_result['medications_deducted'] > 0) {
-                        $message .= "<br>💊 <strong>" . $stock_result['medications_deducted'] . "</strong> medication qty deducted ({$stock_result['medication_items']} items)";
+                        $message .= "<br>💊 <strong>" . $stock_result['medications_deducted'] . "</strong> medication qty deducted";
                     }
                     if ($stock_result['equipment_deducted'] > 0) {
-                        $message .= "<br>🛠️ <strong>" . $stock_result['equipment_deducted'] . "</strong> equipment qty deducted ({$stock_result['equipment_items']} items)";
+                        $message .= "<br>🛠️ <strong>" . $stock_result['equipment_deducted'] . "</strong> equipment qty deducted";
                     }
                     if ($stock_result['lab_equipment_deducted'] > 0) {
-                        $message .= "<br>🧪 <strong>" . $stock_result['lab_equipment_deducted'] . "</strong> lab equipment qty deducted ({$stock_result['lab_equipment_items']} items)";
+                        $message .= "<br>🧪 <strong>" . $stock_result['lab_equipment_deducted'] . "</strong> lab equipment qty deducted";
                     }
                     if ($stock_result['skipped'] > 0) {
-                        $message .= "<br>⏭️ " . $stock_result['skipped'] . " item(s) skipped (already deducted)";
-                    }
-                    if (!empty($stock_result['errors'])) {
-                        $message .= "<br>⚠️ " . count($stock_result['errors']) . " stock issue(s)";
+                        $message .= "<br>⏭️ " . $stock_result['skipped'] . " item(s) skipped";
                     }
                 } else {
                     $message .= "<br>💰 Remaining: <strong>" . $currency . " " . number_format($new_balance, 0) . "</strong>";
@@ -987,7 +972,7 @@ try {
             } catch (Exception $e) {
                 $db->rollBack();
                 echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
-                error_log("❌ V20.0 Payment error: " . $e->getMessage());
+                error_log("❌ V21 Payment error: " . $e->getMessage());
             }
             exit;
         }
@@ -997,7 +982,7 @@ try {
     }
 
     // ================================================================
-    // ✅ V20.0: GET BILL - NO AUTO-REPAIR!
+    // GET BILL
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
@@ -1058,13 +1043,16 @@ try {
     
     $stmt = $db->prepare("
         SELECT bi.*,
-            (SELECT status FROM prescriptions WHERE id = bi.reference_id AND reference_type = 'prescription') as prescription_status
+            (SELECT status FROM prescriptions WHERE id = bi.reference_id AND bi.reference_type = 'prescription') as prescription_status
         FROM bill_items bi
         WHERE bi.bill_id = ? AND bi.status != 'cancelled'
         ORDER BY bi.status DESC, bi.item_type ASC, bi.created_at ASC
     ");
     $stmt->execute([$bill_id]);
     $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // ✅ V21: Group kwa display
+    $display_items = groupBillItemsForDisplay($bill_items);
 
     $bill_status = $bill['status'] ?? 'pending';
     $is_paid = ($remaining_balance <= 0.01);
@@ -1074,7 +1062,7 @@ try {
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
-    $bill = null; $bill_items = [];
+    $bill = null; $bill_items = []; $display_items = [];
     $subtotal = 0; $paid_amount = 0; $db_balance = 0; $remaining_balance = 0;
     $total_discount = 0; $pharmacy_discount = 0; $cashier_discount = 0;
     $pharmacy_premium = 0; $cashier_premium = 0; $total_premium = 0;
@@ -1280,7 +1268,7 @@ include_once '../../components/cashier_sidebar.php';
             font-weight: 700;
         }
         
-        .page-header .header-badge.v20-badge {
+        .page-header .header-badge.v21-badge {
             background: rgba(16,185,129,0.35);
             color: #A7F3D0;
             border-color: rgba(16,185,129,0.5);
@@ -1473,6 +1461,28 @@ include_once '../../components/cashier_sidebar.php';
         .data-table tbody tr.locked-item td {
             background: var(--locked-bg) !important;
             opacity: 0.85;
+        }
+        
+        /* ✅ V21: Multi-batch badge */
+        .multi-batch-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 0.55rem;
+            font-weight: 800;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+            color: #1E40AF;
+            border: 1px solid #60A5FA;
+            margin-left: 6px;
+            text-transform: uppercase;
+        }
+        
+        [data-theme="dark"] .multi-batch-badge {
+            background: linear-gradient(135deg, #1E3A5F, #1E40AF);
+            color: #93C5FD;
+            border-color: #3B82F6;
         }
         
         .payment-controls-wrapper {
@@ -1795,7 +1805,6 @@ include_once '../../components/cashier_sidebar.php';
 
 <main class="main-content">
 
-    <!-- PAGE HEADER -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1807,8 +1816,8 @@ include_once '../../components/cashier_sidebar.php';
                         <i class="fas fa-crown"></i> Premium: <?= $currency ?> <?= number_format($existing_premium, 0) ?>
                     </span>
                 <?php endif; ?>
-                <span class="header-badge v20-badge">
-                    <i class="fas fa-shield-alt"></i> V20.0 - MULTI-BATCH FIX
+                <span class="header-badge v21-badge">
+                    <i class="fas fa-shield-alt"></i> V21.0 - MULTI-BATCH DISPLAY FIX
                 </span>
             </h1>
             <p class="page-subtitle">
@@ -1832,7 +1841,6 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- BILL CARD -->
     <div class="bill-card">
         <div class="card-header">
             <div>
@@ -1927,68 +1935,115 @@ include_once '../../components/cashier_sidebar.php';
                         </tr>
                     </thead>
                     <tbody>
-                        <?php if (count($bill_items) > 0): ?>
-                            <?php $i = 1; foreach ($bill_items as $item): 
-                                $is_item_paid = ($item['status'] === 'paid');
-                                $is_item_partial = ($item['status'] === 'partial');
-                                $is_medication = ($item['item_type'] === 'medication');
-                                $is_equipment = ($item['item_type'] === 'equipment');
-                                $pres_status = $item['prescription_status'] ?? 'pending';
-                                $is_item_locked = ($is_medication && $item['reference_type'] === 'prescription' && $pres_status !== 'confirmed' && $pres_status !== 'dispensed');
-                                $price = (float)($item['total_price'] ?? $item['unit_price'] ?? 0);
-                                $unit_price = (float)($item['unit_price'] ?? 0);
-                                $qty = (int)($item['quantity'] ?? 1);
+                        <?php if (count($display_items) > 0): ?>
+                            <?php $i = 1; foreach ($display_items as $display_item): 
+                                if ($display_item['type'] === 'group'):
+                                    // ✅ V21: Multi-batch group display
+                                    $is_item_paid = $display_item['is_paid'];
+                                    $is_item_partial = $display_item['is_partial'];
+                                    $is_item_locked = $display_item['is_locked'];
+                                    $price = $display_item['total_price'];
+                                    $qty = $display_item['total_qty'];
+                                    $batch_count = $display_item['batch_count'];
+                                    $item_name = $display_item['item_name'];
+                                    $unit_price = $batch_count > 0 ? ($price / $qty) : 0;
                             ?>
-                            <tr class="<?= $is_item_paid ? 'paid-item' : '' ?> <?= $is_item_locked ? 'locked-item' : '' ?>">
-                                <td><?= $i++ ?></td>
-                                <td>
-                                    <div style="display:flex;align-items:center;gap:8px;">
-                                        <?php if ($is_medication): ?>
+                                <tr class="<?= $is_item_paid ? 'paid-item' : '' ?> <?= $is_item_locked ? 'locked-item' : '' ?>">
+                                    <td><?= $i++ ?></td>
+                                    <td>
+                                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                                             <i class="fas fa-pills" style="color:var(--success);"></i>
-                                        <?php elseif ($is_equipment): ?>
-                                            <i class="fas fa-tools" style="color:var(--warning);"></i>
-                                        <?php elseif ($item['item_type'] === 'lab_test'): ?>
-                                            <i class="fas fa-flask" style="color:#0EA5E9;"></i>
-                                        <?php elseif ($item['item_type'] === 'procedure'): ?>
-                                            <i class="fas fa-syringe" style="color:var(--purple);"></i>
-                                        <?php elseif ($item['item_type'] === 'consultation'): ?>
-                                            <i class="fas fa-stethoscope" style="color:var(--primary);"></i>
-                                        <?php else: ?>
-                                            <i class="fas fa-cube"></i>
-                                        <?php endif; ?>
-                                        <strong><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></strong>
-                                    </div>
-                                    <?php if ($is_item_locked): ?>
-                                        <div style="font-size:0.5rem;color:var(--locked-color);margin-top:2px;">
-                                            <i class="fas fa-lock"></i> Waiting pharmacy
+                                            <strong><?= htmlspecialchars($item_name) ?></strong>
+                                            <span class="multi-batch-badge"><i class="fas fa-layer-group"></i> <?= $batch_count ?> Batches</span>
                                         </div>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <span style="font-size:0.55rem;background:var(--bg-body);padding:1px 8px;border-radius:4px;border:1px solid var(--border-color);">
-                                        <?= ucfirst($item['item_type'] ?? 'item') ?>
-                                    </span>
-                                </td>
-                                <td style="text-align:center;"><?= $qty ?></td>
-                                <td style="text-align:right;"><?= $currency ?> <?= number_format($unit_price, 0) ?></td>
-                                <td style="text-align:right;font-weight:600;<?= $is_item_paid ? 'color:var(--success);' : ($is_item_partial ? 'color:var(--warning);' : 'color:var(--danger);') ?>">
-                                    <?= $currency ?> <?= number_format($price, 0) ?>
-                                </td>
-                                <td style="text-align:center;">
-                                    <?php if ($is_item_locked): ?>
-                                        <span style="font-size:0.55rem;font-weight:600;padding:3px 12px;border-radius:12px;background:var(--locked-bg);color:var(--locked-color);border:1px solid var(--locked-color);">
-                                            <i class="fas fa-lock"></i> Locked
+                                    </td>
+                                    <td>
+                                        <span style="font-size:0.55rem;background:var(--bg-body);padding:1px 8px;border-radius:4px;border:1px solid var(--border-color);">
+                                            Medication
                                         </span>
-                                    <?php elseif ($is_item_paid): ?>
-                                        <span style="font-size:0.55rem;font-weight:600;padding:3px 12px;border-radius:12px;background:var(--success-bg);color:var(--success);">✅ Paid</span>
-                                    <?php elseif ($is_item_partial): ?>
-                                        <span style="font-size:0.55rem;font-weight:600;padding:3px 12px;border-radius:12px;background:var(--warning-bg);color:var(--warning);">🔄 Partial</span>
-                                    <?php else: ?>
-                                        <span style="font-size:0.55rem;font-weight:600;padding:3px 12px;border-radius:12px;background:var(--warning-bg);color:var(--warning);">⏳ Pending</span>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                            <?php endforeach; ?>
+                                    </td>
+                                    <td style="text-align:center;font-weight:700;"><?= $qty ?></td>
+                                    <td style="text-align:right;"><?= $currency ?> <?= number_format($unit_price, 0) ?></td>
+                                    <td style="text-align:right;font-weight:600;<?= $is_item_paid ? 'color:var(--success);' : ($is_item_partial ? 'color:var(--warning);' : 'color:var(--danger);') ?>">
+                                        <?= $currency ?> <?= number_format($price, 0) ?>
+                                    </td>
+                                    <td style="text-align:center;">
+                                        <?php if ($is_item_locked): ?>
+                                            <span style="font-size:0.55rem;font-weight:600;padding:3px 12px;border-radius:12px;background:var(--locked-bg);color:var(--locked-color);border:1px solid var(--locked-color);">
+                                                <i class="fas fa-lock"></i> Locked
+                                            </span>
+                                        <?php elseif ($is_item_paid): ?>
+                                            <span style="font-size:0.55rem;font-weight:600;padding:3px 12px;border-radius:12px;background:var(--success-bg);color:var(--success);">✅ Paid</span>
+                                        <?php elseif ($is_item_partial): ?>
+                                            <span style="font-size:0.55rem;font-weight:600;padding:3px 12px;border-radius:12px;background:var(--warning-bg);color:var(--warning);">🔄 Partial</span>
+                                        <?php else: ?>
+                                            <span style="font-size:0.55rem;font-weight:600;padding:3px 12px;border-radius:12px;background:var(--warning-bg);color:var(--warning);">⏳ Pending</span>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php 
+                                else: 
+                                    $item = $display_item['item'];
+                                    $is_item_paid = ($item['status'] === 'paid');
+                                    $is_item_partial = ($item['status'] === 'partial');
+                                    $is_medication = ($item['item_type'] === 'medication');
+                                    $is_equipment = ($item['item_type'] === 'equipment');
+                                    $pres_status = $item['prescription_status'] ?? 'pending';
+                                    $is_item_locked = ($is_medication && $item['reference_type'] === 'prescription' && $pres_status !== 'confirmed' && $pres_status !== 'dispensed');
+                                    $price = (float)($item['total_price'] ?? $item['unit_price'] ?? 0);
+                                    $unit_price = (float)($item['unit_price'] ?? 0);
+                                    $qty = (int)($item['quantity'] ?? 1);
+                            ?>
+                                <tr class="<?= $is_item_paid ? 'paid-item' : '' ?> <?= $is_item_locked ? 'locked-item' : '' ?>">
+                                    <td><?= $i++ ?></td>
+                                    <td>
+                                        <div style="display:flex;align-items:center;gap:8px;">
+                                            <?php if ($is_medication): ?>
+                                                <i class="fas fa-pills" style="color:var(--success);"></i>
+                                            <?php elseif ($is_equipment): ?>
+                                                <i class="fas fa-tools" style="color:var(--warning);"></i>
+                                            <?php elseif ($item['item_type'] === 'lab_test'): ?>
+                                                <i class="fas fa-flask" style="color:#0EA5E9;"></i>
+                                            <?php elseif ($item['item_type'] === 'procedure'): ?>
+                                                <i class="fas fa-syringe" style="color:var(--purple);"></i>
+                                            <?php elseif ($item['item_type'] === 'consultation'): ?>
+                                                <i class="fas fa-stethoscope" style="color:var(--primary);"></i>
+                                            <?php else: ?>
+                                                <i class="fas fa-cube"></i>
+                                            <?php endif; ?>
+                                            <strong><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></strong>
+                                        </div>
+                                        <?php if ($is_item_locked): ?>
+                                            <div style="font-size:0.5rem;color:var(--locked-color);margin-top:2px;">
+                                                <i class="fas fa-lock"></i> Waiting pharmacy
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <span style="font-size:0.55rem;background:var(--bg-body);padding:1px 8px;border-radius:4px;border:1px solid var(--border-color);">
+                                            <?= ucfirst($item['item_type'] ?? 'item') ?>
+                                        </span>
+                                    </td>
+                                    <td style="text-align:center;"><?= $qty ?></td>
+                                    <td style="text-align:right;"><?= $currency ?> <?= number_format($unit_price, 0) ?></td>
+                                    <td style="text-align:right;font-weight:600;<?= $is_item_paid ? 'color:var(--success);' : ($is_item_partial ? 'color:var(--warning);' : 'color:var(--danger);') ?>">
+                                        <?= $currency ?> <?= number_format($price, 0) ?>
+                                    </td>
+                                    <td style="text-align:center;">
+                                        <?php if ($is_item_locked): ?>
+                                            <span style="font-size:0.55rem;font-weight:600;padding:3px 12px;border-radius:12px;background:var(--locked-bg);color:var(--locked-color);border:1px solid var(--locked-color);">
+                                                <i class="fas fa-lock"></i> Locked
+                                            </span>
+                                        <?php elseif ($is_item_paid): ?>
+                                            <span style="font-size:0.55rem;font-weight:600;padding:3px 12px;border-radius:12px;background:var(--success-bg);color:var(--success);">✅ Paid</span>
+                                        <?php elseif ($is_item_partial): ?>
+                                            <span style="font-size:0.55rem;font-weight:600;padding:3px 12px;border-radius:12px;background:var(--warning-bg);color:var(--warning);">🔄 Partial</span>
+                                        <?php else: ?>
+                                            <span style="font-size:0.55rem;font-weight:600;padding:3px 12px;border-radius:12px;background:var(--warning-bg);color:var(--warning);">⏳ Pending</span>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endif; endforeach; ?>
                         <?php else: ?>
                             <tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text-secondary);">No items found</td></tr>
                         <?php endif; ?>
@@ -2001,7 +2056,7 @@ include_once '../../components/cashier_sidebar.php';
     <footer class="footer">
         <p>
             <span style="color:var(--success);font-weight:600;">Braick Dispensary</span> Management System
-            <span>|</span> Make Payment V20.0 (Multi-Batch Fix)
+            <span>|</span> Make Payment V21.0 (Multi-Batch Display Fix)
             <span>|</span>
             <span>👤 <?= htmlspecialchars($user_full_name) ?></span>
             <span>|</span>
@@ -2013,12 +2068,10 @@ include_once '../../components/cashier_sidebar.php';
 
 </main>
 
-<!-- PAYMENT CONTROLS - 2 ROWS -->
 <?php if (!$is_paid && $remaining_balance > 0): ?>
 <div class="payment-controls-wrapper">
     <div class="payment-controls" id="paymentControls">
         
-        <!-- ROW 1: INPUTS -->
         <div class="control-row-1">
             <div class="control-group">
                 <label><i class="fas fa-hand-holding-usd"></i> Method:</label>
@@ -2065,7 +2118,6 @@ include_once '../../components/cashier_sidebar.php';
             </div>
         </div>
         
-        <!-- ROW 2: ACTIONS -->
         <div class="control-row-2">
             <div class="remaining-badge">
                 <span class="label">Remaining</span>
@@ -2086,7 +2138,6 @@ include_once '../../components/cashier_sidebar.php';
 </div>
 <?php endif; ?>
 
-<!-- TOAST -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.3rem;"></i>
     <div>
@@ -2113,11 +2164,10 @@ include_once '../../components/cashier_sidebar.php';
     var isPaid = <?= $is_paid ? 'true' : 'false' ?>;
     var visitId = <?= $visit_id_ref ?? 0 ?>;
 
-    console.log('%c💰 Make Payment V20.0 FINAL', 'font-size:16px; font-weight:bold; color:#059669;');
-    console.log('%c✅ MULTI-BATCH FIX - Group by medication_name');
-    console.log('%c✅ Safety check inatumia reference_id TU');
-    console.log('%c✅ Inachukua jumla ya quantity kwenye batches zote');
-    console.log('%c✅ SAME LOGIC AS process_payment V28');
+    console.log('%c💰 Make Payment V21.0 FINAL', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c✅ MULTI-BATCH DISPLAY FIX');
+    console.log('%c✅ ZENCOF Batch A + B = 1 row × 100');
+    console.log('%c✅ Stock deduction inachukua batches zote');
 
     (function() {
         var htmlElement = document.documentElement;
@@ -2217,7 +2267,7 @@ include_once '../../components/cashier_sidebar.php';
         
         var stockWarning = '';
         if (type === 'full') {
-            stockWarning = '\n\n⚠️ STOCK ITADEDUCT:\n💊 Medications (MULTI-BATCH)\n🛠️ Equipment\n🧪 Lab-linked equipment\n\n✅ MULTI-BATCH FIX: Batches zote zitadeduct';
+            stockWarning = '\n\n⚠️ STOCK ITADEDUCT:\n💊 Medications (MULTI-BATCH)\n🛠️ Equipment\n🧪 Lab-linked equipment\n\n✅ MULTI-BATCH: Batches zote zitadeduct';
         } else {
             stockWarning = '\n\nℹ️ Partial payment — stock HAITADEDUCT.\nStock itadeduct tu kwa FULL payment.';
         }
@@ -2312,9 +2362,8 @@ include_once '../../components/cashier_sidebar.php';
 
     document.addEventListener('DOMContentLoaded', function() {
         updateTotals();
-        console.log('✅ Make Payment V20.0 loaded');
-        console.log('✅ MULTI-BATCH FIX active');
-        console.log('✅ Group by medication_name kabla ya deduct');
+        console.log('✅ Make Payment V21.0 loaded');
+        console.log('✅ MULTI-BATCH DISPLAY FIX active');
     });
 </script>
 

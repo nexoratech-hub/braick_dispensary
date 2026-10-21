@@ -1,15 +1,16 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/process_payment.php
-// CASHIER - PROCESS PAYMENT - V28.0 FINAL - MULTI-BATCH FIX
+// CASHIER - PROCESS PAYMENT - V30.0 FINAL
 // ================================================================
-// ✅ V28: FIX MULTI-BATCH MEDICATION DEDUCTION
-// ✅ V28: Group prescription_items by medication_name kabla ya deduct
-// ✅ V28: Safety check inatumia reference_id TU (sio inventory_id)
-// ✅ V28: Inachukua jumla ya quantity kwenye batches zote
-// ✅ V27: FIX DOUBLE DEDUCTION - Lock bill + stock movements check
-// ✅ V27: Stock deduction inafanyika TU wakati wa payment
-// ✅ V27: Inatumia bill_items.id kwa reference_id (SAHIHI)
+// ✅ V30: FIX removeDuplicateBillItems - HAIFUTI multi-batch medications
+// ✅ V30: Multi-batch medications zinabaki (ZENCOF A + B = 1 item × 100)
+// ✅ V30: FULL payment validation inaruhusu multi-batch
+// ✅ V30: Stock deduction inachukua batches zote (FIFO)
+// ✅ V30: Display grouped kama 1 row na "N Batches" badge
+// ✅ V29: FULL payment validation kwa groups
+// ✅ V28: Safety check inatumia reference_id TU
+// ✅ V27: FIX DOUBLE DEDUCTION
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -51,13 +52,11 @@ try {
 }
 
 // ================================================================
-// V28: CHECK IF ALREADY DEDUCTED (SAFE CHECK) - FIX for multi-batch
+// V28: SAFETY CHECK
 // ================================================================
 function isStockAlreadyDeducted($db, $item_type, $reference_type, $reference_id, $equipment_id_or_inventory_id, $branch_id) {
     try {
         if ($item_type === 'medication') {
-            // ✅ V28 FIX: Check kwa reference_type + reference_id TU (sio inventory_id)
-            // Sababu multi-batch inaweza kuwa na inventory_id tofauti kwa prescription moja
             $stmt = $db->prepare("
                 SELECT COUNT(*) as cnt FROM stock_movements 
                 WHERE reference_type = ? 
@@ -67,7 +66,6 @@ function isStockAlreadyDeducted($db, $item_type, $reference_type, $reference_id,
             ");
             $stmt->execute([$reference_type, $reference_id, $branch_id]);
         } else {
-            // For equipment, check via equipment_id
             $stmt = $db->prepare("
                 SELECT COUNT(*) as cnt FROM stock_movements 
                 WHERE equipment_id = ? 
@@ -87,7 +85,7 @@ function isStockAlreadyDeducted($db, $item_type, $reference_type, $reference_id,
 }
 
 // ================================================================
-// V28: DEDUCT MEDICATION STOCK (FIFO) - WITH SAFETY CHECK
+// V28: DEDUCT MEDICATION STOCK (FIFO)
 // ================================================================
 function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $user_id, $patient_id, $reference_type = 'prescription', $reference_id = 0, $prescription_number = '') {
     $result = ['deducted' => 0, 'remaining' => $quantity, 'details' => [], 'errors' => [], 'skipped' => false];
@@ -96,14 +94,8 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
         $needed = (int)$quantity;
         if ($needed <= 0) return $result;
         
-        error_log("═══════════════════════════════════════════════════");
-        error_log("💊 deductMedicationStock CALLED");
-        error_log("   medication: $medication_name");
-        error_log("   quantity: $quantity");
-        error_log("   reference: $reference_type #$reference_id");
-        error_log("   branch: $branch_id");
+        error_log("💊 deductMedicationStock: $medication_name qty=$quantity ref=$reference_type#$reference_id");
         
-        // ✅ V28: SAFETY CHECK
         if ($reference_type === 'prescription' && $reference_id > 0) {
             $stmt_check = $db->prepare("
                 SELECT COUNT(*) as cnt FROM stock_movements 
@@ -116,7 +108,7 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
             $existing = (int)$stmt_check->fetch(PDO::FETCH_ASSOC)['cnt'];
             
             if ($existing > 0) {
-                error_log("⏭️ V28: Medication deduction SKIPPED - Rx #$reference_id already deducted");
+                error_log("⏭️ SKIPPED - Rx #$reference_id already deducted");
                 $result['skipped'] = true;
                 $result['errors'][] = "Rx #$reference_id already deducted";
                 return $result;
@@ -146,7 +138,6 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
         
         if (empty($batches)) {
             $result['errors'][] = "No active batches found for $clean_name";
-            error_log("⚠️ V28: No batches found for $clean_name");
             return $result;
         }
         
@@ -166,7 +157,7 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
             $result['details'][] = "{$batch['batch_number']}: {$available} → {$new_stock}";
             
             try {
-                $notes = "V28 - Dispensed";
+                $notes = "V30 - Dispensed";
                 if (!empty($prescription_number)) $notes .= " - Rx #{$prescription_number}";
                 $notes .= " - Qty: {$deduct} - Batch: " . ($batch['batch_number'] ?? 'N/A');
                 
@@ -180,7 +171,7 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
                     $reference_type, $reference_id, $user_id, $branch_id, $notes
                 ]);
             } catch (Exception $e) {
-                error_log("V28 stock_movements insert error (med): " . $e->getMessage());
+                error_log("V30 stock_movements error: " . $e->getMessage());
             }
             
             $needed -= $deduct;
@@ -191,14 +182,14 @@ function deductMedicationStock($db, $medication_name, $quantity, $branch_id, $us
         }
     } catch (Exception $e) {
         $result['errors'][] = "System error: " . $e->getMessage();
-        error_log("V28 deductMedicationStock error: " . $e->getMessage());
+        error_log("V30 deductMedicationStock error: " . $e->getMessage());
     }
     
     return $result;
 }
 
 // ================================================================
-// V28: DEDUCT EQUIPMENT STOCK - WITH SAFETY CHECK
+// V28: DEDUCT EQUIPMENT STOCK
 // ================================================================
 function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_id, $patient_id, $reference_type = 'procedure', $reference_id = 0, $notes = '') {
     $result = ['deducted' => 0, 'details' => [], 'errors' => [], 'skipped' => false];
@@ -212,7 +203,6 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
             return $result;
         }
         
-        // ✅ V28: SAFETY CHECK - Check if already deducted
         $stmt_check = $db->prepare("
             SELECT COUNT(*) as cnt FROM stock_movements 
             WHERE equipment_id = ? 
@@ -225,9 +215,9 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
         $existing = (int)$stmt_check->fetch(PDO::FETCH_ASSOC)['cnt'];
         
         if ($existing > 0) {
-            error_log("⏭️ V28: Equipment #$eq_id SKIPPED - reference $reference_type #$reference_id already deducted");
+            error_log("⏭️ Equipment #$eq_id SKIPPED");
             $result['skipped'] = true;
-            $result['errors'][] = "Equipment #$eq_id already deducted for $reference_type #$reference_id";
+            $result['errors'][] = "Equipment #$eq_id already deducted";
             return $result;
         }
         
@@ -241,7 +231,7 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
         $equip = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if (!$equip) {
-            $result['errors'][] = "Equipment #$eq_id not found in branch $branch_id";
+            $result['errors'][] = "Equipment #$eq_id not found";
             return $result;
         }
         
@@ -266,7 +256,7 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
         $result['details'][] = "{$equip['equipment_name']}: {$previous_stock} → {$new_stock}";
         
         try {
-            $log_notes = !empty($notes) ? $notes : "V28 - Equipment used";
+            $log_notes = !empty($notes) ? $notes : "V30 - Equipment used";
             $log_notes .= " | Batch: " . ($equip['batch_number'] ?? 'N/A');
             $log_notes .= " | Stock: {$previous_stock} → {$new_stock}";
             
@@ -279,43 +269,32 @@ function deductEquipmentStock($db, $equipment_id, $quantity, $branch_id, $user_i
                 $eq_id, $patient_id, $qty, $previous_stock, $new_stock,
                 $reference_type, $reference_id, $user_id, $branch_id, $log_notes
             ]);
-            
-            error_log("✅ V28: Equipment {$equip['equipment_name']} deducted $qty ($previous_stock → $new_stock) for $reference_type #$reference_id");
         } catch (Exception $e) {
-            error_log("V28 stock_movements insert error (equip): " . $e->getMessage());
+            error_log("V30 stock_movements equipment error: " . $e->getMessage());
         }
     } catch (Exception $e) {
         $result['errors'][] = "System error: " . $e->getMessage();
-        error_log("V28 deductEquipmentStock error: " . $e->getMessage());
+        error_log("V30 deductEquipmentStock error: " . $e->getMessage());
     }
     
     return $result;
 }
 
 // ================================================================
-// V28: DEDUCT ALL STOCK FOR PAID BILL
-// ✅ Inaitwa TU kwenye PAYMENT (sio page load)
-// ✅ Ina SAFETY CHECK kabla ya kila deduction
-// ✅ MULTI-BATCH FIX: Group by medication_name
+// V30: DEDUCT ALL STOCK FOR PAID BILL
 // ================================================================
 function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
     $result = [
-        'medications_deducted' => 0,
-        'medication_items' => 0,
-        'equipment_deducted' => 0,
-        'equipment_items' => 0,
-        'lab_equipment_deducted' => 0,
-        'lab_equipment_items' => 0,
-        'skipped' => 0,
-        'errors' => []
+        'medications_deducted' => 0, 'medication_items' => 0,
+        'equipment_deducted' => 0, 'equipment_items' => 0,
+        'lab_equipment_deducted' => 0, 'lab_equipment_items' => 0,
+        'skipped' => 0, 'errors' => []
     ];
     
     try {
-        error_log("═══════════════════════════════════════════════════════");
-        error_log("🔍 V28: deductAllStockForPaidBill START - Bill #$bill_id");
-        error_log("═══════════════════════════════════════════════════════");
+        error_log("═══════════════════════════════════════════");
+        error_log("🔍 V30: deductAllStockForPaidBill - Bill #$bill_id");
         
-        // ✅ SAFETY CHECK 1: Verify bill is FULLY PAID
         $stmt_check = $db->prepare("SELECT status, balance, visit_id FROM bills WHERE id = ? AND branch_id = ? FOR UPDATE");
         $stmt_check->execute([$bill_id, $branch_id]);
         $bill_check = $stmt_check->fetch(PDO::FETCH_ASSOC);
@@ -326,15 +305,13 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
         }
         
         if ($bill_check['status'] !== 'paid' || (float)$bill_check['balance'] > 0.01) {
-            error_log("⏭️ V28: Bill #$bill_id NOT fully paid - SKIPPING");
+            error_log("⏭️ Bill #$bill_id NOT fully paid - SKIPPING");
             return $result;
         }
         
         $bill_visit_id = (int)$bill_check['visit_id'];
         
-        // ============================================================
-        // 1. MEDICATIONS FROM PRESCRIPTIONS - ✅ V28 MULTI-BATCH FIX
-        // ============================================================
+        // 1. MEDICATIONS
         $stmt = $db->prepare("
             SELECT DISTINCT p.id as prescription_id, p.patient_id, p.prescription_number
             FROM prescriptions p
@@ -352,7 +329,6 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
             $patient_id = $pres['patient_id'];
             $prescription_number = $pres['prescription_number'];
             
-            // ✅ SAFETY CHECK 2: Check if already deducted
             $stmt_check_disp = $db->prepare("
                 SELECT COUNT(*) as dispensed_count 
                 FROM prescription_items 
@@ -362,14 +338,12 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
             $already_dispensed = (int)$stmt_check_disp->fetch(PDO::FETCH_ASSOC)['dispensed_count'];
             
             if ($already_dispensed > 0) {
-                error_log("⏭️ V28: Rx #$prescription_number already dispensed - SKIPPING");
+                error_log("⏭️ Rx #$prescription_number already dispensed");
                 $result['skipped']++;
                 continue;
             }
             
-            // ✅ V28 FIX: GROUP prescription_items by medication_name
-            // Kwa multi-batch, prescription moja inaweza kuwa na items 2+ za dawa moja
-            // Mfano: Amoxclave Batch A (qty 6) + Batch B (qty 8) = total 14
+            // GROUP kwa medication_name (multi-batch)
             $stmt_items = $db->prepare("
                 SELECT 
                     medication_name,
@@ -391,10 +365,8 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
                 $total_qty = (int)$item['total_quantity'];
                 $batch_count = (int)$item['batch_count'];
                 
-                error_log("🔍 V28: Deducting $med_name qty=$total_qty (from $batch_count batches: {$item['batch_details']})");
+                error_log("💊 V30: Deducting $med_name qty=$total_qty (from $batch_count batches: {$item['batch_details']})");
                 
-                // ✅ V28 FIX: Deduct JUMLA mara MOJA (sio kila batch)
-                // deductMedicationStock() itachukua FIFO kwenye batches zote
                 $deduct_result = deductMedicationStock(
                     $db, $med_name, $total_qty, $branch_id, $user_id, $patient_id,
                     'prescription', $prescription_id, $prescription_number
@@ -403,18 +375,14 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
                 if ($deduct_result['deducted'] > 0) {
                     $result['medications_deducted'] += $deduct_result['deducted'];
                     $result['medication_items']++;
-                    error_log("✅ V28: $med_name deducted={$deduct_result['deducted']} (details: " . implode(', ', $deduct_result['details']) . ")");
+                    error_log("✅ V30: $med_name deducted={$deduct_result['deducted']} (details: " . implode(', ', $deduct_result['details']) . ")");
                 }
-                if ($deduct_result['skipped']) {
-                    $result['skipped']++;
-                }
+                if ($deduct_result['skipped']) $result['skipped']++;
                 if (!empty($deduct_result['errors'])) {
                     $result['errors'] = array_merge($result['errors'], $deduct_result['errors']);
-                    error_log("⚠️ V28: $med_name errors: " . implode(', ', $deduct_result['errors']));
                 }
             }
             
-            // Mark prescription as dispensed
             $db->prepare("
                 UPDATE prescriptions 
                 SET status = 'dispensed', dispensed_at = NOW(), updated_at = NOW(), pharmacy_id = ?
@@ -428,9 +396,7 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
             ")->execute([$user_id, $prescription_id]);
         }
         
-        // ============================================================
-        // 2. EQUIPMENT (DIRECT BILL ITEMS)
-        // ============================================================
+        // 2. EQUIPMENT
         $stmt = $db->prepare("
             SELECT bi.id as bill_item_id, bi.item_id as equipment_id, bi.quantity, 
                    bi.item_name, me.equipment_name
@@ -459,36 +425,26 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
             $deduct_result = deductEquipmentStock(
                 $db, $equipment_id, $qty_needed, $branch_id, $user_id, $patient_id,
                 'equipment', $bill_item_id,
-                "V28 - Equipment - Bill #{$bill_id} - {$eq['equipment_name']}"
+                "V30 - Equipment - Bill #{$bill_id} - {$eq['equipment_name']}"
             );
             
             if ($deduct_result['deducted'] > 0) {
                 $result['equipment_deducted'] += $deduct_result['deducted'];
                 $result['equipment_items']++;
             }
-            if ($deduct_result['skipped']) {
-                $result['skipped']++;
-            }
+            if ($deduct_result['skipped']) $result['skipped']++;
             if (!empty($deduct_result['errors'])) {
                 $result['errors'] = array_merge($result['errors'], $deduct_result['errors']);
             }
         }
         
-        // ============================================================
         // 3. LAB-LINKED EQUIPMENT
-        // ============================================================
         if ($bill_visit_id > 0) {
             $stmt = $db->prepare("
                 SELECT 
-                    lt.id as lab_test_id,
-                    lt.test_id,
-                    lt.test_name,
-                    lt.patient_id,
-                    lt.branch_id,
-                    lt.visit_id,
-                    lte.equipment_id,
-                    me.equipment_name,
-                    me.quantity as current_stock
+                    lt.id as lab_test_id, lt.test_id, lt.test_name, lt.patient_id,
+                    lt.branch_id, lt.visit_id,
+                    lte.equipment_id, me.equipment_name, me.quantity as current_stock
                 FROM lab_tests lt
                 INNER JOIN lab_test_equipment lte 
                     ON lte.lab_test_id = lt.test_id
@@ -508,44 +464,110 @@ function deductAllStockForPaidBill($db, $bill_id, $branch_id, $user_id) {
                 $equipment_id = (int)$eq['equipment_id'];
                 $lab_test_id = (int)$eq['lab_test_id'];
                 $patient_id = (int)$eq['patient_id'];
-                $quantity_used = 1;
                 
                 if ($equipment_id <= 0) continue;
                 
                 $deduct_result = deductEquipmentStock(
-                    $db, $equipment_id, $quantity_used, $branch_id, $user_id, $patient_id,
+                    $db, $equipment_id, 1, $branch_id, $user_id, $patient_id,
                     'lab_test', $lab_test_id,
-                    "V28 - Lab equipment - {$eq['test_name']} - Lab #{$lab_test_id}"
+                    "V30 - Lab equipment - {$eq['test_name']} - Lab #{$lab_test_id}"
                 );
                 
                 if ($deduct_result['deducted'] > 0) {
                     $result['lab_equipment_deducted'] += $deduct_result['deducted'];
                     $result['lab_equipment_items']++;
                 }
-                if ($deduct_result['skipped']) {
-                    $result['skipped']++;
-                }
+                if ($deduct_result['skipped']) $result['skipped']++;
                 if (!empty($deduct_result['errors'])) {
                     $result['errors'] = array_merge($result['errors'], $deduct_result['errors']);
                 }
             }
         }
         
-        error_log("✅ V28: Bill #$bill_id done - Meds: {$result['medications_deducted']}, Equip: {$result['equipment_deducted']}, Lab Equip: {$result['lab_equipment_deducted']}, Skipped: {$result['skipped']}");
+        error_log("✅ V30: Bill #$bill_id done - Meds: {$result['medications_deducted']}, Equip: {$result['equipment_deducted']}, Lab: {$result['lab_equipment_deducted']}, Skipped: {$result['skipped']}");
         
     } catch (Exception $e) {
         $result['errors'][] = "System error: " . $e->getMessage();
-        error_log("V28 deductAllStockForPaidBill error: " . $e->getMessage());
+        error_log("V30 deductAllStockForPaidBill error: " . $e->getMessage());
     }
     
     return $result;
 }
 
 // ================================================================
-// HELPER FUNCTIONS
+// ✅ V30: GROUP BILL ITEMS KWA DISPLAY (multi-batch = 1 row)
+// ================================================================
+function groupBillItemsForDisplay($items) {
+    $display_items = [];
+    $medication_groups = [];
+    
+    foreach ($items as $item) {
+        $is_medication = ($item['item_type'] === 'medication');
+        $is_multi_batch = ($is_medication && $item['reference_type'] === 'prescription' && $item['reference_id'] > 0);
+        
+        if ($is_multi_batch) {
+            $clean_name = preg_replace('/\s*\(Batch:.*?\)\s*/i', '', $item['item_name'] ?? '');
+            $clean_name = trim($clean_name);
+            $group_key = 'med_' . $item['reference_id'] . '_' . md5($clean_name);
+            
+            if (!isset($medication_groups[$group_key])) {
+                $medication_groups[$group_key] = [
+                    'type' => 'group',
+                    'item_type' => 'medication',
+                    'item_name' => $clean_name,
+                    'item_ids' => [],
+                    'total_qty' => 0,
+                    'total_price' => 0,
+                    'is_paid' => true,
+                    'is_locked' => false,
+                    'is_partial' => false,
+                    'prescription_status' => $item['prescription_status'] ?? 'pending',
+                    'reference_id' => $item['reference_id'],
+                    'reference_type' => $item['reference_type'],
+                    'batch_count' => 0,
+                    'batch_numbers' => [],
+                    'bill_id' => $item['bill_id'] ?? null,
+                    'first_item' => $item
+                ];
+            }
+            
+            $medication_groups[$group_key]['item_ids'][] = $item['id'];
+            $medication_groups[$group_key]['total_qty'] += (int)($item['quantity'] ?? 0);
+            $medication_groups[$group_key]['total_price'] += (float)($item['total_price'] ?? 0);
+            $medication_groups[$group_key]['batch_count']++;
+            
+            if ($item['status'] !== 'paid') $medication_groups[$group_key]['is_paid'] = false;
+            if ($item['status'] === 'partial') $medication_groups[$group_key]['is_partial'] = true;
+            
+            if ($item['status'] !== 'paid' && $item['status'] !== 'cancelled') {
+                $pres_status = $item['prescription_status'] ?? 'pending';
+                if ($pres_status !== 'confirmed' && $pres_status !== 'dispensed') {
+                    $medication_groups[$group_key]['is_locked'] = true;
+                }
+            }
+            
+            if (!empty($item['batch_number'])) {
+                $medication_groups[$group_key]['batch_numbers'][] = $item['batch_number'];
+            }
+        } else {
+            $display_items[] = ['type' => 'single', 'item' => $item];
+        }
+    }
+    
+    foreach ($medication_groups as $group) {
+        $display_items[] = $group;
+    }
+    
+    return $display_items;
+}
+
+// ================================================================
+// ✅ V30: FIXED removeDuplicateBillItems - HAIFUTI multi-batch
 // ================================================================
 function removeDuplicateBillItems($db, $branch_id) {
     try {
+        // ✅ V30: Kwa medications, TUSIFUTE kama zina batch tofauti au unit_price/quantity tofauti
+        // Kwa non-medications, futa duplicates halisi
         $stmt = $db->prepare("
             SELECT bi1.id as keep_id, bi2.id as delete_id, bi2.bill_id
             FROM bill_items bi1
@@ -557,7 +579,17 @@ function removeDuplicateBillItems($db, $branch_id) {
                 AND COALESCE(bi1.reference_type, '') = COALESCE(bi2.reference_type, '')
                 AND bi1.id < bi2.id
             INNER JOIN bills b ON bi1.bill_id = b.id
-            WHERE b.branch_id = ? AND bi2.status != 'cancelled'
+            WHERE b.branch_id = ? 
+              AND bi2.status != 'cancelled'
+              AND bi1.status != 'cancelled'
+              AND NOT (
+                  bi1.item_type = 'medication' 
+                  AND bi1.reference_type = 'prescription'
+                  AND (
+                      COALESCE(bi1.unit_price, 0) != COALESCE(bi2.unit_price, 0)
+                      OR COALESCE(bi1.quantity, 0) != COALESCE(bi2.quantity, 0)
+                  )
+              )
         ");
         $stmt->execute([$branch_id]);
         $duplicates = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -576,8 +608,12 @@ function removeDuplicateBillItems($db, $branch_id) {
         foreach ($affected_bills as $bill_id) {
             recalculateBillSubtotal($db, $bill_id, $branch_id);
         }
+        error_log("V30 removeDuplicateBillItems: Deleted $deleted TRUE duplicates");
         return $deleted;
-    } catch (Exception $e) { return 0; }
+    } catch (Exception $e) { 
+        error_log("V30 removeDuplicateBillItems error: " . $e->getMessage());
+        return 0; 
+    }
 }
 
 function recalculateBillSubtotal($db, $bill_id, $branch_id) {
@@ -837,9 +873,6 @@ try {
     }
     $currency = $settings['currency'] ?? 'TSh';
 
-    // ================================================================
-    // HANDLE PAYMENT
-    // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         header('Content-Type: application/json');
         
@@ -853,21 +886,22 @@ try {
         
         if ($action === 'complete_payment' || $action === 'partial_payment') {
             if (empty($item_ids) || !is_array($item_ids)) {
-                echo json_encode(['success' => false, 'message' => 'No items selected for payment']);
+                echo json_encode(['success' => false, 'message' => 'No items selected']);
                 exit;
             }
             
             if ($action === 'partial_payment' && $partial_amount <= 0) {
-                echo json_encode(['success' => false, 'message' => 'Please enter a valid partial amount']);
+                echo json_encode(['success' => false, 'message' => 'Invalid partial amount']);
                 exit;
             }
             
             try {
                 $db->beginTransaction();
                 
-                removeDuplicateBillItems($db, $user_branch_id);
+                // ✅ V30: Validation KABLA ya removeDuplicateBillItems
+                $item_ids_int = array_map('intval', $item_ids);
                 
-                $placeholders = implode(',', array_fill(0, count($item_ids), '?'));
+                $placeholders = implode(',', array_fill(0, count($item_ids_int), '?'));
                 $stmt = $db->prepare("
                     SELECT bi.*, 
                         b.id as bill_id, b.bill_number, b.patient_id, b.branch_id,
@@ -888,37 +922,73 @@ try {
                     WHERE bi.id IN ($placeholders) AND bi.status != 'paid' AND bi.status != 'cancelled'
                     FOR UPDATE
                 ");
-                $stmt->execute($item_ids);
+                $stmt->execute($item_ids_int);
                 $selected_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
                 if (empty($selected_items)) {
                     $db->rollBack();
-                    echo json_encode(['success' => false, 'message' => 'Selected items not found or already paid']);
+                    echo json_encode(['success' => false, 'message' => 'Items not found or already paid']);
                     exit;
                 }
                 
-                // FULL PAYMENT validation
+                // ✅ V30: FULL PAYMENT validation - MULTI-BATCH AWARE
                 if ($action === 'complete_payment') {
                     $affected_bill_ids = array_unique(array_column($selected_items, 'bill_id'));
-                    $all_payable_items = [];
+                    $all_payable_rows = [];
                     foreach ($affected_bill_ids as $abid) {
-                        $stmt_all = $db->prepare("SELECT id FROM bill_items WHERE bill_id = ? AND branch_id = ? AND status != 'paid' AND status != 'cancelled'");
+                        $stmt_all = $db->prepare("
+                            SELECT id, item_type, reference_id, reference_type, item_name 
+                            FROM bill_items 
+                            WHERE bill_id = ? AND branch_id = ? AND status != 'paid' AND status != 'cancelled'
+                        ");
                         $stmt_all->execute([$abid, $user_branch_id]);
-                        $all_payable_items = array_merge($all_payable_items, $stmt_all->fetchAll(PDO::FETCH_COLUMN));
+                        $all_payable_rows = array_merge($all_payable_rows, $stmt_all->fetchAll(PDO::FETCH_ASSOC));
                     }
                     
-                    sort($all_payable_items);
-                    $selected_sorted = $item_ids;
-                    sort($selected_sorted);
+                    // Group payable items
+                    $all_payable_groups = [];
+                    foreach ($all_payable_rows as $r) {
+                        if ($r['item_type'] === 'medication' && $r['reference_type'] === 'prescription' && $r['reference_id'] > 0) {
+                            $clean_name = trim(preg_replace('/\s*\(Batch:.*?\)\s*/i', '', $r['item_name']));
+                            $group_key = 'med_' . $r['reference_id'] . '_' . md5($clean_name);
+                        } else {
+                            $group_key = 'item_' . $r['id'];
+                        }
+                        if (!isset($all_payable_groups[$group_key])) $all_payable_groups[$group_key] = [];
+                        $all_payable_groups[$group_key][] = (int)$r['id'];
+                    }
                     
-                    if ($all_payable_items !== array_map('intval', $selected_sorted)) {
+                    // Group selected items
+                    $selected_groups = [];
+                    foreach ($selected_items as $s) {
+                        if ($s['item_type'] === 'medication' && $s['reference_type'] === 'prescription' && $s['reference_id'] > 0) {
+                            $clean_name = trim(preg_replace('/\s*\(Batch:.*?\)\s*/i', '', $s['item_name']));
+                            $group_key = 'med_' . $s['reference_id'] . '_' . md5($clean_name);
+                        } else {
+                            $group_key = 'item_' . $s['id'];
+                        }
+                        if (!isset($selected_groups[$group_key])) $selected_groups[$group_key] = [];
+                        $selected_groups[$group_key][] = (int)$s['id'];
+                    }
+                    
+                    $missing_groups = array_diff_key($all_payable_groups, $selected_groups);
+                    $extra_groups = array_diff_key($selected_groups, $all_payable_groups);
+                    
+                    if (!empty($missing_groups) || !empty($extra_groups) || count($selected_groups) !== count($all_payable_groups)) {
                         $db->rollBack();
-                        echo json_encode(['success' => false, 'message' => "⚠️ FULL PAYMENT INATAKA ITEMS ZOTE!\n\nUmechagua " . count($item_ids) . " kati ya " . count($all_payable_items) . " items."]);
+                        $msg = "⚠️ FULL PAYMENT INATAKA ITEMS ZOTE!\n\n";
+                        $msg .= "Inahitajika: " . count($all_payable_groups) . " groups\n";
+                        $msg .= "Umechagua: " . count($selected_groups) . " groups\n";
+                        if (!empty($missing_groups)) $msg .= "\n❌ Missing: " . count($missing_groups);
+                        echo json_encode(['success' => false, 'message' => $msg]);
                         exit;
                     }
                 }
                 
-                // Check locked bills
+                // ✅ V30: Sasa futa duplicates HALISI tu (multi-batch zimehifadhiwa)
+                removeDuplicateBillItems($db, $user_branch_id);
+                
+                // Check locked
                 $locked_bills = [];
                 foreach ($selected_items as $item) {
                     if ($item['item_type'] === 'medication' && $item['reference_type'] === 'prescription') {
@@ -931,11 +1001,10 @@ try {
                 
                 if (!empty($locked_bills)) {
                     $db->rollBack();
-                    echo json_encode(['success' => false, 'message' => "🔒 HAIWEZI KULIPWA!\n\nBill(s) zina prescriptions ambazo hazijaconfirm."]);
+                    echo json_encode(['success' => false, 'message' => "🔒 HAIWEZI KULIPWA!\n\nPrescriptions hazijaconfirm."]);
                     exit;
                 }
                 
-                // Process each bill
                 $bill_map = [];
                 $total_original_amount = 0;
                 $affected_visit_ids = [];
@@ -978,13 +1047,10 @@ try {
                 
                 $success_count = 0;
                 $total_items_updated = 0;
-                $processed_bill_ids = [];
                 $fully_paid_bill_ids = [];
                 $total_amount_paid = 0;
                 
                 foreach ($bill_map as $bill_id => $bill_data) {
-                    $processed_bill_ids[] = $bill_id;
-                    
                     $pharmacy_discount = $bill_data['pharmacy_discount'];
                     $pharmacy_premium = $bill_data['pharmacy_premium'];
                     $existing_cashier_discount = $bill_data['existing_cashier_discount'];
@@ -1069,7 +1135,7 @@ try {
                     }
                     
                     $receipt_number = 'RCP-' . date('Ymd') . '-' . str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
-                    $notes = 'V28 Payment';
+                    $notes = 'V30 Payment';
                     
                     $db->prepare("
                         INSERT INTO payments (receipt_number, bill_id, patient_id, amount, payment_method, received_by, branch_id, received_at, notes)
@@ -1081,9 +1147,6 @@ try {
                     $success_count++;
                 }
                 
-                // ================================================================
-                // STOCK DEDUCTION - FULLY PAID BILLS ONLY
-                // ================================================================
                 $stock_summary = [
                     'medications_deducted' => 0, 'medication_items' => 0,
                     'equipment_deducted' => 0, 'equipment_items' => 0,
@@ -1105,7 +1168,6 @@ try {
                     $stock_summary['errors'] = array_merge($stock_summary['errors'], $bill_stock['errors']);
                 }
                 
-                // Update visits
                 foreach ($affected_visit_ids as $visit_id) {
                     if ($visit_id > 0) {
                         updateVisitPaymentStatus($db, $visit_id, $user_branch_id);
@@ -1117,7 +1179,6 @@ try {
                 
                 $db->commit();
                 
-                // Build message
                 $message = "✅ " . $success_count . " bill(s) updated!<br>";
                 $message .= "💰 Total Paid: <strong>" . $currency . " " . number_format($total_amount_paid, 0) . "</strong>";
                 $message .= "<br>📦 " . $total_items_updated . " item(s) marked as PAID";
@@ -1135,7 +1196,7 @@ try {
                         $message .= "<br>🧪 <strong>" . $stock_summary['lab_equipment_deducted'] . "</strong> lab equipment qty deducted";
                     }
                     if ($stock_summary['skipped'] > 0) {
-                        $message .= "<br>⏭️ " . $stock_summary['skipped'] . " item(s) skipped (already deducted)";
+                        $message .= "<br>⏭️ " . $stock_summary['skipped'] . " item(s) skipped";
                     }
                 }
                 if ($completed_visits > 0) $message .= "<br>✅ " . $completed_visits . " visit(s) COMPLETE!";
@@ -1153,7 +1214,7 @@ try {
             } catch (Exception $e) {
                 $db->rollBack();
                 echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
-                error_log("V28 payment error: " . $e->getMessage());
+                error_log("V30 payment error: " . $e->getMessage());
             }
             exit;
         }
@@ -1162,9 +1223,6 @@ try {
         exit;
     }
 
-    // ================================================================
-    // GET BILLS (READ-ONLY - NO AUTO-REPAIR!)
-    // ================================================================
     $bills_query = "
         SELECT b.*, b.discount_amount, b.pharmacy_discount, b.cashier_discount,
             b.total_discount, b.paid_amount, b.balance, b.subtotal,
@@ -1205,19 +1263,14 @@ try {
     $stmt->execute($params);
     $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Sync procedures status
     try {
-        $stmt = $db->prepare("
-            SELECT DISTINCT b.id FROM bills b
-            WHERE b.branch_id = ? AND b.status IN ('paid', 'partial')
-        ");
+        $stmt = $db->prepare("SELECT DISTINCT b.id FROM bills b WHERE b.branch_id = ? AND b.status IN ('paid', 'partial')");
         $stmt->execute([$user_branch_id]);
         foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $bid) {
             syncProceduresStatus($db, $bid, $user_branch_id);
         }
     } catch (Exception $e) {}
     
-    // Update bill_items status for paid bills
     try {
         $db->prepare("
             UPDATE bill_items bi
@@ -1309,6 +1362,7 @@ try {
             ];
         }
         $bill['items'] = $all_items_by_bill[$bill['id']] ?? [];
+        $bill['display_items'] = groupBillItemsForDisplay($bill['items']);
         $bill['med_confirmed'] = $medication_confirmed[$bill['id']] ?? true;
         $bill['is_locked'] = $bill_locked_status[$bill['id']] ?? false;
         $bill['pending_prescriptions'] = $bill_pending_prescription_count[$bill['id']] ?? 0;
@@ -1915,6 +1969,27 @@ include_once '../../components/cashier_sidebar.php';
         .item-checkbox:hover:not(:disabled) { transform: scale(1.15); }
         .item-checkbox:disabled { opacity: 0.3; cursor: not-allowed; }
         
+        .multi-batch-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 0.55rem;
+            font-weight: 800;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+            color: #1E40AF;
+            border: 1px solid #60A5FA;
+            margin-left: 6px;
+            text-transform: uppercase;
+        }
+        
+        [data-theme="dark"] .multi-batch-badge {
+            background: linear-gradient(135deg, #1E3A5F, #1E40AF);
+            color: #93C5FD;
+            border-color: #3B82F6;
+        }
+        
         .payment-controls-wrapper {
             position: fixed;
             bottom: 0;
@@ -2292,7 +2367,6 @@ include_once '../../components/cashier_sidebar.php';
 
 <main class="main-content">
 
-    <!-- PAGE HEADER -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -2305,7 +2379,7 @@ include_once '../../components/cashier_sidebar.php';
                     </span>
                 <?php endif; ?>
                 <span class="header-badge new-version">
-                    <i class="fas fa-shield-alt"></i> V28.0 - MULTI-BATCH FIX
+                    <i class="fas fa-shield-alt"></i> V30.0 - MULTI-BATCH FULL FIX
                 </span>
             </h1>
             <p class="page-subtitle">
@@ -2332,7 +2406,6 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- LOCKED WARNING -->
     <?php if ($total_locked_bills > 0): ?>
         <div class="locked-warning">
             <i class="fas fa-lock"></i>
@@ -2343,7 +2416,6 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- PATIENT CARDS -->
     <?php if (count($patient_bills_data) > 0): ?>
         <?php foreach ($patient_bills_data as $patient): 
             $patient_bills = isset($patient['bills']) && is_array($patient['bills']) ? $patient['bills'] : [];
@@ -2482,6 +2554,7 @@ include_once '../../components/cashier_sidebar.php';
                             
                             <?php foreach ($patient_bills as $bill): 
                                 $items = isset($bill['items']) && is_array($bill['items']) ? $bill['items'] : [];
+                                $display_items = isset($bill['display_items']) && is_array($bill['display_items']) ? $bill['display_items'] : [];
                                 $bill_is_locked = $bill['is_locked'] ?? false;
                                 $bill_pending_pres = $bill['pending_prescriptions'] ?? 0;
                                 $bill_number = $bill['bill_number'] ?? 'N/A';
@@ -2559,17 +2632,89 @@ include_once '../../components/cashier_sidebar.php';
                                     </td>
                                 </tr>
                                 
-                                <?php foreach ($items as $item): 
-                                    $is_paid = ($item['status'] === 'paid');
-                                    $is_cancelled = ($item['status'] === 'cancelled');
-                                    $is_medication = ($item['item_type'] === 'medication');
-                                    $is_equipment = ($item['item_type'] === 'equipment');
-                                    $pres_status = $item['prescription_status'] ?? 'pending';
-                                    $is_item_locked = ($is_medication && $item['reference_type'] === 'prescription' && $pres_status !== 'confirmed' && $pres_status !== 'dispensed');
-                                    $can_select = !$is_paid && !$is_cancelled && !$is_item_locked;
-                                    $price = (float)($item['total_price'] ?? $item['unit_price'] ?? 0);
-                                    $qty = (int)($item['quantity'] ?? 1);
-                                    $item_status = $item['status'] ?? 'pending';
+                                <?php foreach ($display_items as $display_item): 
+                                    if ($display_item['type'] === 'group'):
+                                        // ✅ V30: Multi-batch group display
+                                        $is_paid = $display_item['is_paid'];
+                                        $is_item_locked = $display_item['is_locked'];
+                                        $can_select = !$is_paid && !$is_item_locked;
+                                        $price = $display_item['total_price'];
+                                        $qty = $display_item['total_qty'];
+                                        $item_status = $is_paid ? 'paid' : ($display_item['is_partial'] ? 'partial' : 'pending');
+                                        $item_name = $display_item['item_name'];
+                                        $batch_count = $display_item['batch_count'];
+                                        $item_ids_csv = implode(',', $display_item['item_ids']);
+                                        $first_item_id = $display_item['item_ids'][0] ?? 0;
+                                ?>
+                                    <tr class="item-row <?= $is_paid ? 'bill-paid' : '' ?> <?= $is_item_locked ? 'item-locked' : '' ?>" 
+                                        data-item-id="<?= $first_item_id ?>" 
+                                        data-item-ids="<?= $item_ids_csv ?>"
+                                        data-price="<?= $price ?>"
+                                        data-bill-id="<?= $bill['id'] ?>"
+                                        data-patient-id="<?= $patient['patient_id'] ?>"
+                                        data-item-type="medication"
+                                        data-batch-count="<?= $batch_count ?>"
+                                        data-is-locked="<?= $is_item_locked ? 'true' : 'false' ?>"
+                                        data-is-group="true">
+                                        <td style="text-align:center;">
+                                            <?php if ($is_item_locked): ?>
+                                                <i class="fas fa-lock" style="color:var(--locked-color); font-size:1.05rem;"></i>
+                                            <?php elseif ($can_select): ?>
+                                                <input type="checkbox" class="item-checkbox item-select item-select-group" 
+                                                       data-id="<?= $first_item_id ?>" 
+                                                       data-item-ids="<?= $item_ids_csv ?>"
+                                                       data-price="<?= $price ?>"
+                                                       data-bill-id="<?= $bill['id'] ?>"
+                                                       data-patient-id="<?= $patient['patient_id'] ?>"
+                                                       data-is-locked="<?= $is_item_locked ? 'true' : 'false' ?>"
+                                                       data-item-type="medication"
+                                                       data-is-group="true"
+                                                       onchange="updateSelectedTotal()">
+                                            <?php elseif ($is_paid): ?>
+                                                <i class="fas fa-check-circle" style="color:var(--success); font-size:1.05rem;"></i>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td>
+                                            <div style="display:flex; align-items:center; gap:8px; font-weight:700; flex-wrap:wrap;">
+                                                <i class="fas fa-pills" style="color:var(--success);"></i>
+                                                <span><?= htmlspecialchars($item_name) ?></span>
+                                                <span class="multi-batch-badge"><i class="fas fa-layer-group"></i> <?= $batch_count ?> Batches</span>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span style="font-size:0.58rem; font-weight:700; background:var(--bg-body); padding:3px 10px; border-radius:8px; text-transform:uppercase;">
+                                                Medication
+                                            </span>
+                                        </td>
+                                        <td style="text-align:center; font-weight:800; font-size:0.85rem;"><?= $qty ?></td>
+                                        <td style="text-align:right; font-weight:800; <?= $is_paid ? 'color:var(--success);' : 'color:var(--danger);' ?> font-size:0.85rem;">
+                                            <?= $currency ?> <?= number_format($price, 0) ?>
+                                        </td>
+                                        <td style="text-align:center;">
+                                            <?php if ($is_item_locked): ?>
+                                                <span class="locked-badge"><i class="fas fa-lock"></i> Locked</span>
+                                            <?php elseif ($is_paid): ?>
+                                                <span class="bill-status paid"><i class="fas fa-check"></i> Paid</span>
+                                            <?php elseif ($item_status === 'partial'): ?>
+                                                <span class="bill-status partial"><i class="fas fa-hourglass-half"></i> Partial</span>
+                                            <?php else: ?>
+                                                <span class="bill-status pending"><i class="fas fa-clock"></i> Pending</span>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                <?php 
+                                    else: 
+                                        $item = $display_item['item'];
+                                        $is_paid = ($item['status'] === 'paid');
+                                        $is_cancelled = ($item['status'] === 'cancelled');
+                                        $is_medication = ($item['item_type'] === 'medication');
+                                        $is_equipment = ($item['item_type'] === 'equipment');
+                                        $pres_status = $item['prescription_status'] ?? 'pending';
+                                        $is_item_locked = ($is_medication && $item['reference_type'] === 'prescription' && $pres_status !== 'confirmed' && $pres_status !== 'dispensed');
+                                        $can_select = !$is_paid && !$is_cancelled && !$is_item_locked;
+                                        $price = (float)($item['total_price'] ?? $item['unit_price'] ?? 0);
+                                        $qty = (int)($item['quantity'] ?? 1);
+                                        $item_status = $item['status'] ?? 'pending';
                                 ?>
                                     <tr class="item-row <?= $is_paid ? 'bill-paid' : '' ?> <?= $is_item_locked ? 'item-locked' : '' ?>" 
                                         data-item-id="<?= $item['id'] ?>" 
@@ -2604,6 +2749,8 @@ include_once '../../components/cashier_sidebar.php';
                                                     <i class="fas fa-flask" style="color:#0EA5E9;"></i>
                                                 <?php elseif ($item['item_type'] === 'procedure'): ?>
                                                     <i class="fas fa-syringe" style="color:var(--purple);"></i>
+                                                <?php elseif ($item['item_type'] === 'consultation'): ?>
+                                                    <i class="fas fa-stethoscope" style="color:var(--primary);"></i>
                                                 <?php else: ?>
                                                     <i class="fas fa-cube"></i>
                                                 <?php endif; ?>
@@ -2631,7 +2778,7 @@ include_once '../../components/cashier_sidebar.php';
                                             <?php endif; ?>
                                         </td>
                                     </tr>
-                                <?php endforeach; ?>
+                                <?php endif; endforeach; ?>
                             <?php endforeach; ?>
                         </tbody>
                     </table>
@@ -2649,7 +2796,6 @@ include_once '../../components/cashier_sidebar.php';
 
 </main>
 
-<!-- COMPACT PAYMENT CONTROLS -->
 <div class="payment-controls-wrapper">
     <div class="payment-controls" id="paymentControls">
         <div class="control-group">
@@ -2750,7 +2896,6 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
-<!-- TOAST -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.3rem;"></i>
     <div>
@@ -2763,10 +2908,10 @@ include_once '../../components/cashier_sidebar.php';
     var currency = '<?= $currency ?>';
     var totalLockedBills = <?= $total_locked_bills ?>;
 
-    console.log('%c💰 Process Payment V28.0 FINAL', 'font-size:16px; font-weight:bold; color:#059669;');
-    console.log('%c✅ MULTI-BATCH FIX - Group by medication_name');
-    console.log('%c✅ Safety check inatumia reference_id TU');
-    console.log('%c✅ Inachukua jumla ya quantity kwenye batches zote');
+    console.log('%c💰 Process Payment V30.0 FINAL', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c✅ FIXED: removeDuplicateBillItems HAIFUTI multi-batch');
+    console.log('%c✅ ZENCOF Batch A + Batch B = 1 item × 100');
+    console.log('%c✅ Stock deduction inachukua batches zote');
 
     (function() {
         var htmlElement = document.documentElement;
@@ -2962,13 +3107,19 @@ include_once '../../components/cashier_sidebar.php';
     function processPayment(type) {
         var checkboxes = document.querySelectorAll('.item-select:checked');
         var itemIds = [];
-        var medication_count = 0;
+        var medication_groups = 0;
         var equipment_count = 0;
         
         checkboxes.forEach(function(cb) {
-            itemIds.push(parseInt(cb.dataset.id));
-            if (cb.dataset.itemType === 'medication') medication_count++;
-            if (cb.dataset.itemType === 'equipment') equipment_count++;
+            var idsAttr = cb.getAttribute('data-item-ids');
+            if (idsAttr) {
+                var ids = idsAttr.split(',').map(function(x) { return parseInt(x); });
+                ids.forEach(function(id) { if (!isNaN(id)) itemIds.push(id); });
+                medication_groups++;
+            } else {
+                itemIds.push(parseInt(cb.dataset.id));
+                if (cb.dataset.itemType === 'equipment') equipment_count++;
+            }
         });
         
         if (itemIds.length === 0) {
@@ -3007,16 +3158,16 @@ include_once '../../components/cashier_sidebar.php';
         if (type === 'full') {
             var totalSelectableItems = document.querySelectorAll('.item-select:not([data-is-locked="true"]):not(:disabled)').length;
             
-            if (itemIds.length !== totalSelectableItems) {
+            if (checkboxes.length !== totalSelectableItems) {
                 showToast('⚠️ FULL Payment', 
-                    'FULL payment inahitaji items ZOTE kuchaguliwa.<br><br>Umechagua <strong>' + itemIds.length + '</strong> kati ya <strong>' + totalSelectableItems + '</strong> items.', 
+                    'FULL payment inahitaji items ZOTE kuchaguliwa.<br><br>Umechagua <strong>' + checkboxes.length + '</strong> kati ya <strong>' + totalSelectableItems + '</strong> groups.', 
                     'warning');
                 return;
             }
             
             if (partialAmount > 0 && partialAmount < grandTotal) {
                 showToast('⚠️ Partial Amount Filled', 
-                    'Umejaza PARTIAL amount (<strong>' + currency + ' ' + partialAmount.toFixed(0) + '</strong>).<br><br>Kama unataka kulipia FULL, futa partial kwanza.', 
+                    'Umejaza PARTIAL amount. Futa partial kwanza.', 
                     'warning');
                 return;
             }
@@ -3039,10 +3190,9 @@ include_once '../../components/cashier_sidebar.php';
         
         var stock_info = '';
         if (type === 'full') {
-            if (medication_count > 0) stock_info += '<br>💊 ' + medication_count + ' medication - stock itadeduct';
+            stock_info += '<br>💊 ' + medication_groups + ' medication group(s) - stock itadeduct';
             if (equipment_count > 0) stock_info += '<br>🛠️ ' + equipment_count + ' equipment - stock itadeduct';
-            stock_info += '<br>🧪 Lab equipment itadeduct (kama ipo)';
-            stock_info += '<br>✅ MULTI-BATCH FIX - Batches zote zitadeduct';
+            stock_info += '<br>✅ MULTI-BATCH - Batches zote zitadeduct';
         } else {
             stock_info = '<br>⚠️ PARTIAL payment - stock HAIJADEDUCT';
         }
@@ -3050,6 +3200,7 @@ include_once '../../components/cashier_sidebar.php';
         var confirmMsg = (type === 'partial' ? '💳 PARTIAL' : '💰 FULL') + ' PAYMENT\n' +
                          '═══════════════════════════════\n' +
                          'Items: ' + itemIds.length + '\n' +
+                         'Groups: ' + checkboxes.length + '\n' +
                          'Subtotal: ' + currency + ' ' + selectedSubtotal.toFixed(0) + '\n' +
                          'TOTAL: ' + currency + ' ' + grandTotal.toFixed(0) + '\n' +
                          (type === 'partial' ? 'Paying: ' + currency + ' ' + partialAmount.toFixed(0) + '\n' : '') +
@@ -3113,8 +3264,8 @@ include_once '../../components/cashier_sidebar.php';
         if (partialInput) partialInput.dataset.userInput = 'false';
         updateSelectedTotal();
         
-        console.log('✅ Process Payment V28.0 loaded');
-        console.log('✅ MULTI-BATCH FIX active');
+        console.log('✅ Process Payment V30.0 loaded');
+        console.log('✅ MULTI-BATCH FULL FIX active');
     });
 </script>
 
