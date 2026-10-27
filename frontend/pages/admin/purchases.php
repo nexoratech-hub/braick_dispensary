@@ -1,7 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/purchases.php
-// ADMIN - PURCHASE MANAGEMENT V9.3
+// ADMIN - PURCHASE MANAGEMENT V10.1
+// ✅ V10.1: GLOBAL DISCOUNT (Amount default / Percent) - inapunguza BUYING COST
+// ✅ V10.1: Inventory unit_cost = baada ya discount
 // ✅ Cancel reason OPTIONAL kwa admin
 // ✅ Kila IN_PROGRESS invoice ina button ya DELETE
 // ✅ Kila purchase inaunda NEW BATCH (haiongezi kwenye iliyopo)
@@ -146,6 +148,27 @@ try {
     }
 } catch (Exception $e) {}
 
+// ✅ V10.1: DISCOUNT COLUMNS
+try {
+    $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'global_discount_type'");
+    if ($stmt->rowCount() == 0) {
+        $db->exec("ALTER TABLE `purchases` 
+            ADD COLUMN `global_discount_type` VARCHAR(20) DEFAULT 'amount' AFTER `total_selling_value`,
+            ADD COLUMN `global_discount_value` DECIMAL(12,2) DEFAULT 0 AFTER `global_discount_type`,
+            ADD COLUMN `global_discount_amount` DECIMAL(12,2) DEFAULT 0 AFTER `global_discount_value`,
+            ADD COLUMN `final_total_buying_cost` DECIMAL(12,2) DEFAULT 0 AFTER `global_discount_amount`,
+            ADD COLUMN `final_total_selling_value` DECIMAL(12,2) DEFAULT 0 AFTER `final_total_buying_cost`
+        ");
+    }
+} catch (Exception $e) {}
+
+try {
+    $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'final_total_buying_cost'");
+    if ($stmt->rowCount() == 0) {
+        $db->exec("ALTER TABLE `purchases` ADD COLUMN `final_total_buying_cost` DECIMAL(12,2) DEFAULT 0 AFTER `global_discount_amount`");
+    }
+} catch (Exception $e) {}
+
 // ================================================================
 // PREDEFINED DATA
 // ================================================================
@@ -173,6 +196,75 @@ $predefined_units = [
     'unit' => 'Unit', 'dozen' => 'Dozen', 'litre' => 'Litre (L)',
     'bag' => 'Bag', 'carton' => 'Carton'
 ];
+
+// ================================================================
+// ✅ V10.1 HELPER: Recalculate Purchase Totals (DISCOUNT INAPUNGUZA BUYING)
+// ================================================================
+function recalculatePurchaseTotalsAdmin($db, $purchase_id) {
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as total_items, SUM(quantity) as total_quantity,
+               SUM(total_buying_cost) as total_buying_cost,
+               SUM(total_selling_value) as total_selling_value
+        FROM purchase_items WHERE purchase_id = ?
+    ");
+    $stmt->execute([$purchase_id]);
+    $totals = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $total_items = (int)($totals['total_items'] ?? 0);
+    $total_quantity = (int)($totals['total_quantity'] ?? 0);
+    $total_buying_cost = (float)($totals['total_buying_cost'] ?? 0);
+    $total_selling_value = (float)($totals['total_selling_value'] ?? 0);
+
+    // Pata discount info ya sasa
+    $stmt = $db->prepare("SELECT global_discount_type, global_discount_value FROM purchases WHERE id = ?");
+    $stmt->execute([$purchase_id]);
+    $disc = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $discount_type = $disc['global_discount_type'] ?? 'amount';
+    $discount_value = (float)($disc['global_discount_value'] ?? 0);
+
+    // ✅ DISCOUNT INAPUNGUZA BUYING COST
+    $global_discount_amount = 0;
+    if ($discount_type === 'percent') {
+        $pct = min(max($discount_value, 0), 100);
+        $global_discount_amount = $total_buying_cost * ($pct / 100);
+    } else {
+        $global_discount_amount = min(max($discount_value, 0), $total_buying_cost);
+    }
+
+    $final_total_buying_cost = $total_buying_cost - $global_discount_amount;
+    if ($final_total_buying_cost < 0) $final_total_buying_cost = 0;
+
+    // Selling haibadiliki
+    $final_total_selling_value = $total_selling_value;
+
+    $stmt = $db->prepare("
+        UPDATE purchases SET 
+            total_items = ?, total_quantity = ?,
+            total_buying_cost = ?, total_selling_value = ?,
+            global_discount_amount = ?, final_total_buying_cost = ?,
+            final_total_selling_value = ?,
+            updated_at = NOW()
+        WHERE id = ?
+    ");
+    $stmt->execute([
+        $total_items, $total_quantity,
+        $total_buying_cost, $total_selling_value,
+        $global_discount_amount, $final_total_buying_cost,
+        $final_total_selling_value,
+        $purchase_id
+    ]);
+
+    return [
+        'total_items' => $total_items,
+        'total_quantity' => $total_quantity,
+        'total_buying_cost' => $total_buying_cost,
+        'total_selling_value' => $total_selling_value,
+        'global_discount_amount' => $global_discount_amount,
+        'final_total_buying_cost' => $final_total_buying_cost,
+        'final_total_selling_value' => $final_total_selling_value
+    ];
+}
 
 // ================================================================
 // GET PARAMETERS
@@ -210,9 +302,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action_post = $_POST['action'] ?? '';
     $post_branch = $_POST['branch'] ?? $selected_branch_id;
 
-    // ============================================================
     // CREATE NEW PURCHASE
-    // ============================================================
     if ($action_post === 'create_purchase') {
         $purchase_type_new = $_POST['purchase_type'] ?? 'medicine';
         $create_branch_id = $user_branch_id;
@@ -275,9 +365,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // ============================================================
     // ADD MEDICINE
-    // ============================================================
     if ($action_post === 'add_medicine') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         $medication_name = trim($_POST['medication_name'] ?? '');
@@ -330,25 +418,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $user_id, $user_full_name
                 ]);
 
-                $stmt = $db->prepare("
-                    SELECT COUNT(*) as total_items, SUM(quantity) as total_quantity,
-                           SUM(total_buying_cost) as total_buying_cost,
-                           SUM(total_selling_value) as total_selling_value
-                    FROM purchase_items WHERE purchase_id = ?
-                ");
-                $stmt->execute([$purchase_id_post]);
-                $totals = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                $stmt = $db->prepare("
-                    UPDATE purchases SET total_items = ?, total_quantity = ?, 
-                        total_buying_cost = ?, total_selling_value = ?, updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([
-                    $totals['total_items'] ?? 0, $totals['total_quantity'] ?? 0,
-                    $totals['total_buying_cost'] ?? 0, $totals['total_selling_value'] ?? 0,
-                    $purchase_id_post
-                ]);
+                recalculatePurchaseTotalsAdmin($db, $purchase_id_post);
 
                 $_SESSION['purchase_message'] = "✅ Medicine <strong>" . htmlspecialchars($medication_name) . "</strong> x $quantity added (Batch: $batch_number)";
                 $_SESSION['purchase_message_type'] = 'success';
@@ -363,9 +433,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!empty($errors)) { $message = implode('<br>', $errors); $message_type = 'error'; }
     }
 
-    // ============================================================
     // ADD EQUIPMENT
-    // ============================================================
     if ($action_post === 'add_equipment') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         $equipment_name = trim($_POST['equipment_name'] ?? '');
@@ -418,25 +486,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $user_id, $user_full_name
                 ]);
 
-                $stmt = $db->prepare("
-                    SELECT COUNT(*) as total_items, SUM(quantity) as total_quantity,
-                           SUM(total_buying_cost) as total_buying_cost,
-                           SUM(total_selling_value) as total_selling_value
-                    FROM purchase_items WHERE purchase_id = ?
-                ");
-                $stmt->execute([$purchase_id_post]);
-                $totals = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                $stmt = $db->prepare("
-                    UPDATE purchases SET total_items = ?, total_quantity = ?, 
-                        total_buying_cost = ?, total_selling_value = ?, updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([
-                    $totals['total_items'] ?? 0, $totals['total_quantity'] ?? 0,
-                    $totals['total_buying_cost'] ?? 0, $totals['total_selling_value'] ?? 0,
-                    $purchase_id_post
-                ]);
+                recalculatePurchaseTotalsAdmin($db, $purchase_id_post);
 
                 $_SESSION['purchase_message'] = "✅ Equipment <strong>" . htmlspecialchars($equipment_name) . "</strong> x $quantity added (Batch: $batch_number)";
                 $_SESSION['purchase_message_type'] = 'success';
@@ -451,12 +501,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!empty($errors)) { $message = implode('<br>', $errors); $message_type = 'error'; }
     }
 
-    // ============================================================
-    // COMPLETE PURCHASE - Inaunda NEW BATCH kila item
-    // ============================================================
+    // ✅ V10.1: UPDATE GLOBAL DISCOUNT
+    if ($action_post === 'update_global_discount') {
+        $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
+        $discount_type = $_POST['global_discount_type'] ?? 'amount';
+        $discount_value = (float)str_replace(',', '', $_POST['global_discount_value'] ?? 0);
+
+        if (!in_array($discount_type, ['amount', 'percent'])) $discount_type = 'amount';
+
+        if ($discount_type === 'percent') {
+            $discount_value = min(max($discount_value, 0), 100);
+        } else {
+            $discount_value = max($discount_value, 0);
+        }
+
+        $stmt = $db->prepare("SELECT status FROM purchases WHERE id = ?");
+        $stmt->execute([$purchase_id_post]);
+        $purchase = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($purchase && $purchase['status'] === 'IN_PROGRESS') {
+            try {
+                $stmt = $db->prepare("
+                    UPDATE purchases SET 
+                        global_discount_type = ?,
+                        global_discount_value = ?,
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([$discount_type, $discount_value, $purchase_id_post]);
+
+                $result = recalculatePurchaseTotalsAdmin($db, $purchase_id_post);
+
+                $display = $discount_type === 'percent' 
+                    ? number_format($discount_value, 2) . '%' 
+                    : 'TSh ' . number_format($discount_value);
+
+                $_SESSION['purchase_message'] = "✅ Discount: <strong>$display</strong> = TSh " . number_format($result['global_discount_amount']) . " (imepunguza buying cost)";
+                $_SESSION['purchase_message_type'] = 'success';
+                header('Location: purchases.php?id=' . $purchase_id_post . '&type=' . $purchase_type . '&branch=' . $post_branch);
+                exit;
+            } catch (Exception $e) {
+                $message = "❌ Error: " . $e->getMessage();
+                $message_type = 'error';
+            }
+        }
+    }
+
+    // COMPLETE PURCHASE - ✅ unit_cost baada ya discount
     if ($action_post === 'complete_purchase') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
-        $stmt = $db->prepare("SELECT id, status, created_by, invoice_number, purchase_type, branch_id, total_items FROM purchases WHERE id = ?");
+        $stmt = $db->prepare("
+            SELECT id, status, created_by, invoice_number, purchase_type, branch_id, total_items,
+                   total_buying_cost, global_discount_amount
+            FROM purchases WHERE id = ?
+        ");
         $stmt->execute([$purchase_id_post]);
         $purchase = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -473,8 +571,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([$purchase_id_post]);
                 $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+                // ✅ Kokotoa discount ratio
+                $global_discount = (float)($purchase['global_discount_amount'] ?? 0);
+                $total_buying = (float)($purchase['total_buying_cost'] ?? 0);
+                $discount_ratio = ($total_buying > 0) ? ($global_discount / $total_buying) : 0;
+
                 $batches_created = 0;
                 foreach ($items as $item) {
+                    // ✅ unit_cost inapunguzwa kwa discount ratio
+                    $final_unit_cost = $item['buying_price'] * (1 - $discount_ratio);
+                    
                     if ($item['item_type'] === 'medicine') {
                         $stmt = $db->prepare("
                             INSERT INTO medications_inventory 
@@ -489,7 +595,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $item['item_unit'] ?: 'pcs',
                             $item['quantity'], 
                             $item['item_reorder_level'] ?: 10,
-                            $item['buying_price'], 
+                            $final_unit_cost,
                             $item['selling_price'], 
                             $item['item_supplier'],
                             $item['item_expiry_date'], 
@@ -514,7 +620,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $item['item_unit'] ?: 'pcs',
                             $item['quantity'], 
                             $item['item_reorder_level'] ?: 5,
-                            $item['buying_price'], 
+                            $final_unit_cost,
                             $item['selling_price'], 
                             $item['item_supplier'],
                             $item['item_expiry_date'], 
@@ -532,7 +638,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([$purchase_id_post]);
                 $db->commit();
 
-                $_SESSION['purchase_message'] = "✅ Purchase <strong>{$purchase['invoice_number']}</strong> completed! ($batches_created batches created)";
+                $discount_msg = ($global_discount > 0) ? " (Discount: TSh " . number_format($global_discount) . " imepunguza buying cost)" : "";
+                $_SESSION['purchase_message'] = "✅ Purchase <strong>{$purchase['invoice_number']}</strong> completed! ($batches_created batches created)$discount_msg";
                 $_SESSION['purchase_message_type'] = 'success';
                 header('Location: purchases.php?id=' . $purchase_id_post . '&type=' . $purchase['purchase_type'] . '&branch=' . $post_branch);
                 exit;
@@ -545,12 +652,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!empty($errors)) { $message = implode('<br>', $errors); $message_type = 'error'; }
     }
 
-    // ============================================================
-    // CANCEL PURCHASE - Reason OPTIONAL kwa admin
-    // ============================================================
+    // CANCEL PURCHASE - Reason OPTIONAL
     if ($action_post === 'cancel_purchase') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
-        // ✅ Reason ni OPTIONAL - kama ni tupu, tumia default
         $cancel_reason_raw = trim($_POST['cancel_reason'] ?? '');
         $cancel_reason = !empty($cancel_reason_raw) ? $cancel_reason_raw : 'Cancelled by Admin';
 
@@ -590,9 +694,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!empty($errors)) { $message = implode('<br>', $errors); $message_type = 'error'; }
     }
 
-    // ============================================================
-    // ✅ DELETE PURCHASE (IN_PROGRESS only) - Admin anaweza kufuta yoyote
-    // ============================================================
+    // DELETE PURCHASE
     if ($action_post === 'delete_purchase') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         
@@ -602,22 +704,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $errors = [];
         if (!$purchase) $errors[] = 'Purchase not found';
-        elseif ($purchase['status'] === 'COMPLETED') $errors[] = 'Cannot delete completed purchase. Cancel first or use History.';
+        elseif ($purchase['status'] === 'COMPLETED') $errors[] = 'Cannot delete completed purchase.';
         
         if (empty($errors)) {
             try {
                 $db->beginTransaction();
-                // Futa purchase_items zote
                 $stmt = $db->prepare("DELETE FROM purchase_items WHERE purchase_id = ?");
                 $stmt->execute([$purchase_id_post]);
-                
-                // Futa purchase record
                 $stmt = $db->prepare("DELETE FROM purchases WHERE id = ?");
                 $stmt->execute([$purchase_id_post]);
-                
                 $db->commit();
                 
-                $_SESSION['purchase_message'] = "🗑️ Purchase <strong>{$purchase['invoice_number']}</strong> deleted successfully! (Inventory unaffected)";
+                $_SESSION['purchase_message'] = "🗑️ Purchase <strong>{$purchase['invoice_number']}</strong> deleted!";
                 $_SESSION['purchase_message_type'] = 'success';
                 header('Location: purchases.php?action=list_' . $purchase['purchase_type'] . '&branch=' . $post_branch);
                 exit;
@@ -630,9 +728,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!empty($errors)) { $message = implode('<br>', $errors); $message_type = 'error'; }
     }
 
-    // ============================================================
     // DELETE ITEM
-    // ============================================================
     if ($action_post === 'delete_item') {
         $item_id = (int)($_POST['item_id'] ?? 0);
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
@@ -645,26 +741,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             try {
                 $stmt = $db->prepare("DELETE FROM purchase_items WHERE id = ? AND purchase_id = ?");
                 $stmt->execute([$item_id, $purchase_id_post]);
-
-                $stmt = $db->prepare("
-                    SELECT COUNT(*) as total_items, SUM(quantity) as total_quantity,
-                           SUM(total_buying_cost) as total_buying_cost,
-                           SUM(total_selling_value) as total_selling_value
-                    FROM purchase_items WHERE purchase_id = ?
-                ");
-                $stmt->execute([$purchase_id_post]);
-                $totals = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                $stmt = $db->prepare("
-                    UPDATE purchases SET total_items = ?, total_quantity = ?, 
-                        total_buying_cost = ?, total_selling_value = ?, updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([
-                    $totals['total_items'] ?? 0, $totals['total_quantity'] ?? 0,
-                    $totals['total_buying_cost'] ?? 0, $totals['total_selling_value'] ?? 0,
-                    $purchase_id_post
-                ]);
+                recalculatePurchaseTotalsAdmin($db, $purchase_id_post);
 
                 $_SESSION['purchase_message'] = "✅ Item removed!";
                 $_SESSION['purchase_message_type'] = 'success';
@@ -718,6 +795,19 @@ if ($purchase_id > 0) {
         $is_creator = ($current_purchase['created_by'] == $user_id);
         $can_edit = ($current_purchase['status'] === 'IN_PROGRESS');
         $purchase_branch = $current_purchase['branch_id'] ?? $user_branch_id;
+
+        // Default discount values
+        if (!isset($current_purchase['global_discount_type']) || empty($current_purchase['global_discount_type'])) {
+            $current_purchase['global_discount_type'] = 'amount';
+        }
+        if (!isset($current_purchase['global_discount_value'])) $current_purchase['global_discount_value'] = 0;
+        if (!isset($current_purchase['global_discount_amount'])) $current_purchase['global_discount_amount'] = 0;
+        if (!isset($current_purchase['final_total_buying_cost']) || $current_purchase['final_total_buying_cost'] == 0) {
+            $current_purchase['final_total_buying_cost'] = $current_purchase['total_buying_cost'] ?? 0;
+        }
+        if (!isset($current_purchase['final_total_selling_value']) || $current_purchase['final_total_selling_value'] == 0) {
+            $current_purchase['final_total_selling_value'] = $current_purchase['total_selling_value'] ?? 0;
+        }
 
         $stmt = $db->prepare("
             SELECT pi.*, u.full_name as added_by_full_name
@@ -823,9 +913,6 @@ if ($active_view === 'medicine') $page_title = 'Medicine Purchases';
 elseif ($active_view === 'equipment') $page_title = 'Equipment Purchases';
 elseif ($purchase_id > 0 && $current_purchase) $page_title = 'Purchase: ' . $current_purchase['invoice_number'];
 
-// ================================================================
-// SHARED HEADER & SIDEBAR
-// ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
@@ -918,8 +1005,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .btn-join-purch:hover { background: #0A4CA8; color: white; }
     .btn-join-purch.purple { background: #7C3AED; }
     .btn-join-purch.purple:hover { background: #6D28D9; }
-    
-    /* ✅ NEW: DELETE PURCHASE BUTTON */
     .btn-delete-purchase-purch {
         background: #DC2626; color: white;
         padding: 6px 14px; border-radius: 6px;
@@ -934,7 +1019,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
     }
-    
     .btn-complete-purch {
         background: #059669; color: white;
         padding: 10px 24px; border-radius: 8px;
@@ -1317,8 +1401,214 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
     .batch-info-purch strong { color: #0B5ED7; }
 
+    /* ✅ V10.1: DISCOUNT SECTION */
+    .discount-section-purch {
+        background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+        border: 3px solid #D97706;
+        border-radius: 14px;
+        padding: 16px 20px;
+        margin: 16px 0;
+        box-shadow: 0 4px 16px rgba(217, 119, 6, 0.15);
+    }
+    .discount-section-purch .discount-title {
+        font-size: 0.95rem;
+        font-weight: 800;
+        color: #92400E;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        flex-wrap: wrap;
+    }
+    .discount-section-purch .discount-title i {
+        font-size: 1.1rem;
+        background: #D97706;
+        color: white;
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .discount-section-purch .discount-subtitle {
+        font-size: 0.62rem;
+        font-weight: 600;
+        text-transform: none;
+        color: #92400E;
+        margin-left: auto;
+        background: rgba(255,255,255,0.5);
+        padding: 3px 10px;
+        border-radius: 10px;
+        border: 1px dashed #D97706;
+    }
+    .discount-mode-toggle {
+        display: inline-flex;
+        background: white;
+        border-radius: 10px;
+        padding: 4px;
+        border: 2px solid #D97706;
+        margin-bottom: 12px;
+        box-shadow: 0 2px 8px rgba(217, 119, 6, 0.15);
+    }
+    .discount-mode-btn {
+        padding: 8px 20px;
+        border-radius: 6px;
+        font-weight: 700;
+        font-size: 0.8rem;
+        border: none;
+        cursor: pointer;
+        background: transparent;
+        color: #92400E;
+        transition: all 0.25s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        white-space: nowrap;
+        font-family: inherit;
+    }
+    .discount-mode-btn:hover { background: #FEF3C7; }
+    .discount-mode-btn.active {
+        background: #D97706;
+        color: white;
+        box-shadow: 0 3px 10px rgba(217, 119, 6, 0.4);
+    }
+    .discount-inputs-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        align-items: end;
+    }
+    .discount-input-group label {
+        font-size: 0.7rem;
+        font-weight: 700;
+        color: #92400E;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        display: block;
+        margin-bottom: 4px;
+    }
+    .discount-input-group .input-wrapper { position: relative; }
+    .discount-input-group .currency-prefix,
+    .discount-input-group .percent-suffix {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        font-weight: 800;
+        color: #D97706;
+        font-size: 0.85rem;
+        pointer-events: none;
+        z-index: 1;
+    }
+    .discount-input-group .currency-prefix { left: 12px; }
+    .discount-input-group .percent-suffix { right: 12px; }
+    .discount-input-group input {
+        width: 100%;
+        padding: 10px 16px;
+        border: 2px solid #D97706;
+        border-radius: 10px;
+        font-size: 1rem;
+        font-weight: 700;
+        color: #92400E;
+        background: white;
+        outline: none;
+        height: 46px;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .discount-input-group input.amount-mode { padding-left: 38px; }
+    .discount-input-group input.percent-mode { padding-right: 38px; }
+    .discount-input-group input:focus {
+        border-color: #92400E;
+        box-shadow: 0 0 0 4px rgba(217, 119, 6, 0.2);
+    }
+    .discount-preview {
+        background: white;
+        border: 2px dashed #D97706;
+        border-radius: 10px;
+        padding: 10px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        height: 46px;
+        justify-content: center;
+    }
+    .discount-preview .preview-label {
+        font-size: 0.6rem;
+        font-weight: 700;
+        color: #92400E;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .discount-preview .preview-value {
+        font-size: 1.05rem;
+        font-weight: 900;
+        color: #DC2626;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .discount-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 2px dashed rgba(217, 119, 6, 0.4);
+        flex-wrap: wrap;
+    }
+    .discount-total-summary {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 2px solid #D97706;
+    }
+    .discount-total-summary .summary-box {
+        background: white;
+        border-radius: 10px;
+        padding: 10px 14px;
+        border: 2px solid #E2E8F0;
+    }
+    .discount-total-summary .summary-box.buying { border-color: #DC2626; background: #FEE2E2; }
+    .discount-total-summary .summary-box.discount { border-color: #D97706; background: #FEF3C7; }
+    .discount-total-summary .summary-box.final { border-color: #059669; background: #D1FAE5; }
+    .discount-total-summary .summary-label {
+        font-size: 0.6rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .discount-total-summary .summary-value {
+        font-size: 1.1rem;
+        font-weight: 900;
+        margin-top: 2px;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .discount-total-summary .summary-box.buying .summary-label { color: #DC2626; }
+    .discount-total-summary .summary-box.buying .summary-value { color: #DC2626; }
+    .discount-total-summary .summary-box.discount .summary-label { color: #D97706; }
+    .discount-total-summary .summary-box.discount .summary-value { color: #D97706; }
+    .discount-total-summary .summary-box.final .summary-label { color: #059669; }
+    .discount-total-summary .summary-box.final .summary-value { color: #059669; }
+    .discount-badge-on-purchase {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 10px;
+        background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+        color: #92400E;
+        border: 1.5px solid #D97706;
+        border-radius: 12px;
+        font-size: 0.65rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        margin-left: 8px;
+    }
+
     @media (max-width: 1024px) {
         .grid-3-purch { grid-template-columns: 1fr 1fr; }
+        .discount-inputs-grid { grid-template-columns: 1fr; }
+        .discount-total-summary { grid-template-columns: 1fr; }
     }
     @media (max-width: 768px) {
         .grid-3-purch { grid-template-columns: 1fr; }
@@ -1331,6 +1621,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .action-bar-purch { flex-direction: column; align-items: stretch; }
         .action-bar-purch .action-buttons-purch { width: 100%; }
         .action-bar-purch .action-buttons-purch button { width: 100%; justify-content: center; }
+        .discount-mode-toggle { width: 100%; }
+        .discount-mode-btn { flex: 1; justify-content: center; padding: 8px 10px; font-size: 0.7rem; }
     }
 </style>
 
@@ -1460,7 +1752,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     <a href="purchases.php?id=<?= $purchase['id'] ?>&type=medicine&branch=<?= $selected_branch_id ?>" class="btn-purch btn-join-purch">
                                         <i class="fas fa-sign-in-alt"></i> Open
                                     </a>
-                                    <!-- ✅ DELETE BUTTON -->
                                     <button type="button" class="btn-delete-purchase-purch" 
                                             onclick="openDeletePurchaseModal(<?= $purchase['id'] ?>, '<?= addslashes($purchase['invoice_number']) ?>')"
                                             title="Delete this purchase">
@@ -1531,7 +1822,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     <a href="purchases.php?id=<?= $purchase['id'] ?>&type=equipment&branch=<?= $selected_branch_id ?>" class="btn-purch btn-join-purch purple">
                                         <i class="fas fa-sign-in-alt"></i> Open
                                     </a>
-                                    <!-- ✅ DELETE BUTTON -->
                                     <button type="button" class="btn-delete-purchase-purch" 
                                             onclick="openDeletePurchaseModal(<?= $purchase['id'] ?>, '<?= addslashes($purchase['invoice_number']) ?>')"
                                             title="Delete this purchase">
@@ -1562,6 +1852,17 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <span style="font-size:0.65rem;font-weight:400;color:var(--page-text-secondary);margin-left:8px;">
                             <?= ucfirst($current_purchase['purchase_type']) ?>
                         </span>
+                        <?php if (($current_purchase['global_discount_amount'] ?? 0) > 0): ?>
+                            <span class="discount-badge-on-purchase">
+                                <i class="fas fa-percent"></i>
+                                Discount: 
+                                <?php if (($current_purchase['global_discount_type'] ?? 'amount') === 'percent'): ?>
+                                    <?= number_format($current_purchase['global_discount_value'], 2) ?>%
+                                <?php else: ?>
+                                    TSh <?= number_format($current_purchase['global_discount_value']) ?>
+                                <?php endif; ?>
+                            </span>
+                        <?php endif; ?>
                     </div>
                     <div style="font-size:0.7rem;color:var(--page-text-secondary);margin-top:2px;">
                         Created: <?= date('d/m/Y H:i', strtotime($current_purchase['created_at'])) ?>
@@ -1592,7 +1893,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 </div>
             </div>
 
-            <?php $profit = ($current_purchase['total_selling_value'] ?? 0) - ($current_purchase['total_buying_cost'] ?? 0); ?>
+            <?php 
+                // ✅ V10.1: Discount-aware amounts
+                $total_buying = (float)($current_purchase['total_buying_cost'] ?? 0);
+                $final_buying = (float)($current_purchase['final_total_buying_cost'] ?? 0);
+                if ($final_buying == 0 && ($current_purchase['global_discount_amount'] ?? 0) == 0) $final_buying = $total_buying;
+                $total_selling = (float)($current_purchase['total_selling_value'] ?? 0);
+                $discount_amt = (float)($current_purchase['global_discount_amount'] ?? 0);
+                $profit = $total_selling - $final_buying;
+            ?>
             <div class="purchase-info-grid-purch">
                 <div class="purchase-info-item-purch">
                     <div class="label-purch">Created By</div>
@@ -1616,15 +1925,29 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </div>
                 </div>
                 <div class="purchase-info-item-purch" style="background:#FEE2E2;border:2px solid #DC2626;">
-                    <div class="label-purch" style="color:#DC2626;">💰 Buying Cost</div>
+                    <div class="label-purch" style="color:#DC2626;">💰 Buying Cost (Before)</div>
                     <div class="value-purch" style="color:#DC2626;">
-                        TSh <?= number_format($current_purchase['total_buying_cost'] ?? 0) ?>
+                        TSh <?= number_format($total_buying) ?>
                     </div>
                 </div>
-                <div class="purchase-info-item-purch" style="background:#D1FAE5;border:2px solid #059669;">
-                    <div class="label-purch" style="color:#059669;">💰 Selling Value</div>
-                    <div class="value-purch" style="color:#059669;">
-                        TSh <?= number_format($current_purchase['total_selling_value'] ?? 0) ?>
+                <?php if ($discount_amt > 0): ?>
+                <div class="purchase-info-item-purch" style="background:#FEF3C7;border:2px solid #D97706;">
+                    <div class="label-purch" style="color:#D97706;">🎁 Discount</div>
+                    <div class="value-purch" style="color:#D97706;">
+                        -TSh <?= number_format($discount_amt) ?>
+                    </div>
+                </div>
+                <?php endif; ?>
+                <div class="purchase-info-item-purch" style="background:#FECACA;border:2px solid #991B1B;">
+                    <div class="label-purch" style="color:#991B1B;">💰 Final Buying Cost</div>
+                    <div class="value-purch" style="color:#991B1B;">
+                        TSh <?= number_format($final_buying) ?>
+                    </div>
+                </div>
+                <div class="purchase-info-item-purch" style="background:#E8F0FE;border:2px solid #0B5ED7;">
+                    <div class="label-purch" style="color:#0B5ED7;">💰 Selling Value</div>
+                    <div class="value-purch" style="color:#0B5ED7;">
+                        TSh <?= number_format($total_selling) ?>
                     </div>
                 </div>
                 <div class="purchase-info-item-purch" style="background:<?= $profit >= 0 ? '#D1FAE5' : '#FEE2E2' ?>;border:2px solid <?= $profit >= 0 ? '#059669' : '#DC2626' ?>;">
@@ -1634,6 +1957,96 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </div>
                 </div>
             </div>
+
+            <!-- ✅ V10.1: DISCOUNT SECTION -->
+            <?php if ($current_purchase['status'] === 'IN_PROGRESS'): ?>
+            <div class="discount-section-purch">
+                <div class="discount-title">
+                    <i class="fas fa-percent"></i>
+                    Global Discount
+                    <span class="discount-subtitle">
+                        <i class="fas fa-info-circle"></i> Inapunguza BUYING COST (sio selling)
+                    </span>
+                </div>
+                
+                <?php 
+                    $disc_type = $current_purchase['global_discount_type'] ?? 'amount';
+                    $disc_value = $current_purchase['global_discount_value'] ?? 0;
+                    $disc_amount = $current_purchase['global_discount_amount'] ?? 0;
+                    $subtotal_buying = $current_purchase['total_buying_cost'] ?? 0;
+                    $final_buying_display = $current_purchase['final_total_buying_cost'] ?? $subtotal_buying;
+                ?>
+                
+                <form method="POST" id="discountForm">
+                    <input type="hidden" name="action" value="update_global_discount">
+                    <input type="hidden" name="purchase_id" value="<?= $purchase_id ?>">
+                    <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
+                    <input type="hidden" name="global_discount_type" id="discountTypeInput" value="<?= htmlspecialchars($disc_type) ?>">
+                    
+                    <div class="discount-mode-toggle">
+                        <button type="button" class="discount-mode-btn <?= $disc_type === 'amount' ? 'active' : '' ?>" 
+                                onclick="setDiscountMode('amount')" id="btnModeAmount">
+                            <i class="fas fa-money-bill-wave"></i> Amount (TSh)
+                        </button>
+                        <button type="button" class="discount-mode-btn <?= $disc_type === 'percent' ? 'active' : '' ?>" 
+                                onclick="setDiscountMode('percent')" id="btnModePercent">
+                            <i class="fas fa-percent"></i> Percent (%)
+                        </button>
+                    </div>
+                    
+                    <div class="discount-inputs-grid">
+                        <div class="discount-input-group">
+                            <label id="discountInputLabel">
+                                <?= $disc_type === 'percent' ? 'Discount Percent (%)' : 'Discount Amount (TSh)' ?>
+                            </label>
+                            <div class="input-wrapper">
+                                <span class="currency-prefix" id="discountPrefix" style="<?= $disc_type === 'percent' ? 'display:none;' : '' ?>">TSh</span>
+                                <input type="text" name="global_discount_value" id="discountValueInput" 
+                                       class="money-input <?= $disc_type === 'percent' ? 'percent-mode' : 'amount-mode' ?>"
+                                       value="<?= $disc_type === 'percent' ? number_format($disc_value, 2, '.', '') : number_format($disc_value, 0, '.', ',') ?>"
+                                       placeholder="0" 
+                                       oninput="updateDiscountPreview()">
+                                <span class="percent-suffix" id="discountSuffix" style="<?= $disc_type === 'amount' ? 'display:none;' : '' ?>">%</span>
+                            </div>
+                        </div>
+                        
+                        <div class="discount-input-group">
+                            <label>Discount Amount (Auto)</label>
+                            <div class="discount-preview">
+                                <span class="preview-label">Itakayopunguza buying</span>
+                                <span class="preview-value" id="discountPreviewAmount">-TSh <?= number_format($disc_amount) ?></span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="discount-total-summary">
+                        <div class="summary-box buying">
+                            <div class="summary-label">Buying Cost (Before)</div>
+                            <div class="summary-value">TSh <span id="summarySubtotal"><?= number_format($subtotal_buying) ?></span></div>
+                        </div>
+                        <div class="summary-box discount">
+                            <div class="summary-label">Discount</div>
+                            <div class="summary-value">-TSh <span id="summaryDiscount"><?= number_format($disc_amount) ?></span></div>
+                        </div>
+                        <div class="summary-box final">
+                            <div class="summary-label">Final Buying Cost</div>
+                            <div class="summary-value">TSh <span id="summaryFinal"><?= number_format($final_buying_display) ?></span></div>
+                        </div>
+                    </div>
+                    
+                    <div class="discount-actions">
+                        <button type="submit" class="btn-purch btn-save-purch" style="background:#D97706;">
+                            <i class="fas fa-save"></i> Apply Discount
+                        </button>
+                        <?php if ($disc_value > 0): ?>
+                        <button type="button" class="btn-purch btn-cancel-purch" onclick="clearDiscount()">
+                            <i class="fas fa-times"></i> Clear Discount
+                        </button>
+                        <?php endif; ?>
+                    </div>
+                </form>
+            </div>
+            <?php endif; ?>
 
             <!-- ACTION BAR -->
             <?php if ($current_purchase['status'] === 'IN_PROGRESS'): ?>
@@ -1650,7 +2063,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <?php endif; ?>
                     </div>
                     <div class="action-buttons-purch">
-                        <form method="POST" style="display:inline;" onsubmit="return confirm('Complete this purchase? Batches zote zitaundwa kwenye inventory.');">
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Complete this purchase? Batches zote zitaundwa kwenye inventory na unit_cost itakuwa baada ya discount.');">
                             <input type="hidden" name="action" value="complete_purchase">
                             <input type="hidden" name="purchase_id" value="<?= $purchase_id ?>">
                             <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
@@ -2026,7 +2439,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <p>
             <span class="footer-brand-purch">Braick Dispensary</span> Management System
             <span style="color:#CBD5E1;margin:0 8px;">|</span>
-            Admin Purchases
+            Admin Purchases V10.1
             <span style="color:#CBD5E1;margin:0 8px;">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span style="color:#CBD5E1;margin:0 8px;">|</span>
@@ -2036,9 +2449,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
-<!-- ✅ DELETE PURCHASE MODAL (MPYA) -->
-<!-- ================================================================ -->
+<!-- DELETE PURCHASE MODAL -->
 <div class="modal-overlay-purch" id="deletePurchaseModal">
     <div class="modal-content-purch">
         <div class="modal-header-purch">
@@ -2086,9 +2497,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- CANCEL MODAL - Reason OPTIONAL kwa admin -->
-<!-- ================================================================ -->
+<!-- CANCEL MODAL -->
 <div class="modal-overlay-purch" id="cancelModal">
     <div class="modal-content-purch">
         <div class="modal-header-purch">
@@ -2173,6 +2582,88 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 </div>
 
 <script>
+    // ================================================================
+    // ✅ V10.1: DISCOUNT STATE
+    // ================================================================
+    var subtotalBuying = <?= isset($subtotal_buying) ? (float)$subtotal_buying : 0 ?>;
+    var currentDiscountType = '<?= isset($disc_type) ? $disc_type : 'amount' ?>';
+
+    function setDiscountMode(mode) {
+        currentDiscountType = mode;
+        var typeInput = document.getElementById('discountTypeInput');
+        if (typeInput) typeInput.value = mode;
+        
+        var btnAmount = document.getElementById('btnModeAmount');
+        var btnPercent = document.getElementById('btnModePercent');
+        var input = document.getElementById('discountValueInput');
+        var label = document.getElementById('discountInputLabel');
+        var prefix = document.getElementById('discountPrefix');
+        var suffix = document.getElementById('discountSuffix');
+        
+        if (!input) return;
+        
+        if (mode === 'amount') {
+            if (btnAmount) btnAmount.classList.add('active');
+            if (btnPercent) btnPercent.classList.remove('active');
+            input.classList.remove('percent-mode');
+            input.classList.add('amount-mode');
+            if (label) label.textContent = 'Discount Amount (TSh)';
+            if (prefix) prefix.style.display = '';
+            if (suffix) suffix.style.display = 'none';
+            input.placeholder = '0';
+        } else {
+            if (btnAmount) btnAmount.classList.remove('active');
+            if (btnPercent) btnPercent.classList.add('active');
+            input.classList.remove('amount-mode');
+            input.classList.add('percent-mode');
+            if (label) label.textContent = 'Discount Percent (%)';
+            if (prefix) prefix.style.display = 'none';
+            if (suffix) suffix.style.display = '';
+            input.placeholder = '0.00';
+            input.value = '0';
+        }
+        
+        updateDiscountPreview();
+    }
+
+    function updateDiscountPreview() {
+        var input = document.getElementById('discountValueInput');
+        if (!input) return;
+        
+        var rawVal = input.value.replace(/,/g, '').replace(/[^0-9.]/g, '');
+        var value = parseFloat(rawVal) || 0;
+        
+        // ✅ Discount inapunguza BUYING COST
+        var discountAmount = 0;
+        if (currentDiscountType === 'percent') {
+            value = Math.min(Math.max(value, 0), 100);
+            discountAmount = subtotalBuying * (value / 100);
+        } else {
+            value = Math.max(value, 0);
+            discountAmount = Math.min(value, subtotalBuying);
+        }
+        
+        var finalBuying = Math.max(subtotalBuying - discountAmount, 0);
+        
+        var previewEl = document.getElementById('discountPreviewAmount');
+        var summaryDiscount = document.getElementById('summaryDiscount');
+        var summaryFinal = document.getElementById('summaryFinal');
+        var summarySubtotal = document.getElementById('summarySubtotal');
+        
+        if (previewEl) previewEl.textContent = '-TSh ' + Math.round(discountAmount).toLocaleString();
+        if (summaryDiscount) summaryDiscount.textContent = Math.round(discountAmount).toLocaleString();
+        if (summaryFinal) summaryFinal.textContent = Math.round(finalBuying).toLocaleString();
+        if (summarySubtotal) summarySubtotal.textContent = Math.round(subtotalBuying).toLocaleString();
+    }
+
+    function clearDiscount() {
+        if (!confirm('Clear the discount?')) return;
+        var input = document.getElementById('discountValueInput');
+        if (input) input.value = '0';
+        var form = document.getElementById('discountForm');
+        if (form) form.submit();
+    }
+
     // ================================================================
     // FOOTER TIME
     // ================================================================
@@ -2320,7 +2811,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // ✅ DELETE PURCHASE MODAL
+    // DELETE PURCHASE MODAL
     // ================================================================
     function openDeletePurchaseModal(purchaseId, invoiceNumber) {
         var modal = document.getElementById('deletePurchaseModal');
@@ -2345,7 +2836,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         if (e.target === this) closeDeletePurchaseModal();
     });
 
-    // Delete form submit with confirmation
     document.getElementById('deletePurchaseForm')?.addEventListener('submit', function(e) {
         if (!confirm('⚠️ Are you ABSOLUTELY SURE? This will permanently delete the purchase and all its items. This cannot be undone!')) {
             e.preventDefault();
@@ -2354,7 +2844,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     });
 
     // ================================================================
-    // CANCEL MODAL - Reason OPTIONAL kwa admin
+    // CANCEL MODAL
     // ================================================================
     function openCancelModal(purchaseId, invoiceNumber) {
         var modal = document.getElementById('cancelModal');
@@ -2380,11 +2870,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         if (e.target === this) closeCancelModal();
     });
 
-    // ✅ Cancel form - NO validation kwa reason (OPTIONAL)
     document.getElementById('cancelForm')?.addEventListener('submit', function(e) {
-        // Admin - reason ni optional, hakuna validation
-        // Kama ni tupu, server itaweka "Cancelled by Admin"
-        
         if (!confirm('⚠️ Are you sure? All items will be permanently deleted!')) {
             e.preventDefault();
             return false;
@@ -2484,6 +2970,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 input.dataset.moneyInit = 'true';
 
                 input.addEventListener('input', function() {
+                    if (this.id === 'discountValueInput' && currentDiscountType === 'percent') {
+                        updateDiscountPreview();
+                        return;
+                    }
+
                     var cursorPos = this.selectionStart;
                     var before = this.value.length;
                     var formatted = formatWithCommas(this.value);
@@ -2492,6 +2983,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         var diff = formatted.length - before;
                         this.setSelectionRange(cursorPos + diff, cursorPos + diff);
                     }
+
+                    if (this.id === 'discountValueInput') updateDiscountPreview();
                 });
 
                 input.addEventListener('focus', function() {
@@ -2500,8 +2993,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 });
 
                 input.addEventListener('blur', function() {
-                    if (this.value) this.value = formatWithCommas(this.value);
-                    else this.value = '0';
+                    if (this.value) {
+                        if (this.id === 'discountValueInput' && currentDiscountType === 'percent') {
+                            var v = parseFloat(this.value.replace(/[^0-9.]/g, '')) || 0;
+                            this.value = v.toFixed(2);
+                        } else {
+                            this.value = formatWithCommas(this.value);
+                        }
+                    } else {
+                        this.value = '0';
+                    }
                 });
             });
         }
@@ -2772,11 +3273,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         return div.innerHTML;
     }
 
-    console.log('%c💊 Braick - Admin Purchases V9.3', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Cancel reason OPTIONAL kwa admin', 'font-size:13px; color:#34D399; font-weight:bold;');
-    console.log('%c✅ Kila IN_PROGRESS invoice ina button ya DELETE', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c💊 Braick - Admin Purchases V10.1', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ V10.1: DISCOUNT INAPUNGUZA BUYING COST (sio selling)', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ V10.1: Amount (default) au Percent', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ V10.1: Inventory unit_cost = baada ya discount', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Cancel reason OPTIONAL kwa admin', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Kila IN_PROGRESS invoice ina button ya DELETE', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Kila purchase inaunda NEW BATCH', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Autocomplete inajaza category, unit, prices, supplier', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

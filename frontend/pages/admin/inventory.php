@@ -1,11 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/inventory.php
-// ADMIN - COMPLETE INVENTORY V8.9 (BLUE BATCH BADGE)
+// ADMIN - COMPLETE INVENTORY V10.1
+// ✅ V10.1: batch_count, reorder_sum, na view modal zinahesabu TU batches zenye qty > 0
+// ✅ V10.1: Zero-qty batches HAZIONEKANI kwenye view modal (zinafichwa)
+// ✅ V10: LOW STOCK = Total Qty ≤ JUMLA ya reorder_levels za batches ZOTE zenye stock
 // ✅ Batch count badge ni BLUE
 // ✅ Stock low, days warning, expiry expiring ni BLUE
 // ✅ GROUP BY name + unit + branch
-// ✅ Batches zote zinaonekana kwenye View Modal
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -158,7 +160,6 @@ $message_type = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
-    // CREATE NEW PURCHASE
     if ($action === 'create_new_purchase') {
         $purchase_type = $_POST['purchase_type'] ?? 'medicine';
         $target_branch = (int)($_POST['target_branch'] ?? $manage_branch);
@@ -199,7 +200,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // EDIT MEDICINE
     if ($action === 'edit_medicine') {
         $id = (int)($_POST['id'] ?? 0);
         $medication_name = trim($_POST['medication_name'] ?? '');
@@ -238,7 +238,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else { $message = implode('<br>', $errors); $message_type = 'error'; }
     }
     
-    // EDIT EQUIPMENT
     if ($action === 'edit_equipment') {
         $id = (int)($_POST['id'] ?? 0);
         $equipment_name = trim($_POST['equipment_name'] ?? '');
@@ -276,7 +275,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else { $message = implode('<br>', $errors); $message_type = 'error'; }
     }
     
-    // DELETE MEDICINE
     if ($action === 'delete_medicine') {
         $id = (int)($_POST['id'] ?? 0);
         $confirmed = isset($_POST['confirmed']) ? (int)$_POST['confirmed'] : 0;
@@ -292,7 +290,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // DELETE EQUIPMENT
     if ($action === 'delete_equipment') {
         $id = (int)($_POST['id'] ?? 0);
         $confirmed = isset($_POST['confirmed']) ? (int)$_POST['confirmed'] : 0;
@@ -308,7 +305,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // GET EDIT MEDICINE DATA
     if ($action === 'get_edit_medicine_data') {
         $id = (int)($_POST['id'] ?? 0);
         if ($id > 0) {
@@ -404,7 +400,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
     
-    // GET EDIT EQUIPMENT DATA
     if ($action === 'get_edit_equipment_data') {
         $id = (int)($_POST['id'] ?? 0);
         if ($id > 0) {
@@ -565,6 +560,7 @@ try {
 
 // ================================================================
 // MEDICINES QUERY
+// ✅ V10.1: GROUP_CONCAT inachukua TU batches zenye quantity > 0
 // ================================================================
 $med_query = "
     SELECT 
@@ -583,14 +579,15 @@ $med_query = "
         MIN(m.selling_price) as selling_price,
         MIN(m.supplier) as supplier,
         MIN(CASE WHEN m.expiry_date IS NOT NULL AND m.expiry_date != '0000-00-00' THEN m.expiry_date ELSE NULL END) as expiry_date,
-        GROUP_CONCAT(m.id ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR ',') as batch_ids,
-        GROUP_CONCAT(m.batch_number ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_numbers,
-        GROUP_CONCAT(m.quantity ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_quantities,
-        GROUP_CONCAT(m.expiry_date ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_expiries,
-        GROUP_CONCAT(m.status ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_statuses,
-        GROUP_CONCAT(m.category ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_categories,
-        GROUP_CONCAT(m.supplier ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_suppliers,
-        GROUP_CONCAT(m.added_by_name ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_added_bys,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.id END ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR ',') as batch_ids,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.batch_number END ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_numbers,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.quantity END ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_quantities,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.expiry_date END ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_expiries,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.status END ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_statuses,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.reorder_level END ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_reorder_levels,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.category END ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_categories,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.supplier END ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_suppliers,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.added_by_name END ORDER BY m.expiry_date ASC, m.id ASC SEPARATOR '|') as batch_added_bys,
         MIN(DATEDIFF(CASE WHEN m.expiry_date = '0000-00-00' THEN NULL ELSE m.expiry_date END, CURDATE())) as days_remaining,
         CASE 
             WHEN SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') THEN 1 ELSE 0 END) > 0 
@@ -614,17 +611,81 @@ $med_query .= " GROUP BY m.medication_name, m.unit, m.branch_id";
 if ($status_filter === 'active') { $med_query .= " HAVING computed_status = 'active'"; }
 elseif ($status_filter === 'inactive') { $med_query .= " HAVING computed_status = 'inactive'"; }
 
-if ($stock_filter === 'low') { $med_query .= " HAVING total_quantity > 0 AND total_quantity <= reorder_level AND computed_status = 'active'"; }
-elseif ($stock_filter === 'out') { $med_query .= " HAVING total_quantity = 0 AND computed_status = 'active'"; }
-
 $med_query .= " ORDER BY m.medication_name ASC";
 
 $stmt = $db->prepare($med_query);
 $stmt->execute($med_params);
 $medicines = $stmt->fetchAll();
 
+// ✅ V10.1: Kokotoa TOTAL reorder_level ya batches zote zenye stock
+foreach ($medicines as &$med) {
+    $batch_ids = !empty($med['batch_ids']) ? explode(',', $med['batch_ids']) : [];
+    $batch_quantities = !empty($med['batch_quantities']) ? explode('|', $med['batch_quantities']) : [];
+    $batch_statuses = !empty($med['batch_statuses']) ? explode('|', $med['batch_statuses']) : [];
+    $batch_expiries = !empty($med['batch_expiries']) ? explode('|', $med['batch_expiries']) : [];
+    $batch_reorder_levels = !empty($med['batch_reorder_levels']) ? explode('|', $med['batch_reorder_levels']) : [];
+    
+    $total_reorder_with_stock = 0;
+    $current_batch_reorder = 0;
+    $current_batch_id = null;
+    $current_batch_qty = 0;
+    $found_current = false;
+    $active_batch_count = 0;
+    
+    foreach ($batch_ids as $idx => $bid) {
+        $qty = (int)($batch_quantities[$idx] ?? 0);
+        $status = $batch_statuses[$idx] ?? 'inactive';
+        $expiry = $batch_expiries[$idx] ?? '';
+        $reorder = (int)($batch_reorder_levels[$idx] ?? 0);
+        
+        $is_expired = (!empty($expiry) && $expiry !== '0000-00-00' && strtotime($expiry) < strtotime('today'));
+        $is_valid = ($qty > 0 && $status === 'active' && !$is_expired);
+        
+        if ($is_valid) {
+            $total_reorder_with_stock += $reorder;
+            $active_batch_count++;
+            if (!$found_current) {
+                $current_batch_reorder = $reorder;
+                $current_batch_id = (int)trim($bid);
+                $current_batch_qty = $qty;
+                $found_current = true;
+            }
+        }
+    }
+    
+    $med['total_reorder_level'] = $total_reorder_with_stock;
+    $med['active_batch_count'] = $active_batch_count;
+    $med['current_batch_reorder_level'] = $current_batch_reorder;
+    $med['current_batch_id'] = $current_batch_id;
+    $med['current_batch_qty'] = $current_batch_qty;
+    $med['has_active_batch'] = $found_current;
+}
+unset($med);
+
+// ✅ V10.1: Filter low/out stock BAADA ya kuhesabu total_reorder_level
+if ($stock_filter === 'low' || $stock_filter === 'out') {
+    $filtered_medicines = [];
+    foreach ($medicines as $m) {
+        $total_q = (int)($m['total_quantity'] ?? 0);
+        $total_r = (int)($m['total_reorder_level'] ?? 0);
+        $is_active = ($m['computed_status'] ?? 'active') === 'active';
+        
+        if ($stock_filter === 'low') {
+            if ($total_q > 0 && $total_r > 0 && $total_q <= $total_r && $is_active) {
+                $filtered_medicines[] = $m;
+            }
+        } elseif ($stock_filter === 'out') {
+            if ($total_q == 0 && $is_active) {
+                $filtered_medicines[] = $m;
+            }
+        }
+    }
+    $medicines = $filtered_medicines;
+}
+
 // ================================================================
 // EQUIPMENT QUERY
+// ✅ V10.1: GROUP_CONCAT inachukua TU batches zenye quantity > 0
 // ================================================================
 $equip_query = "
     SELECT 
@@ -643,14 +704,15 @@ $equip_query = "
         MIN(e.selling_price) as selling_price,
         MIN(e.supplier) as supplier,
         MIN(CASE WHEN e.expiry_date IS NOT NULL AND e.expiry_date != '0000-00-00' THEN e.expiry_date ELSE NULL END) as expiry_date,
-        GROUP_CONCAT(e.id ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR ',') as batch_ids,
-        GROUP_CONCAT(e.batch_number ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_numbers,
-        GROUP_CONCAT(e.quantity ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_quantities,
-        GROUP_CONCAT(e.expiry_date ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_expiries,
-        GROUP_CONCAT(e.status ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_statuses,
-        GROUP_CONCAT(e.category ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_categories,
-        GROUP_CONCAT(e.supplier ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_suppliers,
-        GROUP_CONCAT(e.added_by_name ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_added_bys,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.id END ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR ',') as batch_ids,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.batch_number END ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_numbers,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.quantity END ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_quantities,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.expiry_date END ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_expiries,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.status END ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_statuses,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.reorder_level END ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_reorder_levels,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.category END ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_categories,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.supplier END ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_suppliers,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.added_by_name END ORDER BY e.expiry_date ASC, e.id ASC SEPARATOR '|') as batch_added_bys,
         MIN(DATEDIFF(CASE WHEN e.expiry_date = '0000-00-00' THEN NULL ELSE e.expiry_date END, CURDATE())) as days_remaining,
         CASE 
             WHEN SUM(CASE WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') THEN 1 ELSE 0 END) > 0 
@@ -674,14 +736,77 @@ $equip_query .= " GROUP BY e.equipment_name, e.unit, e.branch_id";
 if ($status_filter === 'active') { $equip_query .= " HAVING computed_status = 'active'"; }
 elseif ($status_filter === 'inactive') { $equip_query .= " HAVING computed_status = 'inactive'"; }
 
-if ($stock_filter === 'low') { $equip_query .= " HAVING total_quantity > 0 AND total_quantity <= reorder_level AND computed_status = 'active'"; }
-elseif ($stock_filter === 'out') { $equip_query .= " HAVING total_quantity = 0 AND computed_status = 'active'"; }
-
 $equip_query .= " ORDER BY e.equipment_name ASC";
 
 $stmt = $db->prepare($equip_query);
 $stmt->execute($equip_params);
 $equipment = $stmt->fetchAll();
+
+// ✅ V10.1: Kokotoa TOTAL reorder_level ya batches zote zenye stock
+foreach ($equipment as &$eq) {
+    $batch_ids = !empty($eq['batch_ids']) ? explode(',', $eq['batch_ids']) : [];
+    $batch_quantities = !empty($eq['batch_quantities']) ? explode('|', $eq['batch_quantities']) : [];
+    $batch_statuses = !empty($eq['batch_statuses']) ? explode('|', $eq['batch_statuses']) : [];
+    $batch_expiries = !empty($eq['batch_expiries']) ? explode('|', $eq['batch_expiries']) : [];
+    $batch_reorder_levels = !empty($eq['batch_reorder_levels']) ? explode('|', $eq['batch_reorder_levels']) : [];
+    
+    $total_reorder_with_stock = 0;
+    $current_batch_reorder = 0;
+    $current_batch_id = null;
+    $current_batch_qty = 0;
+    $found_current = false;
+    $active_batch_count = 0;
+    
+    foreach ($batch_ids as $idx => $bid) {
+        $qty = (int)($batch_quantities[$idx] ?? 0);
+        $status = $batch_statuses[$idx] ?? 'inactive';
+        $expiry = $batch_expiries[$idx] ?? '';
+        $reorder = (int)($batch_reorder_levels[$idx] ?? 0);
+        
+        $is_expired = (!empty($expiry) && $expiry !== '0000-00-00' && strtotime($expiry) < strtotime('today'));
+        $is_valid = ($qty > 0 && $status === 'active' && !$is_expired);
+        
+        if ($is_valid) {
+            $total_reorder_with_stock += $reorder;
+            $active_batch_count++;
+            if (!$found_current) {
+                $current_batch_reorder = $reorder;
+                $current_batch_id = (int)trim($bid);
+                $current_batch_qty = $qty;
+                $found_current = true;
+            }
+        }
+    }
+    
+    $eq['total_reorder_level'] = $total_reorder_with_stock;
+    $eq['active_batch_count'] = $active_batch_count;
+    $eq['current_batch_reorder_level'] = $current_batch_reorder;
+    $eq['current_batch_id'] = $current_batch_id;
+    $eq['current_batch_qty'] = $current_batch_qty;
+    $eq['has_active_batch'] = $found_current;
+}
+unset($eq);
+
+// ✅ V10.1: Filter low/out stock BAADA ya kuhesabu total_reorder_level
+if ($stock_filter === 'low' || $stock_filter === 'out') {
+    $filtered_equip = [];
+    foreach ($equipment as $e) {
+        $total_q = (int)($e['total_quantity'] ?? 0);
+        $total_r = (int)($e['total_reorder_level'] ?? 0);
+        $is_active = ($e['computed_status'] ?? 'active') === 'active';
+        
+        if ($stock_filter === 'low') {
+            if ($total_q > 0 && $total_r > 0 && $total_q <= $total_r && $is_active) {
+                $filtered_equip[] = $e;
+            }
+        } elseif ($stock_filter === 'out') {
+            if ($total_q == 0 && $is_active) {
+                $filtered_equip[] = $e;
+            }
+        }
+    }
+    $equipment = $filtered_equip;
+}
 
 // ================================================================
 // STATISTICS
@@ -705,8 +830,48 @@ $stmt = $db->prepare($sql); $stmt->execute($stats_params); $med_in_stock = $stmt
 $sql = "SELECT COUNT(DISTINCT medication_name) as count FROM medications_inventory WHERE status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') AND quantity = 0 $stats_branch_condition";
 $stmt = $db->prepare($sql); $stmt->execute($stats_params); $med_out_of_stock = $stmt->fetch()['count'] ?? 0;
 
-$sql = "SELECT COUNT(DISTINCT medication_name) as count FROM medications_inventory WHERE status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') AND quantity > 0 AND quantity <= reorder_level $stats_branch_condition";
-$stmt = $db->prepare($sql); $stmt->execute($stats_params); $med_low_stock = $stmt->fetch()['count'] ?? 0;
+// ✅ V10.1: Low stock = total_qty <= JUMLA ya reorder_levels za batches zenye stock
+$sql = "
+    SELECT 
+        m.medication_name,
+        m.branch_id,
+        SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') THEN m.quantity ELSE 0 END) as total_qty,
+        GROUP_CONCAT(m.quantity SEPARATOR '|') as all_qtys,
+        GROUP_CONCAT(m.status SEPARATOR '|') as all_statuses,
+        GROUP_CONCAT(m.expiry_date SEPARATOR '|') as all_expiries,
+        GROUP_CONCAT(m.reorder_level SEPARATOR '|') as all_reorders
+    FROM medications_inventory m
+    WHERE 1=1 $stats_branch_condition
+    GROUP BY m.medication_name, m.branch_id
+";
+$stmt = $db->prepare($sql); $stmt->execute($stats_params); $all_med_groups = $stmt->fetchAll();
+
+$med_low_stock = 0;
+foreach ($all_med_groups as $g) {
+    $total_q = (int)($g['total_qty'] ?? 0);
+    if ($total_q <= 0) continue;
+    
+    $qtys_arr = !empty($g['all_qtys']) ? explode('|', $g['all_qtys']) : [];
+    $statuses_arr = !empty($g['all_statuses']) ? explode('|', $g['all_statuses']) : [];
+    $expiries_arr = !empty($g['all_expiries']) ? explode('|', $g['all_expiries']) : [];
+    $reorders_arr = !empty($g['all_reorders']) ? explode('|', $g['all_reorders']) : [];
+    
+    $total_reorder = 0;
+    foreach ($qtys_arr as $idx => $q) {
+        $q = (int)$q;
+        $st = $statuses_arr[$idx] ?? 'inactive';
+        $ex = $expiries_arr[$idx] ?? '';
+        $re = (int)($reorders_arr[$idx] ?? 0);
+        $is_exp = (!empty($ex) && $ex !== '0000-00-00' && strtotime($ex) < strtotime('today'));
+        if ($q > 0 && $st === 'active' && !$is_exp) {
+            $total_reorder += $re;
+        }
+    }
+    
+    if ($total_reorder > 0 && $total_q <= $total_reorder) {
+        $med_low_stock++;
+    }
+}
 
 $sql = "SELECT COUNT(DISTINCT medication_name) as count FROM medications_inventory WHERE expiry_date IS NOT NULL AND expiry_date != '0000-00-00' AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY) AND status = 'active' $stats_branch_condition";
 $stmt = $db->prepare($sql); $stmt->execute($stats_params); $med_expiring = $stmt->fetch()['count'] ?? 0;
@@ -729,8 +894,48 @@ $stmt = $db->prepare($sql); $stmt->execute($stats_params); $equip_in_stock = $st
 $sql = "SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') AND quantity = 0 $stats_branch_condition";
 $stmt = $db->prepare($sql); $stmt->execute($stats_params); $equip_out_of_stock = $stmt->fetch()['count'] ?? 0;
 
-$sql = "SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') AND quantity > 0 AND quantity <= reorder_level $stats_branch_condition";
-$stmt = $db->prepare($sql); $stmt->execute($stats_params); $equip_low_stock = $stmt->fetch()['count'] ?? 0;
+// ✅ V10.1: Low stock equipment = total_qty <= JUMLA ya reorder_levels za batches zenye stock
+$sql = "
+    SELECT 
+        e.equipment_name,
+        e.branch_id,
+        SUM(CASE WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') THEN e.quantity ELSE 0 END) as total_qty,
+        GROUP_CONCAT(e.quantity SEPARATOR '|') as all_qtys,
+        GROUP_CONCAT(e.status SEPARATOR '|') as all_statuses,
+        GROUP_CONCAT(e.expiry_date SEPARATOR '|') as all_expiries,
+        GROUP_CONCAT(e.reorder_level SEPARATOR '|') as all_reorders
+    FROM medical_equipment e
+    WHERE 1=1 $stats_branch_condition
+    GROUP BY e.equipment_name, e.branch_id
+";
+$stmt = $db->prepare($sql); $stmt->execute($stats_params); $all_equip_groups = $stmt->fetchAll();
+
+$equip_low_stock = 0;
+foreach ($all_equip_groups as $g) {
+    $total_q = (int)($g['total_qty'] ?? 0);
+    if ($total_q <= 0) continue;
+    
+    $qtys_arr = !empty($g['all_qtys']) ? explode('|', $g['all_qtys']) : [];
+    $statuses_arr = !empty($g['all_statuses']) ? explode('|', $g['all_statuses']) : [];
+    $expiries_arr = !empty($g['all_expiries']) ? explode('|', $g['all_expiries']) : [];
+    $reorders_arr = !empty($g['all_reorders']) ? explode('|', $g['all_reorders']) : [];
+    
+    $total_reorder = 0;
+    foreach ($qtys_arr as $idx => $q) {
+        $q = (int)$q;
+        $st = $statuses_arr[$idx] ?? 'inactive';
+        $ex = $expiries_arr[$idx] ?? '';
+        $re = (int)($reorders_arr[$idx] ?? 0);
+        $is_exp = (!empty($ex) && $ex !== '0000-00-00' && strtotime($ex) < strtotime('today'));
+        if ($q > 0 && $st === 'active' && !$is_exp) {
+            $total_reorder += $re;
+        }
+    }
+    
+    if ($total_reorder > 0 && $total_q <= $total_reorder) {
+        $equip_low_stock++;
+    }
+}
 
 $sql = "SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE expiry_date IS NOT NULL AND expiry_date != '0000-00-00' AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY) AND status = 'active' $stats_branch_condition";
 $stmt = $db->prepare($sql); $stmt->execute($stats_params); $equip_expiring = $stmt->fetch()['count'] ?? 0;
@@ -763,26 +968,13 @@ try {
     $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 } catch (Exception $e) { $unread_notifications = 0; }
 
-// ================================================================
-// INCLUDE SHARED HEADER + SIDEBAR
-// ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC STYLES -->
-<!-- ================================================================ -->
 <style>
-    .inventory-stat-icon {
-        position: absolute;
-        top: 14px;
-        right: 18px;
-        font-size: 1.3rem;
-        opacity: 0.7;
-    }
+    .inventory-stat-icon { position: absolute; top: 14px; right: 18px; font-size: 1.3rem; opacity: 0.7; }
     
-    /* BRANCH INFO CARD */
     .branch-info-card {
         background: linear-gradient(135deg, var(--page-primary), var(--page-primary-dark));
         border-radius: 16px; padding: 14px 24px; margin-bottom: 20px;
@@ -790,85 +982,38 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         flex-wrap: wrap; gap: 10px; color: white;
     }
     .branch-info-card .branch-title { font-size: 0.95rem; font-weight: 600; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .branch-info-card .filter-badge {
-        background: rgba(255,255,255,0.25); padding: 2px 10px;
-        border-radius: 12px; font-size: 0.65rem; font-weight: 700;
-        display: inline-flex; align-items: center; gap: 4px;
-    }
+    .branch-info-card .filter-badge { background: rgba(255,255,255,0.25); padding: 2px 10px; border-radius: 12px; font-size: 0.65rem; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; }
     .branch-info-card .branch-stats { display: flex; gap: 12px; flex-wrap: wrap; }
-    .branch-info-card .stat-item {
-        display: flex; align-items: center; gap: 5px; font-size: 0.7rem;
-        background: rgba(255,255,255,0.1); padding: 3px 10px; border-radius: 20px;
-    }
+    .branch-info-card .stat-item { display: flex; align-items: center; gap: 5px; font-size: 0.7rem; background: rgba(255,255,255,0.1); padding: 3px 10px; border-radius: 20px; }
     
-    /* PAGE HEADER */
     .page-header-box {
         background: linear-gradient(135deg, var(--page-primary), var(--page-primary-dark));
         border-radius: 16px; padding: 18px 24px; margin-bottom: 20px;
         display: flex; justify-content: space-between; align-items: center;
         flex-wrap: wrap; gap: 10px;
     }
-    .page-header-box .page-title {
-        color: white; font-size: 1.4rem; font-weight: 700;
-        display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    }
-    .page-title .role-badge-display {
-        background: rgba(255,255,255,0.2); color: white;
-        padding: 2px 10px; border-radius: 20px; font-size: 0.55rem;
-        font-weight: 600; text-transform: uppercase;
-    }
-    .page-title .branch-name-display {
-        background: rgba(255,255,255,0.15); padding: 2px 12px;
-        border-radius: 20px; font-size: 0.7rem; font-weight: 500;
-    }
-    .page-title .btn-back-green {
-        background: var(--page-success); color: white; border: none;
-        padding: 5px 16px; border-radius: 20px; font-size: 0.7rem;
-        font-weight: 600; text-decoration: none;
-        display: inline-flex; align-items: center; gap: 6px;
-    }
+    .page-header-box .page-title { color: white; font-size: 1.4rem; font-weight: 700; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .page-title .role-badge-display { background: rgba(255,255,255,0.2); color: white; padding: 2px 10px; border-radius: 20px; font-size: 0.55rem; font-weight: 600; text-transform: uppercase; }
+    .page-title .branch-name-display { background: rgba(255,255,255,0.15); padding: 2px 12px; border-radius: 20px; font-size: 0.7rem; font-weight: 500; }
+    .page-title .btn-back-green { background: var(--page-success); color: white; border: none; padding: 5px 16px; border-radius: 20px; font-size: 0.7rem; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
     
-    .page-subtitle {
-        color: rgba(255,255,255,0.85); font-size: 0.8rem;
-        display: flex; align-items: center; gap: 6px;
-        flex-wrap: wrap; margin-top: 2px;
-    }
+    .page-subtitle { color: rgba(255,255,255,0.85); font-size: 0.8rem; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
     
-    .header-badge {
-        background: rgba(255,255,255,0.12); color: white;
-        padding: 2px 10px; border-radius: 20px; font-size: 0.6rem;
-        font-weight: 500; display: inline-flex; align-items: center; gap: 4px;
-    }
+    .header-badge { background: rgba(255,255,255,0.12); color: white; padding: 2px 10px; border-radius: 20px; font-size: 0.6rem; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; }
     
     .header-actions { display: flex; gap: 10px; flex-wrap: nowrap; align-items: center; }
     
-    .btn-action-inv {
-        display: inline-flex; align-items: center; justify-content: center;
-        gap: 8px; padding: 10px 24px; border-radius: 8px;
-        font-weight: 600; font-size: 0.82rem; border: none;
-        cursor: pointer; text-decoration: none; color: white;
-        height: 48px; min-width: 180px; white-space: nowrap;
-    }
+    .btn-action-inv { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 24px; border-radius: 8px; font-weight: 600; font-size: 0.82rem; border: none; cursor: pointer; text-decoration: none; color: white; height: 48px; min-width: 180px; white-space: nowrap; }
     .btn-add-medicine { background: var(--page-success); }
     .btn-add-equipment { background: var(--page-purple); }
     .btn-purchase-history { background: var(--page-warning); }
     
-    /* MESSAGE */
-    .message-box {
-        padding: 12px 18px; border-radius: 10px; margin-bottom: 16px;
-        display: flex; align-items: center; gap: 10px;
-        font-weight: 500; font-size: 0.9rem;
-        border-left: 5px solid transparent;
-    }
+    .message-box { padding: 12px 18px; border-radius: 10px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; font-weight: 500; font-size: 0.9rem; border-left: 5px solid transparent; }
     .message-box.success { background: var(--page-success-bg); color: var(--page-success); border-left-color: var(--page-success); }
     .message-box.error { background: var(--page-danger-bg); color: var(--page-danger); border-left-color: var(--page-danger); }
     
-    /* STATS GRID */
     .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
-    .inv-stat-card {
-        border-radius: 12px; padding: 16px 18px; text-decoration: none;
-        display: block; color: white; min-height: 85px; position: relative;
-    }
+    .inv-stat-card { border-radius: 12px; padding: 16px 18px; text-decoration: none; display: block; color: white; min-height: 85px; position: relative; }
     .inv-stat-card .stat-number { font-size: 1.6rem; font-weight: 700; line-height: 1.2; }
     .inv-stat-card .stat-label { font-size: 0.6rem; color: rgba(255,255,255,0.9); font-weight: 500; text-transform: uppercase; margin-top: 2px; }
     .inv-stat-card .stat-icon { font-size: 1.3rem; opacity: 0.7; float: right; margin-top: -5px; }
@@ -881,282 +1026,64 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .inv-stat-card.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
     .inv-stat-card.indigo { background: linear-gradient(135deg, #4F46E5, #4338CA); }
     
-    .card {
-        background: var(--page-bg-card); border-radius: 12px; padding: 14px 18px;
-        border: 2px solid var(--page-border); margin-bottom: 20px;
-    }
+    .card { background: var(--page-bg-card); border-radius: 12px; padding: 14px 18px; border: 2px solid var(--page-border); margin-bottom: 20px; }
     
     .filter-group { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
-    .filter-btn {
-        padding: 3px 12px; border-radius: 14px; font-size: 0.65rem;
-        font-weight: 600; border: 2px solid var(--page-border);
-        background: transparent; color: var(--page-text-secondary);
-        cursor: pointer; text-decoration: none;
-    }
+    .filter-btn { padding: 3px 12px; border-radius: 14px; font-size: 0.65rem; font-weight: 600; border: 2px solid var(--page-border); background: transparent; color: var(--page-text-secondary); cursor: pointer; text-decoration: none; }
     .filter-btn:hover { border-color: var(--page-primary); color: var(--page-primary); }
     .filter-btn.active { background: var(--page-primary); border-color: var(--page-primary); color: white; }
     
-    /* TABLE HEADER BAR */
-    .table-header-bar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 12px;
-        margin-bottom: 14px;
-        padding-bottom: 12px;
-        border-bottom: 2px solid var(--page-border);
-    }
-    .table-header-left {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-        flex: 1;
-        min-width: 0;
-    }
-    .table-header-right {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex-shrink: 0;
-    }
+    .table-header-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 2px solid var(--page-border); }
+    .table-header-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 1; min-width: 0; }
+    .table-header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
     
-    .table-search-box {
-        position: relative;
-        min-width: 280px;
-        flex: 1;
-        max-width: 400px;
-    }
-    .table-search-box i {
-        position: absolute;
-        left: 14px;
-        top: 50%;
-        transform: translateY(-50%);
-        color: rgba(255,255,255,0.95);
-        font-size: 0.9rem;
-        pointer-events: none;
-        z-index: 1;
-    }
-    .table-search-box input {
-        width: 100%;
-        padding: 11px 16px 11px 44px;
-        border: 2px solid var(--page-primary);
-        border-radius: 10px;
-        font-size: 0.85rem;
-        background: linear-gradient(135deg, var(--page-primary), var(--page-primary-dark));
-        color: white;
-        outline: none;
-        font-weight: 500;
-        height: 44px;
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
-        transition: all 0.3s ease;
-    }
-    .table-search-box input::placeholder {
-        color: rgba(255,255,255,0.85);
-        font-weight: 400;
-    }
-    .table-search-box input:focus {
-        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.25), 0 6px 20px rgba(11, 94, 215, 0.35);
-        transform: translateY(-1px);
-    }
+    .table-search-box { position: relative; min-width: 280px; flex: 1; max-width: 400px; }
+    .table-search-box i { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: rgba(255,255,255,0.95); font-size: 0.9rem; pointer-events: none; z-index: 1; }
+    .table-search-box input { width: 100%; padding: 11px 16px 11px 44px; border: 2px solid var(--page-primary); border-radius: 10px; font-size: 0.85rem; background: linear-gradient(135deg, var(--page-primary), var(--page-primary-dark)); color: white; outline: none; font-weight: 500; height: 44px; box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25); transition: all 0.3s ease; }
+    .table-search-box input::placeholder { color: rgba(255,255,255,0.85); font-weight: 400; }
+    .table-search-box input:focus { box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.25), 0 6px 20px rgba(11, 94, 215, 0.35); transform: translateY(-1px); }
     
-    .scroll-btn-header {
-        width: 40px;
-        height: 40px;
-        border-radius: 8px;
-        border: 2px solid var(--page-border);
-        background: var(--page-bg-card);
-        color: var(--page-text-primary);
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        transition: all 0.3s ease;
-        font-size: 0.85rem;
-    }
-    .scroll-btn-header:hover {
-        background: var(--page-primary);
-        border-color: var(--page-primary);
-        color: white;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    .scroll-btn-header:disabled {
-        opacity: 0.35;
-        cursor: not-allowed;
-        transform: none;
-    }
+    .scroll-btn-header { width: 40px; height: 40px; border-radius: 8px; border: 2px solid var(--page-border); background: var(--page-bg-card); color: var(--page-text-primary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: all 0.3s ease; font-size: 0.85rem; }
+    .scroll-btn-header:hover { background: var(--page-primary); border-color: var(--page-primary); color: white; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
+    .scroll-btn-header:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
     
-    .search-results-info {
-        font-size: 0.72rem;
-        color: var(--page-primary);
-        padding: 6px 12px;
-        background: var(--page-primary-bg);
-        border-radius: 8px;
-        display: none;
-        font-weight: 600;
-        border: 1px solid var(--page-primary);
-    }
+    .search-results-info { font-size: 0.72rem; color: var(--page-primary); padding: 6px 12px; background: var(--page-primary-bg); border-radius: 8px; display: none; font-weight: 600; border: 1px solid var(--page-primary); }
     
-    .card-title {
-        font-size: 0.9rem;
-        font-weight: 600;
-        color: var(--page-text-primary);
-        display: flex;
-        align-items: center;
-        gap: 6px;
-    }
-    .result-count {
-        font-size: 0.75rem;
-        color: var(--page-text-secondary);
-        font-weight: 500;
-    }
-    .result-count strong {
-        color: var(--page-primary);
-        font-weight: 700;
-    }
+    .card-title { font-size: 0.9rem; font-weight: 600; color: var(--page-text-primary); display: flex; align-items: center; gap: 6px; }
+    .result-count { font-size: 0.75rem; color: var(--page-text-secondary); font-weight: 500; }
+    .result-count strong { color: var(--page-primary); font-weight: 700; }
     
-    /* TABLE CONTAINER */
-    .table-scroll-container {
-        overflow-x: auto;
-        overflow-y: auto;
-        max-height: 560px;
-        border-radius: 12px;
-        border: 2px solid var(--page-border);
-        background: var(--page-bg-card);
-        position: relative;
-    }
+    .table-scroll-container { overflow-x: auto; overflow-y: auto; max-height: 560px; border-radius: 12px; border: 2px solid var(--page-border); background: var(--page-bg-card); position: relative; }
     .table-scroll-container::-webkit-scrollbar { height: 10px; width: 10px; }
-    .table-scroll-container::-webkit-scrollbar-track { 
-        background: var(--page-bg-body); 
-        border-radius: 6px; 
-    }
-    .table-scroll-container::-webkit-scrollbar-thumb { 
-        background: var(--page-primary); 
-        border-radius: 6px;
-        border: 2px solid var(--page-bg-body);
-    }
-    .table-scroll-container::-webkit-scrollbar-thumb:hover { 
-        background: var(--page-primary-dark); 
-    }
+    .table-scroll-container::-webkit-scrollbar-track { background: var(--page-bg-body); border-radius: 6px; }
+    .table-scroll-container::-webkit-scrollbar-thumb { background: var(--page-primary); border-radius: 6px; border: 2px solid var(--page-bg-body); }
     
-    /* DATA TABLE */
-    .data-table {
-        width: 100%;
-        min-width: 1550px;
-        border-collapse: separate;
-        border-spacing: 0;
-        font-size: 0.8rem;
-        font-family: 'Inter', 'Segoe UI', sans-serif;
-    }
+    .data-table { width: 100%; min-width: 1550px; border-collapse: separate; border-spacing: 0; font-size: 0.8rem; font-family: 'Inter', 'Segoe UI', sans-serif; }
     
-    .data-table thead th {
-        position: sticky;
-        top: 0;
-        z-index: 10;
-        background: linear-gradient(135deg, var(--page-primary), var(--page-primary-dark));
-        color: white;
-        padding: 14px 14px;
-        font-size: 0.68rem;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        font-weight: 700;
-        white-space: nowrap;
-        text-align: left;
-        border-right: 1px solid rgba(255, 255, 255, 0.12);
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    }
-    .data-table thead th:last-child {
-        border-right: none;
-        text-align: center;
-    }
+    .data-table thead th { position: sticky; top: 0; z-index: 10; background: linear-gradient(135deg, var(--page-primary), var(--page-primary-dark)); color: white; padding: 14px 14px; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; white-space: nowrap; text-align: left; border-right: 1px solid rgba(255, 255, 255, 0.12); box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); }
+    .data-table thead th:last-child { border-right: none; text-align: center; }
     .data-table thead th:first-child { border-radius: 10px 0 0 0; }
     .data-table thead th:last-child { border-radius: 0 10px 0 0; }
     
-    .data-table tbody tr {
-        transition: all 0.2s ease;
-        background: var(--page-bg-card);
-    }
-    .data-table tbody tr:nth-child(even) {
-        background: rgba(11, 94, 215, 0.03);
-    }
-    [data-theme="dark"] .data-table tbody tr:nth-child(even) {
-        background: rgba(11, 94, 215, 0.08);
-    }
-    .data-table tbody tr:hover {
-        background: linear-gradient(90deg, rgba(209, 250, 229, 0.5) 0%, rgba(209, 250, 229, 0.15) 100%) !important;
-        box-shadow: inset 4px 0 0 var(--page-success);
-    }
-    [data-theme="dark"] .data-table tbody tr:hover {
-        background: linear-gradient(90deg, rgba(26, 58, 42, 0.7) 0%, rgba(26, 58, 42, 0.3) 100%) !important;
-        box-shadow: inset 4px 0 0 #34D399;
-    }
+    .data-table tbody tr { transition: all 0.2s ease; background: var(--page-bg-card); }
+    .data-table tbody tr:nth-child(even) { background: rgba(11, 94, 215, 0.03); }
+    [data-theme="dark"] .data-table tbody tr:nth-child(even) { background: rgba(11, 94, 215, 0.08); }
+    .data-table tbody tr:hover { background: linear-gradient(90deg, rgba(209, 250, 229, 0.5) 0%, rgba(209, 250, 229, 0.15) 100%) !important; box-shadow: inset 4px 0 0 var(--page-success); }
+    [data-theme="dark"] .data-table tbody tr:hover { background: linear-gradient(90deg, rgba(26, 58, 42, 0.7) 0%, rgba(26, 58, 42, 0.3) 100%) !important; box-shadow: inset 4px 0 0 #34D399; }
     
-    .data-table td {
-        padding: 13px 14px;
-        border-bottom: 1px solid var(--page-border);
-        color: var(--page-text-primary);
-        vertical-align: middle;
-        white-space: nowrap;
-        font-size: 0.8rem;
-        line-height: 1.4;
-        transition: all 0.2s ease;
-    }
-    .data-table tbody tr:last-child td {
-        border-bottom: none;
-    }
+    .data-table td { padding: 13px 14px; border-bottom: 1px solid var(--page-border); color: var(--page-text-primary); vertical-align: middle; white-space: nowrap; font-size: 0.8rem; line-height: 1.4; transition: all 0.2s ease; }
+    .data-table tbody tr:last-child td { border-bottom: none; }
     
-    .col-sno {
-        width: 55px;
-        min-width: 55px;
-        text-align: center;
-        font-weight: 700;
-        color: var(--page-text-secondary);
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.75rem;
-    }
-    .col-name {
-        min-width: 220px;
-        max-width: 280px;
-        white-space: normal;
-    }
-    .col-name strong {
-        display: block;
-        font-size: 0.85rem;
-        font-weight: 700;
-        color: var(--page-text-primary);
-        margin-bottom: 2px;
-        line-height: 1.3;
-    }
+    .col-sno { width: 55px; min-width: 55px; text-align: center; font-weight: 700; color: var(--page-text-secondary); font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; }
+    .col-name { min-width: 220px; max-width: 280px; white-space: normal; }
+    .col-name strong { display: block; font-size: 0.85rem; font-weight: 700; color: var(--page-text-primary); margin-bottom: 2px; line-height: 1.3; }
     .col-category { min-width: 140px; }
     .col-branch { min-width: 130px; }
-    .col-qty {
-        min-width: 90px;
-        text-align: center;
-        font-family: 'JetBrains Mono', monospace;
-    }
-    .col-qty strong {
-        font-size: 0.95rem;
-        font-weight: 800;
-        color: var(--page-primary);
-        display: inline-block;
-    }
-    .col-reorder {
-        min-width: 80px;
-        text-align: center;
-        font-family: 'JetBrains Mono', monospace;
-        color: var(--page-text-secondary);
-    }
+    .col-qty { min-width: 90px; text-align: center; font-family: 'JetBrains Mono', monospace; }
+    .col-qty strong { font-size: 0.95rem; font-weight: 800; color: var(--page-primary); display: inline-block; }
+    .col-reorder { min-width: 100px; text-align: center; font-family: 'JetBrains Mono', monospace; color: var(--page-text-secondary); }
     .col-stock { min-width: 140px; text-align: center; }
-    .col-price {
-        min-width: 120px;
-        text-align: right;
-        font-family: 'JetBrains Mono', monospace;
-        font-weight: 700;
-        color: var(--page-success);
-        font-size: 0.85rem;
-    }
+    .col-price { min-width: 120px; text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--page-success); font-size: 0.85rem; }
     .col-expiry { min-width: 120px; text-align: center; }
     .col-days { min-width: 85px; text-align: center; }
     .col-batch { min-width: 150px; text-align: center; }
@@ -1164,535 +1091,104 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .col-added-by { min-width: 150px; max-width: 180px; }
     .col-actions { min-width: 240px; text-align: center; padding: 10px 8px; }
     
-    .no-results-row td {
-        text-align: center;
-        padding: 50px 20px !important;
-        color: var(--page-text-secondary);
-        font-size: 0.9rem;
-    }
-    .no-results-row i {
-        font-size: 2.5rem;
-        color: var(--page-border);
-        display: block;
-        margin-bottom: 10px;
-    }
-    .no-results-row p {
-        font-weight: 600;
-        color: var(--page-text-primary);
-        margin: 0;
-    }
+    .no-results-row td { text-align: center; padding: 50px 20px !important; color: var(--page-text-secondary); font-size: 0.9rem; }
+    .no-results-row i { font-size: 2.5rem; color: var(--page-border); display: block; margin-bottom: 10px; }
+    .no-results-row p { font-weight: 600; color: var(--page-text-primary); margin: 0; }
     
-    /* STATUS BADGES */
-    .status-badge {
-        padding: 5px 14px;
-        border-radius: 20px;
-        font-size: 0.68rem;
-        font-weight: 700;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        white-space: nowrap;
-    }
-    .status-badge.active {
-        background: var(--page-success-bg);
-        color: var(--page-success);
-        border: 1px solid rgba(5, 150, 105, 0.3);
-    }
-    .status-badge.inactive {
-        background: var(--page-danger-bg);
-        color: var(--page-danger);
-        border: 1px solid rgba(220, 38, 38, 0.3);
-    }
+    .status-badge { padding: 5px 14px; border-radius: 20px; font-size: 0.68rem; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+    .status-badge.active { background: var(--page-success-bg); color: var(--page-success); border: 1px solid rgba(5, 150, 105, 0.3); }
+    .status-badge.inactive { background: var(--page-danger-bg); color: var(--page-danger); border: 1px solid rgba(220, 38, 38, 0.3); }
     
-    /* STOCK BADGES - ✅ LOW NI BLUE SASA */
-    .stock-badge {
-        padding: 6px 14px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 700;
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        letter-spacing: 0.02em;
-        white-space: nowrap;
-    }
-    .stock-badge.ok {
-        background: var(--page-success-bg);
-        color: var(--page-success);
-        border: 1px solid rgba(5, 150, 105, 0.3);
-    }
-    .stock-badge.low {
-        background: var(--page-primary-bg);
-        color: var(--page-primary);
-        border: 1px solid rgba(11, 94, 215, 0.3);
-        animation: pulse 1.5s infinite;
-    }
-    .stock-badge.out {
-        background: var(--page-danger-bg);
-        color: var(--page-danger);
-        border: 1px solid rgba(220, 38, 38, 0.3);
-        animation: pulse 1s infinite;
-    }
+    .stock-badge { padding: 6px 14px; border-radius: 20px; font-size: 0.7rem; font-weight: 700; display: inline-flex; align-items: center; gap: 5px; letter-spacing: 0.02em; white-space: nowrap; }
+    .stock-badge.ok { background: var(--page-success-bg); color: var(--page-success); border: 1px solid rgba(5, 150, 105, 0.3); }
+    .stock-badge.low { background: var(--page-primary-bg); color: var(--page-primary); border: 1px solid rgba(11, 94, 215, 0.3); animation: pulse 1.5s infinite; }
+    .stock-badge.out { background: var(--page-danger-bg); color: var(--page-danger); border: 1px solid rgba(220, 38, 38, 0.3); animation: pulse 1s infinite; }
     
-    @keyframes pulse { 
-        0%, 100% { opacity: 1; } 
-        50% { opacity: 0.65; } 
-    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.65; } }
     
-    .zero-qty-warning {
-        font-size: 0.6rem;
-        display: block;
-        color: var(--page-warning);
-        font-weight: 700;
-        margin-top: 3px;
-    }
+    .zero-qty-warning { font-size: 0.6rem; display: block; color: var(--page-warning); font-weight: 700; margin-top: 3px; }
+    .current-batch-info { font-size: 0.58rem; display: block; color: var(--page-primary); font-weight: 600; margin-top: 3px; font-family: 'JetBrains Mono', monospace; }
     
-    /* EXPIRY BADGES - ✅ EXPIRING NI BLUE SASA */
-    .expiry-badge {
-        padding: 5px 12px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 700;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        white-space: nowrap;
-        font-family: 'JetBrains Mono', monospace;
-    }
-    .expiry-badge.valid {
-        background: var(--page-success-bg);
-        color: var(--page-success);
-        border: 1px solid rgba(5, 150, 105, 0.3);
-    }
-    .expiry-badge.expiring {
-        background: var(--page-primary-bg);
-        color: var(--page-primary);
-        border: 1px solid rgba(11, 94, 215, 0.3);
-        animation: pulse 1.5s infinite;
-    }
-    .expiry-badge.expired {
-        background: var(--page-danger-bg);
-        color: var(--page-danger);
-        border: 1px solid rgba(220, 38, 38, 0.3);
-        animation: pulse 1s infinite;
-    }
-    .expiry-badge.no-expiry {
-        background: var(--page-border);
-        color: var(--page-text-muted);
-        border: 1px solid rgba(148, 163, 184, 0.3);
-    }
+    .expiry-badge { padding: 5px 12px; border-radius: 20px; font-size: 0.7rem; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-family: 'JetBrains Mono', monospace; }
+    .expiry-badge.valid { background: var(--page-success-bg); color: var(--page-success); border: 1px solid rgba(5, 150, 105, 0.3); }
+    .expiry-badge.expiring { background: var(--page-primary-bg); color: var(--page-primary); border: 1px solid rgba(11, 94, 215, 0.3); animation: pulse 1.5s infinite; }
+    .expiry-badge.expired { background: var(--page-danger-bg); color: var(--page-danger); border: 1px solid rgba(220, 38, 38, 0.3); animation: pulse 1s infinite; }
+    .expiry-badge.no-expiry { background: var(--page-border); color: var(--page-text-muted); border: 1px solid rgba(148, 163, 184, 0.3); }
     
-    /* DAYS REMAINING - ✅ WARNING NI BLUE SASA */
-    .days-remaining {
-        font-size: 0.72rem;
-        font-weight: 700;
-        padding: 5px 12px;
-        border-radius: 20px;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        font-family: 'JetBrains Mono', monospace;
-        white-space: nowrap;
-    }
-    .days-remaining.good {
-        background: var(--page-success-bg);
-        color: var(--page-success);
-    }
-    .days-remaining.warning {
-        background: var(--page-primary-bg);
-        color: var(--page-primary);
-        animation: pulse 1.5s infinite;
-    }
-    .days-remaining.danger {
-        background: var(--page-danger-bg);
-        color: var(--page-danger);
-        animation: pulse 1s infinite;
-    }
-    .days-remaining.forever {
-        background: var(--page-border);
-        color: var(--page-text-muted);
-    }
+    .days-remaining { font-size: 0.72rem; font-weight: 700; padding: 5px 12px; border-radius: 20px; display: inline-flex; align-items: center; gap: 4px; font-family: 'JetBrains Mono', monospace; white-space: nowrap; }
+    .days-remaining.good { background: var(--page-success-bg); color: var(--page-success); }
+    .days-remaining.warning { background: var(--page-primary-bg); color: var(--page-primary); animation: pulse 1.5s infinite; }
+    .days-remaining.danger { background: var(--page-danger-bg); color: var(--page-danger); animation: pulse 1s infinite; }
+    .days-remaining.forever { background: var(--page-border); color: var(--page-text-muted); }
     
-    /* BATCH NUMBER */
-    .batch-number {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.72rem;
-        font-weight: 700;
-        padding: 5px 12px;
-        border-radius: 8px;
-        background: var(--page-primary-bg);
-        color: var(--page-primary);
-        display: inline-block;
-        letter-spacing: 0.02em;
-        border: 1px solid rgba(11, 94, 215, 0.2);
-    }
-    [data-theme="dark"] .batch-number {
-        background: #1E3A5F;
-        color: #6EA8FE;
-        border-color: rgba(110, 168, 254, 0.3);
-    }
+    .batch-number { font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; font-weight: 700; padding: 5px 12px; border-radius: 8px; background: var(--page-primary-bg); color: var(--page-primary); display: inline-block; letter-spacing: 0.02em; border: 1px solid rgba(11, 94, 215, 0.2); }
+    [data-theme="dark"] .batch-number { background: #1E3A5F; color: #6EA8FE; border-color: rgba(110, 168, 254, 0.3); }
     
-    /* ✅ BATCH COUNT BADGE - BLUE SASA */
-    .batch-count-badge {
-        font-size: 0.6rem;
-        background: var(--page-primary-bg);
-        color: var(--page-primary);
-        padding: 2px 10px;
-        border-radius: 10px;
-        font-weight: 700;
-        border: 1px solid rgba(11, 94, 215, 0.3);
-        display: inline-flex;
-        align-items: center;
-        gap: 3px;
-        box-shadow: 0 1px 3px rgba(11, 94, 215, 0.15);
-    }
-    [data-theme="dark"] .batch-count-badge {
-        background: #1E3A5F;
-        color: #6EA8FE;
-        border-color: rgba(110, 168, 254, 0.3);
-    }
+    .batch-count-badge { font-size: 0.6rem; background: var(--page-primary-bg); color: var(--page-primary); padding: 2px 10px; border-radius: 10px; font-weight: 700; border: 1px solid rgba(11, 94, 215, 0.3); display: inline-flex; align-items: center; gap: 3px; box-shadow: 0 1px 3px rgba(11, 94, 215, 0.15); }
+    [data-theme="dark"] .batch-count-badge { background: #1E3A5F; color: #6EA8FE; border-color: rgba(110, 168, 254, 0.3); }
     
-    /* ADDED BY TAG */
-    .added-by-tag {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        padding: 5px 12px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        background: var(--page-purple-bg);
-        color: var(--page-purple);
-        white-space: nowrap;
-        max-width: 100%;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        border: 1px solid rgba(124, 58, 237, 0.2);
-    }
-    [data-theme="dark"] .added-by-tag {
-        background: #2D1B4E;
-        color: #C4B5FD;
-        border-color: rgba(196, 181, 253, 0.2);
-    }
+    .added-by-tag { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 20px; font-size: 0.7rem; font-weight: 600; background: var(--page-purple-bg); color: var(--page-purple); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; border: 1px solid rgba(124, 58, 237, 0.2); }
+    [data-theme="dark"] .added-by-tag { background: #2D1B4E; color: #C4B5FD; border-color: rgba(196, 181, 253, 0.2); }
     
-    /* ACTION BUTTONS */
-    .action-group {
-        display: flex;
-        flex-direction: row;
-        gap: 6px;
-        align-items: center;
-        justify-content: center;
-        flex-wrap: nowrap;
-    }
+    .action-group { display: flex; flex-direction: row; gap: 6px; align-items: center; justify-content: center; flex-wrap: nowrap; }
     
-    .action-btn {
-        padding: 8px 14px;
-        border-radius: 8px;
-        font-size: 0.72rem;
-        font-weight: 700;
-        border: none;
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 5px;
-        color: white;
-        min-width: 72px;
-        height: 34px;
-        transition: all 0.25s ease;
-        letter-spacing: 0.02em;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
-        white-space: nowrap;
-    }
+    .action-btn { padding: 8px 14px; border-radius: 8px; font-size: 0.72rem; font-weight: 700; border: none; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 5px; color: white; min-width: 72px; height: 34px; transition: all 0.25s ease; letter-spacing: 0.02em; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1); white-space: nowrap; }
+    .action-btn.view { background: linear-gradient(135deg, var(--page-purple), #6D28D9); }
+    .action-btn.view:hover { background: linear-gradient(135deg, #6D28D9, #5B21B6); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(124, 58, 237, 0.5); color: white; }
+    .action-btn.edit { background: linear-gradient(135deg, var(--page-warning), #B45309); }
+    .action-btn.edit:hover { background: linear-gradient(135deg, #B45309, #92400E); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(217, 119, 6, 0.5); color: white; }
+    .action-btn.delete { background: linear-gradient(135deg, var(--page-danger), #991B1B); }
+    .action-btn.delete:hover { background: linear-gradient(135deg, #991B1B, #7F1D1D); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(220, 38, 38, 0.5); color: white; }
+    .action-btn:active { transform: translateY(0) scale(0.97); }
+    .action-btn i { font-size: 0.78rem; }
     
-    .action-btn.view {
-        background: linear-gradient(135deg, var(--page-purple), #6D28D9);
-    }
-    .action-btn.view:hover {
-        background: linear-gradient(135deg, #6D28D9, #5B21B6);
-        transform: translateY(-2px);
-        box-shadow: 0 6px 18px rgba(124, 58, 237, 0.5);
-        color: white;
-    }
+    .action-btn-sm { padding: 5px 10px; border-radius: 6px; font-size: 0.65rem; font-weight: 700; border: none; cursor: pointer; color: white; height: 26px; min-width: 44px; transition: all 0.25s ease; display: inline-flex; align-items: center; justify-content: center; gap: 3px; }
+    .action-btn-sm.edit { background: linear-gradient(135deg, var(--page-warning), #B45309); }
+    .action-btn-sm.edit:hover { background: linear-gradient(135deg, #B45309, #92400E); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(217, 119, 6, 0.4); }
+    .action-btn-sm.delete { background: linear-gradient(135deg, var(--page-danger), #991B1B); }
+    .action-btn-sm.delete:hover { background: linear-gradient(135deg, #991B1B, #7F1D1D); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4); }
     
-    .action-btn.edit {
-        background: linear-gradient(135deg, var(--page-warning), #B45309);
-    }
-    .action-btn.edit:hover {
-        background: linear-gradient(135deg, #B45309, #92400E);
-        transform: translateY(-2px);
-        box-shadow: 0 6px 18px rgba(217, 119, 6, 0.5);
-        color: white;
-    }
-    
-    .action-btn.delete {
-        background: linear-gradient(135deg, var(--page-danger), #991B1B);
-    }
-    .action-btn.delete:hover {
-        background: linear-gradient(135deg, #991B1B, #7F1D1D);
-        transform: translateY(-2px);
-        box-shadow: 0 6px 18px rgba(220, 38, 38, 0.5);
-        color: white;
-    }
-    
-    .action-btn:active {
-        transform: translateY(0) scale(0.97);
-    }
-    
-    .action-btn i {
-        font-size: 0.78rem;
-    }
-    
-    .action-btn-sm {
-        padding: 5px 10px;
-        border-radius: 6px;
-        font-size: 0.65rem;
-        font-weight: 700;
-        border: none;
-        cursor: pointer;
-        color: white;
-        height: 26px;
-        min-width: 44px;
-        transition: all 0.25s ease;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 3px;
-    }
-    .action-btn-sm.edit {
-        background: linear-gradient(135deg, var(--page-warning), #B45309);
-    }
-    .action-btn-sm.edit:hover {
-        background: linear-gradient(135deg, #B45309, #92400E);
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(217, 119, 6, 0.4);
-    }
-    .action-btn-sm.delete {
-        background: linear-gradient(135deg, var(--page-danger), #991B1B);
-    }
-    .action-btn-sm.delete:hover {
-        background: linear-gradient(135deg, #991B1B, #7F1D1D);
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
-    }
-    
-    /* TABS */
-    .tabs-container {
-        display: flex;
-        gap: 4px;
-        background: var(--page-bg-card);
-        border-radius: 12px;
-        padding: 4px;
-        border: 2px solid var(--page-border);
-        margin-bottom: 20px;
-    }
-    .tab-btn {
-        padding: 11px 26px;
-        border-radius: 10px;
-        font-weight: 600;
-        font-size: 0.85rem;
-        border: none;
-        cursor: pointer;
-        background: transparent;
-        color: var(--page-text-secondary);
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        flex: 1;
-        justify-content: center;
-        transition: all 0.3s ease;
-    }
-    .tab-btn:hover {
-        background: var(--page-primary-bg);
-        color: var(--page-primary);
-    }
-    .tab-btn.active {
-        background: var(--page-primary);
-        color: white;
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    .tab-btn .badge {
-        background: rgba(255, 255, 255, 0.2);
-        color: white;
-        padding: 1px 9px;
-        border-radius: 10px;
-        font-size: 0.65rem;
-    }
-    .tab-btn:not(.active) .badge {
-        background: var(--page-border);
-        color: var(--page-text-secondary);
-    }
+    .tabs-container { display: flex; gap: 4px; background: var(--page-bg-card); border-radius: 12px; padding: 4px; border: 2px solid var(--page-border); margin-bottom: 20px; }
+    .tab-btn { padding: 11px 26px; border-radius: 10px; font-weight: 600; font-size: 0.85rem; border: none; cursor: pointer; background: transparent; color: var(--page-text-secondary); display: inline-flex; align-items: center; gap: 8px; flex: 1; justify-content: center; transition: all 0.3s ease; }
+    .tab-btn:hover { background: var(--page-primary-bg); color: var(--page-primary); }
+    .tab-btn.active { background: var(--page-primary); color: white; box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
+    .tab-btn .badge { background: rgba(255, 255, 255, 0.2); color: white; padding: 1px 9px; border-radius: 10px; font-size: 0.65rem; }
+    .tab-btn:not(.active) .badge { background: var(--page-border); color: var(--page-text-secondary); }
     .tab-content { display: none; }
     .tab-content.active { display: block; }
     
-    /* MODAL */
-    .modal-overlay {
-        display: none;
-        position: fixed;
-        top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(0, 0, 0, 0.6);
-        z-index: 2000;
-        justify-content: center;
-        align-items: center;
-        padding: 20px;
-        backdrop-filter: blur(4px);
-    }
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.6); z-index: 2000; justify-content: center; align-items: center; padding: 20px; backdrop-filter: blur(4px); }
     .modal-overlay.show { display: flex; }
-    .modal-content {
-        background: var(--page-bg-card);
-        border-radius: 14px;
-        padding: 22px 26px;
-        max-width: 950px;
-        width: 95%;
-        max-height: 90vh;
-        overflow-y: auto;
-        border: 2px solid var(--page-border);
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-    }
-    .modal-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding-bottom: 12px;
-        border-bottom: 2px solid var(--page-border);
-        margin-bottom: 16px;
-    }
-    .modal-title {
-        font-size: 1.05rem;
-        font-weight: 700;
-        color: var(--page-text-primary);
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    .modal-close {
-        background: none;
-        border: none;
-        font-size: 1.4rem;
-        cursor: pointer;
-        color: var(--page-text-secondary);
-        transition: all 0.2s;
-    }
-    .modal-close:hover {
-        color: var(--page-danger);
-        transform: rotate(90deg);
-    }
+    .modal-content { background: var(--page-bg-card); border-radius: 14px; padding: 22px 26px; max-width: 950px; width: 95%; max-height: 90vh; overflow-y: auto; border: 2px solid var(--page-border); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 12px; border-bottom: 2px solid var(--page-border); margin-bottom: 16px; }
+    .modal-title { font-size: 1.05rem; font-weight: 700; color: var(--page-text-primary); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .modal-close { background: none; border: none; font-size: 1.4rem; cursor: pointer; color: var(--page-text-secondary); transition: all 0.2s; }
+    .modal-close:hover { color: var(--page-danger); transform: rotate(90deg); }
     
-    /* FORM */
-    .form-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 14px;
-    }
+    .hidden-batches-note { display: inline-flex; align-items: center; gap: 5px; padding: 4px 12px; background: var(--page-warning-bg); color: var(--page-warning); border-radius: 12px; font-size: 0.65rem; font-weight: 700; border: 1px solid var(--page-warning); margin-left: 8px; }
+    [data-theme="dark"] .hidden-batches-note { background: #78350F; color: #FCD34D; border-color: #F59E0B; }
+    
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
     .form-grid .full-width { grid-column: 1 / -1; }
-    .form-label {
-        font-size: 0.78rem;
-        font-weight: 600;
-        color: var(--page-text-primary);
-        margin-bottom: 5px;
-        display: block;
-    }
+    .form-label { font-size: 0.78rem; font-weight: 600; color: var(--page-text-primary); margin-bottom: 5px; display: block; }
     .form-label .required { color: var(--page-danger); }
-    .form-control {
-        width: 100%;
-        padding: 9px 14px;
-        border: 2px solid var(--page-border);
-        border-radius: 8px;
-        font-size: 0.88rem;
-        outline: none;
-        background: var(--page-bg-card);
-        color: var(--page-text-primary);
-        height: 42px;
-        transition: all 0.2s ease;
-    }
-    .form-control:focus {
-        border-color: var(--page-primary);
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
-    }
-    .form-actions {
-        display: flex;
-        gap: 10px;
-        margin-top: 18px;
-        padding-top: 14px;
-        border-top: 2px solid var(--page-border);
-    }
-    .btn-save {
-        background: var(--page-primary);
-        color: white;
-        padding: 10px 28px;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 0.9rem;
-        border: none;
-        cursor: pointer;
-        height: 44px;
-        transition: all 0.25s;
-    }
-    .btn-save:hover {
-        background: var(--page-primary-dark);
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    .btn-cancel {
-        background: transparent;
-        color: var(--page-text-secondary);
-        border: 2px solid var(--page-border);
-        padding: 10px 24px;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 0.9rem;
-        cursor: pointer;
-        height: 44px;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        transition: all 0.25s;
-    }
-    .btn-cancel:hover {
-        border-color: var(--page-danger);
-        color: var(--page-danger);
-    }
+    .form-control { width: 100%; padding: 9px 14px; border: 2px solid var(--page-border); border-radius: 8px; font-size: 0.88rem; outline: none; background: var(--page-bg-card); color: var(--page-text-primary); height: 42px; transition: all 0.2s ease; }
+    .form-control:focus { border-color: var(--page-primary); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1); }
+    .form-actions { display: flex; gap: 10px; margin-top: 18px; padding-top: 14px; border-top: 2px solid var(--page-border); }
+    .btn-save { background: var(--page-primary); color: white; padding: 10px 28px; border-radius: 8px; font-weight: 600; font-size: 0.9rem; border: none; cursor: pointer; height: 44px; transition: all 0.25s; }
+    .btn-save:hover { background: var(--page-primary-dark); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
+    .btn-cancel { background: transparent; color: var(--page-text-secondary); border: 2px solid var(--page-border); padding: 10px 24px; border-radius: 8px; font-weight: 600; font-size: 0.9rem; cursor: pointer; height: 44px; display: inline-flex; align-items: center; gap: 6px; transition: all 0.25s; }
+    .btn-cancel:hover { border-color: var(--page-danger); color: var(--page-danger); }
     
-    .category-input-group, .unit-input-group, .batch-input-group {
-        display: flex;
-        gap: 6px;
-        align-items: center;
-    }
+    .category-input-group, .unit-input-group, .batch-input-group { display: flex; gap: 6px; align-items: center; }
     .category-input-group .form-control, .unit-input-group .form-control { flex: 1; }
-    .btn-toggle {
-        background: var(--page-primary);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 8px 14px;
-        font-size: 0.72rem;
-        font-weight: 600;
-        cursor: pointer;
-        white-space: nowrap;
-        height: 42px;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        transition: all 0.25s;
-    }
-    .btn-toggle:hover {
-        background: var(--page-primary-dark);
-        transform: translateY(-1px);
-    }
+    .btn-toggle { background: var(--page-primary); color: white; border: none; border-radius: 8px; padding: 8px 14px; font-size: 0.72rem; font-weight: 600; cursor: pointer; white-space: nowrap; height: 42px; display: inline-flex; align-items: center; gap: 4px; transition: all 0.25s; }
+    .btn-toggle:hover { background: var(--page-primary-dark); transform: translateY(-1px); }
     
-    /* MANAGE PURCHASES */
     .manage-header { background: linear-gradient(135deg, var(--page-primary), var(--page-primary-dark)); border-radius: 16px; padding: 24px 28px; margin-bottom: 24px; color: white; }
     .manage-header .manage-title { font-size: 1.4rem; font-weight: 700; display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
     .manage-header .manage-subtitle { font-size: 0.85rem; opacity: 0.9; }
-    .btn-back-header {
-        background: rgba(255,255,255,0.2); color: white; padding: 10px 22px; border-radius: 10px;
-        font-weight: 600; font-size: 0.85rem; border: 2px solid rgba(255,255,255,0.3);
-        cursor: pointer; text-decoration: none; display: inline-flex;
-        align-items: center; gap: 8px; transition: all 0.3s ease; white-space: nowrap; height: 48px;
-        backdrop-filter: blur(4px);
-    }
+    .btn-back-header { background: rgba(255,255,255,0.2); color: white; padding: 10px 22px; border-radius: 10px; font-weight: 600; font-size: 0.85rem; border: 2px solid rgba(255,255,255,0.3); cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; transition: all 0.3s ease; white-space: nowrap; height: 48px; backdrop-filter: blur(4px); }
     .btn-back-header:hover { background: rgba(255,255,255,0.3); border-color: rgba(255,255,255,0.5); transform: translateX(-3px); }
     
     .purchase-list-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; margin-bottom: 24px; }
@@ -1716,14 +1212,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .empty-purchases i { font-size: 3rem; color: var(--page-border); display: block; margin-bottom: 12px; }
     
     input[type="number"] { -moz-appearance: textfield; }
-    input[type="number"]::-webkit-outer-spin-button,
-    input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type="number"]::-webkit-outer-spin-button, input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
     input.numeric-only { text-align: left; letter-spacing: 0.5px; }
     
-    /* RESPONSIVE */
-    @media (max-width: 1024px) {
-        .stats-grid { grid-template-columns: repeat(2, 1fr); }
-    }
+    @media (max-width: 1024px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
     @media (max-width: 768px) {
         .stats-grid { grid-template-columns: 1fr 1fr; }
         .page-header-box { flex-direction: column; align-items: stretch; }
@@ -1741,7 +1233,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <main class="main-content">
 
 <?php if ($show_manage_purchases): ?>
-    <!-- MANAGE PURCHASES PAGE -->
     <div class="manage-header">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
             <div style="flex:1;min-width:0;">
@@ -1761,8 +1252,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 </div>
             </div>
             
-            <a href="inventory.php?tab=<?= $manage_type === 'medicine' ? 'medicines' : 'equipment' ?>&branch=<?= $selected_branch_id ?>" 
-               class="btn-back-header">
+            <a href="inventory.php?tab=<?= $manage_type === 'medicine' ? 'medicines' : 'equipment' ?>&branch=<?= $selected_branch_id ?>" class="btn-back-header">
                 <i class="fas fa-arrow-left"></i> Back to Inventory
             </a>
         </div>
@@ -1837,7 +1327,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <?php endif; ?>
 
 <?php else: ?>
-    <!-- NORMAL INVENTORY PAGE -->
     
     <div class="branch-info-card">
         <div class="branch-title">
@@ -1915,7 +1404,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="stat-icon"><i class="fas fa-exclamation-triangle"></i></span>
                 <div class="stat-number"><?= $med_low_stock ?></div>
                 <div class="stat-label">Low Stock</div>
-                <div class="stat-sub">Below reorder level</div>
+                <div class="stat-sub">Total &le; Sum Reorder</div>
             </a>
             <a href="inventory.php?tab=medicines&stock=out&branch=<?= $selected_branch_id ?>" class="inv-stat-card red">
                 <span class="stat-icon"><i class="fas fa-times-circle"></i></span>
@@ -1996,7 +1485,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <th class="col-category">Category</th>
                                 <th class="col-branch">Branch</th>
                                 <th class="col-qty">Qty</th>
-                                <th class="col-reorder">Reorder</th>
+                                <th class="col-reorder">Reorder (Sum)</th>
                                 <th class="col-stock">Stock</th>
                                 <th class="col-price">Price</th>
                                 <th class="col-expiry">Expiry</th>
@@ -2011,15 +1500,21 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             <?php $counter = 1; ?>
                             <?php foreach ($medicines as $item): ?>
                                 <?php
-                                    $active_qty = $item['total_quantity'] ?? 0;
+                                    $active_qty = (int)($item['total_quantity'] ?? 0);
+                                    $total_reorder = (int)($item['total_reorder_level'] ?? 0);
                                     $branch_name = $item['branch_name'] ?? 'Unknown';
                                     $batch_ids = $item['batch_ids'] ?? '';
                                     $first_batch_id = $batch_ids ? explode(',', $batch_ids)[0] : 0;
                                     $category_display = !empty($item['category']) ? $item['category'] : 'N/A';
                                     
+                                    // ✅ V10.1: LOW STOCK = total_qty <= JUMLA ya reorder_levels za batches zenye stock
                                     $stock_status = 'ok'; $stock_label = 'In Stock';
-                                    if ($active_qty <= 0) { $stock_status = 'out'; $stock_label = 'Out of Stock'; }
-                                    elseif ($active_qty <= $item['reorder_level']) { $stock_status = 'low'; $stock_label = 'Low Stock'; }
+                                    if ($active_qty <= 0) { 
+                                        $stock_status = 'out'; $stock_label = 'Out of Stock'; 
+                                    }
+                                    elseif ($total_reorder > 0 && $active_qty <= $total_reorder) { 
+                                        $stock_status = 'low'; $stock_label = 'Low Stock'; 
+                                    }
                                     
                                     $batch_numbers = $item['batch_numbers'] ?? '';
                                     $batch_count = $batch_numbers ? count(explode('|', $batch_numbers)) : 0;
@@ -2046,6 +1541,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                         'category' => $category_display,
                                         'unit' => $item['unit'] ?? 'pcs', 
                                         'reorder_level' => $item['reorder_level'],
+                                        'total_reorder_level' => $total_reorder,
                                         'selling_price' => $item['selling_price'] ?? 0, 
                                         'supplier' => $item['supplier'] ?? 'N/A',
                                         'status' => $display_status, 
@@ -2057,6 +1553,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                         'batch_quantities' => $item['batch_quantities'] ?? '',
                                         'batch_expiries' => $item['batch_expiries'] ?? '',
                                         'batch_statuses' => $item['batch_statuses'] ?? '',
+                                        'batch_reorder_levels' => $item['batch_reorder_levels'] ?? '',
                                         'batch_categories' => $item['batch_categories'] ?? '',
                                         'batch_suppliers' => $item['batch_suppliers'] ?? '',
                                         'batch_added_bys' => $item['batch_added_bys'] ?? ''
@@ -2093,12 +1590,26 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                             </span>
                                         <?php endif; ?>
                                     </td>
-                                    <td class="col-reorder"><?= $item['reorder_level'] ?></td>
+                                    <td class="col-reorder">
+                                        <?php if ($total_reorder > 0): ?>
+                                            <span style="color:var(--page-primary);font-weight:700;"><?= $total_reorder ?></span>
+                                            <span style="font-size:0.6rem;color:var(--page-text-muted);display:block;font-weight:500;">
+                                                (<?= $item['active_batch_count'] ?> batch<?= $item['active_batch_count'] > 1 ? 'es' : '' ?>)
+                                            </span>
+                                        <?php else: ?>
+                                            <?= $item['reorder_level'] ?>
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="col-stock">
                                         <span class="stock-badge <?= $stock_status ?>">
                                             <i class="fas <?= $stock_status === 'ok' ? 'fa-check-circle' : ($stock_status === 'low' ? 'fa-exclamation-triangle' : 'fa-times-circle') ?>"></i>
                                             <?= $stock_label ?>
                                         </span>
+                                        <?php if ($item['current_batch_qty'] > 0): ?>
+                                            <span class="current-batch-info">
+                                                <i class="fas fa-tag"></i> Current batch: <?= $item['current_batch_qty'] ?> units
+                                            </span>
+                                        <?php endif; ?>
                                     </td>
                                     <td class="col-price"><?= $price_display ?></td>
                                     <td class="col-expiry">
@@ -2181,7 +1692,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="stat-icon"><i class="fas fa-exclamation-triangle"></i></span>
                 <div class="stat-number"><?= $equip_low_stock ?></div>
                 <div class="stat-label">Low Stock</div>
-                <div class="stat-sub">Below reorder</div>
+                <div class="stat-sub">Total &le; Sum Reorder</div>
             </a>
             <a href="inventory.php?tab=equipment&stock=out&branch=<?= $selected_branch_id ?>" class="inv-stat-card red">
                 <span class="stat-icon"><i class="fas fa-times-circle"></i></span>
@@ -2262,7 +1773,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <th class="col-category">Category</th>
                                 <th class="col-branch">Branch</th>
                                 <th class="col-qty">Qty</th>
-                                <th class="col-reorder">Reorder</th>
+                                <th class="col-reorder">Reorder (Sum)</th>
                                 <th class="col-stock">Stock</th>
                                 <th class="col-price">Price</th>
                                 <th class="col-expiry">Expiry</th>
@@ -2277,15 +1788,21 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             <?php $counter = 1; ?>
                             <?php foreach ($equipment as $item): ?>
                                 <?php
-                                    $active_qty = $item['total_quantity'] ?? 0;
+                                    $active_qty = (int)($item['total_quantity'] ?? 0);
+                                    $total_reorder = (int)($item['total_reorder_level'] ?? 0);
                                     $branch_name = $item['branch_name'] ?? 'Unknown';
                                     $batch_ids = $item['batch_ids'] ?? '';
                                     $first_batch_id = $batch_ids ? explode(',', $batch_ids)[0] : 0;
                                     $category_display = !empty($item['category']) ? $item['category'] : 'N/A';
                                     
+                                    // ✅ V10.1: LOW STOCK = total_qty <= JUMLA ya reorder_levels za batches zenye stock
                                     $stock_status = 'ok'; $stock_label = 'In Stock';
-                                    if ($active_qty <= 0) { $stock_status = 'out'; $stock_label = 'Out of Stock'; }
-                                    elseif ($active_qty <= $item['reorder_level']) { $stock_status = 'low'; $stock_label = 'Low Stock'; }
+                                    if ($active_qty <= 0) { 
+                                        $stock_status = 'out'; $stock_label = 'Out of Stock'; 
+                                    }
+                                    elseif ($total_reorder > 0 && $active_qty <= $total_reorder) { 
+                                        $stock_status = 'low'; $stock_label = 'Low Stock'; 
+                                    }
                                     
                                     $batch_numbers = $item['batch_numbers'] ?? '';
                                     $batch_count = $batch_numbers ? count(explode('|', $batch_numbers)) : 0;
@@ -2312,6 +1829,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                         'category' => $category_display,
                                         'unit' => $item['unit'] ?? 'pcs', 
                                         'reorder_level' => $item['reorder_level'],
+                                        'total_reorder_level' => $total_reorder,
                                         'selling_price' => $item['selling_price'] ?? 0, 
                                         'supplier' => $item['supplier'] ?? 'N/A',
                                         'status' => $display_status, 
@@ -2323,6 +1841,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                         'batch_quantities' => $item['batch_quantities'] ?? '',
                                         'batch_expiries' => $item['batch_expiries'] ?? '',
                                         'batch_statuses' => $item['batch_statuses'] ?? '',
+                                        'batch_reorder_levels' => $item['batch_reorder_levels'] ?? '',
                                         'batch_categories' => $item['batch_categories'] ?? '',
                                         'batch_suppliers' => $item['batch_suppliers'] ?? '',
                                         'batch_added_bys' => $item['batch_added_bys'] ?? ''
@@ -2359,12 +1878,26 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                             </span>
                                         <?php endif; ?>
                                     </td>
-                                    <td class="col-reorder"><?= $item['reorder_level'] ?></td>
+                                    <td class="col-reorder">
+                                        <?php if ($total_reorder > 0): ?>
+                                            <span style="color:var(--page-primary);font-weight:700;"><?= $total_reorder ?></span>
+                                            <span style="font-size:0.6rem;color:var(--page-text-muted);display:block;font-weight:500;">
+                                                (<?= $item['active_batch_count'] ?> batch<?= $item['active_batch_count'] > 1 ? 'es' : '' ?>)
+                                            </span>
+                                        <?php else: ?>
+                                            <?= $item['reorder_level'] ?>
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="col-stock">
                                         <span class="stock-badge <?= $stock_status ?>">
                                             <i class="fas <?= $stock_status === 'ok' ? 'fa-check-circle' : ($stock_status === 'low' ? 'fa-exclamation-triangle' : 'fa-times-circle') ?>"></i>
                                             <?= $stock_label ?>
                                         </span>
+                                        <?php if ($item['current_batch_qty'] > 0): ?>
+                                            <span class="current-batch-info">
+                                                <i class="fas fa-tag"></i> Current batch: <?= $item['current_batch_qty'] ?> units
+                                            </span>
+                                        <?php endif; ?>
                                     </td>
                                     <td class="col-price"><?= $price_display ?></td>
                                     <td class="col-expiry">
@@ -2442,7 +1975,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <div class="modal-overlay" id="viewModal">
     <div class="modal-content">
         <div class="modal-header">
-            <div class="modal-title"><i class="fas fa-eye"></i> <span id="viewModalName"></span></div>
+            <div class="modal-title"><i class="fas fa-eye"></i> <span id="viewModalName"></span><span id="viewHiddenNote"></span></div>
             <button class="modal-close" onclick="closeModal('viewModal')">&times;</button>
         </div>
         <div id="viewModalBody"></div>
@@ -2464,13 +1997,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 </div>
 
 <script>
-// ================================================================
-// ZUIA SCROLL WHEEL KUBADILISHA NUMBER INPUTS
-// ================================================================
 document.addEventListener('wheel', function(e) {
-    if (document.activeElement && 
-        (document.activeElement.type === 'number' || 
-         document.activeElement.classList.contains('numeric-only'))) {
+    if (document.activeElement && (document.activeElement.type === 'number' || document.activeElement.classList.contains('numeric-only'))) {
         document.activeElement.blur();
     }
 }, { passive: true });
@@ -2479,26 +2007,20 @@ function setupNumericOnlyInputs() {
     document.querySelectorAll('.numeric-only').forEach(function(input) {
         if (input.dataset.numericInit) return;
         input.dataset.numericInit = 'true';
-        
         input.addEventListener('keypress', function(e) {
             var char = String.fromCharCode(e.which);
-            if (!/[0-9]/.test(char) && e.which !== 8 && e.which !== 0 && e.which !== 46) {
-                e.preventDefault();
-            }
+            if (!/[0-9]/.test(char) && e.which !== 8 && e.which !== 0 && e.which !== 46) e.preventDefault();
         });
-        
         input.addEventListener('input', function() {
             var cursorPos = this.selectionStart;
             var oldVal = this.value;
             this.value = this.value.replace(/[^0-9]/g, '');
             if (oldVal !== this.value) this.setSelectionRange(cursorPos - 1, cursorPos - 1);
         });
-        
         input.addEventListener('wheel', function(e) { e.preventDefault(); this.blur(); }, { passive: false });
         input.addEventListener('keydown', function(e) {
             if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
         });
-        
         input.addEventListener('paste', function(e) {
             e.preventDefault();
             var pasted = (e.clipboardData || window.clipboardData).getData('text');
@@ -2510,9 +2032,6 @@ function setupNumericOnlyInputs() {
 document.addEventListener('DOMContentLoaded', setupNumericOnlyInputs);
 new MutationObserver(function() { setTimeout(setupNumericOnlyInputs, 100); }).observe(document.body, { childList: true, subtree: true });
 
-// ================================================================
-// DELETE
-// ================================================================
 function deleteMedicine(id, name) {
     if (confirm('Delete this batch of "' + name + '"?\nThis cannot be undone!')) {
         var f = document.createElement('form');
@@ -2531,9 +2050,6 @@ function deleteEquipment(id, name) {
     }
 }
 
-// ================================================================
-// TAB SWITCHING
-// ================================================================
 function switchTab(tab) {
     var url = new URL(window.location.href);
     url.searchParams.set('tab', tab);
@@ -2541,9 +2057,6 @@ function switchTab(tab) {
     window.location.href = url.toString();
 }
 
-// ================================================================
-// SCROLL
-// ================================================================
 function scrollMedTable(dir) {
     var w = document.getElementById('medTableWrap');
     if (w) w.scrollBy({ left: dir === 'left' ? -400 : 400, behavior: 'smooth' });
@@ -2569,9 +2082,6 @@ function updateEquipScrollBtns() {
     l.disabled = sl <= 5; r.disabled = sl >= ms - 5 || ms <= 0;
 }
 
-// ================================================================
-// AUTO SEARCH
-// ================================================================
 document.getElementById('medSearchInput')?.addEventListener('input', function() {
     var q = this.value.toLowerCase().trim();
     var rows = document.querySelectorAll('.med-row');
@@ -2585,7 +2095,8 @@ document.getElementById('medSearchInput')?.addEventListener('input', function() 
     var si = document.getElementById('medSearchInfo');
     var sc = document.getElementById('medSearchCount');
     if (si && sc) { si.style.display = q === '' ? 'none' : 'inline-flex'; sc.textContent = v; }
-    document.getElementById('medNoResults').style.display = (v === 0 && q !== '') ? '' : 'none';
+    var nr = document.getElementById('medNoResults');
+    if (nr) nr.style.display = (v === 0 && q !== '') ? '' : 'none';
 });
 
 document.getElementById('equipSearchInput')?.addEventListener('input', function() {
@@ -2601,7 +2112,8 @@ document.getElementById('equipSearchInput')?.addEventListener('input', function(
     var si = document.getElementById('equipSearchInfo');
     var sc = document.getElementById('equipSearchCount');
     if (si && sc) { si.style.display = q === '' ? 'none' : 'inline-flex'; sc.textContent = v; }
-    document.getElementById('equipNoResults').style.display = (v === 0 && q !== '') ? '' : 'none';
+    var nr = document.getElementById('equipNoResults');
+    if (nr) nr.style.display = (v === 0 && q !== '') ? '' : 'none';
 });
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -2611,9 +2123,6 @@ document.addEventListener('DOMContentLoaded', function() {
     if (e) { e.addEventListener('scroll', updateEquipScrollBtns); setTimeout(updateEquipScrollBtns, 200); }
 });
 
-// ================================================================
-// MODAL
-// ================================================================
 function closeModal(id) {
     var m = document.getElementById(id);
     if (m) { m.classList.remove('show'); document.body.style.overflow = ''; }
@@ -2624,20 +2133,19 @@ document.querySelectorAll('.modal-overlay').forEach(function(m) {
     });
 });
 
-// ================================================================
-// VIEW MODAL
-// ================================================================
 function openViewModal(data, type) {
     var m = document.getElementById('viewModal');
     if (!m) return;
     document.getElementById('viewModalName').textContent = data.name || 'Unknown';
+    document.getElementById('viewHiddenNote').innerHTML = '';
     
     var batchesHtml = '';
-    var bIds = data.batch_ids ? data.batch_ids.split(',') : [];
+    var bIds = data.batch_ids ? data.batch_ids.split(',').filter(function(x) { return x.trim() !== ''; }) : [];
     var bNums = data.batch_numbers ? data.batch_numbers.split('|') : [];
     var bQtys = data.batch_quantities ? data.batch_quantities.split('|') : [];
     var bExps = data.batch_expiries ? data.batch_expiries.split('|') : [];
     var bStats = data.batch_statuses ? data.batch_statuses.split('|') : [];
+    var bReorders = data.batch_reorder_levels ? data.batch_reorder_levels.split('|') : [];
     var bCats = data.batch_categories ? data.batch_categories.split('|') : [];
     var bSups = data.batch_suppliers ? data.batch_suppliers.split('|') : [];
     var bAdds = data.batch_added_bys ? data.batch_added_bys.split('|') : [];
@@ -2648,6 +2156,7 @@ function openViewModal(data, type) {
         var q = parseInt(bQtys[i]) || 0;
         var exp = bExps[i] || '';
         var st = bStats[i] || 'active';
+        var reorder = bReorders[i] || 0;
         var cat = bCats[i] || 'N/A';
         var sup = bSups[i] || 'N/A';
         var addBy = bAdds[i] || 'System';
@@ -2671,7 +2180,8 @@ function openViewModal(data, type) {
             + '<td style="padding:8px;text-align:center;color:var(--page-text-secondary);font-weight:700;">' + (i + 1) + '</td>'
             + '<td style="padding:8px;"><span class="batch-number">' + bNum + '</span></td>'
             + '<td style="padding:8px;"><span style="background:var(--page-primary-bg);color:var(--page-primary);padding:3px 10px;border-radius:10px;font-size:0.65rem;font-weight:600;">' + cat + '</span></td>'
-            + '<td style="padding:8px;text-align:center;font-weight:700;font-family:monospace;">' + q + (q == 0 ? ' <span class="zero-qty-warning"><i class="fas fa-exclamation-triangle"></i></span>' : '') + '</td>'
+            + '<td style="padding:8px;text-align:center;font-weight:700;font-family:monospace;">' + q + '</td>'
+            + '<td style="padding:8px;text-align:center;font-weight:700;font-family:monospace;color:var(--page-primary);">' + reorder + '</td>'
             + '<td style="padding:8px;"><span class="expiry-badge ' + expCls + '">' + expDisp + '</span></td>'
             + '<td style="padding:8px;text-align:center;"><span class="days-remaining ' + dCls + '">' + (dL === '∞' ? '∞' : (dL < 0 ? 'EXP' : dL + 'd')) + '</span></td>'
             + '<td style="padding:8px;text-align:center;"><span class="status-badge ' + stCls + '">' + stLbl + '</span></td>'
@@ -2684,13 +2194,14 @@ function openViewModal(data, type) {
     }
     
     if (bIds.length === 0) {
-        batchesHtml = '<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--page-text-secondary);"><i class="fas fa-box-open" style="font-size:1.5rem;display:block;margin-bottom:8px;"></i>No batches</td></tr>';
+        batchesHtml = '<tr><td colspan="11" style="text-align:center;padding:20px;color:var(--page-text-secondary);"><i class="fas fa-box-open" style="font-size:1.5rem;display:block;margin-bottom:8px;"></i>No active batches (all with 0 qty hidden)</td></tr>';
     }
     
     var total = data.active_qty || 0;
+    var totalReorder = data.total_reorder_level || 0;
     var stockBadge = 'ok', stockText = 'In Stock';
     if (total <= 0) { stockBadge = 'out'; stockText = 'Out of Stock'; }
-    else if (total <= (data.reorder_level || 0)) { stockBadge = 'low'; stockText = 'Low Stock'; }
+    else if (totalReorder > 0 && total <= totalReorder) { stockBadge = 'low'; stockText = 'Low Stock'; }
     
     var html = ''
         + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">'
@@ -2714,6 +2225,10 @@ function openViewModal(data, type) {
                 + '</div>'
             + '</div>'
             + '<div style="padding:8px 12px;background:var(--page-bg-body);border-radius:8px;">'
+                + '<div style="font-size:0.55rem;text-transform:uppercase;color:var(--page-text-secondary);font-weight:600;">Total Reorder (Sum)</div>'
+                + '<div style="font-size:0.85rem;font-weight:600;margin-top:2px;font-family:monospace;color:var(--page-primary);">' + totalReorder + '</div>'
+            + '</div>'
+            + '<div style="padding:8px 12px;background:var(--page-bg-body);border-radius:8px;">'
                 + '<div style="font-size:0.55rem;text-transform:uppercase;color:var(--page-text-secondary);font-weight:600;">Selling Price</div>'
                 + '<div style="font-size:0.85rem;font-weight:600;margin-top:2px;color:var(--page-success);font-family:monospace;">' 
                     + (data.selling_price > 0 ? 'TSh ' + Number(data.selling_price).toLocaleString() : 'FREE') 
@@ -2727,9 +2242,9 @@ function openViewModal(data, type) {
         
         + '<div style="background:linear-gradient(135deg,var(--page-primary),var(--page-primary-dark));color:white;padding:10px 16px;border-radius:10px 10px 0 0;display:flex;align-items:center;justify-content:space-between;">'
             + '<div style="font-size:0.85rem;font-weight:700;display:flex;align-items:center;gap:8px;">'
-                + '<i class="fas fa-layer-group"></i> ALL BATCHES (' + bIds.length + ')'
+                + '<i class="fas fa-layer-group"></i> ACTIVE BATCHES (' + bIds.length + ')'
             + '</div>'
-            + '<div style="font-size:0.7rem;opacity:0.9;">Sorted by expiry date (earliest first)</div>'
+            + '<div style="font-size:0.7rem;opacity:0.9;">Zero-qty hidden · Sorted by expiry (earliest first)</div>'
         + '</div>'
         + '<div style="overflow-x:auto;border:2px solid var(--page-primary);border-top:none;border-radius:0 0 10px 10px;">'
             + '<table style="width:100%;border-collapse:collapse;font-size:0.75rem;">'
@@ -2738,6 +2253,7 @@ function openViewModal(data, type) {
                     + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:left;font-weight:700;border-bottom:1px solid var(--page-primary);">Batch Number</th>'
                     + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:left;font-weight:700;border-bottom:1px solid var(--page-primary);">Category</th>'
                     + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:center;font-weight:700;border-bottom:1px solid var(--page-primary);">Qty</th>'
+                    + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:center;font-weight:700;border-bottom:1px solid var(--page-primary);">Reorder</th>'
                     + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:left;font-weight:700;border-bottom:1px solid var(--page-primary);">Expiry Date</th>'
                     + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:center;font-weight:700;border-bottom:1px solid var(--page-primary);">Days</th>'
                     + '<th style="padding:8px;font-size:0.6rem;text-transform:uppercase;text-align:center;font-weight:700;border-bottom:1px solid var(--page-primary);">Status</th>'
@@ -2843,11 +2359,11 @@ setTimeout(function() {
     if (m) m.style.display = 'none';
 }, 5000);
 
-console.log('%c📦 Admin Inventory V8.9', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
-console.log('%c✅ Batch count badge ni BLUE', 'font-size:13px;color:#34D399;font-weight:bold;');
-console.log('%c✅ Stock low, days warning, expiry expiring ni BLUE', 'font-size:13px;color:#34D399;font-weight:bold;');
-console.log('%c✅ GROUP BY name + unit + branch', 'font-size:13px;color:#34D399;font-weight:bold;');
-console.log('%c✅ Batches zote zinaonekana kwenye View Modal', 'font-size:13px;color:#34D399;font-weight:bold;');
+console.log('%c📦 Admin Inventory V10.1', 'font-size:18px;font-weight:bold;color:#0B5ED7;');
+console.log('%c✅ V10.1: Batch count, reorder_sum, na view modal zinahesabu TU batches zenye qty > 0', 'font-size:13px;color:#34D399;font-weight:bold;');
+console.log('%c✅ V10.1: Zero-qty batches HAZIONEKANI kwenye views ZOTE', 'font-size:13px;color:#34D399;font-weight:bold;');
+console.log('%c✅ V10: LOW STOCK = Total Qty ≤ JUMLA ya reorder_levels za batches ZOTE zenye stock', 'font-size:13px;color:#34D399;');
+console.log('%c✅ V10: View modal inaonyesha batches zenye stock TU', 'font-size:13px;color:#34D399;');
 </script>
 
 </body>

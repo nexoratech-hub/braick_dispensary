@@ -1,18 +1,16 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/consultation.php
-// V32 FINAL - MULTI-BATCH STOCK DISTRIBUTION
+// V34 FINAL - COMPLETED VIEW WITH ALL SECTIONS
 // ================================================================
+// ✅ V34: Completed view inaonyesha Lab Tests + Lab Results sections
+// ✅ V34: Sections zote zinaonekana: Diagnosis, Lab, Meds, Proc, Equip, Bill
+// ✅ V33: Equipment batches ZOTE zinaonyeshwa (total + breakdown)
+// ✅ V33: Lab test inabaki active hata equipment ikiisha (OUT OF STOCK)
+// ✅ V33: Medications multi-batch GROUPED
+// ✅ V33: Bill item MOJA kwa prescription nzima
 // ✅ V32: Multi-batch stock distribution (FIFO by expiry)
-// ✅ V32: Medication inachukua batches zote ikiisha ya kwanza
-// ✅ V32: Stock validation kwa total available kwenye batches zote
-// ✅ V32: Bill items + prescription items kwa kila batch
-// ✅ V32: Display batches zilizotumika kwenye prescribed meds
-// ✅ V31: ensureBillExists() - bill hata kama FREE (0 charge)
-// ✅ V31: Error logging kamili
-// ✅ V31: Status auto-promotion: waiting → lab_test / prescribed
-// ✅ V31: BLUE CARDS kwa lab tests zilizo-linked na equipment
-// ✅ V31: Search filter kwa procedures na equipment
+// ✅ V31: ensureBillExists(), status auto-promotion, BLUE CARDS
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -187,6 +185,16 @@ function getPrescriptionStatusInfo($status, $is_paid = false) {
         'pending' => ['label' => '⏳ Pending', 'class' => 'badge-pending', 'icon' => 'fa-clock'],
         'confirmed' => ['label' => '✔️ Confirmed', 'class' => 'badge-confirmed', 'icon' => 'fa-check-double'],
         'dispensed' => ['label' => '💊 Dispensed', 'class' => 'badge-dispensed', 'icon' => 'fa-pills'],
+        'cancelled' => ['label' => '❌ Cancelled', 'class' => 'badge-cancelled', 'icon' => 'fa-times-circle']
+    ];
+    return $map[$status] ?? ['label' => ucfirst($status), 'class' => 'badge-pending', 'icon' => 'fa-clock'];
+}
+
+function getLabTestStatusInfo($status) {
+    $map = [
+        'pending' => ['label' => '⏳ Pending', 'class' => 'badge-pending', 'icon' => 'fa-clock'],
+        'in_progress' => ['label' => '🔄 In Progress', 'class' => 'badge-confirmed', 'icon' => 'fa-spinner'],
+        'completed' => ['label' => '✅ Completed', 'class' => 'badge-dispensed', 'icon' => 'fa-check-circle'],
         'cancelled' => ['label' => '❌ Cancelled', 'class' => 'badge-cancelled', 'icon' => 'fa-times-circle']
     ];
     return $map[$status] ?? ['label' => ucfirst($status), 'class' => 'badge-pending', 'icon' => 'fa-clock'];
@@ -600,6 +608,7 @@ try {
     $diseases_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $diseases_list = []; }
 
+// ✅ V33: Lab tests catalog with equipment batches
 $lab_tests_catalog = [];
 try {
     $stmt = $db->prepare("SELECT lc.id, lc.test_name, lc.test_code, lc.category, lc.price, lc.description, lc.reference_range FROM lab_tests_catalog lc WHERE lc.is_active = 1 AND (lc.branch_id = ? OR lc.branch_id IS NULL) ORDER BY lc.category, lc.test_name");
@@ -609,30 +618,80 @@ try {
     foreach ($lab_tests_catalog as &$test) {
         $stmt_eq = $db->prepare("
             SELECT lte.id as link_id, lte.equipment_id, lte.branch_id as link_branch_id,
-                   me.equipment_name, me.quantity as equipment_stock,
-                   me.batch_number as equipment_batch, me.expiry_date as equipment_expiry,
-                   me.unit, 1 as equipment_quantity_used
+                   me.equipment_name, me.unit,
+                   1 as equipment_quantity_used
             FROM lab_test_equipment lte
             LEFT JOIN medical_equipment me ON lte.equipment_id = me.id AND me.branch_id = lte.branch_id
-            WHERE lte.lab_test_id = ? AND me.status = 'active'
-            ORDER BY me.equipment_name        ");
+            WHERE lte.lab_test_id = ?
+            ORDER BY me.equipment_name
+        ");
         $stmt_eq->execute([$test['id']]);
-        $test['equipment_links'] = $stmt_eq->fetchAll(PDO::FETCH_ASSOC);
-        $test['total_equipment_links'] = count($test['equipment_links']);
+        $equipment_links_raw = $stmt_eq->fetchAll(PDO::FETCH_ASSOC);
         
-        $all_available = true;
-        foreach ($test['equipment_links'] as $eq) {
-            if ((int)($eq['equipment_stock'] ?? 0) < (int)($eq['equipment_quantity_used'] ?? 1)) {
-                $all_available = false;
-                break;
+        $equipment_links = [];
+        $total_equipment_available = 0;
+        $all_equipment_available = true;
+        
+        foreach ($equipment_links_raw as $eq_link) {
+            if (empty($eq_link['equipment_id']) || empty($eq_link['equipment_name'])) continue;
+            
+            $stmt_batches = $db->prepare("
+                SELECT id, quantity, batch_number, expiry_date, status
+                FROM medical_equipment
+                WHERE equipment_name = ? AND branch_id = ?
+                ORDER BY 
+                    CASE WHEN quantity > 0 AND status = 'active' AND (expiry_date IS NULL OR expiry_date = '0000-00-00' OR expiry_date >= CURDATE()) THEN 0 ELSE 1 END ASC,
+                    expiry_date ASC, id ASC
+            ");
+            $stmt_batches->execute([$eq_link['equipment_name'], $doctor_branch_id]);
+            $all_batches = $stmt_batches->fetchAll(PDO::FETCH_ASSOC);
+            
+            $total_stock = 0;
+            $available_batches = [];
+            foreach ($all_batches as $batch) {
+                $is_valid = ($batch['quantity'] > 0 
+                    && $batch['status'] === 'active' 
+                    && (empty($batch['expiry_date']) || $batch['expiry_date'] === '0000-00-00' || strtotime($batch['expiry_date']) >= strtotime('today')));
+                if ($is_valid) {
+                    $total_stock += (int)$batch['quantity'];
+                    $available_batches[] = [
+                        'batch_number' => $batch['batch_number'],
+                        'quantity' => (int)$batch['quantity'],
+                        'expiry_date' => $batch['expiry_date']
+                    ];
+                }
             }
+            
+            $required_qty = (int)($eq_link['equipment_quantity_used'] ?? 1);
+            $is_available = ($total_stock >= $required_qty);
+            if (!$is_available) $all_equipment_available = false;
+            
+            $equipment_links[] = [
+                'link_id' => $eq_link['link_id'],
+                'equipment_id' => $eq_link['equipment_id'],
+                'equipment_name' => $eq_link['equipment_name'],
+                'unit' => $eq_link['unit'],
+                'equipment_quantity_used' => $required_qty,
+                'total_stock' => $total_stock,
+                'available_batches' => $available_batches,
+                'is_available' => $is_available,
+                'batch_count' => count($available_batches)
+            ];
+            $total_equipment_available += $total_stock;
         }
-        $test['all_equipment_available'] = $all_available;
+        
+        $test['equipment_links'] = $equipment_links;
+        $test['total_equipment_links'] = count($equipment_links);
+        $test['total_equipment_available'] = $total_equipment_available;
+        $test['all_equipment_available'] = $all_equipment_available;
     }
     unset($test);
-} catch (Exception $e) { $lab_tests_catalog = []; }
+} catch (Exception $e) { 
+    error_log("lab_tests_catalog ERROR: " . $e->getMessage());
+    $lab_tests_catalog = []; 
+}
 
-// ✅ V32: Medications grouped - FIFO by expiry for batch selection
+// Medications grouped
 $medications_grouped = [];
 try {
     $stmt = $db->prepare("
@@ -1042,37 +1101,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    if ($action === 'cancel_completed_lab_test') {
-        header('Content-Type: application/json');
-        $test_id = (int)($_POST['test_id'] ?? 0);
-        $response = ['success' => false, 'message' => ''];
-        try {
-            $bill_id = ensureBillExists($db, $visit_id, $patient_id, $doctor_id, $doctor_branch_id, $bill_id);
-            $stmt = $db->prepare("SELECT lt.* FROM lab_tests lt WHERE lt.id = ? AND lt.visit_id = ?");
-            $stmt->execute([$test_id, $visit_id]);
-            $test = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($test && $test['status'] === 'completed') {
-                $is_paid = isBillItemPaid($db, $bill_id, $test_id, 'lab_test');
-                if (!$is_paid) {
-                    $db->beginTransaction();
-                    deleteBillItemByReference($db, $bill_id, $test_id, 'lab_test', 'lab_test');
-                    $db->prepare("DELETE FROM lab_tests WHERE id = ?")->execute([$test_id]);
-                    $db->commit();
-                    updateBillTotal($db, $bill_id);
-                    $response['success'] = true;
-                    $response['message'] = '✅ Test canceled!';
-                } else $response['message'] = '❌ Already PAID';
-            } else $response['message'] = '❌ Not completed';
-        } catch (Exception $e) {
-            if ($db->inTransaction()) $db->rollBack();
-            error_log("cancel_completed_lab_test ERROR: " . $e->getMessage());
-            $response['message'] = '❌ Error: ' . $e->getMessage();
-        }
-        echo json_encode($response);
-        exit;
-    }
-    
-    // ✅ V32: MULTI-BATCH add_medication
     if ($action === 'add_medication') {
         header('Content-Type: application/json');
         
@@ -1111,7 +1139,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         
         if (!empty($medication_name) && $quantity > 0) {
             try {
-                // ✅ V32: FIFO - batches zote zenye stock, expiry ya karibu kwanza
                 $stmt = $db->prepare("
                     SELECT id, medication_name, selling_price, quantity as stock, batch_number, expiry_date 
                     FROM medications_inventory 
@@ -1142,7 +1169,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                     exit;
                 }
                 
-                // ✅ V32: Chukua kwenye batches zote (FIFO)
                 $remaining_to_dispense = $quantity;
                 $batches_used = [];
                 $total_price = 0;
@@ -1202,25 +1228,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                         $batch_used['total_price'], 
                         $doctor_branch_id
                     ]);
-                    
-                    $batch_label = ' (Batch: ' . ($batch_used['batch_number'] ?: 'N/A') . ')';
                     $batch_numbers_list[] = $batch_used['batch_number'] ?: 'N/A';
-                    
-                    $db->prepare("
-                        INSERT INTO bill_items 
-                        (bill_id, patient_id, branch_id, item_type, item_name, quantity, unit_price, total_price, status, reference_id, reference_type, created_at) 
-                        VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, 'pending', ?, 'prescription', NOW())
-                    ")->execute([
-                        $bill_id, 
-                        $patient_id, 
-                        $doctor_branch_id, 
-                        $medication_name . $batch_label, 
-                        $batch_used['quantity'], 
-                        $batch_used['unit_price'], 
-                        $batch_used['total_price'], 
-                        $prescription_id
-                    ]);
                 }
+                
+                $batch_summary = count($batches_used) > 1 
+                    ? ' [Batches: ' . implode(', ', $batch_numbers_list) . ']'
+                    : ' [Batch: ' . ($batch_numbers_list[0] ?? 'N/A') . ']';
+                
+                $avg_unit_price = ($quantity > 0) ? ($total_price / $quantity) : 0;
+                
+                $db->prepare("
+                    INSERT INTO bill_items 
+                    (bill_id, patient_id, branch_id, item_type, item_name, quantity, unit_price, total_price, status, reference_id, reference_type, created_at) 
+                    VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, 'pending', ?, 'prescription', NOW())
+                ")->execute([
+                    $bill_id, 
+                    $patient_id, 
+                    $doctor_branch_id, 
+                    $medication_name . $batch_summary, 
+                    $quantity, 
+                    $avg_unit_price, 
+                    $total_price, 
+                    $prescription_id
+                ]);
                 
                 $db->prepare("UPDATE visits SET status = 'prescribed', updated_at = NOW() WHERE id = ? AND status IN ('assigned', 'waiting', 'lab_test')")->execute([$visit_id]);
                 
@@ -1553,7 +1583,6 @@ $valid_prescriptions = array_filter($prescriptions, function($med) {
     return !empty($med['medication_name']) && !empty($med['item_id']);
 });
 
-// ✅ V32: Group prescriptions by prescription_id (kwa batches nyingi)
 $grouped_prescriptions = [];
 foreach ($valid_prescriptions as $med) {
     $pid = $med['id'];
@@ -1920,7 +1949,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             transition: max-height 0.5s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s ease;
             background: var(--bg-card);
         }
-        .dropdown-body.open { max-height: 2500px; padding: 20px 24px 24px; border-top: 3px solid var(--border-color); }
+        .dropdown-body.open { max-height: 3500px; padding: 20px 24px 24px; border-top: 3px solid var(--border-color); }
         
         .items-grid {
             display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; padding: 16px;
@@ -2025,6 +2054,15 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         [data-theme="dark"] .item-card.labtest-card.linked-equipment .item-name { color: #93C5FD; }
         
+        .item-card.labtest-card.out-of-stock {
+            border-color: #DC2626;
+            background: linear-gradient(135deg, #FEF2F2 0%, #FEE2E2 100%);
+            opacity: 0.75;
+        }
+        [data-theme="dark"] .item-card.labtest-card.out-of-stock {
+            background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%);
+        }
+        
         .item-card.procedure-card.selected { border-color: #7C3AED; background: linear-gradient(135deg, #EDE9FE 0%, #DDD6FE 100%); }
         .item-card.procedure-card.selected .item-check { background: #7C3AED; border-color: #7C3AED; }
         .item-card.equipment-card.selected { border-color: #D97706; background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%); }
@@ -2035,6 +2073,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             background: linear-gradient(135deg, #F0F9FF 0%, #E0F2FE 100%);
             border-radius: 8px; border: 1px solid rgba(14, 165, 233, 0.3);
             display: flex; flex-direction: column; gap: 5px;
+            width: 100%;
         }
         [data-theme="dark"] .item-card .equipment-list {
             background: linear-gradient(135deg, #0C2A3A 0%, #1E3A5F 100%);
@@ -2068,7 +2107,26 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .item-card .equipment-item-row .eq-stock-badge.low { background: linear-gradient(135deg, #FEF3C7, #FDE68A); color: #B45309; border: 1px solid #FCD34D; }
         .item-card .equipment-item-row .eq-stock-badge.out { background: linear-gradient(135deg, #FEE2E2, #FECACA); color: #991B1B; border: 1px solid #FCA5A5; }
         
-        /* ✅ V32: Multi-batch badge */
+        .item-card .equipment-batches-list {
+            display: flex; flex-wrap: wrap; gap: 3px;
+            padding-left: 14px; margin-top: 2px;
+        }
+        .item-card .equipment-batch-chip {
+            font-size: 0.58rem; padding: 2px 7px;
+            background: rgba(14,165,233,0.1);
+            border: 1px solid rgba(14,165,233,0.35);
+            border-radius: 6px; color: #0369A1;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            display: inline-flex; align-items: center; gap: 3px;
+        }
+        .item-card .equipment-batch-chip i { font-size: 0.5rem; }
+        [data-theme="dark"] .item-card .equipment-batch-chip {
+            background: rgba(96,165,250,0.15);
+            border-color: rgba(96,165,250,0.4);
+            color: #93C5FD;
+        }
+        
         .item-card .multi-batch-badge {
             display: inline-flex; align-items: center; gap: 4px;
             padding: 3px 10px; background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
@@ -2474,7 +2532,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             50% { box-shadow: 0 0 0 6px rgba(217, 119, 6, 0); }
         }
         
-        /* ✅ V32: Batch info list */
         .medication-item .batch-info-list {
             margin-top: 8px; padding: 8px 10px;
             background: linear-gradient(135deg, #EFF6FF, #DBEAFE);
@@ -2512,6 +2569,15 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-weight: 800; font-family: 'JetBrains Mono', monospace;
             color: #1E40AF; background: #DBEAFE;
             padding: 2px 8px; border-radius: 8px; font-size: 0.65rem;
+        }
+        
+        .medication-item .med-total-badge {
+            font-size: 0.65rem; padding: 3px 10px;
+            background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+            color: #1E40AF; border-radius: 10px;
+            font-weight: 800; border: 1px solid #60A5FA;
+            display: inline-flex; align-items: center; gap: 4px;
+            text-transform: uppercase; letter-spacing: 0.03em;
         }
         
         .medication-item.procedure-item {
@@ -2568,6 +2634,35 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             color: #FCD34D; border-color: #F59E0B;
         }
         
+        .medication-item.labtest-item {
+            background: linear-gradient(135deg, #FFFFFF 0%, #F0F9FF 100%);
+            border-color: #7DD3FC; border-left-color: #0284C7;
+            box-shadow: 0 2px 8px rgba(14, 165, 233, 0.08);
+        }
+        [data-theme="dark"] .medication-item.labtest-item {
+            background: linear-gradient(135deg, #1E293B 0%, #0C2A3A 100%);
+            border-color: #38BDF8; border-left-color: #0284C7;
+        }
+        .medication-item.labtest-item .med-name { color: #0369A1; }
+        [data-theme="dark"] .medication-item.labtest-item .med-name { color: #7DD3FC; }
+        .medication-item.labtest-item .med-name::before {
+            content: '\f0c3'; font-family: 'Font Awesome 6 Free'; font-weight: 900;
+            background: linear-gradient(135deg, #0EA5E9, #0284C7);
+            box-shadow: 0 3px 8px rgba(14, 165, 233, 0.3);
+        }
+        .medication-item.labtest-item .med-qty {
+            background: linear-gradient(135deg, #0284C7, #0369A1);
+            box-shadow: 0 3px 8px rgba(14, 165, 233, 0.25);
+        }
+        .medication-item.labtest-item .med-price {
+            color: #0284C7; background: linear-gradient(135deg, #E0F2FE, #BAE6FD);
+            border-color: #0EA5E9;
+        }
+        [data-theme="dark"] .medication-item.labtest-item .med-price {
+            background: linear-gradient(135deg, #0C2A3A, #075985);
+            color: #7DD3FC; border-color: #0EA5E9;
+        }
+        
         .medication-item .btn-remove {
             width: 34px; height: 34px; border-radius: 10px;
             border: 2px solid #FCA5A5;
@@ -2595,6 +2690,111 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         #medicationsList .empty-medications i,
         #addedItemsList .empty-added i {
             font-size: 2.5rem; display: block; margin-bottom: 12px; opacity: 0.3;
+        }
+        
+        .lab-test-item {
+            display: flex; gap: 12px; align-items: center;
+            padding: 14px 18px;
+            background: linear-gradient(135deg, var(--sky-bg), var(--bg-card));
+            border: 2px solid var(--sky); border-left: 6px solid var(--sky-dark);
+            border-radius: 14px; transition: var(--transition);
+            position: relative; overflow: hidden;
+        }
+        [data-theme="dark"] .lab-test-item {
+            background: linear-gradient(135deg, #0C2A3A, #1E293B);
+        }
+        .lab-test-item:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(14, 165, 233, 0.2); }
+        .lab-test-item .lab-test-icon {
+            width: 42px; height: 42px; border-radius: 10px;
+            background: var(--sky-gradient); color: white;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.1rem; flex-shrink: 0;
+            box-shadow: 0 4px 12px rgba(14, 165, 233, 0.3);
+        }
+        .lab-test-item .lab-test-info { flex: 1; min-width: 0; }
+        .lab-test-item .lab-test-name {
+            font-weight: 800; font-size: 0.95rem;
+            color: var(--sky-dark); margin-bottom: 3px;
+        }
+        [data-theme="dark"] .lab-test-item .lab-test-name { color: #7DD3FC; }
+        .lab-test-item .lab-test-meta {
+            display: flex; gap: 10px; flex-wrap: wrap;
+            font-size: 0.72rem; color: var(--text-secondary);
+        }
+        .lab-test-item .lab-test-actions {
+            display: flex; flex-direction: column; gap: 6px;
+            align-items: flex-end; flex-shrink: 0;
+        }
+        
+        .lab-result-card {
+            background: linear-gradient(135deg, var(--bg-card), var(--sky-bg));
+            border: 3px solid var(--sky); border-radius: var(--radius-lg);
+            overflow: hidden; position: relative;
+        }
+        .lab-result-card::before {
+            content: ''; position: absolute; top: 0; left: 0;
+            width: 5px; height: 100%;
+            background: var(--sky-gradient);
+        }
+        .lab-result-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 14px 20px 14px 24px;
+            background: linear-gradient(135deg, var(--sky-dark), var(--sky));
+            color: white; flex-wrap: wrap; gap: 10px;
+        }
+        .lab-result-header .lr-title {
+            display: flex; align-items: center; gap: 12px;
+            flex: 1; min-width: 200px;
+        }
+        .lab-result-header .lr-title-icon {
+            width: 38px; height: 38px; border-radius: 10px;
+            background: rgba(255,255,255,0.2);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1rem; border: 1px solid rgba(255,255,255,0.3);
+        }
+        .lab-result-header .lr-title-text {
+            font-size: 1.05rem; font-weight: 800; color: white;
+        }
+        .lab-result-header .lr-date-badge {
+            display: inline-flex; align-items: center; gap: 6px;
+            font-size: 0.72rem; font-weight: 600;
+            background: rgba(255,255,255,0.15);
+            padding: 4px 12px; border-radius: 20px;
+            color: white; border: 1px solid rgba(255,255,255,0.2);
+        }
+        .lab-result-body { padding: 18px 20px 18px 24px; }
+        .lab-result-section-label {
+            font-size: 0.65rem; font-weight: 800;
+            text-transform: uppercase; letter-spacing: 0.08em;
+            color: var(--sky-dark); margin-bottom: 6px;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .lab-result-text {
+            background: var(--bg-card); border: 2px solid var(--sky);
+            border-radius: var(--radius); padding: 14px 18px;
+            font-size: 0.9rem; font-weight: 600; color: var(--text-primary);
+            line-height: 1.7; font-family: 'JetBrains Mono', monospace;
+            white-space: pre-wrap;
+        }
+        .lab-result-ref-range {
+            background: var(--purple-bg); border: 1px solid var(--purple);
+            border-radius: var(--radius); padding: 10px 16px;
+            font-size: 0.85rem; font-weight: 600; color: var(--purple);
+            display: inline-flex; align-items: center; gap: 8px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .lab-result-footer {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-top: 14px; padding-top: 14px;
+            border-top: 2px dashed var(--border-color);
+            flex-wrap: wrap; gap: 10px;
+        }
+        .lab-result-tech {
+            display: inline-flex; align-items: center; gap: 8px;
+            font-size: 0.8rem; font-weight: 600;
+            color: var(--text-primary); background: var(--gray-50);
+            padding: 6px 14px; border-radius: 20px;
+            border: 1px solid var(--border-color);
         }
         
         @media (max-width: 1200px) {
@@ -2985,7 +3185,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <?php if (!$is_completed): ?>
-    <!-- EDITABLE VIEW -->
+    <!-- ============================================================
+         EDITABLE VIEW
+         ============================================================ -->
     <form method="POST" action="consultation.php?visit_id=<?= $visit_id ?>" id="consultationForm">
     
     <!-- CHIEF COMPLAINT & HISTORY -->
@@ -3112,8 +3314,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 $all_available = $test['all_equipment_available'] ?? true;
                                 $is_disabled = $has_equipment && !$all_available;
                                 $is_linked_class = $has_equipment ? 'linked-equipment' : '';
+                                $out_of_stock_class = ($has_equipment && !$all_available) ? 'out-of-stock' : '';
                             ?>
-                                <div class="item-card labtest-card <?= $is_disabled ? 'disabled' : '' ?> <?= $is_linked_class ?>" 
+                                <div class="item-card labtest-card <?= $is_disabled ? 'disabled' : '' ?> <?= $is_linked_class ?> <?= $out_of_stock_class ?>" 
                                      data-test-id="<?= $test['id'] ?>"
                                      data-test-name="<?= htmlspecialchars($test['test_name']) ?>"
                                      onclick="toggleLabTestCheckbox(this)">
@@ -3139,18 +3342,34 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                                 <?php endif; ?>
                                             </div>
                                             <?php foreach ($test['equipment_links'] as $eq): 
-                                                $stock = (int)($eq['equipment_stock'] ?? 0);
+                                                $total_stock = (int)($eq['total_stock'] ?? 0);
                                                 $used = (int)($eq['equipment_quantity_used'] ?? 1);
-                                                $stock_class = $stock <= 0 ? 'out' : ($stock < $used ? 'low' : 'ok');
+                                                $stock_class = $total_stock <= 0 ? 'out' : ($total_stock < $used ? 'low' : 'ok');
                                             ?>
-                                                <div class="equipment-item-row">
-                                                    <span class="eq-name">
-                                                        <i class="fas fa-box"></i> 
-                                                        <?= htmlspecialchars($eq['equipment_name'] ?? 'Unknown') ?>
-                                                    </span>
-                                                    <span class="eq-stock-badge <?= $stock_class ?>">
-                                                        Stock: <?= $stock ?>
-                                                    </span>
+                                                <div class="equipment-item-row" style="flex-direction:column;align-items:stretch;gap:4px;">
+                                                    <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+                                                        <span class="eq-name">
+                                                            <i class="fas fa-box"></i> 
+                                                            <?= htmlspecialchars($eq['equipment_name'] ?? 'Unknown') ?>
+                                                        </span>
+                                                        <span class="eq-stock-badge <?= $stock_class ?>">
+                                                            Total: <?= $total_stock ?> <?= htmlspecialchars($eq['unit'] ?? '') ?>
+                                                        </span>
+                                                    </div>
+                                                    <?php if (!empty($eq['available_batches']) && count($eq['available_batches']) > 1): ?>
+                                                        <div class="equipment-batches-list">
+                                                            <?php foreach ($eq['available_batches'] as $batch): ?>
+                                                                <span class="equipment-batch-chip">
+                                                                    <i class="fas fa-layer-group"></i>
+                                                                    <?= htmlspecialchars($batch['batch_number'] ?: 'N/A') ?>: <?= $batch['quantity'] ?>
+                                                                </span>
+                                                            <?php endforeach; ?>
+                                                        </div>
+                                                    <?php elseif (!empty($eq['available_batches'])): ?>
+                                                        <div style="padding-left:14px;font-size:0.58rem;color:#0369A1;font-family:'JetBrains Mono',monospace;">
+                                                            <i class="fas fa-box"></i> Batch: <?= htmlspecialchars($eq['available_batches'][0]['batch_number'] ?: 'N/A') ?>
+                                                        </div>
+                                                    <?php endif; ?>
                                                 </div>
                                             <?php endforeach; ?>
                                         </div>
@@ -3266,36 +3485,33 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     $ref_range = $result['reference_range'] ?? '';
                     $tech_name = $result['technician_name'] ?? 'N/A';
                 ?>
-                    <div style="background: linear-gradient(135deg, var(--bg-card), var(--sky-bg)); border: 3px solid var(--sky); border-radius: var(--radius-lg); overflow: hidden; position: relative;" id="lab-result-card-<?= $result['id'] ?>">
-                        <div style="position:absolute;top:0;left:0;width:5px;height:100%;background:var(--sky-gradient);"></div>
-                        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px 14px 24px;background:linear-gradient(135deg, var(--sky-dark), var(--sky));color:white;flex-wrap:wrap;gap:10px;">
-                            <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:200px;">
-                                <div style="width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,0.2);display:flex;align-items:center;justify-content:center;font-size:1rem;border:1px solid rgba(255,255,255,0.3);"><i class="fas fa-flask"></i></div>
-                                <div>
-                                    <div style="font-size:1.05rem;font-weight:800;color:white;"><?= htmlspecialchars($result['test_name'] ?? 'N/A') ?></div>
-                                </div>
+                    <div class="lab-result-card" id="lab-result-card-<?= $result['id'] ?>">
+                        <div class="lab-result-header">
+                            <div class="lr-title">
+                                <div class="lr-title-icon"><i class="fas fa-flask"></i></div>
+                                <div class="lr-title-text"><?= htmlspecialchars($result['test_name'] ?? 'N/A') ?></div>
                             </div>
-                            <div style="display:flex;gap:12px;flex-wrap:wrap;">
-                                <?php if (!empty($result['completed_at'])): ?><span style="display:inline-flex;align-items:center;gap:6px;font-size:0.72rem;font-weight:600;background:rgba(255,255,255,0.15);padding:4px 12px;border-radius:20px;color:white;border:1px solid rgba(255,255,255,0.2);"><i class="fas fa-calendar-check"></i> <?= date('d M Y, H:i', strtotime($result['completed_at'])) ?></span><?php endif; ?>
-                            </div>
+                            <?php if (!empty($result['completed_at'])): ?>
+                                <span class="lr-date-badge"><i class="fas fa-calendar-check"></i> <?= date('d M Y, H:i', strtotime($result['completed_at'])) ?></span>
+                            <?php endif; ?>
                         </div>
-                        <div style="padding:18px 20px 18px 24px;">
+                        <div class="lab-result-body">
                             <div style="margin-bottom:14px;">
-                                <div style="font-size:0.65rem;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;color:var(--sky-dark);margin-bottom:6px;display:flex;align-items:center;gap:6px;"><i class="fas fa-clipboard-check"></i> TEST RESULT</div>
+                                <div class="lab-result-section-label"><i class="fas fa-clipboard-check"></i> TEST RESULT</div>
                                 <?php if (!empty($result_text)): ?>
-                                    <div style="background:var(--bg-card);border:2px solid var(--sky);border-radius:var(--radius);padding:14px 18px;font-size:0.9rem;font-weight:600;color:var(--text-primary);line-height:1.7;font-family:'JetBrains Mono',monospace;white-space:pre-wrap;<?= $is_long ? 'max-height:220px;overflow-y:auto;' : '' ?>"><?= nl2br(htmlspecialchars($result_text)) ?></div>
+                                    <div class="lab-result-text" <?= $is_long ? 'style="max-height:220px;overflow-y:auto;"' : '' ?>><?= nl2br(htmlspecialchars($result_text)) ?></div>
                                 <?php else: ?>
-                                    <div style="background:var(--bg-card);border:2px solid var(--sky);border-radius:var(--radius);padding:14px 18px;font-size:0.9rem;color:var(--text-secondary);font-style:italic;">No result recorded yet</div>
+                                    <div class="lab-result-text" style="color:var(--text-secondary);font-style:italic;">No result recorded yet</div>
                                 <?php endif; ?>
                             </div>
                             <?php if (!empty($ref_range)): ?>
                             <div style="margin-bottom:14px;">
-                                <div style="font-size:0.65rem;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;color:var(--sky-dark);margin-bottom:6px;display:flex;align-items:center;gap:6px;"><i class="fas fa-ruler"></i> REFERENCE RANGE</div>
-                                <span style="background:var(--purple-bg);border:1px solid var(--purple);border-radius:var(--radius);padding:10px 16px;font-size:0.85rem;font-weight:600;color:var(--purple);display:inline-flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;"><i class="fas fa-chart-line"></i> <?= htmlspecialchars($ref_range) ?></span>
+                                <div class="lab-result-section-label"><i class="fas fa-ruler"></i> REFERENCE RANGE</div>
+                                <span class="lab-result-ref-range"><i class="fas fa-chart-line"></i> <?= htmlspecialchars($ref_range) ?></span>
                             </div>
                             <?php endif; ?>
-                            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:14px;border-top:2px dashed var(--border-color);flex-wrap:wrap;gap:10px;">
-                                <div style="display:inline-flex;align-items:center;gap:8px;font-size:0.8rem;font-weight:600;color:var(--text-primary);background:var(--gray-50);padding:6px 14px;border-radius:20px;border:1px solid var(--border-color);">
+                            <div class="lab-result-footer">
+                                <div class="lab-result-tech">
                                     <i class="fas fa-user-md" style="color:var(--sky-dark);"></i>
                                     <span>Technician: <strong><?= htmlspecialchars($tech_name) ?></strong></span>
                                 </div>
@@ -3541,7 +3757,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
             
-            <!-- MEDICATION FORM CARD -->
             <div class="med-form-card">
                 <div class="med-form-header">
                     <div class="header-title">
@@ -3678,7 +3893,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                         <?= htmlspecialchars($main_med['frequency'] ?? '') ?> • 
                                         <?= htmlspecialchars($main_med['duration'] ?? '') ?> days
                                     </span>
-                                    <span class="med-qty">x<?= $group['total_qty'] ?></span>
+                                    <span class="med-qty" title="Total quantity across all batches">x<?= $group['total_qty'] ?></span>
                                     <span class="med-price">TSh <?= formatMoneyDisplay($group['total_price']) ?></span>
                                     <?php if (!empty($main_med['instructions'])): ?>
                                         <span class="med-instruction-tag"><?= htmlspecialchars($main_med['instructions']) ?></span>
@@ -3686,6 +3901,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                     <span class="med-status-pending">
                                         <i class="fas fa-clock"></i> Pending
                                     </span>
+                                    <?php if ($is_multi_batch): ?>
+                                        <span class="med-total-badge">
+                                            <i class="fas fa-layer-group"></i> <?= count($group['items']) ?> Batches
+                                        </span>
+                                    <?php endif; ?>
                                     
                                     <?php if ($is_multi_batch): ?>
                                         <div class="batch-info-list">
@@ -3735,7 +3955,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </span>
         </div>
         <div class="section-body">
-            <!-- PROCEDURES -->
             <div class="dropdown-section">
                 <div class="dropdown-header" onclick="toggleDropdownSection('proceduresToggle')">
                     <div class="dh-left">
@@ -3794,7 +4013,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
             
-            <!-- EQUIPMENT -->
             <div class="dropdown-section">
                 <div class="dropdown-header" onclick="toggleDropdownSection('equipmentToggle')">
                     <div class="dh-left">
@@ -3953,7 +4171,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </form>
     
     <?php else: ?>
-    <!-- COMPLETED VIEW -->
+    <!-- ============================================================
+         ✅ V34: COMPLETED VIEW - SECTIONS ZOTE ZINAONEKANA
+         ============================================================ -->
+    
+    <!-- 1. DIAGNOSIS & TREATMENT -->
     <div class="section-card section-purple">
         <div class="section-header">
             <div class="section-title">
@@ -3985,7 +4207,122 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <?php endif; ?>
         </div>
     </div>
+    
+    <!-- 2. ✅ V34: LABORATORY TESTS (Completed View) -->
+    <?php if (count($all_lab_tests) > 0): ?>
+    <div class="section-card section-sky">
+        <div class="section-header">
+            <div class="section-title">
+                <div class="title-icon" style="background: var(--sky-gradient);"><i class="fas fa-flask"></i></div>
+                Laboratory Tests
+                <span style="background:var(--sky-bg);color:var(--sky-dark);padding:3px 12px;border-radius:12px;font-size:0.65rem;font-weight:700;border:1px solid var(--sky);">
+                    🧪 <?= count($all_lab_tests) ?> Total
+                </span>
+            </div>
+            <span style="background:var(--sky-bg);color:var(--sky-dark);padding:5px 14px;border-radius:12px;font-size:0.7rem;font-weight:800;font-family:'JetBrains Mono',monospace;border:1px solid var(--sky);">
+                💰 TSh <?= formatMoneyDisplay($lab_total) ?>
+            </span>
+        </div>
+        <div class="section-body">
+            <div style="display:flex;flex-direction:column;gap:10px;">
+                <?php foreach ($all_lab_tests as $lab): 
+                    $lab_status = $lab['status'] ?? 'pending';
+                    $lab_info = getLabTestStatusInfo($lab_status);
+                    $is_paid_lab = isBillItemPaid($db, $bill_id, $lab['id'], 'lab_test');
+                ?>
+                    <div class="lab-test-item">
+                        <div class="lab-test-icon"><i class="fas fa-flask"></i></div>
+                        <div class="lab-test-info">
+                            <div class="lab-test-name"><?= htmlspecialchars($lab['test_name'] ?? 'N/A') ?></div>
+                            <div class="lab-test-meta">
+                                <span><i class="fas fa-money-bill"></i> TSh <?= formatMoneyDisplay($lab['test_price'] ?? 0) ?></span>
+                                <?php if (!empty($lab['completed_at'])): ?>
+                                    <span><i class="fas fa-calendar-check"></i> <?= date('d M Y H:i', strtotime($lab['completed_at'])) ?></span>
+                                <?php elseif (!empty($lab['created_at'])): ?>
+                                    <span><i class="fas fa-calendar-plus"></i> <?= date('d M Y H:i', strtotime($lab['created_at'])) ?></span>
+                                <?php endif; ?>
+                                <?php if (!empty($lab['technician_name']) && $lab['technician_name'] !== 'N/A'): ?>
+                                    <span><i class="fas fa-user-md"></i> <?= htmlspecialchars($lab['technician_name']) ?></span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                        <div class="lab-test-actions">
+                            <span class="<?= $lab_info['class'] ?>" style="font-size:0.65rem;padding:5px 14px;border-radius:14px;font-weight:800;text-transform:uppercase;display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">
+                                <i class="fas <?= $lab_info['icon'] ?>"></i> <?= $lab_info['label'] ?>
+                            </span>
+                            <?php if ($is_paid_lab): ?>
+                                <span class="badge-paid" style="font-size:0.6rem;padding:3px 10px;border-radius:12px;font-weight:800;display:inline-flex;align-items:center;gap:3px;text-transform:uppercase;">
+                                    <i class="fas fa-money-bill"></i> Paid
+                                </span>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+    
+    <!-- 3. ✅ V34: LABORATORY RESULTS (Completed View) -->
+    <?php if ($lab_results_available): ?>
+    <div class="section-card section-success">
+        <div class="section-header">
+            <div class="section-title">
+                <div class="title-icon" style="background: linear-gradient(135deg, #10B981, #059669);"><i class="fas fa-file-medical-alt"></i></div>
+                Laboratory Results
+                <span style="background:var(--success-bg);color:var(--success);padding:3px 12px;border-radius:12px;font-size:0.65rem;font-weight:700;border:1px solid var(--success);">
+                    ✅ <?= count($lab_results) ?> Completed
+                </span>
+            </div>
+        </div>
+        <div class="section-body">
+            <div style="display:flex;flex-direction:column;gap:16px;">
+                <?php foreach ($lab_results as $result): 
+                    $result_text = $result['results'] ?? '';
+                    $is_long = strlen($result_text) > 150;
+                    $ref_range = $result['reference_range'] ?? '';
+                    $tech_name = $result['technician_name'] ?? 'N/A';
+                ?>
+                    <div class="lab-result-card" id="lab-result-card-completed-<?= $result['id'] ?>">
+                        <div class="lab-result-header">
+                            <div class="lr-title">
+                                <div class="lr-title-icon"><i class="fas fa-flask"></i></div>
+                                <div class="lr-title-text"><?= htmlspecialchars($result['test_name'] ?? 'N/A') ?></div>
+                            </div>
+                            <?php if (!empty($result['completed_at'])): ?>
+                                <span class="lr-date-badge"><i class="fas fa-calendar-check"></i> <?= date('d M Y, H:i', strtotime($result['completed_at'])) ?></span>
+                            <?php endif; ?>
+                        </div>
+                        <div class="lab-result-body">
+                            <div style="margin-bottom:14px;">
+                                <div class="lab-result-section-label"><i class="fas fa-clipboard-check"></i> TEST RESULT</div>
+                                <?php if (!empty($result_text)): ?>
+                                    <div class="lab-result-text" <?= $is_long ? 'style="max-height:220px;overflow-y:auto;"' : '' ?>><?= nl2br(htmlspecialchars($result_text)) ?></div>
+                                <?php else: ?>
+                                    <div class="lab-result-text" style="color:var(--text-secondary);font-style:italic;">No result recorded yet</div>
+                                <?php endif; ?>
+                            </div>
+                            <?php if (!empty($ref_range)): ?>
+                            <div style="margin-bottom:14px;">
+                                <div class="lab-result-section-label"><i class="fas fa-ruler"></i> REFERENCE RANGE</div>
+                                <span class="lab-result-ref-range"><i class="fas fa-chart-line"></i> <?= htmlspecialchars($ref_range) ?></span>
+                            </div>
+                            <?php endif; ?>
+                            <div class="lab-result-footer">
+                                <div class="lab-result-tech">
+                                    <i class="fas fa-user-md" style="color:var(--sky-dark);"></i>
+                                    <span>Technician: <strong><?= htmlspecialchars($tech_name) ?></strong></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
 
+    <!-- 4. MEDICATIONS -->
     <?php if (count($grouped_prescriptions) > 0): ?>
     <div class="section-card section-success">
         <div class="section-header">
@@ -4023,6 +4360,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 <i class="fas <?= $status_info['icon'] ?>"></i> <?= $status_info['label'] ?>
                             </span>
                             <?php if ($is_multi_batch): ?>
+                                <span class="med-total-badge">
+                                    <i class="fas fa-layer-group"></i> <?= count($group['items']) ?> Batches
+                                </span>
                                 <div class="batch-info-list">
                                     <div class="batch-info-header">
                                         <i class="fas fa-layer-group"></i> 
@@ -4047,6 +4387,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
     <?php endif; ?>
 
+    <!-- 5. PROCEDURES -->
     <?php if (count($procedures) > 0): ?>
     <div class="section-card section-purple">
         <div class="section-header">
@@ -4087,6 +4428,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
     <?php endif; ?>
 
+    <!-- 6. EQUIPMENT -->
     <?php if (count($equipment_items_display) > 0): ?>
     <div class="section-card section-warning">
         <div class="section-header">
@@ -4130,6 +4472,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
     <?php endif; ?>
 
+    <!-- 7. BILL ITEMS -->
     <?php if (count($bill_items) > 0): ?>
     <div class="section-card section-primary">
         <div class="section-header">
@@ -4225,7 +4568,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <p>
             <span style="color:var(--primary);font-weight:700;">Braick Dispensary</span> Management System
             <span style="margin:0 8px;color:var(--border-color);">|</span>
-            Consultation V32
+            Consultation V34
             <span style="margin:0 8px;color:var(--border-color);">|</span>
             <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>
             <span style="margin:0 8px;color:var(--border-color);">|</span>
@@ -4818,11 +5161,13 @@ function addMedicationToList(med) {
     
     var instructions = med.instructions ? '<span class="med-instruction-tag">' + escapeHtml(med.instructions) + '</span>' : '';
     var batchesInfo = '';
+    var totalBatchBadge = '';
     if (med.batches_used && med.batches_used.length > 1) {
         var batchRows = med.batches_used.map(function(b) {
             return '<div class="batch-info-row"><span class="batch-num"><i class="fas fa-box"></i> Batch: ' + escapeHtml(b.batch_number || 'N/A') + '</span><span class="batch-qty">× ' + b.quantity + '</span></div>';
         }).join('');
         batchesInfo = '<div class="batch-info-list"><div class="batch-info-header"><i class="fas fa-layer-group"></i> Batches Used: ' + med.batches_used.length + '</div>' + batchRows + '</div>';
+        totalBatchBadge = '<span class="med-total-badge"><i class="fas fa-layer-group"></i> ' + med.batches_used.length + ' Batches</span>';
     }
     
     div.innerHTML = 
@@ -4833,10 +5178,11 @@ function addMedicationToList(med) {
                 escapeHtml(med.frequency || '') + ' • ' + 
                 escapeHtml(med.duration || '') + ' days' +
             '</span>' +
-            '<span class="med-qty">x' + (med.quantity || 0) + '</span>' +
+            '<span class="med-qty" title="Total quantity across all batches">x' + (med.quantity || 0) + '</span>' +
             '<span class="med-price">TSh ' + Number(med.total_price || 0).toLocaleString() + '</span>' +
             instructions +
             '<span class="med-status-pending"><i class="fas fa-clock"></i> Pending</span>' +
+            totalBatchBadge +
             batchesInfo +
         '</div>' +
         '<button type="button" class="btn-remove" onclick="removeMedication(' + med.id + ')" title="Remove">' +
@@ -4909,12 +5255,10 @@ function addSelectedProcedures() {
             setTimeout(() => window.location.reload(), 1200); 
         } else {
             showToast('❌ Error', data.message || 'Unknown error', 'error');
-            console.error('add_procedures_batch failed:', data);
         }
     })
     .catch(err => {
         showToast('❌ Network Error', err.message, 'error');
-        console.error('Fetch error:', err);
     });
 }
 
@@ -4950,12 +5294,10 @@ function addSelectedEquipment() {
             setTimeout(() => window.location.reload(), 1200); 
         } else {
             showToast('❌ Error', data.message || 'Unknown error', 'error');
-            console.error('add_equipment_batch failed:', data);
         }
     })
     .catch(err => {
         showToast('❌ Network Error', err.message, 'error');
-        console.error('Fetch error:', err);
     });
 }
 
@@ -4984,11 +5326,11 @@ document.addEventListener('DOMContentLoaded', function() {
     updateComplaintsUI();
 });
 
-console.log('%c🩺 Braick Consultation V32 FINAL', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ V32: MULTI-BATCH STOCK DISTRIBUTION (FIFO)', 'font-size:12px; color:#059669; font-weight:bold;');
-console.log('%c✅ V32: Inachukua batches zote ikiisha ya kwanza', 'font-size:12px; color:#1E40AF; font-weight:bold;');
-console.log('%c✅ V32: Bill items kwa kila batch', 'font-size:12px; color:#7C3AED;');
-console.log('%c✅ V32: Display batches zilizotumika', 'font-size:12px; color:#D97706;');
+console.log('%c🩺 Braick Consultation V34 FINAL', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ V34: Completed view inaonyesha Lab Tests + Lab Results', 'font-size:12px; color:#059669; font-weight:bold;');
+console.log('%c✅ V34: Sections zote zinaonekana kwenye completed view', 'font-size:12px; color:#1E40AF; font-weight:bold;');
+console.log('%c✅ V33: Equipment batches ZOTE zinaonyeshwa', 'font-size:12px; color:#7C3AED;');
+console.log('%c✅ V33: Medications multi-batch GROUPED', 'font-size:12px; color:#D97706;');
 </script>
 
 </body>

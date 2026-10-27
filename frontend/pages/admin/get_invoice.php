@@ -1,7 +1,10 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/get_invoice.php
-// ADMIN - GET INVOICE HTML FOR PDF VIEW
+// ADMIN - GET INVOICE HTML FOR PDF VIEW V2.0
+// ✅ V2.0: Discount inapunguza BUYING COST (sio selling)
+// ✅ V2.0: Inaonyesha discount breakdown kwenye invoice
+// ✅ V2.0: Item name inachukuliwa kutoka purchase_items (sahihi)
 // ✅ BLUE THEME
 // ✅ Opens in new window / tab
 // ✅ Logo ya Braick inaonekana
@@ -73,27 +76,36 @@ if (!$purchase) {
 
 // ================================================================
 // GET PURCHASE ITEMS
+// ✅ V2.0: Tumia item_name kutoka purchase_items (sahihi)
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
         pi.*,
-        CASE 
-            WHEN pi.item_type = 'medicine' THEN mi.medication_name 
-            WHEN pi.item_type = 'equipment' THEN eq.equipment_name 
-        END as item_name,
-        CASE 
-            WHEN pi.item_type = 'medicine' THEN mi.category 
-            WHEN pi.item_type = 'equipment' THEN eq.category 
-        END as category,
-        CASE 
-            WHEN pi.item_type = 'medicine' THEN mi.unit 
-            WHEN pi.item_type = 'equipment' THEN eq.unit 
-        END as unit,
-        CASE 
-            WHEN pi.item_type = 'medicine' THEN mi.batch_number 
-            WHEN pi.item_type = 'equipment' THEN eq.batch_number 
-        END as batch_number,
-        u.full_name as added_by_full_name
+        COALESCE(pi.item_name, 
+            CASE 
+                WHEN pi.item_type = 'medicine' THEN mi.medication_name 
+                WHEN pi.item_type = 'equipment' THEN eq.equipment_name 
+            END
+        ) as item_name,
+        COALESCE(pi.item_category,
+            CASE 
+                WHEN pi.item_type = 'medicine' THEN mi.category 
+                WHEN pi.item_type = 'equipment' THEN eq.category 
+            END
+        ) as category,
+        COALESCE(pi.item_unit,
+            CASE 
+                WHEN pi.item_type = 'medicine' THEN mi.unit 
+                WHEN pi.item_type = 'equipment' THEN eq.unit 
+            END
+        ) as unit,
+        COALESCE(pi.item_batch_number,
+            CASE 
+                WHEN pi.item_type = 'medicine' THEN mi.batch_number 
+                WHEN pi.item_type = 'equipment' THEN eq.batch_number 
+            END
+        ) as batch_number,
+        COALESCE(pi.added_by_name, u.full_name) as added_by_full_name
     FROM purchase_items pi
     LEFT JOIN medications_inventory mi ON pi.item_id = mi.id AND pi.item_type = 'medicine'
     LEFT JOIN medical_equipment eq ON pi.item_id = eq.id AND pi.item_type = 'equipment'
@@ -123,10 +135,28 @@ foreach ($logo_alternatives as $alt) {
 $logo_fallback = 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 80 80"><rect width="80" height="80" rx="12" fill="#0B5ED7"/><text x="40" y="52" text-anchor="middle" fill="white" font-size="36" font-weight="bold" font-family="Arial">B</text></svg>');
 
 // ================================================================
-// COMPUTE SUMMARY
+// ✅ V2.0: COMPUTE SUMMARY (DISCOUNT-AWARE)
 // ================================================================
-$profit = ($purchase['total_selling_value'] ?? 0) - ($purchase['total_buying_cost'] ?? 0);
-$profit_percent = $purchase['total_buying_cost'] > 0 ? round(($profit / $purchase['total_buying_cost']) * 100, 1) : 0;
+$total_buying = (float)($purchase['total_buying_cost'] ?? 0);
+$total_selling = (float)($purchase['total_selling_value'] ?? 0);
+
+$discount_amount = (float)($purchase['global_discount_amount'] ?? 0);
+$discount_type = $purchase['global_discount_type'] ?? 'amount';
+$discount_value = (float)($purchase['global_discount_value'] ?? 0);
+
+$final_buying = (float)($purchase['final_total_buying_cost'] ?? 0);
+// Fallback calculations kama haipo kwenye DB
+if ($final_buying == 0 && $discount_amount > 0) {
+    $final_buying = $total_buying - $discount_amount;
+}
+if ($final_buying == 0 && $discount_amount == 0) {
+    $final_buying = $total_buying;
+}
+if ($final_buying < 0) $final_buying = 0;
+
+// ✅ Profit = Selling - Final Buying (baada ya discount)
+$profit = $total_selling - $final_buying;
+$profit_percent = $final_buying > 0 ? round(($profit / $final_buying) * 100, 1) : 0;
 
 $added_by_names = [];
 foreach ($items as $item) {
@@ -167,9 +197,6 @@ try {
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
-        /* ================================================================
-           BLUE THEME — PRINT OPTIMIZED
-           ================================================================ */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
@@ -193,9 +220,7 @@ try {
             position: relative;
         }
         
-        /* ================================================================
-           PRINT BUTTONS
-           ================================================================ */
+        /* PRINT BUTTONS */
         .print-btn-wrapper {
             display: flex;
             justify-content: flex-end;
@@ -234,9 +259,7 @@ try {
             background: #475569;
         }
         
-        /* ================================================================
-           HEADER WITH LOGO
-           ================================================================ */
+        /* HEADER WITH LOGO */
         .invoice-header {
             text-align: center;
             border-bottom: 3px double #0B5ED7;
@@ -280,9 +303,7 @@ try {
             margin-top: 6px;
         }
         
-        /* ================================================================
-           INVOICE TITLE
-           ================================================================ */
+        /* INVOICE TITLE */
         .invoice-title {
             text-align: center;
             margin-bottom: 20px;
@@ -310,9 +331,7 @@ try {
         .status-in-progress { color: #1A73E8; font-weight: 700; }
         .status-cancelled { color: #64748B; font-weight: 700; }
         
-        /* ================================================================
-           INVOICE INFO GRID
-           ================================================================ */
+        /* INVOICE INFO GRID */
         .invoice-info {
             display: grid;
             grid-template-columns: 1fr 1fr 1fr;
@@ -351,22 +370,67 @@ try {
             color: white;
         }
         
-        .invoice-info .info-item .value .status-badge.completed {
-            background: #0B5ED7;
-        }
-        
+        .invoice-info .info-item .value .status-badge.completed { background: #0B5ED7; }
         .invoice-info .info-item .value .status-badge.in_progress,
-        .invoice-info .info-item .value .status-badge.in-progress {
-            background: #1A73E8;
+        .invoice-info .info-item .value .status-badge.in-progress { background: #1A73E8; }
+        .invoice-info .info-item .value .status-badge.cancelled { background: #64748B; }
+        
+        /* ✅ V2.0: DISCOUNT BANNER */
+        .discount-banner {
+            background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+            border: 2px solid #D97706;
+            border-radius: 10px;
+            padding: 14px 18px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
         }
         
-        .invoice-info .info-item .value .status-badge.cancelled {
-            background: #64748B;
+        .discount-banner .discount-icon {
+            width: 48px;
+            height: 48px;
+            background: #D97706;
+            color: white;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            font-weight: 900;
+            flex-shrink: 0;
         }
         
-        /* ================================================================
-           CANCELLATION BOX
-           ================================================================ */
+        .discount-banner .discount-text {
+            flex: 1;
+            min-width: 200px;
+        }
+        
+        .discount-banner .discount-text .d-title {
+            font-size: 0.7rem;
+            font-weight: 800;
+            color: #92400E;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 3px;
+        }
+        
+        .discount-banner .discount-text .d-desc {
+            font-size: 0.85rem;
+            color: #78350F;
+            font-weight: 600;
+        }
+        
+        .discount-banner .discount-amount {
+            font-size: 1.4rem;
+            font-weight: 900;
+            color: #DC2626;
+            font-family: 'Courier New', monospace;
+            white-space: nowrap;
+        }
+        
+        /* CANCELLATION BOX */
         .cancellation-box {
             background: #F1F5F9;
             border: 2px solid #94A3B8;
@@ -395,9 +459,7 @@ try {
             margin-top: 2px;
         }
         
-        /* ================================================================
-           INVOICE TABLE
-           ================================================================ */
+        /* INVOICE TABLE */
         .invoice-table-wrapper {
             overflow-x: auto;
             margin-bottom: 20px;
@@ -461,42 +523,59 @@ try {
         .invoice-table .text-success { color: #0B5ED7; }
         .invoice-table .fw-bold { font-weight: 700; }
         
-        /* ================================================================
-           INVOICE SUMMARY
-           ================================================================ */
+        /* ✅ V2.0: INVOICE SUMMARY - 5 columns to include discount */
         .invoice-summary {
             display: grid;
-            grid-template-columns: 1fr 1fr 1fr 1fr;
-            gap: 12px;
-            padding: 16px;
+            grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
+            gap: 10px;
+            padding: 14px;
             background: #E8F0FE;
             border-radius: 10px;
             border: 1px solid #BFDBFE;
             margin-bottom: 20px;
         }
         
+        .invoice-summary .summary-item {
+            background: white;
+            border-radius: 8px;
+            padding: 10px 12px;
+            border: 1px solid #E2E8F0;
+        }
+        
+        .invoice-summary .summary-item.buying { border-color: #DC2626; background: #FEE2E2; }
+        .invoice-summary .summary-item.discount { border-color: #D97706; background: #FEF3C7; }
+        .invoice-summary .summary-item.final-buying { border-color: #991B1B; background: #FECACA; }
+        .invoice-summary .summary-item.selling { border-color: #0B5ED7; background: #E8F0FE; }
+        .invoice-summary .summary-item.profit { border-color: #059669; background: #D1FAE5; }
+        
         .invoice-summary .summary-item .label {
-            font-size: 10px;
-            color: #64748B;
+            font-size: 9px;
             margin: 0;
-            font-weight: 700;
+            font-weight: 800;
             text-transform: uppercase;
             letter-spacing: 0.05em;
         }
         
+        .invoice-summary .summary-item.buying .label { color: #DC2626; }
+        .invoice-summary .summary-item.discount .label { color: #D97706; }
+        .invoice-summary .summary-item.final-buying .label { color: #991B1B; }
+        .invoice-summary .summary-item.selling .label { color: #0B5ED7; }
+        .invoice-summary .summary-item.profit .label { color: #059669; }
+        
         .invoice-summary .summary-item .value {
-            font-size: 18px;
-            font-weight: 700;
+            font-size: 15px;
+            font-weight: 800;
             margin: 4px 0 0 0;
+            font-family: 'Courier New', monospace;
         }
         
-        .invoice-summary .summary-item .value.text-danger { color: #DC2626; }
-        .invoice-summary .summary-item .value.text-success { color: #0B5ED7; }
-        .invoice-summary .summary-item .value.text-warning { color: #1A73E8; }
+        .invoice-summary .summary-item.buying .value { color: #DC2626; }
+        .invoice-summary .summary-item.discount .value { color: #D97706; }
+        .invoice-summary .summary-item.final-buying .value { color: #991B1B; }
+        .invoice-summary .summary-item.selling .value { color: #0B5ED7; }
+        .invoice-summary .summary-item.profit .value { color: #059669; }
         
-        /* ================================================================
-           ADDED BY
-           ================================================================ */
+        /* ADDED BY */
         .invoice-added-by {
             font-size: 12px;
             color: #64748B;
@@ -513,9 +592,7 @@ try {
             color: #1E293B;
         }
         
-        /* ================================================================
-           OFFICIAL STAMP
-           ================================================================ */
+        /* OFFICIAL STAMP */
         .official-stamp {
             margin-top: 20px;
             padding-top: 14px;
@@ -571,9 +648,7 @@ try {
             margin-top: 2px;
         }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
+        /* FOOTER */
         .invoice-footer {
             text-align: center;
             border-top: 2px solid #0B5ED7;
@@ -593,9 +668,7 @@ try {
             margin: 2px 0;
         }
         
-        /* ================================================================
-           NO ITEMS
-           ================================================================ */
+        /* NO ITEMS */
         .no-items {
             text-align: center;
             padding: 30px;
@@ -613,13 +686,11 @@ try {
             opacity: 0.5;
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
+        /* RESPONSIVE */
         @media (max-width: 768px) {
             .invoice-container { padding: 16px 18px; }
             .invoice-info { grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px 12px; }
-            .invoice-summary { grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px 12px; }
+            .invoice-summary { grid-template-columns: 1fr 1fr 1fr; gap: 8px; padding: 10px 12px; }
             .invoice-title p span { display: block; margin-left: 0; }
             .invoice-table { font-size: 12px; }
             .invoice-table thead th,
@@ -638,12 +709,10 @@ try {
             .invoice-table tbody td { padding: 4px 6px; }
             .invoice-header h1 { font-size: 18px; }
             .invoice-title h2 { font-size: 16px; }
-            .invoice-summary .summary-item .value { font-size: 15px; }
+            .invoice-summary .summary-item .value { font-size: 13px; }
         }
         
-        /* ================================================================
-           PRINT STYLES
-           ================================================================ */
+        /* PRINT STYLES */
         @media print {
             body {
                 background: white !important;
@@ -672,6 +741,12 @@ try {
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
+            .invoice-summary .summary-item.buying { background: #FEE2E2 !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            .invoice-summary .summary-item.discount { background: #FEF3C7 !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            .invoice-summary .summary-item.final-buying { background: #FECACA !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            .invoice-summary .summary-item.selling { background: #E8F0FE !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            .invoice-summary .summary-item.profit { background: #D1FAE5 !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            .discount-banner { background: #FEF3C7 !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; border-color: #D97706 !important; }
             .official-stamp .stamp-box {
                 background: #E8F0FE !important;
                 -webkit-print-color-adjust: exact !important;
@@ -757,6 +832,24 @@ try {
             </div>
         <?php endif; ?>
         
+        <!-- ✅ V2.0: DISCOUNT BANNER -->
+        <?php if ($discount_amount > 0): ?>
+            <div class="discount-banner">
+                <div class="discount-icon">%</div>
+                <div class="discount-text">
+                    <div class="d-title">Discount Applied to Buying Cost</div>
+                    <div class="d-desc">
+                        <?php if ($discount_type === 'percent'): ?>
+                            <?= number_format($discount_value, 2) ?>% off on TSh <?= fmt($total_buying) ?>
+                        <?php else: ?>
+                            Fixed amount discount on total buying cost
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <div class="discount-amount">-TSh <?= fmt($discount_amount) ?></div>
+            </div>
+        <?php endif; ?>
+        
         <!-- PURCHASE INFO -->
         <div class="invoice-info">
             <div class="info-item">
@@ -827,10 +920,13 @@ try {
                             <tr>
                                 <td style="text-align:center;"><?= $counter++ ?></td>
                                 <td>
-                                    <strong><?= htmlspecialchars($item['item_name'] ?? 'Unknown') ?></strong>
+                                    <strong><?= htmlspecialchars($item['item_name'] ?? 'Unknown Item') ?></strong>
                                     <span class="batch-info">
-                                        <?= htmlspecialchars($item['unit'] ?? 'pcs') ?> | 
-                                        Batch: <?= htmlspecialchars($item['batch_number'] ?? 'N/A') ?>
+                                        <?= htmlspecialchars($item['unit'] ?? 'pcs') ?> 
+                                        <?php if (!empty($item['category'])): ?>
+                                            | <?= htmlspecialchars($item['category']) ?>
+                                        <?php endif; ?>
+                                        | Batch: <?= htmlspecialchars($item['batch_number'] ?? 'N/A') ?>
                                         <?php if (!empty($item['added_by_full_name'])): ?>
                                             | Added by: <?= htmlspecialchars($item['added_by_full_name']) ?>
                                         <?php endif; ?>
@@ -849,11 +945,11 @@ try {
                             <td colspan="3" class="fw-bold">TOTALS</td>
                             <td></td>
                             <td class="text-right text-danger fw-bold" style="font-size:15px;">
-                                TSh <?= fmt($purchase['total_buying_cost'] ?? 0) ?>
+                                TSh <?= fmt($total_buying) ?>
                             </td>
                             <td></td>
                             <td class="text-right text-success fw-bold" style="font-size:15px;">
-                                TSh <?= fmt($purchase['total_selling_value'] ?? 0) ?>
+                                TSh <?= fmt($total_selling) ?>
                             </td>
                         </tr>
                     </tfoot>
@@ -866,34 +962,42 @@ try {
             </div>
         <?php endif; ?>
         
-        <!-- SUMMARY -->
+        <!-- ✅ V2.0: SUMMARY WITH DISCOUNT -->
         <div class="invoice-summary">
-            <div class="summary-item">
-                <p class="label">Grand Total (Buying)</p>
-                <p class="value text-danger">
-                    TSh <?= fmt($purchase['total_buying_cost'] ?? 0) ?>
-                </p>
+            <div class="summary-item buying">
+                <p class="label">Buying Cost</p>
+                <p class="value">TSh <?= fmt($total_buying) ?></p>
             </div>
-            <div class="summary-item">
-                <p class="label">Grand Total (Selling)</p>
-                <p class="value text-success">
-                    TSh <?= fmt($purchase['total_selling_value'] ?? 0) ?>
+            
+            <?php if ($discount_amount > 0): ?>
+            <div class="summary-item discount">
+                <p class="label">
+                    Discount 
+                    <?php if ($discount_type === 'percent'): ?>
+                        (<?= number_format($discount_value, 2) ?>%)
+                    <?php endif; ?>
                 </p>
+                <p class="value">-TSh <?= fmt($discount_amount) ?></p>
             </div>
-            <div class="summary-item">
-                <p class="label">Expected Profit</p>
-                <p class="value" style="color:<?= $profit >= 0 ? '#0B5ED7' : '#DC2626' ?>;">
+            <?php endif; ?>
+            
+            <div class="summary-item final-buying">
+                <p class="label">Final Buying Cost</p>
+                <p class="value">TSh <?= fmt($final_buying) ?></p>
+            </div>
+            
+            <div class="summary-item selling">
+                <p class="label">Selling Value</p>
+                <p class="value">TSh <?= fmt($total_selling) ?></p>
+            </div>
+            
+            <div class="summary-item profit">
+                <p class="label">
+                    <?= $profit >= 0 ? 'Profit' : 'Loss' ?>
+                </p>
+                <p class="value">
                     TSh <?= fmt($profit) ?>
-                    <span style="font-size:13px;font-weight:400;">(<?= $profit_percent ?>%)</span>
-                </p>
-            </div>
-            <div class="summary-item">
-                <p class="label">Total Items</p>
-                <p class="value text-warning">
-                    <?= number_format($purchase['total_items']) ?> items
-                    <span style="font-size:13px;font-weight:400;display:block;">
-                        <?= number_format($purchase['total_quantity']) ?> units
-                    </span>
+                    <span style="font-size:11px;font-weight:600;display:block;opacity:0.8;">(<?= $profit_percent ?>%)</span>
                 </p>
             </div>
         </div>
@@ -932,10 +1036,14 @@ try {
     </div>
 
 <script>
-    console.log('%c📄 Braick - Purchase Invoice (BLUE THEME)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
-    console.log('%c✅ Blue theme applied', 'font-size:12px;color:#34D399;');
-    console.log('%c✅ Logo ya Braick inaonekana', 'font-size:12px;color:#34D399;');
+    console.log('%c📄 Braick - Purchase Invoice V2.0 (BLUE THEME + DISCOUNT)', 'font-size:16px;font-weight:bold;color:#0B5ED7;');
+    console.log('%c✅ Discount inapunguza BUYING COST', 'font-size:12px;color:#34D399;font-weight:bold;');
+    console.log('%c✅ Item name sahihi kutoka purchase_items', 'font-size:12px;color:#34D399;');
+    console.log('%c✅ Summary: Buying → Discount → Final Buying → Selling → Profit', 'font-size:12px;color:#34D399;');
     console.log('%c📋 Invoice: <?= htmlspecialchars($purchase['invoice_number'] ?? 'N/A') ?>', 'font-size:12px;color:#64748B;');
+    <?php if ($discount_amount > 0): ?>
+    console.log('%c🎁 Discount: TSh <?= fmt($discount_amount) ?> (saved on buying)', 'font-size:12px;color:#D97706;font-weight:bold;');
+    <?php endif; ?>
 </script>
 </body>
 </html>

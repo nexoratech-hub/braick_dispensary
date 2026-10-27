@@ -1,12 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/purchase_history.php
-// PHARMACY - PURCHASE HISTORY V9.2
-// ✅ Table header search (auto-filter, no submit)
-// ✅ Rows & columns kubwa, zinaonekana vizuri
-// ✅ Group dawa kwa invoice zao + margin per invoice
-// ✅ Column "Added By" kwenye View Modal (per item)
-// ✅ Modal ipo MBELE ya sidebar
+// PHARMACY - PURCHASE HISTORY V10.0 (CARD-BASED)
+// ✅ V10: Card-based layout (badala ya table)
+// ✅ V10: Kila card inaonyesha: Invoice, Date, Creator, Items, Status
+// ✅ V10: Amounts (buying, selling, profit) zinaonekana kwenye View Modal
+// ✅ V10: Discount inahesabiwa kwenye profit (final buying cost)
+// ✅ V10: Search inafanya kazi kwenye cards
+// ✅ V10: Filters zote zinafanya kazi
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -32,7 +33,6 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $view_id = isset($_GET['view']) ? (int)$_GET['view'] : 0;
-$action = isset($_GET['action']) ? $_GET['action'] : '';
 
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -42,6 +42,7 @@ try {
     die("Database connection failed: " . $e->getMessage());
 }
 
+// Auto-migration
 try {
     $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'branch_id'");
     if ($stmt->rowCount() == 0) {
@@ -50,14 +51,22 @@ try {
     }
 } catch (Exception $e) {}
 
+// ✅ V10.1: Ensure discount columns exist
+try {
+    $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'global_discount_amount'");
+    if ($stmt->rowCount() == 0) {
+        $db->exec("ALTER TABLE `purchases` 
+            ADD COLUMN `global_discount_type` VARCHAR(20) DEFAULT 'amount',
+            ADD COLUMN `global_discount_value` DECIMAL(12,2) DEFAULT 0,
+            ADD COLUMN `global_discount_amount` DECIMAL(12,2) DEFAULT 0,
+            ADD COLUMN `final_total_buying_cost` DECIMAL(12,2) DEFAULT 0
+        ");
+    }
+} catch (Exception $e) {}
+
 function formatMoney($amount) {
     if ($amount === null || $amount === '') return '0.00';
     return number_format((float)$amount, 2, '.', ',');
-}
-
-function formatMoneyNoDecimal($amount) {
-    if ($amount === null || $amount === '') return '0';
-    return number_format((float)$amount, 0, '.', ',');
 }
 
 function formatMoneyShort($amount) {
@@ -74,7 +83,6 @@ function formatMoneyShort($amount) {
 // ================================================================
 $view_purchase = null;
 $view_items = [];
-$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.PNG';
 
 if ($view_id > 0) {
     $stmt = $db->prepare("
@@ -89,36 +97,8 @@ if ($view_id > 0) {
     
     if ($view_purchase) {
         $stmt = $db->prepare("
-            SELECT 
-                pi.*,
-                COALESCE(pi.item_name, 
-                    CASE WHEN pi.item_type = 'medicine' THEN mi.medication_name 
-                         WHEN pi.item_type = 'equipment' THEN eq.equipment_name END
-                ) as item_name,
-                COALESCE(pi.item_category,
-                    CASE WHEN pi.item_type = 'medicine' THEN mi.category 
-                         WHEN pi.item_type = 'equipment' THEN eq.category END
-                ) as category,
-                COALESCE(pi.item_unit,
-                    CASE WHEN pi.item_type = 'medicine' THEN mi.unit 
-                         WHEN pi.item_type = 'equipment' THEN eq.unit END
-                ) as unit,
-                COALESCE(pi.item_batch_number,
-                    CASE WHEN pi.item_type = 'medicine' THEN mi.batch_number 
-                         WHEN pi.item_type = 'equipment' THEN eq.batch_number END
-                ) as batch_number,
-                COALESCE(pi.item_expiry_date,
-                    CASE WHEN pi.item_type = 'medicine' THEN mi.expiry_date 
-                         WHEN pi.item_type = 'equipment' THEN eq.expiry_date END
-                ) as expiry_date,
-                COALESCE(pi.item_supplier,
-                    CASE WHEN pi.item_type = 'medicine' THEN mi.supplier 
-                         WHEN pi.item_type = 'equipment' THEN eq.supplier END
-                ) as supplier,
-                COALESCE(pi.added_by_name, u.full_name) as added_by_full_name
+            SELECT pi.*, COALESCE(pi.added_by_name, u.full_name) as added_by_full_name
             FROM purchase_items pi
-            LEFT JOIN medications_inventory mi ON pi.item_id = mi.id AND pi.item_type = 'medicine'
-            LEFT JOIN medical_equipment eq ON pi.item_id = eq.id AND pi.item_type = 'equipment'
             LEFT JOIN users u ON pi.added_by = u.id
             WHERE pi.purchase_id = ?
             ORDER BY pi.item_name ASC, pi.added_at DESC
@@ -189,7 +169,7 @@ $stmt->execute($params);
 $purchases = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS
+// STATISTICS
 // ================================================================
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM purchases WHERE branch_id = ?");
 $stmt->execute([$user_branch_id]);
@@ -207,14 +187,20 @@ $stmt = $db->prepare("SELECT COUNT(*) as count FROM purchases WHERE status = 'CA
 $stmt->execute([$user_branch_id]);
 $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(total_buying_cost), 0) as total FROM purchases WHERE status = 'COMPLETED' AND branch_id = ?");
+// ✅ V10: Tumia final_total_buying_cost kwa total spending (baada ya discount)
+$stmt = $db->prepare("
+    SELECT 
+        COALESCE(SUM(COALESCE(NULLIF(final_total_buying_cost, 0), total_buying_cost)), 0) as total_buying,
+        COALESCE(SUM(total_selling_value), 0) as total_selling,
+        COALESCE(SUM(global_discount_amount), 0) as total_discount
+    FROM purchases 
+    WHERE status = 'COMPLETED' AND branch_id = ?
+");
 $stmt->execute([$user_branch_id]);
-$total_spending = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-$stmt = $db->prepare("SELECT COALESCE(SUM(total_selling_value), 0) as total FROM purchases WHERE status = 'COMPLETED' AND branch_id = ?");
-$stmt->execute([$user_branch_id]);
-$total_selling = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
+$stats_totals = $stmt->fetch(PDO::FETCH_ASSOC);
+$total_spending = (float)($stats_totals['total_buying'] ?? 0);
+$total_selling = (float)($stats_totals['total_selling'] ?? 0);
+$total_discount = (float)($stats_totals['total_discount'] ?? 0);
 $total_profit = $total_selling - $total_spending;
 
 $unread_notifications = 0;
@@ -233,9 +219,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 ?>
 
 <style>
-    /* ================================================================
-       PAGE VARIABLES
-       ================================================================ */
     :root {
         --ph-primary: #0B5ED7;
         --ph-primary-dark: #0A4CA8;
@@ -279,9 +262,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         background: var(--ph-bg-body);
     }
 
-    /* ================================================================
-       PAGE HEADER
-       ================================================================ */
+    /* PAGE HEADER */
     .page-header-box-ph {
         background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
         border-radius: 16px;
@@ -300,10 +281,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     .page-header-box-ph::before {
         content: '';
         position: absolute;
-        top: -60%;
-        right: -10%;
-        width: 350px;
-        height: 350px;
+        top: -60%; right: -10%;
+        width: 350px; height: 350px;
         background: rgba(255,255,255,0.05);
         border-radius: 50%;
         pointer-events: none;
@@ -374,9 +353,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: white;
     }
 
-    /* ================================================================
-       STATS CARDS
-       ================================================================ */
+    /* STATS CARDS */
     .stats-grid-ph {
         display: grid;
         grid-template-columns: repeat(6, 1fr);
@@ -410,9 +387,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     .stat-card-ph.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
     .stat-card-ph.dark-red { background: linear-gradient(135deg, #7F1D1D, #450A0A); }
 
-    /* ================================================================
-       CARD
-       ================================================================ */
+    /* CARD */
     .card-ph {
         background: var(--ph-bg-card);
         border-radius: 14px;
@@ -427,44 +402,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06);
     }
 
-    /* ================================================================
-       TABLE HEADER BAR
-       ================================================================ */
-    .table-header-bar-ph {
+    /* SEARCH BAR */
+    .search-bar-ph {
         display: flex;
         justify-content: space-between;
         align-items: center;
         flex-wrap: wrap;
         gap: 12px;
-        margin-bottom: 14px;
-        padding-bottom: 12px;
+        margin-bottom: 16px;
+        padding-bottom: 14px;
         border-bottom: 2px solid var(--ph-border-color);
     }
 
-    .table-header-left-ph {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-        flex: 1;
-        min-width: 0;
-    }
-
-    .table-header-right-ph {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex-shrink: 0;
-    }
-
-    .table-search-box-ph {
+    .search-box-ph {
         position: relative;
-        min-width: 320px;
         flex: 1;
         max-width: 500px;
+        min-width: 280px;
     }
 
-    .table-search-box-ph i {
+    .search-box-ph i {
         position: absolute;
         left: 14px;
         top: 50%;
@@ -475,7 +432,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         z-index: 1;
     }
 
-    .table-search-box-ph input {
+    .search-box-ph input {
         width: 100%;
         padding: 11px 16px 11px 44px;
         border: 2px solid var(--ph-primary);
@@ -491,71 +448,20 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         font-family: inherit;
     }
 
-    .table-search-box-ph input::placeholder {
-        color: rgba(255,255,255,0.85);
-        font-weight: 400;
-    }
-
-    .table-search-box-ph input:focus {
+    .search-box-ph input::placeholder { color: rgba(255,255,255,0.85); font-weight: 400; }
+    .search-box-ph input:focus {
         box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.25), 0 6px 20px rgba(11, 94, 215, 0.35);
         transform: translateY(-1px);
     }
 
-    .scroll-btn-header-ph {
-        width: 40px;
-        height: 40px;
-        border-radius: 8px;
-        border: 2px solid var(--ph-border-color);
-        background: var(--ph-bg-card);
-        color: var(--ph-text-primary);
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        transition: all 0.3s ease;
-        font-size: 0.85rem;
-    }
-
-    .scroll-btn-header-ph:hover {
-        background: var(--ph-primary);
-        border-color: var(--ph-primary);
-        color: white;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-
-    .scroll-btn-header-ph:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
-
-    .search-results-info-ph {
-        font-size: 0.72rem;
-        color: var(--ph-primary);
-        padding: 6px 12px;
-        background: var(--ph-primary-light);
-        border-radius: 8px;
-        display: none;
-        font-weight: 600;
-        border: 1px solid var(--ph-primary);
-    }
-
-    .card-title-ph {
-        font-size: 1rem;
-        font-weight: 600;
-        color: var(--ph-text-primary);
-        margin: 0;
-    }
-
-    .card-title-ph .title-blue { color: var(--ph-primary); }
-
-    .result-count-ph {
+    .search-count-ph {
         font-size: 0.8rem;
         color: var(--ph-text-secondary);
+        white-space: nowrap;
     }
+    .search-count-ph strong { color: var(--ph-primary); }
 
-    .result-count-ph strong { color: var(--ph-primary); }
-
-    /* ================================================================
-       FILTERS
-       ================================================================ */
+    /* FILTERS */
     .filter-group-ph {
         display: flex;
         flex-wrap: wrap;
@@ -593,8 +499,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         align-items: center;
     }
 
-    .search-form-ph input[type="text"],
-    .search-form-ph select,
     .search-form-ph input[type="date"] {
         padding: 8px 14px;
         border: 2px solid var(--ph-border-color);
@@ -604,14 +508,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: var(--ph-text-primary);
         outline: none;
         transition: all 0.3s ease;
-        flex: 1;
-        min-width: 120px;
+        min-width: 140px;
         font-family: inherit;
         height: 40px;
     }
 
-    .search-form-ph input:focus,
-    .search-form-ph select:focus {
+    .search-form-ph input[type="date"]:focus {
         border-color: var(--ph-primary);
         box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
     }
@@ -654,136 +556,125 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
     .btn-reset-ph:hover { border-color: var(--ph-danger); color: var(--ph-danger); }
 
-    /* ================================================================
-       TABLE
-       ================================================================ */
-    .table-wrapper-ph { position: relative; }
+    /* ✅ V10: PURCHASE CARDS GRID */
+    .purchases-grid-ph {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+        gap: 16px;
+    }
 
-    .table-scroll-container-ph {
-        overflow-x: auto;
-        overflow-y: auto;
-        max-height: 600px;
-        scroll-behavior: smooth;
-        border-radius: 12px;
+    .purchase-card-ph {
+        background: var(--ph-bg-card);
         border: 2px solid var(--ph-border-color);
-        background: var(--ph-bg-card);
+        border-radius: 14px;
+        overflow: hidden;
+        transition: all 0.3s ease;
+        position: relative;
+        display: flex;
+        flex-direction: column;
     }
 
-    .table-scroll-container-ph::-webkit-scrollbar { height: 10px; width: 10px; }
-    .table-scroll-container-ph::-webkit-scrollbar-track { background: var(--ph-bg-body); border-radius: 6px; }
-    .table-scroll-container-ph::-webkit-scrollbar-thumb { 
-        background: var(--ph-primary); 
-        border-radius: 6px;
-        border: 2px solid var(--ph-bg-body);
-    }
-    .table-scroll-container-ph::-webkit-scrollbar-thumb:hover { background: var(--ph-primary-dark); }
-
-    .data-table-ph {
-        width: 100%;
-        min-width: 1600px;
-        border-collapse: separate;
-        border-spacing: 0;
-        font-size: 0.82rem;
-        font-family: 'Inter', 'Segoe UI', sans-serif;
+    .purchase-card-ph:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.12);
     }
 
-    .data-table-ph thead th {
-        position: sticky;
-        top: 0;
-        z-index: 10;
-        background: linear-gradient(135deg, var(--ph-primary), var(--ph-primary-dark));
+    .purchase-card-ph.status-completed { border-color: #059669; }
+    .purchase-card-ph.status-in_progress { border-color: #D97706; }
+    .purchase-card-ph.status-cancelled { border-color: #DC2626; opacity: 0.85; }
+
+    /* Card header - colored strip */
+    .purchase-card-ph .card-header-strip {
+        padding: 14px 18px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .purchase-card-ph.status-completed .card-header-strip {
+        background: linear-gradient(135deg, #059669, #047857);
+    }
+    .purchase-card-ph.status-in_progress .card-header-strip {
+        background: linear-gradient(135deg, #D97706, #B45309);
+    }
+    .purchase-card-ph.status-cancelled .card-header-strip {
+        background: linear-gradient(135deg, #DC2626, #991B1B);
+    }
+
+    .purchase-card-ph .card-header-strip::before {
+        content: '';
+        position: absolute;
+        top: -50%; right: -20%;
+        width: 200px; height: 200px;
+        background: rgba(255,255,255,0.1);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .purchase-card-ph .invoice-number-ph {
+        font-size: 0.95rem;
+        font-weight: 800;
         color: white;
-        padding: 14px 16px;
-        font-size: 0.7rem;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        font-weight: 700;
-        white-space: nowrap;
-        text-align: left;
-        border-right: 1px solid rgba(255, 255, 255, 0.12);
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        position: relative;
+        z-index: 1;
+        font-family: 'JetBrains Mono', monospace;
     }
 
-    .data-table-ph thead th:last-child { border-right: none; text-align: center; }
-    .data-table-ph thead th:first-child { border-radius: 10px 0 0 0; }
-    .data-table-ph thead th:last-child { border-radius: 0 10px 0 0; }
-
-    .data-table-ph tbody tr {
-        transition: all 0.2s ease;
-        background: var(--ph-bg-card);
-    }
-
-    .data-table-ph tbody tr:nth-child(even) {
-        background: rgba(11, 94, 215, 0.03);
-    }
-
-    [data-theme="dark"] .data-table-ph tbody tr:nth-child(even) {
-        background: rgba(11, 94, 215, 0.08);
-    }
-
-    .data-table-ph tbody tr:hover {
-        background: linear-gradient(90deg, rgba(209, 250, 229, 0.5) 0%, rgba(209, 250, 229, 0.15) 100%) !important;
-        box-shadow: inset 4px 0 0 var(--ph-success);
-    }
-
-    [data-theme="dark"] .data-table-ph tbody tr:hover {
-        background: linear-gradient(90deg, rgba(26, 58, 42, 0.7) 0%, rgba(26, 58, 42, 0.3) 100%) !important;
-        box-shadow: inset 4px 0 0 #34D399;
-    }
-
-    .data-table-ph td {
-        padding: 14px 16px;
-        border-bottom: 1px solid var(--ph-border-color);
-        color: var(--ph-text-primary);
-        vertical-align: middle;
-        font-size: 0.82rem;
-        line-height: 1.45;
-        transition: all 0.2s ease;
-    }
-
-    .data-table-ph tbody tr:last-child td { border-bottom: none; }
-
-    /* Column widths */
-    .col-sno-ph { width: 55px; min-width: 55px; text-align: center; font-weight: 700; color: var(--ph-text-secondary); font-family: 'JetBrains Mono', monospace; }
-    .col-invoice-ph { min-width: 180px; }
-    .col-invoice-ph strong { font-size: 0.85rem; }
-    .col-type-ph { min-width: 100px; }
-    .col-creator-ph { min-width: 170px; }
-    .col-items-ph { min-width: 90px; text-align: center; }
-    .col-qty-ph { min-width: 80px; text-align: center; font-family: 'JetBrains Mono', monospace; }
-    .col-buying-ph { min-width: 140px; text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #DC2626; }
-    .col-selling-ph { min-width: 140px; text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #059669; }
-    .col-profit-ph { min-width: 140px; text-align: right; font-family: 'JetBrains Mono', monospace; }
-    .col-status-ph { min-width: 160px; text-align: center; }
-    .col-reason-ph { min-width: 240px; max-width: 300px; white-space: normal; }
-    .col-date-ph { min-width: 160px; }
-    .col-actions-ph { min-width: 200px; text-align: center; padding: 12px 8px; }
-
-    /* ================================================================
-       BADGES
-       ================================================================ */
-    .status-badge-ph {
-        padding: 5px 14px;
+    .purchase-card-ph .status-pill-ph {
+        padding: 3px 12px;
         border-radius: 20px;
-        font-size: 0.68rem;
-        font-weight: 700;
+        font-size: 0.6rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        background: rgba(255,255,255,0.25);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.3);
+        position: relative;
+        z-index: 1;
         display: inline-flex;
         align-items: center;
         gap: 4px;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        white-space: nowrap;
     }
 
-    .status-badge-ph.completed { background: #D1FAE5; color: #059669; border: 1px solid rgba(5, 150, 105, 0.3); }
-    .status-badge-ph.in-progress { background: #FEF3C7; color: #D97706; border: 1px solid rgba(217, 119, 6, 0.3); }
-    .status-badge-ph.cancelled { background: #FEE2E2; color: #DC2626; border: 1px solid rgba(220, 38, 38, 0.3); }
+    /* Card body */
+    .purchase-card-ph .card-body-ph {
+        padding: 14px 18px;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
 
-    [data-theme="dark"] .status-badge-ph.completed { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .status-badge-ph.in-progress { background: #3D2E0A; color: #FBBF24; }
-    [data-theme="dark"] .status-badge-ph.cancelled { background: #3A1A1A; color: #F87171; }
+    /* Meta row */
+    .purchase-card-ph .meta-row-ph {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.75rem;
+        color: var(--ph-text-secondary);
+    }
 
-    .type-badge-ph {
+    .purchase-card-ph .meta-row-ph i {
+        color: var(--ph-primary);
+        font-size: 0.75rem;
+        width: 16px;
+        text-align: center;
+    }
+
+    .purchase-card-ph .meta-row-ph strong {
+        color: var(--ph-text-primary);
+        font-weight: 700;
+    }
+
+    /* Type badge */
+    .purchase-card-ph .type-badge-ph {
         padding: 4px 12px;
         border-radius: 12px;
         font-size: 0.7rem;
@@ -793,93 +684,177 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         gap: 4px;
     }
 
-    .type-badge-ph.medicine { background: #E8F0FE; color: #0B5ED7; border: 1px solid rgba(11, 94, 215, 0.2); }
-    .type-badge-ph.equipment { background: #EDE9FE; color: #7C3AED; border: 1px solid rgba(124, 58, 237, 0.2); }
+    .purchase-card-ph .type-badge-ph.medicine { 
+        background: #E8F0FE; 
+        color: #0B5ED7; 
+        border: 1px solid rgba(11, 94, 215, 0.2); 
+    }
+    .purchase-card-ph .type-badge-ph.equipment { 
+        background: #EDE9FE; 
+        color: #7C3AED; 
+        border: 1px solid rgba(124, 58, 237, 0.2); 
+    }
 
-    [data-theme="dark"] .type-badge-ph.medicine { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .type-badge-ph.equipment { background: #2D1B5F; color: #A78BFA; }
-
-    .profit-positive-ph { color: #059669; }
-    .profit-negative-ph { color: #DC2626; }
-
-    /* ================================================================
-       CANCEL REASON CELL
-       ================================================================ */
-    .cancel-reason-cell-ph {
-        font-size: 0.75rem;
-        color: #DC2626;
-        background: #FEE2E2;
-        padding: 8px 12px;
+    /* Items summary */
+    .purchase-card-ph .items-summary-ph {
+        background: var(--ph-bg-body);
         border-radius: 8px;
-        border-left: 4px solid #DC2626;
-        word-wrap: break-word;
-        white-space: normal;
-        line-height: 1.4;
+        padding: 10px 12px;
+        border-left: 3px solid var(--ph-primary);
     }
 
-    [data-theme="dark"] .cancel-reason-cell-ph { background: #3A1A1A; }
-
-    .cancel-reason-cell-ph .reason-label-ph {
-        font-weight: 700;
-        font-size: 0.65rem;
+    .purchase-card-ph .items-summary-ph .summary-label {
+        font-size: 0.58rem;
         text-transform: uppercase;
-        display: block;
+        color: var(--ph-text-secondary);
+        font-weight: 700;
+        letter-spacing: 0.05em;
         margin-bottom: 4px;
-        color: #991B1B;
+        display: flex;
+        align-items: center;
+        gap: 4px;
     }
 
-    [data-theme="dark"] .cancel-reason-cell-ph .reason-label-ph { color: #FCA5A5; }
+    .purchase-card-ph .items-summary-ph .summary-value {
+        font-size: 0.78rem;
+        color: var(--ph-text-primary);
+        font-weight: 600;
+        line-height: 1.4;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
 
-    /* ================================================================
-       ACTION BUTTONS
-       ================================================================ */
-    .action-group-ph {
+    /* Stats row */
+    .purchase-card-ph .stats-row-ph {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+    }
+
+    .purchase-card-ph .stat-mini-ph {
+        background: var(--ph-bg-body);
+        border-radius: 8px;
+        padding: 8px 10px;
+        text-align: center;
+    }
+
+    .purchase-card-ph .stat-mini-ph .stat-label {
+        font-size: 0.55rem;
+        text-transform: uppercase;
+        color: var(--ph-text-secondary);
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        margin-bottom: 2px;
+    }
+
+    .purchase-card-ph .stat-mini-ph .stat-value {
+        font-size: 0.9rem;
+        font-weight: 800;
+        font-family: 'JetBrains Mono', monospace;
+        color: var(--ph-primary);
+    }
+
+    /* Discount badge */
+    .purchase-card-ph .discount-badge-ph {
+        background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+        border: 1px solid #D97706;
+        border-radius: 8px;
+        padding: 6px 10px;
+        font-size: 0.65rem;
+        font-weight: 800;
+        color: #92400E;
         display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
+        align-items: center;
+        gap: 5px;
         justify-content: center;
     }
 
-    .action-btn-ph {
-        padding: 8px 14px;
+    /* Cancelled reason */
+    .purchase-card-ph .cancel-reason-ph {
+        background: #FEE2E2;
+        border: 1px solid #DC2626;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 0.7rem;
+        color: #991B1B;
+        font-weight: 600;
+    }
+
+    .purchase-card-ph .cancel-reason-ph .reason-label {
+        font-size: 0.55rem;
+        text-transform: uppercase;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        margin-bottom: 2px;
+        display: block;
+    }
+
+    /* Card footer - actions */
+    .purchase-card-ph .card-footer-ph {
+        padding: 12px 18px;
+        border-top: 2px solid var(--ph-border-color);
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        background: var(--ph-bg-body);
+    }
+
+    .purchase-card-ph .btn-card-ph {
+        flex: 1;
+        padding: 8px 12px;
         border-radius: 8px;
         font-size: 0.72rem;
         font-weight: 700;
         border: none;
         cursor: pointer;
-        transition: all 0.25s ease;
-        text-decoration: none;
         display: inline-flex;
         align-items: center;
         justify-content: center;
         gap: 5px;
-        color: white;
-        min-width: 72px;
-        height: 34px;
+        text-decoration: none;
+        transition: all 0.25s ease;
         white-space: nowrap;
         font-family: inherit;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+        min-width: 90px;
     }
 
-    .action-btn-ph.view { background: linear-gradient(135deg, var(--ph-primary), var(--ph-primary-dark)); }
-    .action-btn-ph.view:hover { background: linear-gradient(135deg, var(--ph-primary-dark), #083B87); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(11, 94, 215, 0.5); color: white; }
+    .purchase-card-ph .btn-card-ph.view {
+        background: linear-gradient(135deg, var(--ph-primary), var(--ph-primary-dark));
+        color: white;
+        box-shadow: 0 2px 6px rgba(11, 94, 215, 0.2);
+    }
 
-    .action-btn-ph.pdf { background: linear-gradient(135deg, var(--ph-danger), #991B1B); }
-    .action-btn-ph.pdf:hover { background: linear-gradient(135deg, #991B1B, #7F1D1D); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(220, 38, 38, 0.5); color: white; }
+    .purchase-card-ph .btn-card-ph.view:hover {
+        background: linear-gradient(135deg, var(--ph-primary-dark), #083B87);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 18px rgba(11, 94, 215, 0.4);
+        color: white;
+    }
 
-    .action-btn-ph i { font-size: 0.72rem; }
+    .purchase-card-ph .btn-card-ph.pdf {
+        background: linear-gradient(135deg, var(--ph-danger), #991B1B);
+        color: white;
+        box-shadow: 0 2px 6px rgba(220, 38, 38, 0.2);
+    }
 
-    /* ================================================================
-       EMPTY STATE
-       ================================================================ */
+    .purchase-card-ph .btn-card-ph.pdf:hover {
+        background: linear-gradient(135deg, #991B1B, #7F1D1D);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 18px rgba(220, 38, 38, 0.4);
+        color: white;
+    }
+
+    /* EMPTY STATE */
     .empty-state-ph {
         text-align: center;
-        padding: 50px 20px;
+        padding: 60px 20px;
         color: var(--ph-text-secondary);
     }
 
     .empty-state-ph i {
-        font-size: 3rem;
+        font-size: 4rem;
         color: var(--ph-border-color);
         display: block;
         margin-bottom: 12px;
@@ -888,28 +863,21 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     .empty-state-ph p { font-size: 0.95rem; font-weight: 600; margin-bottom: 6px; }
     .empty-state-ph .sub { font-size: 0.8rem; font-weight: 400; }
 
-    .no-results-row-ph td {
+    .no-results-ph {
+        display: none;
         text-align: center;
-        padding: 50px 20px !important;
+        padding: 60px 20px;
         color: var(--ph-text-secondary);
     }
 
-    .no-results-row-ph i {
-        font-size: 2.5rem;
+    .no-results-ph i {
+        font-size: 3rem;
         color: var(--ph-border-color);
         display: block;
-        margin-bottom: 10px;
+        margin-bottom: 12px;
     }
 
-    .no-results-row-ph p {
-        font-weight: 600;
-        color: var(--ph-text-primary);
-        margin: 0;
-    }
-
-    /* ================================================================
-       MODAL
-       ================================================================ */
+    /* MODAL */
     .modal-overlay-ph {
         display: none;
         position: fixed;
@@ -936,12 +904,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         border: 2px solid var(--ph-border-color);
         position: relative;
         z-index: 1000000;
-        animation: slideUp 0.3s ease;
-    }
-
-    @keyframes slideUp {
-        from { opacity: 0; transform: translateY(30px) scale(0.98); }
-        to { opacity: 1; transform: translateY(0) scale(1); }
     }
 
     .modal-header-ph {
@@ -1021,9 +983,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
     .btn-print-invoice-ph:hover { background: #991B1B; transform: translateY(-2px); color: white; }
 
-    /* ================================================================
-       VIEW GRID
-       ================================================================ */
+    /* VIEW GRID */
     .view-grid-ph {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -1055,9 +1015,23 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
     .view-item-ph.full-width { grid-column: 1 / -1; }
 
-    /* ================================================================
-       CANCELLED INFO BOX
-       ================================================================ */
+    .view-item-ph.amount-box {
+        padding: 14px 18px;
+    }
+
+    .view-item-ph.amount-box .label {
+        font-size: 0.62rem;
+        margin-bottom: 4px;
+    }
+
+    .view-item-ph.amount-box .value {
+        font-size: 1.15rem;
+        font-weight: 900;
+        font-family: 'JetBrains Mono', monospace;
+        margin-top: 4px;
+    }
+
+    /* CANCELLED INFO BOX */
     .cancelled-info-box-ph {
         background: linear-gradient(135deg, #FEF2F2, #FEE2E2);
         border: 2px solid #DC2626;
@@ -1102,9 +1076,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
     [data-theme="dark"] .cancelled-info-box-ph .info-text-ph .info-row-ph .info-value-ph { color: #FECACA; }
 
-    /* ================================================================
-       INVOICE GROUP (View Modal)
-       ================================================================ */
+    /* INVOICE GROUP (View Modal) */
     .invoice-group-ph {
         border: 2px solid var(--ph-border-color);
         border-radius: 10px;
@@ -1149,24 +1121,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         gap: 5px;
     }
 
-    .invoice-group-header-ph .ig-margin-ph {
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 0.72rem;
-        font-weight: 700;
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-    }
-
-    .invoice-group-header-ph .ig-margin-ph.positive { background: #D1FAE5; color: #059669; }
-    .invoice-group-header-ph .ig-margin-ph.negative { background: #FEE2E2; color: #DC2626; }
-
     .invoice-group-body-ph { padding: 0; overflow-x: auto; }
 
-    /* ================================================================
-       VIEW ITEMS TABLE
-       ================================================================ */
+    /* VIEW ITEMS TABLE */
     .view-items-table-ph {
         width: 100%;
         border-collapse: collapse;
@@ -1229,12 +1186,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         flex-wrap: wrap;
     }
 
-    .item-name-cell-ph .item-meta-ph span {
-        display: inline-flex;
-        align-items: center;
-        gap: 3px;
-    }
-
     .item-batch-tag-ph {
         background: #FEF3C7;
         color: #D97706;
@@ -1245,12 +1196,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         font-family: 'JetBrains Mono', monospace;
     }
 
-    [data-theme="dark"] .item-batch-tag-ph {
-        background: #3D2E0A;
-        color: #FBBF24;
-    }
+    [data-theme="dark"] .item-batch-tag-ph { background: #3D2E0A; color: #FBBF24; }
 
-    /* ADDED BY TAG */
     .added-by-tag-ph {
         display: inline-flex;
         align-items: center;
@@ -1271,9 +1218,66 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         border-color: rgba(196, 181, 253, 0.2);
     }
 
-    /* ================================================================
-       FOOTER
-       ================================================================ */
+    /* DISCOUNT DETAIL BOX */
+    .discount-detail-box-ph {
+        background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+        border: 2px solid #D97706;
+        border-radius: 10px;
+        padding: 14px 18px;
+        margin-bottom: 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+
+    .discount-detail-box-ph .discount-info-ph {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex: 1;
+        min-width: 200px;
+    }
+
+    .discount-detail-box-ph .discount-icon-ph {
+        width: 44px;
+        height: 44px;
+        background: #D97706;
+        color: white;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.4rem;
+        font-weight: 900;
+        flex-shrink: 0;
+    }
+
+    .discount-detail-box-ph .discount-text-ph .discount-label-ph {
+        font-size: 0.6rem;
+        text-transform: uppercase;
+        font-weight: 800;
+        color: #92400E;
+        letter-spacing: 0.05em;
+        margin-bottom: 2px;
+    }
+
+    .discount-detail-box-ph .discount-text-ph .discount-desc-ph {
+        font-size: 0.8rem;
+        color: #78350F;
+        font-weight: 600;
+    }
+
+    .discount-detail-box-ph .discount-amount-ph {
+        font-size: 1.3rem;
+        font-weight: 900;
+        color: #DC2626;
+        font-family: 'JetBrains Mono', monospace;
+        white-space: nowrap;
+    }
+
+    /* FOOTER */
     .footer-ph {
         padding: 12px 0;
         border-top: 1px solid var(--ph-border-color);
@@ -1285,9 +1289,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
     .footer-ph .footer-brand-ph { color: var(--ph-primary); font-weight: 600; }
 
-    /* ================================================================
-       ANIMATIONS
-       ================================================================ */
+    /* ANIMATIONS */
     @keyframes fadeInUp {
         from { opacity: 0; transform: translateY(20px); }
         to { opacity: 1; transform: translateY(0); }
@@ -1298,18 +1300,20 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         opacity: 0;
     }
 
-    /* ================================================================
-       RESPONSIVE
-       ================================================================ */
+    /* RESPONSIVE */
+    @media (max-width: 1200px) {
+        .stats-grid-ph { grid-template-columns: repeat(3, 1fr); }
+    }
     @media (max-width: 1024px) {
         .main-content-ph { margin-left: 0; padding: 16px; }
         .stats-grid-ph { grid-template-columns: repeat(3, 1fr); }
+        .purchases-grid-ph { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
     }
 
     @media (max-width: 768px) {
         .stats-grid-ph { grid-template-columns: repeat(2, 1fr); }
         .search-form-ph { flex-direction: column; align-items: stretch; }
-        .search-form-ph input, .search-form-ph select { min-width: 100%; }
+        .search-form-ph input { min-width: 100%; }
         .filter-group-ph { justify-content: center; }
         .card-ph { padding: 12px 14px; }
         .page-header-box-ph .page-title-ph { font-size: 1.1rem; }
@@ -1317,26 +1321,17 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .stat-card-ph { padding: 10px 12px; min-height: 65px; }
         .header-actions-ph { flex-direction: column; align-items: stretch; width: 100%; }
         .header-actions-ph .btn-back-ph { width: 100%; justify-content: center; }
-        .data-table-ph { min-width: 1200px; font-size: 0.72rem; }
-        .data-table-ph th, .data-table-ph td { padding: 10px 12px; }
         .view-grid-ph { grid-template-columns: 1fr; }
         .modal-content-ph { padding: 16px; }
-        .table-search-box-ph { min-width: 100%; max-width: 100%; }
-        .table-header-bar-ph { flex-direction: column; align-items: stretch; }
+        .search-box-ph { min-width: 100%; max-width: 100%; }
+        .purchases-grid-ph { grid-template-columns: 1fr; }
         .view-items-table-ph { min-width: 1000px; }
     }
 
     @media (max-width: 480px) {
         .stats-grid-ph { grid-template-columns: 1fr 1fr; }
         .stat-card-ph .stat-number { font-size: 0.9rem; }
-        .stat-card-ph { padding: 8px 10px; min-height: 55px; }
         .page-header-box-ph { flex-direction: column; align-items: flex-start !important; }
-    }
-
-    @media print {
-        .btn-back-ph, .btn-search-ph, .btn-reset-ph, .action-group-ph,
-        .scroll-btn-header-ph, .filter-group-ph, .search-form-ph, .table-search-box-ph { display: none !important; }
-        .page-header-box-ph { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     }
 </style>
 
@@ -1393,14 +1388,18 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         <div class="stat-card-ph red">
             <span class="stat-icon"><i class="fas fa-coins"></i></span>
             <div class="stat-number">TSh <?= formatMoneyShort($total_spending) ?></div>
-            <div class="stat-label">Total Buying Cost</div>
-            <div class="stat-sub">Money spent on purchases</div>
+            <div class="stat-label">Final Buying Cost</div>
+            <div class="stat-sub">
+                <?php if ($total_discount > 0): ?>
+                    After TSh <?= formatMoneyShort($total_discount) ?> discount
+                <?php else: ?>
+                    Money spent on purchases
+                <?php endif; ?>
+            </div>
         </div>
         <div class="stat-card-ph purple">
             <span class="stat-icon"><i class="fas fa-chart-line"></i></span>
-            <div class="stat-number <?= $total_profit >= 0 ? 'profit-positive-ph' : 'profit-negative-ph' ?>">
-                TSh <?= formatMoneyShort($total_profit) ?>
-            </div>
+            <div class="stat-number">TSh <?= formatMoneyShort($total_profit) ?></div>
             <div class="stat-label"><?= $total_profit >= 0 ? '💰 Total Profit' : '📉 Total Loss' ?></div>
             <div class="stat-sub"><?= $total_spending > 0 ? round(($total_profit / $total_spending) * 100, 1) . '% margin' : 'No data' ?></div>
         </div>
@@ -1434,179 +1433,170 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </form>
     </div>
 
-    <!-- PURCHASE TABLE -->
+    <!-- ✅ V10: PURCHASE CARDS GRID -->
     <div class="card-ph animate-fade-in-up-ph" style="animation-delay:0.15s;">
         
-        <!-- TABLE HEADER BAR -->
-        <div class="table-header-bar-ph">
-            <div class="table-header-left-ph">
-                <div class="table-search-box-ph">
-                    <i class="fas fa-search"></i>
-                    <input type="text" id="phSearchInput" placeholder="🔍 Auto-search invoice, item, batch, creator, reason..." autocomplete="off">
-                </div>
-                <h3 class="card-title-ph" style="margin:0;">
-                    <i class="fas fa-list title-blue"></i> Purchase List
-                    <span class="result-count-ph" id="phCountDisplay">(<strong><?= count($purchases) ?></strong> purchases)</span>
-                </h3>
-                <span class="search-results-info-ph" id="phSearchInfo">
-                    <strong id="phSearchCount">0</strong> match
-                </span>
-                <?php if ($status_filter === 'CANCELLED'): ?>
-                    <span style="font-size:0.7rem;color:#DC2626;font-weight:600;">
-                        <i class="fas fa-ban"></i> Cancelled Only
-                    </span>
-                <?php endif; ?>
+        <div class="search-bar-ph">
+            <div class="search-box-ph">
+                <i class="fas fa-search"></i>
+                <input type="text" id="phSearchInput" placeholder="🔍 Auto-search invoice, item, creator, reason..." autocomplete="off">
             </div>
-            <div class="table-header-right-ph">
-                <button class="scroll-btn-header-ph" id="phScrollBtnLeft" onclick="scrollTable('left')" title="Scroll Left">
-                    <i class="fas fa-chevron-left"></i>
-                </button>
-                <button class="scroll-btn-header-ph" id="phScrollBtnRight" onclick="scrollTable('right')" title="Scroll Right">
-                    <i class="fas fa-chevron-right"></i>
-                </button>
+            <div class="search-count-ph">
+                <i class="fas fa-list" style="color:var(--ph-primary);"></i>
+                <span id="phCountDisplay"><strong><?= count($purchases) ?></strong> purchases</span>
+                <span id="phSearchInfo" style="display:none;color:var(--ph-primary);font-weight:700;margin-left:8px;">
+                    → <strong id="phSearchCount">0</strong> match
+                </span>
             </div>
         </div>
         
         <?php if (count($purchases) > 0): ?>
-            <div class="table-wrapper-ph">
-                <div class="table-scroll-container-ph" id="tableScrollContainer">
-                    <table class="data-table-ph" id="purchaseTable">
-                        <thead>
-                            <tr>
-                                <th class="col-sno-ph">#</th>
-                                <th class="col-invoice-ph">Invoice</th>
-                                <th class="col-type-ph">Type</th>
-                                <th class="col-creator-ph">Created By</th>
-                                <th class="col-items-ph">Items</th>
-                                <th class="col-qty-ph">Qty</th>
-                                <th class="col-buying-ph">Buying Cost</th>
-                                <th class="col-selling-ph">Selling Value</th>
-                                <th class="col-profit-ph">Profit</th>
-                                <th class="col-status-ph">Status</th>
-                                <th class="col-reason-ph">Cancel Reason</th>
-                                <th class="col-date-ph">Date</th>
-                                <th class="col-actions-ph">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="purchaseTableBody">
-                            <?php $counter = 1; ?>
-                            <?php foreach ($purchases as $purchase): ?>
-                                <?php 
-                                    $profit = ($purchase['total_selling_value'] ?? 0) - ($purchase['total_buying_cost'] ?? 0);
-                                    $profit_class = $profit >= 0 ? 'profit-positive-ph' : 'profit-negative-ph';
-                                    $status_class = strtolower($purchase['status']);
-                                    $status_icon = $purchase['status'] === 'COMPLETED' ? 'fa-check-circle' : ($purchase['status'] === 'IN_PROGRESS' ? 'fa-spinner fa-spin' : 'fa-ban');
-                                    $has_items = ($purchase['items_count'] ?? 0) > 0;
-                                    $is_cancelled = ($purchase['status'] === 'CANCELLED');
-                                    
-                                    $search_data = strtolower(
-                                        ($purchase['invoice_number'] ?? '') . ' ' .
-                                        ($purchase['purchase_type'] ?? '') . ' ' .
-                                        ($purchase['creator_name'] ?? $purchase['created_by_name'] ?? '') . ' ' .
-                                        ($purchase['cancelled_reason'] ?? '') . ' ' .
-                                        ($purchase['cancelled_by_name'] ?? '') . ' ' .
-                                        ($purchase['status'] ?? '') . ' ' .
-                                        ($purchase['items_list'] ?? '')
-                                    );
-                                ?>
-                                <tr class="ph-row" data-search="<?= htmlspecialchars($search_data) ?>" style="<?= $is_cancelled ? 'background:rgba(220,38,38,0.05);' : '' ?>">
-                                    <td class="col-sno-ph"><?= $counter++ ?></td>
-                                    <td class="col-invoice-ph">
-                                        <strong style="<?= $is_cancelled ? 'text-decoration:line-through;color:#DC2626;' : '' ?>">
-                                            <?= htmlspecialchars($purchase['invoice_number']) ?>
-                                        </strong>
-                                    </td>
-                                    <td class="col-type-ph">
-                                        <span class="type-badge-ph <?= $purchase['purchase_type'] ?>">
-                                            <i class="fas <?= $purchase['purchase_type'] === 'medicine' ? 'fa-pills' : 'fa-tools' ?>"></i>
-                                            <?= ucfirst($purchase['purchase_type']) ?>
-                                        </span>
-                                    </td>
-                                    <td class="col-creator-ph">
-                                        <i class="fas fa-user" style="color:#0B5ED7;font-size:0.7rem;"></i>
-                                        <?= htmlspecialchars($purchase['creator_name'] ?? $purchase['created_by_name'] ?? 'Unknown') ?>
-                                    </td>
-                                    <td class="col-items-ph"><?= number_format($purchase['items_count'] ?? 0) ?></td>
-                                    <td class="col-qty-ph"><?= number_format($purchase['total_qty'] ?? 0) ?></td>
-                                    <td class="col-buying-ph">
-                                        TSh <?= number_format($purchase['total_buying_cost'] ?? 0) ?>
-                                    </td>
-                                    <td class="col-selling-ph">
-                                        TSh <?= number_format($purchase['total_selling_value'] ?? 0) ?>
-                                    </td>
-                                    <td class="col-profit-ph">
-                                        <span class="<?= $profit_class ?>" style="font-weight:700;">
-                                            TSh <?= number_format($profit) ?>
-                                            <?php if ($purchase['total_buying_cost'] > 0 && $purchase['status'] === 'COMPLETED'): ?>
-                                                <span style="font-size:0.62rem;display:block;color:var(--ph-text-muted);">
-                                                    (<?= round(($profit / $purchase['total_buying_cost']) * 100, 1) ?>%)
-                                                </span>
-                                            <?php endif; ?>
-                                        </span>
-                                    </td>
-                                    <td class="col-status-ph">
-                                        <span class="status-badge-ph <?= $status_class ?>">
-                                            <i class="fas <?= $status_icon ?>"></i>
-                                            <?= $purchase['status'] ?>
-                                        </span>
-                                        <?php if ($is_cancelled && !empty($purchase['cancelled_at'])): ?>
-                                            <div style="font-size:0.6rem;color:var(--ph-text-muted);margin-top:4px;">
-                                                <i class="fas fa-clock"></i>
-                                                <?= date('d/m/Y H:i', strtotime($purchase['cancelled_at'])) ?>
-                                            </div>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td class="col-reason-ph">
-                                        <?php if ($is_cancelled): ?>
-                                            <div class="cancel-reason-cell-ph">
-                                                <span class="reason-label-ph">
-                                                    <i class="fas fa-info-circle"></i> Reason:
-                                                </span>
-                                                <?= htmlspecialchars($purchase['cancelled_reason'] ?? 'No reason provided') ?>
-                                                <?php if (!empty($purchase['cancelled_by_name'])): ?>
-                                                    <div style="font-size:0.65rem;margin-top:4px;color:#7F1D1D;font-style:italic;">
-                                                        <i class="fas fa-user-slash"></i> By: <?= htmlspecialchars($purchase['cancelled_by_name']) ?>
-                                                    </div>
-                                                <?php endif; ?>
-                                            </div>
-                                        <?php else: ?>
-                                            <span style="font-size:0.75rem;color:var(--ph-text-muted);">—</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td class="col-date-ph">
-                                        <?= date('d/m/Y H:i', strtotime($purchase['created_at'])) ?>
-                                        <?php if ($purchase['status'] === 'COMPLETED' && $purchase['completed_at']): ?>
-                                            <br><span style="font-size:0.6rem;color:var(--ph-text-muted);">
-                                                <i class="fas fa-check-circle" style="color:#059669;"></i>
-                                                <?= date('d/m/Y H:i', strtotime($purchase['completed_at'])) ?>
-                                            </span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td class="col-actions-ph">
-                                        <div class="action-group-ph">
-                                            <a href="purchase_history.php?view=<?= $purchase['id'] ?>" class="action-btn-ph view" title="View Details">
-                                                <i class="fas fa-eye"></i> View
-                                            </a>
-                                            
-                                            <?php if ($purchase['status'] === 'COMPLETED' && $has_items): ?>
-                                                <a href="get_invoice.php?id=<?= $purchase['id'] ?>" target="_blank" class="action-btn-ph pdf" title="View PDF Invoice">
-                                                    <i class="fas fa-file-pdf"></i> PDF
-                                                </a>
-                                            <?php endif; ?>
-                                        </div>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                            <tr class="no-results-row-ph" id="phNoResults" style="display:none;">
-                                <td colspan="13">
-                                    <i class="fas fa-search-minus"></i>
-                                    <p>No purchases match your search</p>
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
+            <div class="purchases-grid-ph" id="purchasesGrid">
+                <?php foreach ($purchases as $purchase): 
+                    $status_lower = strtolower($purchase['status']);
+                    
+                    // ✅ V10: Discount-aware profit calculation
+                    $discount_amt = (float)($purchase['global_discount_amount'] ?? 0);
+                    $total_buying = (float)($purchase['total_buying_cost'] ?? 0);
+                    $final_buying = (float)($purchase['final_total_buying_cost'] ?? 0);
+                    if ($final_buying == 0 && $discount_amt == 0) $final_buying = $total_buying;
+                    $total_selling = (float)($purchase['total_selling_value'] ?? 0);
+                    $profit = $total_selling - $final_buying;
+                    
+                    $status_icon = $purchase['status'] === 'COMPLETED' ? 'fa-check-circle' : ($purchase['status'] === 'IN_PROGRESS' ? 'fa-spinner fa-spin' : 'fa-ban');
+                    
+                    $search_data = strtolower(
+                        ($purchase['invoice_number'] ?? '') . ' ' .
+                        ($purchase['purchase_type'] ?? '') . ' ' .
+                        ($purchase['creator_name'] ?? $purchase['created_by_name'] ?? '') . ' ' .
+                        ($purchase['cancelled_reason'] ?? '') . ' ' .
+                        ($purchase['status'] ?? '') . ' ' .
+                        ($purchase['items_list'] ?? '')
+                    );
+                ?>
+                    <div class="purchase-card-ph status-<?= $status_lower ?> ph-card" data-search="<?= htmlspecialchars($search_data) ?>">
+                        
+                        <!-- HEADER STRIP -->
+                        <div class="card-header-strip">
+                            <div class="invoice-number-ph">
+                                <i class="fas fa-file-invoice"></i>
+                                <?= htmlspecialchars($purchase['invoice_number']) ?>
+                            </div>
+                            <span class="status-pill-ph">
+                                <i class="fas <?= $status_icon ?>"></i>
+                                <?= str_replace('_', ' ', $purchase['status']) ?>
+                            </span>
+                        </div>
+                        
+                        <!-- BODY -->
+                        <div class="card-body-ph">
+                            
+                            <!-- Type + Created By -->
+                            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+                                <span class="type-badge-ph <?= $purchase['purchase_type'] ?>">
+                                    <i class="fas <?= $purchase['purchase_type'] === 'medicine' ? 'fa-pills' : 'fa-tools' ?>"></i>
+                                    <?= ucfirst($purchase['purchase_type']) ?>
+                                </span>
+                                <span style="font-size:0.7rem;color:var(--ph-text-secondary);">
+                                    <i class="fas fa-hashtag" style="color:var(--ph-primary);"></i>
+                                    #<?= $purchase['id'] ?>
+                                </span>
+                            </div>
+                            
+                            <!-- Meta rows -->
+                            <div class="meta-row-ph">
+                                <i class="fas fa-user-circle"></i>
+                                <span>Added by: <strong><?= htmlspecialchars($purchase['creator_name'] ?? $purchase['created_by_name'] ?? 'Unknown') ?></strong></span>
+                            </div>
+                            
+                            <div class="meta-row-ph">
+                                <i class="fas fa-calendar-alt"></i>
+                                <span><strong><?= date('d M Y', strtotime($purchase['created_at'])) ?></strong> · <?= date('H:i', strtotime($purchase['created_at'])) ?></span>
+                            </div>
+                            
+                            <?php if ($purchase['status'] === 'COMPLETED' && !empty($purchase['completed_at'])): ?>
+                            <div class="meta-row-ph">
+                                <i class="fas fa-check-circle" style="color:#059669;"></i>
+                                <span>Completed: <strong><?= date('d M Y', strtotime($purchase['completed_at'])) ?></strong> · <?= date('H:i', strtotime($purchase['completed_at'])) ?></span>
+                            </div>
+                            <?php endif; ?>
+                            
+                            <!-- Items summary -->
+                            <div class="items-summary-ph">
+                                <div class="summary-label">
+                                    <i class="fas fa-boxes"></i> Items (<?= number_format($purchase['items_count'] ?? 0) ?>)
+                                </div>
+                                <div class="summary-value">
+                                    <?php 
+                                        $items_list = $purchase['items_list'] ?? '';
+                                        echo !empty($items_list) 
+                                            ? htmlspecialchars(strlen($items_list) > 100 ? substr($items_list, 0, 100) . '...' : $items_list)
+                                            : 'No items';
+                                    ?>
+                                </div>
+                            </div>
+                            
+                            <!-- Qty stat -->
+                            <div class="stats-row-ph">
+                                <div class="stat-mini-ph">
+                                    <div class="stat-label">Quantity</div>
+                                    <div class="stat-value"><?= number_format($purchase['total_qty'] ?? 0) ?></div>
+                                </div>
+                                <div class="stat-mini-ph">
+                                    <div class="stat-label">Items</div>
+                                    <div class="stat-value"><?= number_format($purchase['items_count'] ?? 0) ?></div>
+                                </div>
+                            </div>
+                            
+                            <!-- Discount badge -->
+                            <?php if ($discount_amt > 0): ?>
+                            <div class="discount-badge-ph">
+                                <i class="fas fa-percent"></i>
+                                Discount Applied: -TSh <?= number_format($discount_amt) ?>
+                            </div>
+                            <?php endif; ?>
+                            
+                            <!-- Cancel reason -->
+                            <?php if ($purchase['status'] === 'CANCELLED'): ?>
+                            <div class="cancel-reason-ph">
+                                <span class="reason-label">
+                                    <i class="fas fa-exclamation-circle"></i> Cancel Reason
+                                </span>
+                                <?= htmlspecialchars($purchase['cancelled_reason'] ?? 'No reason provided') ?>
+                                <?php if (!empty($purchase['cancelled_by_name'])): ?>
+                                    <div style="font-size:0.62rem;margin-top:3px;font-style:italic;opacity:0.85;">
+                                        <i class="fas fa-user-slash"></i> By: <?= htmlspecialchars($purchase['cancelled_by_name']) ?>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                            <?php endif; ?>
+                            
+                        </div>
+                        
+                        <!-- FOOTER - ACTIONS -->
+                        <div class="card-footer-ph">
+                            <a href="purchase_history.php?view=<?= $purchase['id'] ?>" class="btn-card-ph view">
+                                <i class="fas fa-eye"></i> View Details
+                            </a>
+                            
+                            <?php if ($purchase['status'] === 'COMPLETED' && ($purchase['items_count'] ?? 0) > 0): ?>
+                                <a href="get_invoice.php?id=<?= $purchase['id'] ?>" target="_blank" class="btn-card-ph pdf">
+                                    <i class="fas fa-file-pdf"></i> PDF
+                                </a>
+                            <?php endif; ?>
+                        </div>
+                        
+                    </div>
+                <?php endforeach; ?>
             </div>
+            
+            <!-- NO RESULTS (hidden by default) -->
+            <div class="no-results-ph" id="phNoResults">
+                <i class="fas fa-search-minus"></i>
+                <p style="font-weight:700;color:var(--ph-text-primary);">No purchases match your search</p>
+                <p style="font-size:0.85rem;">Try a different search term</p>
+            </div>
+            
         <?php else: ?>
             <div class="empty-state-ph">
                 <i class="fas fa-history"></i>
@@ -1621,23 +1611,33 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         <p>
             <span class="footer-brand-ph">Braick Dispensary</span> Management System
             <span style="margin:0 8px;">|</span>
-            Pharmacy Purchase History
+            Pharmacy Purchase History V10
             <span style="margin:0 8px;">|</span>
             <strong><?= $total_purchases ?></strong> purchases · 
             <strong><?= $completed_count ?></strong> completed · 
-            <strong style="color:#DC2626;"><?= $cancelled_count ?></strong> cancelled · 
-            TSh <strong><?= formatMoney($total_spending) ?></strong> spent
+            <strong style="color:#DC2626;"><?= $cancelled_count ?></strong> cancelled
             <span style="margin:0 8px;">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span style="margin:0 8px;">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
+            &copy; <?= date('Y') ?>
         </p>
     </footer>
 
 </main>
 
 <!-- VIEW MODAL -->
-<?php if ($view_purchase && $view_id > 0): ?>
+<?php if ($view_purchase && $view_id > 0): 
+    // ✅ V10: Discount-aware calculations
+    $vd_discount = (float)($view_purchase['global_discount_amount'] ?? 0);
+    $vd_discount_type = $view_purchase['global_discount_type'] ?? 'amount';
+    $vd_discount_value = (float)($view_purchase['global_discount_value'] ?? 0);
+    $vd_total_buying = (float)($view_purchase['total_buying_cost'] ?? 0);
+    $vd_final_buying = (float)($view_purchase['final_total_buying_cost'] ?? 0);
+    if ($vd_final_buying == 0 && $vd_discount == 0) $vd_final_buying = $vd_total_buying;
+    $vd_total_selling = (float)($view_purchase['total_selling_value'] ?? 0);
+    $vd_profit = $vd_total_selling - $vd_final_buying;
+    $vd_margin_pct = ($vd_final_buying > 0) ? (($vd_profit / $vd_final_buying) * 100) : 0;
+?>
 <div class="modal-overlay-ph show" id="viewModal" style="display:flex;z-index:999999;">
     <div class="modal-content-ph" style="z-index:1000000;">
         <div class="modal-header-ph">
@@ -1678,15 +1678,20 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </div>
         <?php endif; ?>
         
+        <!-- ✅ V10: AMOUNTS SECTION - inaonekana hapa kwenye View Modal -->
         <div class="view-grid-ph">
-            <div class="view-item-ph full-width">
+            <div class="view-item-ph">
                 <div class="label">Status</div>
                 <div class="value">
-                    <span class="status-badge-ph <?= strtolower($view_purchase['status']) ?>">
+                    <span class="status-badge-ph <?= strtolower($view_purchase['status']) ?>" style="padding:5px 14px;border-radius:20px;font-size:0.68rem;font-weight:700;display:inline-flex;align-items:center;gap:4px;text-transform:uppercase;">
                         <i class="fas <?= $view_purchase['status'] === 'COMPLETED' ? 'fa-check-circle' : ($view_purchase['status'] === 'IN_PROGRESS' ? 'fa-spinner fa-spin' : 'fa-ban') ?>"></i>
-                        <?= $view_purchase['status'] ?>
+                        <?= str_replace('_', ' ', $view_purchase['status']) ?>
                     </span>
                 </div>
+            </div>
+            <div class="view-item-ph">
+                <div class="label">Purchase Type</div>
+                <div class="value"><?= ucfirst($view_purchase['purchase_type']) ?></div>
             </div>
             <div class="view-item-ph">
                 <div class="label">Created By</div>
@@ -1697,71 +1702,103 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <div class="value"><?= date('d/m/Y H:i', strtotime($view_purchase['created_at'])) ?></div>
             </div>
             <?php if ($view_purchase['completed_at']): ?>
-                <div class="view-item-ph">
-                    <div class="label">Completed At</div>
-                    <div class="value"><?= date('d/m/Y H:i', strtotime($view_purchase['completed_at'])) ?></div>
-                </div>
+            <div class="view-item-ph">
+                <div class="label">Completed At</div>
+                <div class="value"><?= date('d/m/Y H:i', strtotime($view_purchase['completed_at'])) ?></div>
+            </div>
             <?php endif; ?>
             <div class="view-item-ph">
-                <div class="label">Total Items</div>
-                <div class="value"><?= number_format($view_purchase['total_items']) ?></div>
-            </div>
-            <div class="view-item-ph">
                 <div class="label">Total Quantity</div>
-                <div class="value"><?= number_format($view_purchase['total_quantity']) ?> units</div>
+                <div class="value"><?= number_format($view_purchase['total_quantity']) ?> units (<?= number_format($view_purchase['total_items']) ?> items)</div>
             </div>
-            <div class="view-item-ph" style="background:#FEE2E2;border:2px solid #DC2626;">
-                <div class="label" style="color:#DC2626;">Total Buying Cost</div>
-                <div class="value" style="color:#DC2626;">TSh <?= number_format($view_purchase['total_buying_cost'] ?? 0) ?></div>
+        </div>
+        
+        <!-- ✅ V10: AMOUNTS BREAKDOWN -->
+        <div style="margin-top:14px;margin-bottom:16px;">
+            <div style="font-size:0.85rem;font-weight:800;color:var(--ph-text-primary);margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+                <i class="fas fa-coins" style="color:#D97706;"></i> Amounts Breakdown
             </div>
-            <div class="view-item-ph" style="background:#D1FAE5;border:2px solid #059669;">
-                <div class="label" style="color:#059669;">Total Selling Value</div>
-                <div class="value" style="color:#059669;">TSh <?= number_format($view_purchase['total_selling_value'] ?? 0) ?></div>
-            </div>
-            <?php 
-                $view_profit = ($view_purchase['total_selling_value'] ?? 0) - ($view_purchase['total_buying_cost'] ?? 0);
-                $view_profit_class = $view_profit >= 0 ? 'profit-positive-ph' : 'profit-negative-ph';
-            ?>
-            <div class="view-item-ph full-width" style="background:<?= $view_profit >= 0 ? '#D1FAE5' : '#FEE2E2' ?>;border:2px solid <?= $view_profit >= 0 ? '#059669' : '#DC2626' ?>;">
-                <div class="label" style="color:<?= $view_profit >= 0 ? '#059669' : '#DC2626' ?>;">
-                    <i class="fas fa-chart-line"></i> Margin / Expected Profit (Per Invoice)
+            
+            <div class="view-grid-ph">
+                <!-- Buying Cost (Before Discount) -->
+                <div class="view-item-ph amount-box" style="background:#FEE2E2;border:2px solid #DC2626;">
+                    <div class="label" style="color:#DC2626;">💰 Buying Cost (Before Discount)</div>
+                    <div class="value" style="color:#DC2626;">TSh <?= number_format($vd_total_buying) ?></div>
                 </div>
-                <div class="value <?= $view_profit_class ?>" style="font-size:1.1rem;">
-                    TSh <?= number_format($view_profit) ?>
-                    <?php if ($view_purchase['total_buying_cost'] > 0): ?>
-                        <span style="font-size:0.75rem;font-weight:600;background:<?= $view_profit >= 0 ? '#059669' : '#DC2626' ?>;color:white;padding:3px 10px;border-radius:12px;margin-left:8px;">
-                            <?= round(($view_profit / $view_purchase['total_buying_cost']) * 100, 1) ?>% margin
+                
+                <!-- Discount -->
+                <?php if ($vd_discount > 0): ?>
+                <div class="view-item-ph amount-box" style="background:#FEF3C7;border:2px solid #D97706;">
+                    <div class="label" style="color:#D97706;">
+                        🎁 Discount 
+                        <?php if ($vd_discount_type === 'percent'): ?>
+                            (<?= number_format($vd_discount_value, 2) ?>%)
+                        <?php endif; ?>
+                    </div>
+                    <div class="value" style="color:#D97706;">-TSh <?= number_format($vd_discount) ?></div>
+                </div>
+                <?php endif; ?>
+                
+                <!-- Final Buying Cost -->
+                <div class="view-item-ph amount-box" style="background:#FECACA;border:2px solid #991B1B;">
+                    <div class="label" style="color:#991B1B;">💰 Final Buying Cost</div>
+                    <div class="value" style="color:#991B1B;">TSh <?= number_format($vd_final_buying) ?></div>
+                </div>
+                
+                <!-- Selling Value -->
+                <div class="view-item-ph amount-box" style="background:#E8F0FE;border:2px solid #0B5ED7;">
+                    <div class="label" style="color:#0B5ED7;">💰 Total Selling Value</div>
+                    <div class="value" style="color:#0B5ED7;">TSh <?= number_format($vd_total_selling) ?></div>
+                </div>
+                
+                <!-- Profit -->
+                <div class="view-item-ph amount-box full-width" style="background:<?= $vd_profit >= 0 ? '#D1FAE5' : '#FEE2E2' ?>;border:2px solid <?= $vd_profit >= 0 ? '#059669' : '#DC2626' ?>;">
+                    <div class="label" style="color:<?= $vd_profit >= 0 ? '#059669' : '#DC2626' ?>;">
+                        <i class="fas fa-chart-line"></i> 
+                        <?= $vd_profit >= 0 ? 'Expected Profit' : 'Expected Loss' ?>
+                    </div>
+                    <div class="value" style="color:<?= $vd_profit >= 0 ? '#059669' : '#DC2626' ?>;">
+                        TSh <?= number_format($vd_profit) ?>
+                        <span style="font-size:0.75rem;font-weight:700;background:<?= $vd_profit >= 0 ? '#059669' : '#DC2626' ?>;color:white;padding:3px 10px;border-radius:12px;margin-left:8px;">
+                            <?= number_format($vd_margin_pct, 1) ?>% margin
                         </span>
-                    <?php endif; ?>
+                    </div>
                 </div>
             </div>
         </div>
         
-        <!-- ITEMS GROUPED BY INVOICE -->
+        <!-- ✅ V10: DISCOUNT DETAIL BOX -->
+        <?php if ($vd_discount > 0): ?>
+        <div class="discount-detail-box-ph">
+            <div class="discount-info-ph">
+                <div class="discount-icon-ph">%</div>
+                <div class="discount-text-ph">
+                    <div class="discount-label-ph">Discount Applied to Buying Cost</div>
+                    <div class="discount-desc-ph">
+                        <?php if ($vd_discount_type === 'percent'): ?>
+                            <?= number_format($vd_discount_value, 2) ?>% off on TSh <?= number_format($vd_total_buying) ?>
+                        <?php else: ?>
+                            Fixed amount off on total buying cost
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+            <div class="discount-amount-ph">-TSh <?= number_format($vd_discount) ?></div>
+        </div>
+        <?php endif; ?>
+        
+        <!-- ITEMS TABLE -->
         <?php if (count($view_items) > 0): ?>
             <div style="margin-top:16px;">
                 <div class="invoice-group-ph">
                     <div class="invoice-group-header-ph">
                         <div class="ig-title-ph">
-                            <i class="fas fa-file-invoice"></i>
-                            Invoice: <?= htmlspecialchars($view_purchase['invoice_number']) ?>
+                            <i class="fas fa-list"></i>
+                            Items Purchased (<?= count($view_items) ?>)
                         </div>
                         <div class="ig-stats-ph">
                             <span class="ig-stat-ph">
-                                <i class="fas fa-boxes"></i> <?= count($view_items) ?> items
-                            </span>
-                            <span class="ig-stat-ph">
-                                <i class="fas fa-coins"></i> Buy: TSh <?= number_format($view_purchase['total_buying_cost'] ?? 0) ?>
-                            </span>
-                            <span class="ig-stat-ph">
-                                <i class="fas fa-tag"></i> Sell: TSh <?= number_format($view_purchase['total_selling_value'] ?? 0) ?>
-                            </span>
-                            <span class="ig-margin-ph <?= $view_profit >= 0 ? 'positive' : 'negative' ?>">
-                                <i class="fas <?= $view_profit >= 0 ? 'fa-arrow-up' : 'fa-arrow-down' ?>"></i>
-                                Margin: TSh <?= number_format($view_profit) ?>
-                                <?php if ($view_purchase['total_buying_cost'] > 0): ?>
-                                    (<?= round(($view_profit / $view_purchase['total_buying_cost']) * 100, 1) ?>%)
-                                <?php endif; ?>
+                                <i class="fas fa-boxes"></i> <?= number_format($view_purchase['total_quantity']) ?> units
                             </span>
                         </div>
                     </div>
@@ -1779,36 +1816,31 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     <th style="text-align:right;width:115px;">Buy Total</th>
                                     <th style="text-align:right;width:105px;">Sell Price</th>
                                     <th style="text-align:right;width:115px;">Sell Total</th>
-                                    <th style="text-align:right;width:105px;">Profit</th>
                                     <th style="min-width:150px;text-align:center;">Added By</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php $vcounter = 1; $item_total_profit = 0; ?>
-                                <?php foreach ($view_items as $item): 
-                                    $item_profit = ($item['total_selling_value'] ?? 0) - ($item['total_buying_cost'] ?? 0);
-                                    $item_total_profit += $item_profit;
-                                ?>
+                                <?php $vcounter = 1; foreach ($view_items as $item): ?>
                                     <tr>
                                         <td style="text-align:center;font-weight:700;color:var(--ph-text-secondary);"><?= $vcounter++ ?></td>
                                         <td>
                                             <div class="item-name-cell-ph">
                                                 <strong><?= htmlspecialchars($item['item_name'] ?? 'Unknown') ?></strong>
                                                 <div class="item-meta-ph">
-                                                    <?php if (!empty($item['batch_number']) && $item['batch_number'] !== 'N/A'): ?>
+                                                    <?php if (!empty($item['item_batch_number'])): ?>
                                                         <span class="item-batch-tag-ph">
-                                                            <i class="fas fa-barcode"></i> <?= htmlspecialchars($item['batch_number']) ?>
+                                                            <i class="fas fa-barcode"></i> <?= htmlspecialchars($item['item_batch_number']) ?>
                                                         </span>
                                                     <?php endif; ?>
-                                                    <?php if (!empty($item['expiry_date']) && $item['expiry_date'] !== '0000-00-00'): ?>
+                                                    <?php if (!empty($item['item_expiry_date']) && $item['item_expiry_date'] !== '0000-00-00'): ?>
                                                         <span style="color:#DC2626;font-weight:600;">
                                                             <i class="fas fa-calendar-times"></i>
-                                                            Exp: <?= date('d/m/Y', strtotime($item['expiry_date'])) ?>
+                                                            Exp: <?= date('d/m/Y', strtotime($item['item_expiry_date'])) ?>
                                                         </span>
                                                     <?php endif; ?>
-                                                    <?php if (!empty($item['supplier'])): ?>
+                                                    <?php if (!empty($item['item_supplier'])): ?>
                                                         <span>
-                                                            <i class="fas fa-truck"></i> <?= htmlspecialchars($item['supplier']) ?>
+                                                            <i class="fas fa-truck"></i> <?= htmlspecialchars($item['item_supplier']) ?>
                                                         </span>
                                                     <?php endif; ?>
                                                 </div>
@@ -1816,22 +1848,19 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                         </td>
                                         <td>
                                             <span style="background:var(--ph-primary-light);color:var(--ph-primary);padding:3px 10px;border-radius:10px;font-size:0.68rem;font-weight:600;">
-                                                <?= htmlspecialchars($item['category'] ?? 'N/A') ?>
+                                                <?= htmlspecialchars($item['item_category'] ?? 'N/A') ?>
                                             </span>
                                         </td>
                                         <td style="text-align:center;font-weight:700;font-family:monospace;"><?= number_format($item['quantity']) ?></td>
                                         <td style="text-align:center;">
                                             <span style="background:#CCFBF1;color:#0D9488;padding:2px 8px;border-radius:6px;font-size:0.68rem;font-weight:700;">
-                                                <?= htmlspecialchars($item['unit'] ?? 'pcs') ?>
+                                                <?= htmlspecialchars($item['item_unit'] ?? 'pcs') ?>
                                             </span>
                                         </td>
                                         <td style="text-align:right;color:#DC2626;font-weight:600;">TSh <?= number_format($item['buying_price'] ?? 0) ?></td>
                                         <td style="text-align:right;color:#DC2626;font-weight:700;">TSh <?= number_format($item['total_buying_cost'] ?? 0) ?></td>
                                         <td style="text-align:right;color:#059669;font-weight:600;">TSh <?= number_format($item['selling_price'] ?? 0) ?></td>
                                         <td style="text-align:right;color:#059669;font-weight:700;">TSh <?= number_format($item['total_selling_value'] ?? 0) ?></td>
-                                        <td style="text-align:right;font-weight:700;color:<?= $item_profit >= 0 ? '#059669' : '#DC2626' ?>;">
-                                            TSh <?= number_format($item_profit) ?>
-                                        </td>
                                         <td style="text-align:center;">
                                             <span class="added-by-tag-ph">
                                                 <i class="fas fa-user-circle"></i>
@@ -1841,24 +1870,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
-                            <tfoot>
-                                <tr style="background:rgba(11, 94, 215, 0.08);">
-                                    <td colspan="6" style="text-align:right;font-weight:700;color:var(--ph-text-primary);padding:12px 14px;font-size:0.75rem;">
-                                        TOTALS:
-                                    </td>
-                                    <td style="text-align:right;font-weight:800;color:#DC2626;padding:12px 14px;font-size:0.85rem;border-top:2px solid #DC2626;">
-                                        TSh <?= number_format($view_purchase['total_buying_cost'] ?? 0) ?>
-                                    </td>
-                                    <td></td>
-                                    <td style="text-align:right;font-weight:800;color:#059669;padding:12px 14px;font-size:0.85rem;border-top:2px solid #059669;">
-                                        TSh <?= number_format($view_purchase['total_selling_value'] ?? 0) ?>
-                                    </td>
-                                    <td style="text-align:right;font-weight:800;color:<?= $item_total_profit >= 0 ? '#059669' : '#DC2626' ?>;padding:12px 14px;font-size:0.85rem;border-top:2px solid <?= $item_total_profit >= 0 ? '#059669' : '#DC2626' ?>;">
-                                        TSh <?= number_format($item_total_profit) ?>
-                                    </td>
-                                    <td></td>
-                                </tr>
-                            </tfoot>
                         </table>
                     </div>
                 </div>
@@ -1890,7 +1901,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 <?php endif; ?>
 
 <script>
-    // AUTO-SEARCH
+    // ✅ V10: AUTO-SEARCH for CARDS
     (function() {
         var searchInput = document.getElementById('phSearchInput');
         var countDisplay = document.getElementById('phCountDisplay');
@@ -1902,25 +1913,25 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         searchInput.addEventListener('input', function() {
             var q = this.value.toLowerCase().trim();
-            var rows = document.querySelectorAll('.ph-row');
-            var total = rows.length;
+            var cards = document.querySelectorAll('.ph-card');
+            var total = cards.length;
             var visible = 0;
             
-            rows.forEach(function(row) {
-                var searchData = row.getAttribute('data-search') || '';
+            cards.forEach(function(card) {
+                var searchData = card.getAttribute('data-search') || '';
                 if (q === '' || searchData.includes(q)) {
-                    row.style.display = '';
+                    card.style.display = '';
                     visible++;
                 } else {
-                    row.style.display = 'none';
+                    card.style.display = 'none';
                 }
             });
             
             if (countDisplay) {
                 if (q === '') {
-                    countDisplay.innerHTML = '(<strong>' + total + '</strong> purchases)';
+                    countDisplay.innerHTML = '<strong>' + total + '</strong> purchases';
                 } else {
-                    countDisplay.innerHTML = '(<strong>' + visible + '</strong> of ' + total + ')';
+                    countDisplay.innerHTML = '<strong>' + total + '</strong> purchases';
                 }
             }
             
@@ -1928,13 +1939,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 if (q === '') {
                     searchInfo.style.display = 'none';
                 } else {
-                    searchInfo.style.display = 'inline-flex';
+                    searchInfo.style.display = 'inline';
                     searchCount.textContent = visible;
                 }
             }
             
             if (noResults) {
-                noResults.style.display = (visible === 0 && q !== '') ? '' : 'none';
+                noResults.style.display = (visible === 0 && q !== '') ? 'block' : 'none';
             }
         });
         
@@ -1947,40 +1958,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         });
     })();
 
-    // SCROLL BUTTONS
-    function scrollTable(direction) {
-        var container = document.getElementById('tableScrollContainer');
-        if (!container) return;
-        var scrollAmount = 400;
-        if (direction === 'left') {
-            container.scrollLeft -= scrollAmount;
-        } else {
-            container.scrollLeft += scrollAmount;
-        }
-    }
-    
-    function updateScrollButtons() {
-        var container = document.getElementById('tableScrollContainer');
-        var btnLeft = document.getElementById('phScrollBtnLeft');
-        var btnRight = document.getElementById('phScrollBtnRight');
-        
-        if (!container || !btnLeft || !btnRight) return;
-        
-        var scrollLeft = container.scrollLeft;
-        var maxScroll = container.scrollWidth - container.clientWidth;
-        
-        btnLeft.disabled = scrollLeft <= 5;
-        btnRight.disabled = scrollLeft >= maxScroll - 5 || maxScroll <= 0;
-    }
-    
-    document.addEventListener('DOMContentLoaded', function() {
-        var container = document.getElementById('tableScrollContainer');
-        if (container) {
-            container.addEventListener('scroll', updateScrollButtons);
-            setTimeout(updateScrollButtons, 200);
-        }
-    });
-
     // FOOTER TIME
     setInterval(function() {
         var now = new Date();
@@ -1991,11 +1968,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         if (ftEl) ftEl.textContent = timeStr;
     }, 1000);
 
-    console.log('%c📜 Braick - Pharmacy Purchase History V9.2', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Table header search (auto-filter, no submit)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Column "Added By" kwenye View Modal (per item)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Group dawa kwa invoice zao + margin per invoice', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Modal ipo MBELE ya sidebar (z-index 999999)', 'font-size:13px; color:#34D399;');
+    console.log('%c📜 Braick - Pharmacy Purchase History V10.0', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Card-based layout (badala ya table)', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ Kila card: Invoice, Date, Creator, Items, Status', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Amounts zinaonekana kwenye View Modal tu', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Discount inahesabiwa kwenye profit (final buying cost)', 'font-size:13px; color:#34D399;');
     console.log('%c💡 Press Ctrl+K to focus search', 'font-size:13px; color:#D97706; font-weight:bold;');
 </script>
 

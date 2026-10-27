@@ -1,12 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/purchases.php
-// PHARMACY - PURCHASE MANAGEMENT V9.2
-// ✅ Kila purchase inaunda NEW BATCH (kama admin)
-// ✅ Autocomplete inajaza category, unit, prices, supplier
-// ✅ purchase_items inahifadhi taarifa zote za batch
-// ✅ Auto-migration: item_id, medicine_id, equipment_id NULL-able
-// ✅ UI/UX inafanana na admin
+// PHARMACY - PURCHASE MANAGEMENT V10.1
+// ✅ V10.1: DISCOUNT INAPUNGUZA BUYING COST (sio selling)
+// ✅ V10.1: Discount ya jumla - Amount (default) au Percent
+// ✅ V10.1: Inventory unit_cost inakuwa baada ya discount
+// ✅ V10: Global discount kwenye purchase nzima
+// ✅ V9.2: Kila purchase inaunda NEW BATCH
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -58,7 +58,6 @@ try {
     }
 } catch (Exception $e) {}
 
-// ✅ Rekebisha item_id kuwa NULL-able
 try {
     $stmt = $db->query("SHOW COLUMNS FROM purchase_items LIKE 'item_id'");
     $col = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -83,7 +82,6 @@ try {
     }
 } catch (Exception $e) {}
 
-// ✅ Ongeza columns mpya kwenye purchase_items
 try {
     $stmt = $db->query("SHOW COLUMNS FROM purchase_items LIKE 'item_name'");
     if ($stmt->rowCount() == 0) {
@@ -133,6 +131,28 @@ try {
     $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'cancelled_at'");
     if ($stmt->rowCount() == 0) {
         $db->exec("ALTER TABLE `purchases` ADD COLUMN `cancelled_at` DATETIME NULL AFTER `cancelled_by_name`");
+    }
+} catch (Exception $e) {}
+
+// ✅ V10.1: DISCOUNT COLUMNS - discount inapunguza buying cost
+try {
+    $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'global_discount_type'");
+    if ($stmt->rowCount() == 0) {
+        $db->exec("ALTER TABLE `purchases` 
+            ADD COLUMN `global_discount_type` VARCHAR(20) DEFAULT 'amount' AFTER `total_selling_value`,
+            ADD COLUMN `global_discount_value` DECIMAL(12,2) DEFAULT 0 AFTER `global_discount_type`,
+            ADD COLUMN `global_discount_amount` DECIMAL(12,2) DEFAULT 0 AFTER `global_discount_value`,
+            ADD COLUMN `final_total_buying_cost` DECIMAL(12,2) DEFAULT 0 AFTER `global_discount_amount`,
+            ADD COLUMN `final_total_selling_value` DECIMAL(12,2) DEFAULT 0 AFTER `final_total_buying_cost`
+        ");
+    }
+} catch (Exception $e) {}
+
+// ✅ V10.1: Ongeza final_total_buying_cost kama haipo (kwa DB za zamani)
+try {
+    $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'final_total_buying_cost'");
+    if ($stmt->rowCount() == 0) {
+        $db->exec("ALTER TABLE `purchases` ADD COLUMN `final_total_buying_cost` DECIMAL(12,2) DEFAULT 0 AFTER `global_discount_amount`");
     }
 } catch (Exception $e) {}
 
@@ -186,9 +206,6 @@ function formatMoneyNoDecimal($amount) {
 function cleanMoney($value) { return str_replace(',', '', $value); }
 function getMoney($value) { return floatval(cleanMoney($value)); }
 
-// ================================================================
-// GENERATE UNIQUE INVOICE NUMBER
-// ================================================================
 function generateUniqueInvoiceNumber($db, $prefix, $date) {
     $max_attempts = 50;
     
@@ -234,6 +251,75 @@ function generateUniqueInvoiceNumber($db, $prefix, $date) {
 }
 
 // ================================================================
+// HELPER: Recalculate Purchase Totals (discount inapunguza BUYING)
+// ================================================================
+function recalculatePurchaseTotals($db, $purchase_id) {
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as total_items, SUM(quantity) as total_quantity,
+               SUM(total_buying_cost) as total_buying_cost,
+               SUM(total_selling_value) as total_selling_value
+        FROM purchase_items WHERE purchase_id = ?
+    ");
+    $stmt->execute([$purchase_id]);
+    $totals = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    $total_items = (int)($totals['total_items'] ?? 0);
+    $total_quantity = (int)($totals['total_quantity'] ?? 0);
+    $total_buying_cost = (float)($totals['total_buying_cost'] ?? 0);
+    $total_selling_value = (float)($totals['total_selling_value'] ?? 0);
+    
+    // Pata discount info ya sasa
+    $stmt = $db->prepare("SELECT global_discount_type, global_discount_value FROM purchases WHERE id = ?");
+    $stmt->execute([$purchase_id]);
+    $disc = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    $discount_type = $disc['global_discount_type'] ?? 'amount';
+    $discount_value = (float)($disc['global_discount_value'] ?? 0);
+    
+    // ✅ V10.1: DISCOUNT INAPUNGUZA BUYING COST (sio selling)
+    $global_discount_amount = 0;
+    if ($discount_type === 'percent') {
+        $pct = min(max($discount_value, 0), 100);
+        $global_discount_amount = $total_buying_cost * ($pct / 100);
+    } else {
+        $global_discount_amount = min(max($discount_value, 0), $total_buying_cost);
+    }
+    
+    $final_total_buying_cost = $total_buying_cost - $global_discount_amount;
+    if ($final_total_buying_cost < 0) $final_total_buying_cost = 0;
+    
+    // Selling haibadiliki
+    $final_total_selling_value = $total_selling_value;
+    
+    $stmt = $db->prepare("
+        UPDATE purchases SET 
+            total_items = ?, total_quantity = ?,
+            total_buying_cost = ?, total_selling_value = ?,
+            global_discount_amount = ?, final_total_buying_cost = ?,
+            final_total_selling_value = ?,
+            updated_at = NOW()
+        WHERE id = ?
+    ");
+    $stmt->execute([
+        $total_items, $total_quantity,
+        $total_buying_cost, $total_selling_value,
+        $global_discount_amount, $final_total_buying_cost,
+        $final_total_selling_value,
+        $purchase_id
+    ]);
+    
+    return [
+        'total_items' => $total_items,
+        'total_quantity' => $total_quantity,
+        'total_buying_cost' => $total_buying_cost,
+        'total_selling_value' => $total_selling_value,
+        'global_discount_amount' => $global_discount_amount,
+        'final_total_buying_cost' => $final_total_buying_cost,
+        'final_total_selling_value' => $final_total_selling_value
+    ];
+}
+
+// ================================================================
 // PROCESS POST REQUESTS
 // ================================================================
 $message = '';
@@ -242,7 +328,6 @@ $message_type = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
-    // JOIN PURCHASE
     if ($action === 'join_purchase') {
         $purchase_id_join = (int)($_POST['purchase_id'] ?? 0);
         
@@ -261,7 +346,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // CREATE NEW PURCHASE
     if ($action === 'create_purchase') {
         $purchase_type_new = $_POST['purchase_type'] ?? 'medicine';
         $force_new = isset($_POST['force_new']) ? (int)$_POST['force_new'] : 0;
@@ -310,9 +394,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // ================================================================
-    // ✅ ADD MEDICINE - Hifadhi kwenye purchase_items tu
-    // ================================================================
     if ($action === 'add_medicine') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         $medication_name = trim($_POST['medication_name'] ?? '');
@@ -350,7 +431,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         if (empty($errors)) {
             try {
-                // ✅ Hifadhi kwenye purchase_items tu (item_id = NULL)
                 $stmt = $db->prepare("
                     INSERT INTO purchase_items 
                     (purchase_id, item_type, item_id, item_name, item_category, item_unit, 
@@ -367,26 +447,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $user_id, $user_full_name
                 ]);
                 
-                // Update totals
-                $stmt = $db->prepare("
-                    SELECT COUNT(*) as total_items, SUM(quantity) as total_quantity,
-                           SUM(total_buying_cost) as total_buying_cost,
-                           SUM(total_selling_value) as total_selling_value
-                    FROM purchase_items WHERE purchase_id = ?
-                ");
-                $stmt->execute([$purchase_id_post]);
-                $totals = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                $stmt = $db->prepare("
-                    UPDATE purchases SET total_items = ?, total_quantity = ?, 
-                        total_buying_cost = ?, total_selling_value = ?, updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([
-                    $totals['total_items'] ?? 0, $totals['total_quantity'] ?? 0,
-                    $totals['total_buying_cost'] ?? 0, $totals['total_selling_value'] ?? 0,
-                    $purchase_id_post
-                ]);
+                recalculatePurchaseTotals($db, $purchase_id_post);
                 
                 $_SESSION['purchase_message'] = "✅ Medicine <strong>" . htmlspecialchars($medication_name) . "</strong> x $quantity added (Batch: $batch_number)";
                 $_SESSION['purchase_message_type'] = 'success';
@@ -401,9 +462,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!empty($errors)) { $message = implode('<br>', $errors); $message_type = 'error'; }
     }
     
-    // ================================================================
-    // ✅ ADD EQUIPMENT
-    // ================================================================
     if ($action === 'add_equipment') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         $equipment_name = trim($_POST['equipment_name'] ?? '');
@@ -457,25 +515,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $user_id, $user_full_name
                 ]);
                 
-                $stmt = $db->prepare("
-                    SELECT COUNT(*) as total_items, SUM(quantity) as total_quantity,
-                           SUM(total_buying_cost) as total_buying_cost,
-                           SUM(total_selling_value) as total_selling_value
-                    FROM purchase_items WHERE purchase_id = ?
-                ");
-                $stmt->execute([$purchase_id_post]);
-                $totals = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                $stmt = $db->prepare("
-                    UPDATE purchases SET total_items = ?, total_quantity = ?, 
-                        total_buying_cost = ?, total_selling_value = ?, updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([
-                    $totals['total_items'] ?? 0, $totals['total_quantity'] ?? 0,
-                    $totals['total_buying_cost'] ?? 0, $totals['total_selling_value'] ?? 0,
-                    $purchase_id_post
-                ]);
+                recalculatePurchaseTotals($db, $purchase_id_post);
                 
                 $_SESSION['purchase_message'] = "✅ Equipment <strong>" . htmlspecialchars($equipment_name) . "</strong> x $quantity added (Batch: $batch_number)";
                 $_SESSION['purchase_message_type'] = 'success';
@@ -490,14 +530,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!empty($errors)) { $message = implode('<br>', $errors); $message_type = 'error'; }
     }
     
-    // ================================================================
-    // ✅ COMPLETE PURCHASE - Inaunda NEW BATCH kila item
-    // ================================================================
+    // ✅ V10.1: UPDATE GLOBAL DISCOUNT (inapunguza buying cost)
+    if ($action === 'update_global_discount') {
+        $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
+        $discount_type = $_POST['global_discount_type'] ?? 'amount';
+        $discount_value = (float)str_replace(',', '', $_POST['global_discount_value'] ?? 0);
+        
+        if (!in_array($discount_type, ['amount', 'percent'])) $discount_type = 'amount';
+        
+        if ($discount_type === 'percent') {
+            $discount_value = min(max($discount_value, 0), 100);
+        } else {
+            $discount_value = max($discount_value, 0);
+        }
+        
+        $stmt = $db->prepare("SELECT status, branch_id FROM purchases WHERE id = ?");
+        $stmt->execute([$purchase_id_post]);
+        $purchase = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($purchase && $purchase['status'] === 'IN_PROGRESS' && $purchase['branch_id'] == $user_branch_id) {
+            try {
+                $stmt = $db->prepare("
+                    UPDATE purchases SET 
+                        global_discount_type = ?,
+                        global_discount_value = ?,
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([$discount_type, $discount_value, $purchase_id_post]);
+                
+                $result = recalculatePurchaseTotals($db, $purchase_id_post);
+                
+                $display = $discount_type === 'percent' 
+                    ? number_format($discount_value, 2) . '%' 
+                    : 'TSh ' . number_format($discount_value);
+                
+                $_SESSION['purchase_message'] = "✅ Discount updated: <strong>$display</strong> = TSh " . number_format($result['global_discount_amount']) . " (imepunguza buying cost)";
+                $_SESSION['purchase_message_type'] = 'success';
+                header('Location: purchases.php?id=' . $purchase_id_post . '&type=' . $purchase_type);
+                exit;
+            } catch (Exception $e) {
+                $message = "❌ Error: " . $e->getMessage();
+                $message_type = 'error';
+            }
+        } else {
+            $message = "❌ Cannot update discount for this purchase.";
+            $message_type = 'error';
+        }
+    }
+    
+    // COMPLETE PURCHASE - unit_cost inakuwa baada ya discount
     if ($action === 'complete_purchase') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         
         $stmt = $db->prepare("
-            SELECT id, status, created_by, invoice_number, purchase_type, branch_id, total_items
+            SELECT id, status, created_by, invoice_number, purchase_type, branch_id, total_items,
+                   total_buying_cost, global_discount_amount, final_total_buying_cost
             FROM purchases WHERE id = ? AND branch_id = ?
         ");
         $stmt->execute([$purchase_id_post, $user_branch_id]);
@@ -513,15 +601,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             try {
                 $db->beginTransaction();
                 
-                // Chukua items zote zilizo kwenye purchase
                 $stmt = $db->prepare("SELECT * FROM purchase_items WHERE purchase_id = ?");
                 $stmt->execute([$purchase_id_post]);
                 $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
+                // ✅ V10.1: Kokotoa discount ratio kwa kila item
+                $global_discount = (float)($purchase['global_discount_amount'] ?? 0);
+                $total_buying = (float)($purchase['total_buying_cost'] ?? 0);
+                $discount_ratio = ($total_buying > 0) ? ($global_discount / $total_buying) : 0;
+                
                 $batches_created = 0;
                 foreach ($items as $item) {
+                    // ✅ unit_cost inapunguzwa kwa discount ratio
+                    $final_unit_cost = $item['buying_price'] * (1 - $discount_ratio);
+                    
                     if ($item['item_type'] === 'medicine') {
-                        // ✅ UNDA BATCH MPYA kila wakati
                         $stmt = $db->prepare("
                             INSERT INTO medications_inventory 
                             (medication_name, category, unit, quantity, reorder_level, 
@@ -535,8 +629,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $item['item_unit'] ?: 'pcs',
                             $item['quantity'], 
                             $item['item_reorder_level'] ?: 10,
-                            $item['buying_price'], 
-                            $item['selling_price'], 
+                            $final_unit_cost,  // ✅ Baada ya discount
+                            $item['selling_price'],  // Selling haibadiliki
                             $item['item_supplier'],
                             $item['item_expiry_date'], 
                             $item['item_batch_number'],
@@ -547,7 +641,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         ]);
                         $batches_created++;
                     } else {
-                        // ✅ Equipment
                         $stmt = $db->prepare("
                             INSERT INTO medical_equipment 
                             (equipment_name, category, unit, quantity, reorder_level, 
@@ -561,8 +654,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $item['item_unit'] ?: 'pcs',
                             $item['quantity'], 
                             $item['item_reorder_level'] ?: 5,
-                            $item['buying_price'], 
-                            $item['selling_price'], 
+                            $final_unit_cost,  // ✅ Baada ya discount
+                            $item['selling_price'],
                             $item['item_supplier'],
                             $item['item_expiry_date'], 
                             $item['item_batch_number'],
@@ -580,7 +673,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 $db->commit();
                 
-                $_SESSION['purchase_message'] = "✅ Purchase <strong>{$purchase['invoice_number']}</strong> completed! ($batches_created batches created)";
+                $discount_msg = '';
+                if (($purchase['global_discount_amount'] ?? 0) > 0) {
+                    $discount_msg = " (Discount: TSh " . number_format($purchase['global_discount_amount']) . " imepunguza buying cost)";
+                }
+                
+                $_SESSION['purchase_message'] = "✅ Purchase <strong>{$purchase['invoice_number']}</strong> completed! ($batches_created batches created)$discount_msg";
                 $_SESSION['purchase_message_type'] = 'success';
                 header('Location: purchases.php?id=' . $purchase_id_post . '&type=' . $purchase['purchase_type']);
                 exit;
@@ -596,9 +694,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // ================================================================
-    // CANCEL PURCHASE
-    // ================================================================
     if ($action === 'cancel_purchase') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         $cancel_reason = trim($_POST['cancel_reason_final'] ?? $_POST['cancel_reason'] ?? 'Cancelled by creator');
@@ -643,9 +738,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // ================================================================
-    // DELETE PURCHASE ITEM
-    // ================================================================
     if ($action === 'delete_item') {
         $item_id = (int)($_POST['item_id'] ?? 0);
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
@@ -659,25 +751,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $db->prepare("DELETE FROM purchase_items WHERE id = ? AND purchase_id = ?");
                 $stmt->execute([$item_id, $purchase_id_post]);
                 
-                $stmt = $db->prepare("
-                    SELECT COUNT(*) as total_items, SUM(quantity) as total_quantity,
-                           SUM(total_buying_cost) as total_buying_cost,
-                           SUM(total_selling_value) as total_selling_value
-                    FROM purchase_items WHERE purchase_id = ?
-                ");
-                $stmt->execute([$purchase_id_post]);
-                $totals = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                $stmt = $db->prepare("
-                    UPDATE purchases SET total_items = ?, total_quantity = ?, 
-                        total_buying_cost = ?, total_selling_value = ?, updated_at = NOW()
-                    WHERE id = ? AND branch_id = ?
-                ");
-                $stmt->execute([
-                    $totals['total_items'] ?? 0, $totals['total_quantity'] ?? 0,
-                    $totals['total_buying_cost'] ?? 0, $totals['total_selling_value'] ?? 0,
-                    $purchase_id_post, $user_branch_id
-                ]);
+                recalculatePurchaseTotals($db, $purchase_id_post);
                 
                 $_SESSION['purchase_message'] = "✅ Item removed!";
                 $_SESSION['purchase_message_type'] = 'success';
@@ -725,7 +799,22 @@ if ($purchase_id > 0) {
         $can_edit = ($current_purchase['status'] === 'IN_PROGRESS');
         $can_cancel = ($is_creator && $current_purchase['status'] === 'IN_PROGRESS');
         
-        // ✅ Chukua purchase_items - tumia columns mpya
+        if (!isset($current_purchase['global_discount_type']) || empty($current_purchase['global_discount_type'])) {
+            $current_purchase['global_discount_type'] = 'amount';
+        }
+        if (!isset($current_purchase['global_discount_value'])) {
+            $current_purchase['global_discount_value'] = 0;
+        }
+        if (!isset($current_purchase['global_discount_amount'])) {
+            $current_purchase['global_discount_amount'] = 0;
+        }
+        if (!isset($current_purchase['final_total_buying_cost']) || $current_purchase['final_total_buying_cost'] == 0) {
+            $current_purchase['final_total_buying_cost'] = $current_purchase['total_buying_cost'] ?? 0;
+        }
+        if (!isset($current_purchase['final_total_selling_value']) || $current_purchase['final_total_selling_value'] == 0) {
+            $current_purchase['final_total_selling_value'] = $current_purchase['total_selling_value'] ?? 0;
+        }
+        
         $stmt = $db->prepare("
             SELECT pi.*, u.full_name as added_by_full_name
             FROM purchase_items pi
@@ -736,7 +825,6 @@ if ($purchase_id > 0) {
         $stmt->execute([$purchase_id]);
         $purchase_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
-        // ✅ Autocomplete data - GROUP BY medication_name (record ya mwisho)
         $stmt = $db->prepare("
             SELECT mi.*
             FROM medications_inventory mi
@@ -769,7 +857,6 @@ if ($purchase_id > 0) {
     }
 }
 
-// GET ALL IN PROGRESS PURCHASES
 $in_progress_purchases = [];
 $stmt = $db->prepare("
     SELECT p.*, u.full_name as creator_name 
@@ -781,7 +868,6 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $in_progress_purchases = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// GET COMPLETED PURCHASES
 $completed_purchases = [];
 $stmt = $db->prepare("
     SELECT p.*, u.full_name as creator_name 
@@ -794,7 +880,6 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $completed_purchases = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// GET CANCELLED PURCHASES
 $cancelled_purchases = [];
 try {
     $stmt = $db->prepare("
@@ -841,9 +926,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 ?>
 
 <style>
-    /* ================================================================
-       PAGE VARIABLES
-       ================================================================ */
     :root {
         --pp-primary: #0B5ED7;
         --pp-primary-dark: #0A4CA8;
@@ -876,7 +958,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         --pp-text-muted: #64748B;
     }
     
-    /* MAIN CONTENT */
     .main-content-pp {
         margin-left: 270px;
         margin-top: 68px;
@@ -885,7 +966,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         background: var(--pp-bg-body);
     }
     
-    /* PAGE HEADER BOX */
     .page-header-box-pp {
         background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
         border-radius: 16px;
@@ -949,7 +1029,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         position: relative; z-index: 1;
     }
     
-    /* BUTTONS */
     .btn-pp {
         display: inline-flex; align-items: center; gap: 6px;
         padding: 8px 18px; border-radius: 10px;
@@ -1032,7 +1111,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     .btn-generate-pp:hover, .btn-toggle-pp:hover { background: #0A4CA8; }
     
-    /* MESSAGE BOX */
     .message-box-pp {
         padding: 12px 18px; border-radius: 10px;
         margin-bottom: 16px; display: flex;
@@ -1059,7 +1137,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         font-size: 1.1rem; color: inherit;
     }
     
-    /* CARD */
     .card-pp {
         background: var(--pp-bg-card);
         border-radius: 12px;
@@ -1088,14 +1165,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     .result-count-pp strong { color: #0B5ED7; }
     
-    /* GRID 3 */
     .grid-3-pp {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
         gap: 16px;
     }
     
-    /* PURCHASE CARD */
     .purchase-card-pp {
         background: var(--pp-bg-card);
         border: 2px solid var(--pp-border-color);
@@ -1123,7 +1198,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         font-size: 0.7rem; color: var(--pp-text-secondary);
     }
     
-    /* PURCHASE DETAILS */
     .purchase-details-header-pp {
         display: flex; justify-content: space-between;
         align-items: center; flex-wrap: wrap;
@@ -1163,7 +1237,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         font-size: 0.85rem; font-weight: 600; margin-top: 2px;
     }
     
-    /* FORMS */
     .form-grid-pp {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -1210,7 +1283,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     .unit-input-group-pp .form-control-pp,
     .batch-input-group-pp .form-control-pp { flex: 1; }
     
-    /* AUTOCOMPLETE */
     .autocomplete-container-pp { position: relative; width: 100%; }
     
     .autocomplete-list-pp {
@@ -1247,7 +1319,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     .batch-info-pp strong { color: #0B5ED7; }
     
-    /* TABLE */
     .table-wrapper-pp { overflow-x: auto; }
     
     .data-table-pp {
@@ -1289,7 +1360,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         background: #CCFBF1; color: #0D9488;
     }
     
-    /* EMPTY STATE */
     .empty-state-pp {
         text-align: center; padding: 40px 20px;
         color: var(--pp-text-secondary);
@@ -1301,7 +1371,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     .empty-state-pp p { font-size: 0.95rem; margin-bottom: 6px; }
     .empty-state-pp .sub { font-size: 0.8rem; }
     
-    /* MODAL */
     .modal-overlay-pp {
         display: none; position: fixed;
         top: 0; left: 0; right: 0; bottom: 0;
@@ -1412,7 +1481,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         display: inline-flex; align-items: center; gap: 4px;
     }
     
-    /* ACTION BAR */
     .action-bar-pp {
         background: linear-gradient(135deg, #FEF3C7, #FDE68A);
         border: 2px solid #D97706; border-radius: 12px;
@@ -1430,7 +1498,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         display: flex; gap: 10px; flex-wrap: wrap;
     }
     
-    /* FOOTER */
     .footer-pp {
         padding: 10px 0;
         border-top: 1px solid var(--pp-border-color);
@@ -1441,10 +1508,266 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     
     input.numeric-only { text-align: left; letter-spacing: 0.5px; }
     
-    /* RESPONSIVE */
+    /* ✅ V10.1: DISCOUNT SECTION - inapunguza BUYING COST */
+    .discount-section-pp {
+        background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+        border: 3px solid #D97706;
+        border-radius: 14px;
+        padding: 16px 20px;
+        margin: 16px 0;
+        box-shadow: 0 4px 16px rgba(217, 119, 6, 0.15);
+    }
+    
+    .discount-section-pp .discount-title {
+        font-size: 0.95rem;
+        font-weight: 800;
+        color: #92400E;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        flex-wrap: wrap;
+    }
+    
+    .discount-section-pp .discount-title i {
+        font-size: 1.1rem;
+        background: #D97706;
+        color: white;
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    .discount-section-pp .discount-title .discount-subtitle {
+        font-size: 0.62rem;
+        font-weight: 600;
+        text-transform: none;
+        color: #92400E;
+        margin-left: auto;
+        background: rgba(255,255,255,0.5);
+        padding: 3px 10px;
+        border-radius: 10px;
+        border: 1px dashed #D97706;
+    }
+    
+    .discount-mode-toggle {
+        display: inline-flex;
+        background: white;
+        border-radius: 10px;
+        padding: 4px;
+        border: 2px solid #D97706;
+        margin-bottom: 12px;
+        box-shadow: 0 2px 8px rgba(217, 119, 6, 0.15);
+    }
+    
+    .discount-mode-btn {
+        padding: 8px 20px;
+        border-radius: 6px;
+        font-weight: 700;
+        font-size: 0.8rem;
+        border: none;
+        cursor: pointer;
+        background: transparent;
+        color: #92400E;
+        transition: all 0.25s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        white-space: nowrap;
+    }
+    
+    .discount-mode-btn:hover {
+        background: #FEF3C7;
+    }
+    
+    .discount-mode-btn.active {
+        background: #D97706;
+        color: white;
+        box-shadow: 0 3px 10px rgba(217, 119, 6, 0.4);
+    }
+    
+    .discount-inputs-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        align-items: end;
+    }
+    
+    .discount-input-group label {
+        font-size: 0.7rem;
+        font-weight: 700;
+        color: #92400E;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        display: block;
+        margin-bottom: 4px;
+    }
+    
+    .discount-input-group .input-wrapper {
+        position: relative;
+    }
+    
+    .discount-input-group .input-wrapper .currency-prefix,
+    .discount-input-group .input-wrapper .percent-suffix {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        font-weight: 800;
+        color: #D97706;
+        font-size: 0.85rem;
+        pointer-events: none;
+        z-index: 1;
+    }
+    
+    .discount-input-group .input-wrapper .currency-prefix {
+        left: 12px;
+    }
+    
+    .discount-input-group .input-wrapper .percent-suffix {
+        right: 12px;
+    }
+    
+    .discount-input-group input {
+        width: 100%;
+        padding: 10px 16px;
+        border: 2px solid #D97706;
+        border-radius: 10px;
+        font-size: 1rem;
+        font-weight: 700;
+        color: #92400E;
+        background: white;
+        outline: none;
+        height: 46px;
+        font-family: 'JetBrains Mono', monospace;
+        transition: all 0.2s ease;
+    }
+    
+    .discount-input-group input.amount-mode {
+        padding-left: 38px;
+    }
+    
+    .discount-input-group input.percent-mode {
+        padding-right: 38px;
+    }
+    
+    .discount-input-group input:focus {
+        border-color: #92400E;
+        box-shadow: 0 0 0 4px rgba(217, 119, 6, 0.2);
+    }
+    
+    .discount-preview {
+        background: white;
+        border: 2px dashed #D97706;
+        border-radius: 10px;
+        padding: 10px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        height: 46px;
+        justify-content: center;
+    }
+    
+    .discount-preview .preview-label {
+        font-size: 0.6rem;
+        font-weight: 700;
+        color: #92400E;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    
+    .discount-preview .preview-value {
+        font-size: 1.05rem;
+        font-weight: 900;
+        color: #DC2626;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    
+    .discount-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 2px dashed rgba(217, 119, 6, 0.4);
+        flex-wrap: wrap;
+    }
+    
+    .discount-total-summary {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 2px solid #D97706;
+    }
+    
+    .discount-total-summary .summary-box {
+        background: white;
+        border-radius: 10px;
+        padding: 10px 14px;
+        border: 2px solid #E2E8F0;
+    }
+    
+    .discount-total-summary .summary-box.buying {
+        border-color: #DC2626;
+        background: #FEE2E2;
+    }
+    
+    .discount-total-summary .summary-box.discount {
+        border-color: #D97706;
+        background: #FEF3C7;
+    }
+    
+    .discount-total-summary .summary-box.final {
+        border-color: #059669;
+        background: #D1FAE5;
+    }
+    
+    .discount-total-summary .summary-label {
+        font-size: 0.6rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    
+    .discount-total-summary .summary-value {
+        font-size: 1.1rem;
+        font-weight: 900;
+        margin-top: 2px;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    
+    .discount-total-summary .summary-box.buying .summary-label { color: #DC2626; }
+    .discount-total-summary .summary-box.buying .summary-value { color: #DC2626; }
+    .discount-total-summary .summary-box.discount .summary-label { color: #D97706; }
+    .discount-total-summary .summary-box.discount .summary-value { color: #D97706; }
+    .discount-total-summary .summary-box.final .summary-label { color: #059669; }
+    .discount-total-summary .summary-box.final .summary-value { color: #059669; }
+    
+    .discount-badge-on-purchase {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 10px;
+        background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+        color: #92400E;
+        border: 1.5px solid #D97706;
+        border-radius: 12px;
+        font-size: 0.65rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        margin-left: 8px;
+    }
+    
     @media (max-width: 1024px) {
         .main-content-pp { margin-left: 0; padding: 16px; }
         .grid-3-pp { grid-template-columns: 1fr 1fr; }
+        .discount-inputs-grid { grid-template-columns: 1fr; }
+        .discount-total-summary { grid-template-columns: 1fr; }
     }
     
     @media (max-width: 768px) {
@@ -1459,12 +1782,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .action-bar-pp .action-buttons-pp { width: 100%; }
         .action-bar-pp .action-buttons-pp button { width: 100%; justify-content: center; }
         .purchase-info-grid-pp { grid-template-columns: 1fr; }
+        .discount-mode-toggle { width: 100%; }
+        .discount-mode-btn { flex: 1; justify-content: center; padding: 8px 10px; font-size: 0.7rem; }
     }
 </style>
 
 <main class="main-content-pp">
 
-    <!-- PAGE HEADER -->
     <div class="page-header-box-pp <?= $purchase_type === 'equipment' ? 'equipment-mode' : '' ?>">
         <div>
             <h1 class="page-title-pp">
@@ -1507,7 +1831,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     </div>
 
-    <!-- MESSAGE -->
     <?php if ($message): ?>
         <div class="message-box-pp <?= $message_type ?>" id="messageBox">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'info' ? 'fa-info-circle' : 'fa-exclamation-circle') ?>"></i>
@@ -1516,7 +1839,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- VIEW SPECIFIC PURCHASE -->
     <?php if ($purchase_id && $current_purchase): ?>
         <div class="card-pp">
             <div class="purchase-details-header-pp">
@@ -1526,6 +1848,17 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         <span style="font-size:0.65rem;font-weight:400;color:var(--pp-text-secondary);margin-left:8px;">
                             <?= ucfirst($current_purchase['purchase_type']) ?>
                         </span>
+                        <?php if (($current_purchase['global_discount_amount'] ?? 0) > 0): ?>
+                            <span class="discount-badge-on-purchase">
+                                <i class="fas fa-percent"></i>
+                                Discount: 
+                                <?php if (($current_purchase['global_discount_type'] ?? 'amount') === 'percent'): ?>
+                                    <?= number_format($current_purchase['global_discount_value'], 2) ?>%
+                                <?php else: ?>
+                                    TSh <?= number_format($current_purchase['global_discount_value']) ?>
+                                <?php endif; ?>
+                            </span>
+                        <?php endif; ?>
                     </div>
                     <div style="font-size:0.7rem;color:var(--pp-text-secondary);margin-top:2px;">
                         Created: <?= date('d/m/Y H:i', strtotime($current_purchase['created_at'])) ?>
@@ -1552,7 +1885,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 </div>
             </div>
             
-            <?php $profit = ($current_purchase['total_selling_value'] ?? 0) - ($current_purchase['total_buying_cost'] ?? 0); ?>
+            <?php 
+                // ✅ V10.1: Discount inapunguza BUYING COST
+                $total_buying = $current_purchase['total_buying_cost'] ?? 0;
+                $final_buying = $current_purchase['final_total_buying_cost'] ?? $total_buying;
+                $total_sell = $current_purchase['total_selling_value'] ?? 0;
+                $discount_amt = $current_purchase['global_discount_amount'] ?? 0;
+                
+                // ✅ Profit = Selling - Final Buying (baada ya discount)
+                $profit = $total_sell - $final_buying;
+            ?>
             <div class="purchase-info-grid-pp">
                 <div class="purchase-info-item-pp">
                     <div class="label-pp">Created By</div>
@@ -1575,18 +1917,42 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         <?= number_format($current_purchase['total_quantity']) ?> units
                     </div>
                 </div>
+                
+                <!-- ✅ Buying cost kabla ya discount -->
                 <div class="purchase-info-item-pp" style="background:#FEE2E2;border:2px solid #DC2626;">
-                    <div class="label-pp" style="color:#DC2626;">💰 Buying Cost</div>
+                    <div class="label-pp" style="color:#DC2626;">💰 Buying Cost (Before Disc)</div>
                     <div class="value-pp" style="color:#DC2626;">
-                        TSh <?= number_format($current_purchase['total_buying_cost'] ?? 0) ?>
+                        TSh <?= number_format($total_buying) ?>
                     </div>
                 </div>
-                <div class="purchase-info-item-pp" style="background:#D1FAE5;border:2px solid #059669;">
-                    <div class="label-pp" style="color:#059669;">💰 Selling Value</div>
-                    <div class="value-pp" style="color:#059669;">
-                        TSh <?= number_format($current_purchase['total_selling_value'] ?? 0) ?>
+                
+                <!-- ✅ Discount -->
+                <?php if ($discount_amt > 0): ?>
+                <div class="purchase-info-item-pp" style="background:#FEF3C7;border:2px solid #D97706;">
+                    <div class="label-pp" style="color:#D97706;">🎁 Discount</div>
+                    <div class="value-pp" style="color:#D97706;">
+                        -TSh <?= number_format($discount_amt) ?>
                     </div>
                 </div>
+                <?php endif; ?>
+                
+                <!-- ✅ Final buying cost baada ya discount -->
+                <div class="purchase-info-item-pp" style="background:#FECACA;border:2px solid #991B1B;">
+                    <div class="label-pp" style="color:#991B1B;">💰 Final Buying Cost</div>
+                    <div class="value-pp" style="color:#991B1B;">
+                        TSh <?= number_format($final_buying) ?>
+                    </div>
+                </div>
+                
+                <!-- ✅ Selling value (haibadiliki) -->
+                <div class="purchase-info-item-pp" style="background:#E8F0FE;border:2px solid #0B5ED7;">
+                    <div class="label-pp" style="color:#0B5ED7;">💰 Selling Value</div>
+                    <div class="value-pp" style="color:#0B5ED7;">
+                        TSh <?= number_format($total_sell) ?>
+                    </div>
+                </div>
+                
+                <!-- ✅ Profit -->
                 <div class="purchase-info-item-pp" style="background:<?= $profit >= 0 ? '#D1FAE5' : '#FEE2E2' ?>;border:2px solid <?= $profit >= 0 ? '#059669' : '#DC2626' ?>;">
                     <div class="label-pp" style="color:<?= $profit >= 0 ? '#059669' : '#DC2626' ?>;">📈 Expected Profit</div>
                     <div class="value-pp" style="color:<?= $profit >= 0 ? '#059669' : '#DC2626' ?>;">
@@ -1594,6 +1960,96 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                     </div>
                 </div>
             </div>
+            
+            <!-- ✅ V10.1: DISCOUNT SECTION (kwa IN_PROGRESS tu) -->
+            <?php if ($current_purchase['status'] === 'IN_PROGRESS'): ?>
+            <div class="discount-section-pp">
+                <div class="discount-title">
+                    <i class="fas fa-percent"></i>
+                    Global Discount
+                    <span class="discount-subtitle">
+                        <i class="fas fa-info-circle"></i> Inapunguza BUYING COST (sio selling)
+                    </span>
+                </div>
+                
+                <?php 
+                    $disc_type = $current_purchase['global_discount_type'] ?? 'amount';
+                    $disc_value = $current_purchase['global_discount_value'] ?? 0;
+                    $disc_amount = $current_purchase['global_discount_amount'] ?? 0;
+                    $subtotal_buying = $current_purchase['total_buying_cost'] ?? 0;
+                    $final_buying_display = $current_purchase['final_total_buying_cost'] ?? $subtotal_buying;
+                ?>
+                
+                <form method="POST" id="discountForm">
+                    <input type="hidden" name="action" value="update_global_discount">
+                    <input type="hidden" name="purchase_id" value="<?= $purchase_id ?>">
+                    <input type="hidden" name="global_discount_type" id="discountTypeInput" value="<?= htmlspecialchars($disc_type) ?>">
+                    
+                    <div class="discount-mode-toggle">
+                        <button type="button" class="discount-mode-btn <?= $disc_type === 'amount' ? 'active' : '' ?>" 
+                                onclick="setDiscountMode('amount')" id="btnModeAmount">
+                            <i class="fas fa-money-bill-wave"></i> Amount (TSh)
+                        </button>
+                        <button type="button" class="discount-mode-btn <?= $disc_type === 'percent' ? 'active' : '' ?>" 
+                                onclick="setDiscountMode('percent')" id="btnModePercent">
+                            <i class="fas fa-percent"></i> Percent (%)
+                        </button>
+                    </div>
+                    
+                    <div class="discount-inputs-grid">
+                        <div class="discount-input-group">
+                            <label id="discountInputLabel">
+                                <?= $disc_type === 'percent' ? 'Discount Percent (%)' : 'Discount Amount (TSh)' ?>
+                            </label>
+                            <div class="input-wrapper">
+                                <span class="currency-prefix" id="discountPrefix" style="<?= $disc_type === 'percent' ? 'display:none;' : '' ?>">TSh</span>
+                                <input type="text" name="global_discount_value" id="discountValueInput" 
+                                       class="money-input <?= $disc_type === 'percent' ? 'percent-mode' : 'amount-mode' ?>"
+                                       value="<?= $disc_type === 'percent' ? number_format($disc_value, 2, '.', '') : number_format($disc_value, 0, '.', ',') ?>"
+                                       placeholder="0" 
+                                       oninput="updateDiscountPreview()">
+                                <span class="percent-suffix" id="discountSuffix" style="<?= $disc_type === 'amount' ? 'display:none;' : '' ?>">%</span>
+                            </div>
+                        </div>
+                        
+                        <div class="discount-input-group">
+                            <label>Discount Amount (Auto)</label>
+                            <div class="discount-preview">
+                                <span class="preview-label">Itakayopunguza buying</span>
+                                <span class="preview-value" id="discountPreviewAmount">-TSh <?= number_format($disc_amount) ?></span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- ✅ Summary - inaonyesha BUYING cost breakdown -->
+                    <div class="discount-total-summary">
+                        <div class="summary-box buying">
+                            <div class="summary-label">Buying Cost (Before)</div>
+                            <div class="summary-value">TSh <span id="summarySubtotal"><?= number_format($subtotal_buying) ?></span></div>
+                        </div>
+                        <div class="summary-box discount">
+                            <div class="summary-label">Discount</div>
+                            <div class="summary-value">-TSh <span id="summaryDiscount"><?= number_format($disc_amount) ?></span></div>
+                        </div>
+                        <div class="summary-box final">
+                            <div class="summary-label">Final Buying Cost</div>
+                            <div class="summary-value">TSh <span id="summaryFinal"><?= number_format($final_buying_display) ?></span></div>
+                        </div>
+                    </div>
+                    
+                    <div class="discount-actions">
+                        <button type="submit" class="btn-pp btn-save-pp" style="background:#D97706;">
+                            <i class="fas fa-save"></i> Apply Discount
+                        </button>
+                        <?php if ($disc_value > 0): ?>
+                        <button type="button" class="btn-pp btn-cancel-pp" onclick="clearDiscount()">
+                            <i class="fas fa-times"></i> Clear Discount
+                        </button>
+                        <?php endif; ?>
+                    </div>
+                </form>
+            </div>
+            <?php endif; ?>
             
             <!-- ACTION BAR -->
             <?php if ($current_purchase['status'] === 'IN_PROGRESS'): ?>
@@ -1603,7 +2059,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         This purchase has <strong><?= count($purchase_items) ?></strong> item(s). Click to complete or cancel.
                     </div>
                     <div class="action-buttons-pp">
-                        <form method="POST" style="display:inline;" onsubmit="return confirm('Complete this purchase? Batches zote zitaundwa kwenye inventory.');">
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Complete this purchase? Batches zote zitaundwa kwenye inventory na unit_cost itakuwa baada ya discount.');">
                             <input type="hidden" name="action" value="complete_purchase">
                             <input type="hidden" name="purchase_id" value="<?= $purchase_id ?>">
                             <button type="submit" class="btn-pp btn-complete-pp" <?= count($purchase_items) == 0 ? 'disabled' : '' ?>>
@@ -1969,10 +2425,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </div>
         </div>
         
-    <!-- VIEW LIST -->
     <?php else: ?>
         
-        <!-- IN PROGRESS PURCHASES -->
         <div class="card-pp">
             <div class="card-header-pp">
                 <h3 class="card-title-pp">
@@ -2018,6 +2472,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     <div class="meta-text-pp">
                                         <i class="fas fa-clock"></i> <?= date('d/m/Y H:i', strtotime($purchase['created_at'])) ?>
                                     </div>
+                                    <?php if (($purchase['global_discount_amount'] ?? 0) > 0): ?>
+                                        <div class="meta-text-pp" style="color:#D97706;font-weight:600;margin-top:2px;">
+                                            <i class="fas fa-percent"></i> Discount: TSh <?= number_format($purchase['global_discount_amount']) ?>
+                                        </div>
+                                    <?php endif; ?>
                                 </div>
                                 <span class="status-badge-pp in-progress">
                                     <i class="fas fa-spinner fa-spin"></i> IN PROGRESS
@@ -2056,7 +2515,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <?php endif; ?>
         </div>
         
-        <!-- COMPLETED PURCHASES -->
         <div class="card-pp">
             <div class="card-header-pp">
                 <h3 class="card-title-pp">
@@ -2067,7 +2525,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             
             <?php if (count($completed_purchases) > 0): ?>
                 <div class="grid-3-pp">
-                    <?php foreach ($completed_purchases as $purchase): ?>
+                    <?php foreach ($completed_purchases as $purchase): 
+                        $purchase_discount = $purchase['global_discount_amount'] ?? 0;
+                        $purchase_final_buying = $purchase['final_total_buying_cost'] ?? $purchase['total_buying_cost'] ?? 0;
+                        $purchase_selling = $purchase['total_selling_value'] ?? 0;
+                        $purchase_profit = $purchase_selling - $purchase_final_buying;
+                    ?>
                         <div class="purchase-card-pp" style="border-color:#D1FAE5;">
                             <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:4px;">
                                 <div>
@@ -2080,6 +2543,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     <div class="meta-text-pp">
                                         <i class="fas fa-check-circle"></i> <?= date('d/m/Y H:i', strtotime($purchase['completed_at'] ?? $purchase['created_at'])) ?>
                                     </div>
+                                    <?php if ($purchase_discount > 0): ?>
+                                        <div class="meta-text-pp" style="color:#D97706;font-weight:600;margin-top:2px;">
+                                            <i class="fas fa-percent"></i> Discount: -TSh <?= number_format($purchase_discount) ?>
+                                        </div>
+                                    <?php endif; ?>
                                 </div>
                                 <span class="status-badge-pp completed">
                                     <i class="fas fa-check-circle"></i> COMPLETED
@@ -2089,7 +2557,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 <div class="meta-text-pp">
                                     <i class="fas fa-boxes"></i> <?= number_format($purchase['total_items']) ?> items
                                     <span style="margin-left:6px;font-weight:600;color:#059669;">
-                                        TSh <?= number_format($purchase['total_selling_value'] ?? 0) ?>
+                                        Profit: TSh <?= number_format($purchase_profit) ?>
                                     </span>
                                 </div>
                                 <a href="purchases.php?id=<?= $purchase['id'] ?>&type=<?= $purchase['purchase_type'] ?>" class="btn-pp" style="padding:4px 12px;font-size:0.7rem;background:#7C3AED;color:white;">
@@ -2107,7 +2575,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <?php endif; ?>
         </div>
         
-        <!-- CANCELLED PURCHASES -->
         <?php if (count($cancelled_purchases) > 0): ?>
         <div class="card-pp">
             <div class="card-header-pp">
@@ -2150,7 +2617,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         <p>
             <span class="footer-brand-pp">Braick Dispensary</span> Management System
             <span style="color:#CBD5E1;margin:0 8px;">|</span>
-            Pharmacy Purchases
+            Pharmacy Purchases V10.1 (Discount on Buying Cost)
             <span style="color:#CBD5E1;margin:0 8px;">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span style="color:#CBD5E1;margin:0 8px;">|</span>
@@ -2253,6 +2720,85 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 </div>
 
 <script>
+    // ✅ V10.1: DISCOUNT STATE - inapunguza BUYING COST
+    var subtotalBuying = <?= isset($subtotal_buying) ? (float)$subtotal_buying : 0 ?>;
+    var currentDiscountType = '<?= isset($disc_type) ? $disc_type : 'amount' ?>';
+    
+    function setDiscountMode(mode) {
+        currentDiscountType = mode;
+        document.getElementById('discountTypeInput').value = mode;
+        
+        var btnAmount = document.getElementById('btnModeAmount');
+        var btnPercent = document.getElementById('btnModePercent');
+        var input = document.getElementById('discountValueInput');
+        var label = document.getElementById('discountInputLabel');
+        var prefix = document.getElementById('discountPrefix');
+        var suffix = document.getElementById('discountSuffix');
+        
+        if (mode === 'amount') {
+            btnAmount.classList.add('active');
+            btnPercent.classList.remove('active');
+            input.classList.remove('percent-mode');
+            input.classList.add('amount-mode');
+            label.textContent = 'Discount Amount (TSh)';
+            prefix.style.display = '';
+            suffix.style.display = 'none';
+            input.placeholder = '0';
+        } else {
+            btnAmount.classList.remove('active');
+            btnPercent.classList.add('active');
+            input.classList.remove('amount-mode');
+            input.classList.add('percent-mode');
+            label.textContent = 'Discount Percent (%)';
+            prefix.style.display = 'none';
+            suffix.style.display = '';
+            input.placeholder = '0.00';
+            input.value = '0';
+        }
+        
+        updateDiscountPreview();
+    }
+    
+    function updateDiscountPreview() {
+        var input = document.getElementById('discountValueInput');
+        var previewEl = document.getElementById('discountPreviewAmount');
+        var summaryDiscount = document.getElementById('summaryDiscount');
+        var summaryFinal = document.getElementById('summaryFinal');
+        var summarySubtotal = document.getElementById('summarySubtotal');
+        
+        if (!input) return;
+        
+        var rawVal = input.value.replace(/,/g, '').replace(/[^0-9.]/g, '');
+        var value = parseFloat(rawVal) || 0;
+        
+        // ✅ Discount inapunguza BUYING COST
+        var discountAmount = 0;
+        if (currentDiscountType === 'percent') {
+            value = Math.min(Math.max(value, 0), 100);
+            discountAmount = subtotalBuying * (value / 100);
+        } else {
+            value = Math.max(value, 0);
+            discountAmount = Math.min(value, subtotalBuying);
+        }
+        
+        var finalBuying = Math.max(subtotalBuying - discountAmount, 0);
+        
+        if (previewEl) previewEl.textContent = '-TSh ' + Math.round(discountAmount).toLocaleString();
+        if (summaryDiscount) summaryDiscount.textContent = Math.round(discountAmount).toLocaleString();
+        if (summaryFinal) summaryFinal.textContent = Math.round(finalBuying).toLocaleString();
+        if (summarySubtotal) summarySubtotal.textContent = Math.round(subtotalBuying).toLocaleString();
+    }
+    
+    function clearDiscount() {
+        if (!confirm('Clear the discount?')) return;
+        
+        var input = document.getElementById('discountValueInput');
+        input.value = '0';
+        
+        var form = document.getElementById('discountForm');
+        if (form) form.submit();
+    }
+    
     // FOOTER TIME
     setInterval(function() {
         var now = new Date();
@@ -2263,7 +2809,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         if (ftEl) ftEl.textContent = timeStr;
     }, 1000);
 
-    // ZUIA SCROLL WHEEL KUBADILISHA NUMBER INPUTS
     document.addEventListener('wheel', function(e) {
         if (document.activeElement && 
             (document.activeElement.type === 'number' || 
@@ -2314,7 +2859,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     document.addEventListener('DOMContentLoaded', setupNumericOnlyInputsPurch);
     new MutationObserver(function() { setTimeout(setupNumericOnlyInputsPurch, 100); }).observe(document.body, { childList: true, subtree: true });
 
-    // HELPERS
     function closeMessage() {
         var messageBox = document.getElementById('messageBox');
         if (messageBox) messageBox.style.display = 'none';
@@ -2393,7 +2937,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     }
 
-    // CANCEL MODAL FUNCTIONS
     function openCancelModal() {
         var modal = document.getElementById('cancelModal');
         if (modal) {
@@ -2476,7 +3019,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
 
-    // PDF FUNCTIONS
     function openPDFView(purchaseId) {
         var modal = document.getElementById('pdfModal');
         var content = document.getElementById('pdfInvoiceContent');
@@ -2570,6 +3112,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 input.dataset.moneyInit = 'true';
                 
                 input.addEventListener('input', function() {
+                    if (this.id === 'discountValueInput' && currentDiscountType === 'percent') {
+                        updateDiscountPreview();
+                        return;
+                    }
+                    
                     var cursorPos = this.selectionStart;
                     var before = this.value.length;
                     var formatted = formatWithCommas(this.value);
@@ -2578,6 +3125,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         var diff = formatted.length - before;
                         this.setSelectionRange(cursorPos + diff, cursorPos + diff);
                     }
+                    
+                    if (this.id === 'discountValueInput') updateDiscountPreview();
                 });
                 
                 input.addEventListener('focus', function() {
@@ -2586,8 +3135,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 });
                 
                 input.addEventListener('blur', function() {
-                    if (this.value) this.value = formatWithCommas(this.value);
-                    else this.value = '0';
+                    if (this.value) {
+                        if (this.id === 'discountValueInput' && currentDiscountType === 'percent') {
+                            var v = parseFloat(this.value.replace(/[^0-9.]/g, '')) || 0;
+                            this.value = v.toFixed(2);
+                        } else {
+                            this.value = formatWithCommas(this.value);
+                        }
+                    } else {
+                        this.value = '0';
+                    }
                 });
             });
         }
@@ -2649,7 +3206,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                     if (medicineIdInput) medicineIdInput.value = this.dataset.id;
                     autocomplete.classList.remove('show');
                     
-                    // Jaza category
                     var catVal = this.dataset.category;
                     var catSelect = document.getElementById('purchaseCategorySelect');
                     var catManual = document.getElementById('purchaseCategoryManual');
@@ -2676,7 +3232,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         }
                     }
                     
-                    // Jaza unit
                     var unitVal = this.dataset.unit;
                     var unitSelect = document.getElementById('purchaseUnit');
                     var unitManual = document.getElementById('purchaseUnitManual');
@@ -2703,7 +3258,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         }
                     }
                     
-                    // Jaza prices na supplier
                     if (document.getElementById('purchaseBuyingPrice')) 
                         document.getElementById('purchaseBuyingPrice').value = Number(this.dataset.cost || 0).toLocaleString();
                     if (document.getElementById('purchaseUnitPrice')) 
@@ -2713,13 +3267,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                     if (document.getElementById('purchaseSupplier')) 
                         document.getElementById('purchaseSupplier').value = this.dataset.supplier || '';
                     
-                    // Onyesha info ya batches zilizopo
                     if (batchInfoDiv && batchesCountSpan) {
                         batchInfoDiv.style.display = 'block';
                         batchesCountSpan.textContent = '1+';
                     }
                     
-                    // Focus quantity
                     var qtyInput = document.getElementById('purchaseQuantity');
                     if (qtyInput) qtyInput.focus();
                 });
@@ -2780,7 +3332,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                     if (equipmentIdInput) equipmentIdInput.value = this.dataset.id;
                     autocomplete.classList.remove('show');
                     
-                    // Category
                     var catVal = this.dataset.category;
                     var catSelect = document.getElementById('purchaseEquipCategorySelect');
                     var catManual = document.getElementById('purchaseEquipCategoryManual');
@@ -2807,7 +3358,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         }
                     }
                     
-                    // Unit
                     var unitVal = this.dataset.unit;
                     var unitSelect = document.getElementById('purchaseEquipUnit');
                     var unitManual = document.getElementById('purchaseEquipUnitManual');
@@ -2834,7 +3384,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         }
                     }
                     
-                    // Prices na supplier
                     if (document.getElementById('purchaseEquipBuyingPrice')) 
                         document.getElementById('purchaseEquipBuyingPrice').value = Number(this.dataset.cost || 0).toLocaleString();
                     if (document.getElementById('purchaseEquipSellingPrice')) 
@@ -2862,11 +3411,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         return div.innerHTML;
     }
 
-    console.log('%c💊 Braick - Pharmacy Purchases V9.2', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Kila purchase inaunda NEW BATCH', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Autocomplete inajaza category, unit, prices, supplier', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ purchase_items inahifadhi taarifa zote za batch', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Mouse scroll hairuhusiwi kupunguza quantities', 'font-size:13px; color:#34D399;');
+    console.log('%c💊 Braick - Pharmacy Purchases V10.1', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Discount inapunguza BUYING COST (sio selling)', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ Global Discount: Amount (default) au Percent', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Inventory unit_cost inakuwa baada ya discount', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Selling price haibadiliki', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

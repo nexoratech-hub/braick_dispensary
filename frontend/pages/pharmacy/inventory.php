@@ -1,12 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/inventory.php
-// PHARMACY - COMPLETE INVENTORY V8.9.1
+// PHARMACY - COMPLETE INVENTORY V10.1
+// ✅ V10.1: batch_count, reorder_sum, na view modal zinahesabu TU batches zenye qty > 0
+// ✅ V10: LOW STOCK = Total Qty ≤ JUMLA ya reorder_levels za batches ZOTE zenye stock
+// ✅ V10: Batches zenye qty=0 HAZIONEKANI kwenye view modal (zinafichwa)
+// ✅ V9: Current batch FIFO logic
 // ✅ Modal ipo MBELE ya sidebar (z-index 999999)
 // ✅ Batch count badge ni BLUE
 // ✅ Stock low, days warning, expiry expiring ni BLUE
 // ✅ Table header search (auto-filter)
-// ✅ View modal inaonyesha batches zote + added by
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -149,6 +152,7 @@ $expiry_filter = isset($_GET['expiry']) ? trim($_GET['expiry']) : '';
 
 // ================================================================
 // MEDICINES QUERY
+// ✅ V10.1: GROUP_CONCAT inachukua TU batches zenye quantity > 0
 // ================================================================
 $med_query = "
     SELECT 
@@ -157,12 +161,21 @@ $med_query = "
         SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') THEN m.quantity ELSE 0 END) as total_quantity,
         MIN(m.reorder_level) as reorder_level, MIN(m.unit_cost) as unit_cost, MIN(m.selling_price) as selling_price,
         MIN(m.supplier) as supplier, MIN(m.expiry_date) as expiry_date,
-        GROUP_CONCAT(m.id) as batch_ids, GROUP_CONCAT(m.batch_number SEPARATOR '|') as batch_numbers,
-        GROUP_CONCAT(m.quantity SEPARATOR '|') as batch_quantities, GROUP_CONCAT(m.expiry_date SEPARATOR '|') as batch_expiries,
-        GROUP_CONCAT(m.status SEPARATOR '|') as batch_statuses,
-        GROUP_CONCAT(m.category SEPARATOR '|') as batch_categories,
-        GROUP_CONCAT(m.supplier SEPARATOR '|') as batch_suppliers,
-        GROUP_CONCAT(m.added_by_name SEPARATOR '|') as batch_added_bys,
+        
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.id END ORDER BY 
+            CASE WHEN m.quantity > 0 AND m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') THEN 0 ELSE 1 END ASC,
+            CASE WHEN m.expiry_date IS NULL OR m.expiry_date = '0000-00-00' THEN 1 ELSE 0 END ASC,
+            m.expiry_date ASC, m.id ASC
+        ) as batch_ids_ordered,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.id END) as batch_ids,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.batch_number END SEPARATOR '|') as batch_numbers,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.quantity END SEPARATOR '|') as batch_quantities,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.expiry_date END SEPARATOR '|') as batch_expiries,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.status END SEPARATOR '|') as batch_statuses,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.reorder_level END SEPARATOR '|') as batch_reorder_levels,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.category END SEPARATOR '|') as batch_categories,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.supplier END SEPARATOR '|') as batch_suppliers,
+        GROUP_CONCAT(CASE WHEN m.quantity > 0 THEN m.added_by_name END SEPARATOR '|') as batch_added_bys,
         MIN(DATEDIFF(CASE WHEN m.expiry_date = '0000-00-00' THEN NULL ELSE m.expiry_date END, CURDATE())) as days_remaining,
         CASE 
             WHEN SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') THEN 1 ELSE 0 END) > 0 
@@ -195,20 +208,81 @@ if ($status_filter === 'active') {
     $med_query .= " HAVING computed_status = 'inactive'"; 
 }
 
-if ($stock_filter === 'low') { 
-    $med_query .= " HAVING total_quantity > 0 AND total_quantity <= reorder_level AND computed_status = 'active'"; 
-} elseif ($stock_filter === 'out') { 
-    $med_query .= " HAVING total_quantity = 0 AND computed_status = 'active'"; 
-}
-
 $med_query .= " ORDER BY m.medication_name ASC";
 
 $stmt = $db->prepare($med_query);
 $stmt->execute($med_params);
 $medicines = $stmt->fetchAll();
 
+// ✅ V10.1: Kokotoa TOTAL reorder_level ya batches zote zenye stock
+foreach ($medicines as &$med) {
+    $batch_ids = !empty($med['batch_ids']) ? explode(',', $med['batch_ids']) : [];
+    $batch_quantities = !empty($med['batch_quantities']) ? explode('|', $med['batch_quantities']) : [];
+    $batch_statuses = !empty($med['batch_statuses']) ? explode('|', $med['batch_statuses']) : [];
+    $batch_expiries = !empty($med['batch_expiries']) ? explode('|', $med['batch_expiries']) : [];
+    $batch_reorder_levels = !empty($med['batch_reorder_levels']) ? explode('|', $med['batch_reorder_levels']) : [];
+    
+    $total_reorder_with_stock = 0;
+    $current_batch_reorder = 0;
+    $current_batch_id = null;
+    $current_batch_qty = 0;
+    $found_current = false;
+    $active_batch_count = 0;
+    
+    foreach ($batch_ids as $idx => $bid) {
+        $qty = (int)($batch_quantities[$idx] ?? 0);
+        $status = $batch_statuses[$idx] ?? 'inactive';
+        $expiry = $batch_expiries[$idx] ?? '';
+        $reorder = (int)($batch_reorder_levels[$idx] ?? 0);
+        
+        $is_expired = (!empty($expiry) && $expiry !== '0000-00-00' && strtotime($expiry) < strtotime('today'));
+        $is_valid = ($qty > 0 && $status === 'active' && !$is_expired);
+        
+        if ($is_valid) {
+            $total_reorder_with_stock += $reorder;
+            $active_batch_count++;
+            if (!$found_current) {
+                $current_batch_reorder = $reorder;
+                $current_batch_id = (int)trim($bid);
+                $current_batch_qty = $qty;
+                $found_current = true;
+            }
+        }
+    }
+    
+    $med['total_reorder_level'] = $total_reorder_with_stock;
+    $med['active_batch_count'] = $active_batch_count;
+    $med['current_batch_reorder_level'] = $current_batch_reorder;
+    $med['current_batch_id'] = $current_batch_id;
+    $med['current_batch_qty'] = $current_batch_qty;
+    $med['has_active_batch'] = $found_current;
+}
+unset($med);
+
+// ✅ V10.1: Filter low/out stock
+if ($stock_filter === 'low' || $stock_filter === 'out') {
+    $filtered_medicines = [];
+    foreach ($medicines as $m) {
+        $total_q = (int)($m['total_quantity'] ?? 0);
+        $total_r = (int)($m['total_reorder_level'] ?? 0);
+        $is_active = ($m['computed_status'] ?? 'active') === 'active';
+        
+        if ($stock_filter === 'low') {
+            if ($total_q > 0 && $total_r > 0 && $total_q <= $total_r && $is_active) {
+                $filtered_medicines[] = $m;
+            }
+        } elseif ($stock_filter === 'out') {
+            if ($total_q == 0 && $is_active) {
+                $filtered_medicines[] = $m;
+            }
+        }
+    }
+    $medicines = $filtered_medicines;
+}
+
 // ================================================================
 // EQUIPMENT QUERY
+// ✅ V10.1: GROUP_CONCAT inachukua TU batches zenye quantity > 0
 // ================================================================
 $equip_query = "
     SELECT 
@@ -217,12 +291,21 @@ $equip_query = "
         SUM(CASE WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') THEN e.quantity ELSE 0 END) as total_quantity,
         MIN(e.reorder_level) as reorder_level, MIN(e.unit_cost) as unit_cost, MIN(e.selling_price) as selling_price,
         MIN(e.supplier) as supplier, MIN(e.expiry_date) as expiry_date,
-        GROUP_CONCAT(e.id) as batch_ids, GROUP_CONCAT(e.batch_number SEPARATOR '|') as batch_numbers,
-        GROUP_CONCAT(e.quantity SEPARATOR '|') as batch_quantities, GROUP_CONCAT(e.expiry_date SEPARATOR '|') as batch_expiries,
-        GROUP_CONCAT(e.status SEPARATOR '|') as batch_statuses,
-        GROUP_CONCAT(e.category SEPARATOR '|') as batch_categories,
-        GROUP_CONCAT(e.supplier SEPARATOR '|') as batch_suppliers,
-        GROUP_CONCAT(e.added_by_name SEPARATOR '|') as batch_added_bys,
+        
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.id END ORDER BY 
+            CASE WHEN e.quantity > 0 AND e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') THEN 0 ELSE 1 END ASC,
+            CASE WHEN e.expiry_date IS NULL OR e.expiry_date = '0000-00-00' THEN 1 ELSE 0 END ASC,
+            e.expiry_date ASC, e.id ASC
+        ) as batch_ids_ordered,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.id END) as batch_ids,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.batch_number END SEPARATOR '|') as batch_numbers,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.quantity END SEPARATOR '|') as batch_quantities,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.expiry_date END SEPARATOR '|') as batch_expiries,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.status END SEPARATOR '|') as batch_statuses,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.reorder_level END SEPARATOR '|') as batch_reorder_levels,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.category END SEPARATOR '|') as batch_categories,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.supplier END SEPARATOR '|') as batch_suppliers,
+        GROUP_CONCAT(CASE WHEN e.quantity > 0 THEN e.added_by_name END SEPARATOR '|') as batch_added_bys,
         MIN(DATEDIFF(CASE WHEN e.expiry_date = '0000-00-00' THEN NULL ELSE e.expiry_date END, CURDATE())) as days_remaining,
         CASE 
             WHEN SUM(CASE WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') THEN 1 ELSE 0 END) > 0 
@@ -255,17 +338,77 @@ if ($status_filter === 'active') {
     $equip_query .= " HAVING computed_status = 'inactive'"; 
 }
 
-if ($stock_filter === 'low') { 
-    $equip_query .= " HAVING total_quantity > 0 AND total_quantity <= reorder_level AND computed_status = 'active'"; 
-} elseif ($stock_filter === 'out') { 
-    $equip_query .= " HAVING total_quantity = 0 AND computed_status = 'active'"; 
-}
-
 $equip_query .= " ORDER BY e.equipment_name ASC";
 
 $stmt = $db->prepare($equip_query);
 $stmt->execute($equip_params);
 $equipment = $stmt->fetchAll();
+
+// ✅ V10.1: Kokotoa TOTAL reorder_level ya batches zote zenye stock
+foreach ($equipment as &$eq) {
+    $batch_ids = !empty($eq['batch_ids']) ? explode(',', $eq['batch_ids']) : [];
+    $batch_quantities = !empty($eq['batch_quantities']) ? explode('|', $eq['batch_quantities']) : [];
+    $batch_statuses = !empty($eq['batch_statuses']) ? explode('|', $eq['batch_statuses']) : [];
+    $batch_expiries = !empty($eq['batch_expiries']) ? explode('|', $eq['batch_expiries']) : [];
+    $batch_reorder_levels = !empty($eq['batch_reorder_levels']) ? explode('|', $eq['batch_reorder_levels']) : [];
+    
+    $total_reorder_with_stock = 0;
+    $current_batch_reorder = 0;
+    $current_batch_id = null;
+    $current_batch_qty = 0;
+    $found_current = false;
+    $active_batch_count = 0;
+    
+    foreach ($batch_ids as $idx => $bid) {
+        $qty = (int)($batch_quantities[$idx] ?? 0);
+        $status = $batch_statuses[$idx] ?? 'inactive';
+        $expiry = $batch_expiries[$idx] ?? '';
+        $reorder = (int)($batch_reorder_levels[$idx] ?? 0);
+        
+        $is_expired = (!empty($expiry) && $expiry !== '0000-00-00' && strtotime($expiry) < strtotime('today'));
+        $is_valid = ($qty > 0 && $status === 'active' && !$is_expired);
+        
+        if ($is_valid) {
+            $total_reorder_with_stock += $reorder;
+            $active_batch_count++;
+            if (!$found_current) {
+                $current_batch_reorder = $reorder;
+                $current_batch_id = (int)trim($bid);
+                $current_batch_qty = $qty;
+                $found_current = true;
+            }
+        }
+    }
+    
+    $eq['total_reorder_level'] = $total_reorder_with_stock;
+    $eq['active_batch_count'] = $active_batch_count;
+    $eq['current_batch_reorder_level'] = $current_batch_reorder;
+    $eq['current_batch_id'] = $current_batch_id;
+    $eq['current_batch_qty'] = $current_batch_qty;
+    $eq['has_active_batch'] = $found_current;
+}
+unset($eq);
+
+// ✅ V10.1: Filter low/out stock
+if ($stock_filter === 'low' || $stock_filter === 'out') {
+    $filtered_equip = [];
+    foreach ($equipment as $e) {
+        $total_q = (int)($e['total_quantity'] ?? 0);
+        $total_r = (int)($e['total_reorder_level'] ?? 0);
+        $is_active = ($e['computed_status'] ?? 'active') === 'active';
+        
+        if ($stock_filter === 'low') {
+            if ($total_q > 0 && $total_r > 0 && $total_q <= $total_r && $is_active) {
+                $filtered_equip[] = $e;
+            }
+        } elseif ($stock_filter === 'out') {
+            if ($total_q == 0 && $is_active) {
+                $filtered_equip[] = $e;
+            }
+        }
+    }
+    $equipment = $filtered_equip;
+}
 
 // ================================================================
 // STATISTICS - MEDICINES
@@ -282,9 +425,48 @@ $stmt = $db->prepare("SELECT COUNT(DISTINCT medication_name) as count FROM medic
 $stmt->execute([$user_branch_id]);
 $med_out_of_stock = $stmt->fetch()['count'] ?? 0;
 
-$stmt = $db->prepare("SELECT COUNT(DISTINCT medication_name) as count FROM medications_inventory WHERE branch_id = ? AND status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') AND quantity > 0 AND quantity <= reorder_level");
+// ✅ V10.1: Low stock = total_qty <= JUMLA ya reorder_levels za batches zenye stock
+$stmt = $db->prepare("
+    SELECT 
+        m.medication_name,
+        SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') THEN m.quantity ELSE 0 END) as total_qty,
+        GROUP_CONCAT(m.quantity SEPARATOR '|') as all_qtys,
+        GROUP_CONCAT(m.status SEPARATOR '|') as all_statuses,
+        GROUP_CONCAT(m.expiry_date SEPARATOR '|') as all_expiries,
+        GROUP_CONCAT(m.reorder_level SEPARATOR '|') as all_reorders
+    FROM medications_inventory m
+    WHERE m.branch_id = ?
+    GROUP BY m.medication_name
+");
 $stmt->execute([$user_branch_id]);
-$med_low_stock = $stmt->fetch()['count'] ?? 0;
+$all_med_groups = $stmt->fetchAll();
+
+$med_low_stock = 0;
+foreach ($all_med_groups as $g) {
+    $total_q = (int)($g['total_qty'] ?? 0);
+    if ($total_q <= 0) continue;
+    
+    $qtys_arr = !empty($g['all_qtys']) ? explode('|', $g['all_qtys']) : [];
+    $statuses_arr = !empty($g['all_statuses']) ? explode('|', $g['all_statuses']) : [];
+    $expiries_arr = !empty($g['all_expiries']) ? explode('|', $g['all_expiries']) : [];
+    $reorders_arr = !empty($g['all_reorders']) ? explode('|', $g['all_reorders']) : [];
+    
+    $total_reorder = 0;
+    foreach ($qtys_arr as $idx => $q) {
+        $q = (int)$q;
+        $st = $statuses_arr[$idx] ?? 'inactive';
+        $ex = $expiries_arr[$idx] ?? '';
+        $re = (int)($reorders_arr[$idx] ?? 0);
+        $is_exp = (!empty($ex) && $ex !== '0000-00-00' && strtotime($ex) < strtotime('today'));
+        if ($q > 0 && $st === 'active' && !$is_exp) {
+            $total_reorder += $re;
+        }
+    }
+    
+    if ($total_reorder > 0 && $total_q <= $total_reorder) {
+        $med_low_stock++;
+    }
+}
 
 $stmt = $db->prepare("SELECT COUNT(DISTINCT medication_name) as count FROM medications_inventory WHERE branch_id = ? AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY) AND status = 'active'");
 $stmt->execute([$user_branch_id]);
@@ -317,9 +499,48 @@ $stmt = $db->prepare("SELECT COUNT(DISTINCT equipment_name) as count FROM medica
 $stmt->execute([$user_branch_id]);
 $equip_out_of_stock = $stmt->fetch()['count'] ?? 0;
 
-$stmt = $db->prepare("SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE branch_id = ? AND status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00') AND quantity > 0 AND quantity <= reorder_level");
+// ✅ V10.1: Low stock equipment = total_qty <= JUMLA ya reorder_levels za batches zenye stock
+$stmt = $db->prepare("
+    SELECT 
+        e.equipment_name,
+        SUM(CASE WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') THEN e.quantity ELSE 0 END) as total_qty,
+        GROUP_CONCAT(e.quantity SEPARATOR '|') as all_qtys,
+        GROUP_CONCAT(e.status SEPARATOR '|') as all_statuses,
+        GROUP_CONCAT(e.expiry_date SEPARATOR '|') as all_expiries,
+        GROUP_CONCAT(e.reorder_level SEPARATOR '|') as all_reorders
+    FROM medical_equipment e
+    WHERE e.branch_id = ?
+    GROUP BY e.equipment_name
+");
 $stmt->execute([$user_branch_id]);
-$equip_low_stock = $stmt->fetch()['count'] ?? 0;
+$all_equip_groups = $stmt->fetchAll();
+
+$equip_low_stock = 0;
+foreach ($all_equip_groups as $g) {
+    $total_q = (int)($g['total_qty'] ?? 0);
+    if ($total_q <= 0) continue;
+    
+    $qtys_arr = !empty($g['all_qtys']) ? explode('|', $g['all_qtys']) : [];
+    $statuses_arr = !empty($g['all_statuses']) ? explode('|', $g['all_statuses']) : [];
+    $expiries_arr = !empty($g['all_expiries']) ? explode('|', $g['all_expiries']) : [];
+    $reorders_arr = !empty($g['all_reorders']) ? explode('|', $g['all_reorders']) : [];
+    
+    $total_reorder = 0;
+    foreach ($qtys_arr as $idx => $q) {
+        $q = (int)$q;
+        $st = $statuses_arr[$idx] ?? 'inactive';
+        $ex = $expiries_arr[$idx] ?? '';
+        $re = (int)($reorders_arr[$idx] ?? 0);
+        $is_exp = (!empty($ex) && $ex !== '0000-00-00' && strtotime($ex) < strtotime('today'));
+        if ($q > 0 && $st === 'active' && !$is_exp) {
+            $total_reorder += $re;
+        }
+    }
+    
+    if ($total_reorder > 0 && $total_q <= $total_reorder) {
+        $equip_low_stock++;
+    }
+}
 
 $stmt = $db->prepare("SELECT COUNT(DISTINCT equipment_name) as count FROM medical_equipment WHERE branch_id = ? AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY) AND status = 'active'");
 $stmt->execute([$user_branch_id]);
@@ -347,9 +568,14 @@ $stmt = $db->prepare("SELECT id, invoice_number, purchase_type, status, total_it
 $stmt->execute([$user_id, $user_branch_id]);
 $in_progress_purchases = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// ================================================================
+// VIEW MODAL DATA
+// ✅ V10.1: Batches zenye qty=0 zinafichwa kabisa
+// ================================================================
 $view_data = null;
 $view_batches = [];
 $view_name = '';
+$view_hidden_zero_count = 0;
 
 if ($view_id > 0) {
     if ($view_type === 'medicine') {
@@ -358,9 +584,25 @@ if ($view_id > 0) {
         $name_row = $stmt->fetch();
         if ($name_row) {
             $view_name = $name_row['medication_name'];
+            
             $stmt = $db->prepare("SELECT m.*, u.full_name as added_by_full_name FROM medications_inventory m LEFT JOIN users u ON m.added_by = u.id WHERE m.medication_name = ? AND m.branch_id = ? ORDER BY m.expiry_date ASC, m.id ASC");
             $stmt->execute([$view_name, $user_branch_id]);
-            $view_batches = $stmt->fetchAll();
+            $all_view_batches = $stmt->fetchAll();
+            
+            $view_batches = [];
+            foreach ($all_view_batches as $batch) {
+                if ((int)($batch['quantity'] ?? 0) > 0) {
+                    $view_batches[] = $batch;
+                } else {
+                    $view_hidden_zero_count++;
+                }
+            }
+            
+            if (empty($view_batches) && !empty($all_view_batches)) {
+                $view_batches = $all_view_batches;
+                $view_hidden_zero_count = 0;
+            }
+            
             $view_data = $view_batches[0] ?? null;
         }
     } else {
@@ -369,9 +611,25 @@ if ($view_id > 0) {
         $name_row = $stmt->fetch();
         if ($name_row) {
             $view_name = $name_row['equipment_name'];
+            
             $stmt = $db->prepare("SELECT e.*, u.full_name as added_by_full_name FROM medical_equipment e LEFT JOIN users u ON e.added_by = u.id WHERE e.equipment_name = ? AND e.branch_id = ? ORDER BY e.expiry_date ASC, e.id ASC");
             $stmt->execute([$view_name, $user_branch_id]);
-            $view_batches = $stmt->fetchAll();
+            $all_view_batches = $stmt->fetchAll();
+            
+            $view_batches = [];
+            foreach ($all_view_batches as $batch) {
+                if ((int)($batch['quantity'] ?? 0) > 0) {
+                    $view_batches[] = $batch;
+                } else {
+                    $view_hidden_zero_count++;
+                }
+            }
+            
+            if (empty($view_batches) && !empty($all_view_batches)) {
+                $view_batches = $all_view_batches;
+                $view_hidden_zero_count = 0;
+            }
+            
             $view_data = $view_batches[0] ?? null;
         }
     }
@@ -651,7 +909,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     .btn-reset:hover { border-color: var(--danger); color: var(--danger); }
     
-    /* TABLE HEADER BAR */
     .table-header-bar {
         display: flex;
         justify-content: space-between;
@@ -757,7 +1014,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     .table-title-inline i { color: var(--primary); }
     
-    /* TABLE */
     .table-container { position: relative; border-radius: 10px; overflow: hidden; }
     
     .table-wrap {
@@ -830,14 +1086,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     .data-table tbody tr:last-child td { border-bottom: none; }
     
-    /* Column widths */
     .col-sno { width: 55px; min-width: 55px; text-align: center; font-weight: 700; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace; }
     .col-name { min-width: 220px; max-width: 280px; white-space: normal; }
     .col-name strong { display: block; font-size: 0.85rem; font-weight: 700; color: var(--text-primary); margin-bottom: 2px; line-height: 1.3; }
     .col-category { min-width: 140px; }
     .col-qty { min-width: 90px; text-align: center; font-family: 'JetBrains Mono', monospace; }
     .col-qty strong { font-size: 0.95rem; font-weight: 800; color: var(--primary); display: inline-block; }
-    .col-reorder { min-width: 80px; text-align: center; font-family: 'JetBrains Mono', monospace; color: var(--text-secondary); }
+    .col-reorder { min-width: 100px; text-align: center; font-family: 'JetBrains Mono', monospace; color: var(--text-secondary); }
     .col-stock { min-width: 140px; text-align: center; }
     .col-price { min-width: 120px; text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--success); font-size: 0.85rem; }
     .col-expiry { min-width: 120px; text-align: center; }
@@ -847,7 +1102,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     .col-added-by { min-width: 150px; max-width: 180px; }
     .col-actions { min-width: 100px; text-align: center; padding: 12px 8px; }
     
-    /* BADGES */
     .added-by-tag {
         display: inline-flex; align-items: center; gap: 5px;
         padding: 5px 12px; border-radius: 20px;
@@ -868,7 +1122,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     .status-badge.active { background: var(--success-light); color: var(--success); border: 1px solid rgba(5, 150, 105, 0.3); }
     .status-badge.inactive { background: var(--danger-light); color: var(--danger); border: 1px solid rgba(220, 38, 38, 0.3); }
     
-    /* ✅ STOCK BADGES - LOW NI BLUE */
     .stock-badge {
         padding: 6px 14px; border-radius: 20px;
         font-size: 0.7rem; font-weight: 700;
@@ -881,7 +1134,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.65; } }
     
-    /* ✅ EXPIRY BADGES - EXPIRING NI BLUE */
     .expiry-badge {
         padding: 5px 12px; border-radius: 20px;
         font-size: 0.7rem; font-weight: 700;
@@ -894,7 +1146,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     .expiry-badge.expired { background: var(--danger-light); color: var(--danger); border: 1px solid rgba(220, 38, 38, 0.3); animation: pulse 1s infinite; }
     .expiry-badge.no-expiry { background: var(--border-color); color: var(--text-muted); border: 1px solid rgba(148, 163, 184, 0.3); }
     
-    /* ✅ DAYS REMAINING - WARNING NI BLUE */
     .days-remaining {
         font-size: 0.72rem; font-weight: 700;
         padding: 5px 12px; border-radius: 20px;
@@ -917,7 +1168,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     [data-theme="dark"] .batch-number { background: #1E3A5F; color: #6EA8FE; border-color: rgba(110, 168, 254, 0.3); }
     
-    /* ✅ BATCH COUNT BADGE - BLUE */
     .batch-count-badge {
         font-size: 0.6rem;
         background: var(--primary-light);
@@ -941,7 +1191,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         margin-top: 3px;
     }
     
-    /* ACTION BUTTONS */
+    .current-batch-info {
+        font-size: 0.58rem;
+        display: block;
+        color: var(--primary);
+        font-weight: 600;
+        margin-top: 3px;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    
     .action-btn {
         padding: 8px 14px; border-radius: 8px;
         font-size: 0.72rem; font-weight: 700;
@@ -966,7 +1224,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     .no-results-row i { font-size: 2.5rem; color: var(--border-color); display: block; margin-bottom: 10px; }
     .no-results-row p { font-weight: 600; color: var(--text-primary); margin: 0; }
     
-    /* MESSAGE */
     .message-box {
         padding: 12px 18px; border-radius: 10px;
         margin-bottom: 16px; display: flex;
@@ -989,9 +1246,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     .empty-state p { font-size: 0.95rem; font-weight: 600; margin-bottom: 6px; }
     .empty-state .sub { font-size: 0.8rem; font-weight: 400; }
     
-    /* ================================================================
-       ✅ MODAL - Z-INDEX KUBWA ILI IWE MBELE YA SIDEBAR
-       ================================================================ */
     .modal-overlay {
         display: none;
         position: fixed;
@@ -1034,6 +1288,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         display: flex;
         align-items: center;
         gap: 8px;
+        flex-wrap: wrap;
     }
     .modal-close {
         background: none; border: none;
@@ -1045,7 +1300,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     .modal-close:hover { color: var(--danger); transform: rotate(90deg); }
     
-    /* VIEW MODAL */
     .view-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -1100,7 +1354,23 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     [data-theme="dark"] .view-items-table tbody tr:nth-child(even) { background: rgba(11, 94, 215, 0.08); }
     .view-items-table tbody tr:hover { background: rgba(209, 250, 229, 0.4); }
     
-    /* FOOTER */
+    .hidden-batches-note {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 12px;
+        background: var(--warning-light);
+        color: var(--warning);
+        border-radius: 12px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        border: 1px solid var(--warning);
+        margin-left: 8px;
+    }
+    [data-theme="dark"] .hidden-batches-note {
+        background: #78350F; color: #FCD34D; border-color: #F59E0B;
+    }
+    
     .footer {
         padding: 12px 0;
         border-top: 1px solid var(--border-color);
@@ -1151,7 +1421,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
 <main class="main-content">
 
-    <!-- Page Header -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1183,7 +1452,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     </div>
 
-    <!-- Message -->
     <?php if ($message): ?>
         <div class="message-box <?= $message_type ?>" id="messageBox">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'info' ? 'fa-info-circle' : 'fa-exclamation-circle') ?>"></i>
@@ -1192,7 +1460,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- In Progress Banner -->
     <?php if (count($in_progress_purchases) > 0): ?>
         <div class="purchase-banner animate-fade-in-up">
             <div class="banner-text">
@@ -1215,7 +1482,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- Tabs -->
     <div class="tabs-container animate-fade-in-up">
         <button class="tab-btn <?= $active_tab === 'medicines' ? 'active' : '' ?>" onclick="switchTab('medicines')">
             <i class="fas fa-pills"></i> Medicines
@@ -1241,7 +1507,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <span class="stat-icon"><i class="fas fa-exclamation-triangle"></i></span>
                 <div class="stat-number"><?= $med_low_stock ?></div>
                 <div class="stat-label">Low Stock</div>
-                <div class="stat-sub">Below reorder level</div>
+                <div class="stat-sub">Total &le; Sum Reorder</div>
             </a>
             <a href="inventory.php?tab=medicines&stock=out" class="stat-card red">
                 <span class="stat-icon"><i class="fas fa-times-circle"></i></span>
@@ -1350,7 +1616,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     <th class="col-name">Name</th>
                                     <th class="col-category">Category</th>
                                     <th class="col-qty">Total Qty</th>
-                                    <th class="col-reorder">Reorder</th>
+                                    <th class="col-reorder">Reorder (Sum)</th>
                                     <th class="col-stock">Stock</th>
                                     <th class="col-price">Price (TSh)</th>
                                     <th class="col-expiry">Expiry</th>
@@ -1365,10 +1631,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 <?php $counter = 1; ?>
                                 <?php foreach ($medicines as $item): ?>
                                     <?php
-                                        $total_qty = $item['total_quantity'] ?? 0;
+                                        $total_qty = (int)($item['total_quantity'] ?? 0);
+                                        $total_reorder = (int)($item['total_reorder_level'] ?? 0);
+                                        
                                         $stock_status = 'ok'; $stock_label = 'In Stock';
-                                        if ($total_qty <= 0) { $stock_status = 'out'; $stock_label = 'Out of Stock'; }
-                                        elseif ($total_qty <= $item['reorder_level']) { $stock_status = 'low'; $stock_label = 'Low Stock'; }
+                                        if ($total_qty <= 0) { 
+                                            $stock_status = 'out'; $stock_label = 'Out of Stock'; 
+                                        }
+                                        elseif ($total_reorder > 0 && $total_qty <= $total_reorder) { 
+                                            $stock_status = 'low'; $stock_label = 'Low Stock'; 
+                                        }
                                         
                                         $batch_numbers = $item['batch_numbers'] ?? '';
                                         $batch_count = $batch_numbers ? count(explode('|', $batch_numbers)) : 0;
@@ -1415,12 +1687,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                                 </span>
                                             <?php endif; ?>
                                         </td>
-                                        <td class="col-reorder"><?= $item['reorder_level'] ?></td>
+                                        <td class="col-reorder">
+                                            <?php if ($total_reorder > 0): ?>
+                                                <span style="color:var(--primary);font-weight:700;"><?= $total_reorder ?></span>
+                                                <span style="font-size:0.6rem;color:var(--text-muted);display:block;font-weight:500;">
+                                                    (<?= $item['active_batch_count'] ?> batch<?= $item['active_batch_count'] > 1 ? 'es' : '' ?>)
+                                                </span>
+                                            <?php else: ?>
+                                                <?= $item['reorder_level'] ?>
+                                            <?php endif; ?>
+                                        </td>
                                         <td class="col-stock">
                                             <span class="stock-badge <?= $stock_status ?>">
                                                 <i class="fas <?= $stock_status === 'ok' ? 'fa-check-circle' : ($stock_status === 'low' ? 'fa-exclamation-triangle' : 'fa-times-circle') ?>"></i>
                                                 <?= $stock_label ?>
                                             </span>
+                                            <?php if ($item['current_batch_qty'] > 0): ?>
+                                                <span class="current-batch-info">
+                                                    <i class="fas fa-tag"></i> Current batch: <?= $item['current_batch_qty'] ?> units
+                                                </span>
+                                            <?php endif; ?>
                                         </td>
                                         <td class="col-price"><?= $price_display ?></td>
                                         <td class="col-expiry">
@@ -1504,7 +1790,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <span class="stat-icon"><i class="fas fa-exclamation-triangle"></i></span>
                 <div class="stat-number"><?= $equip_low_stock ?></div>
                 <div class="stat-label">Low Stock</div>
-                <div class="stat-sub">Below reorder level</div>
+                <div class="stat-sub">Total &le; Sum Reorder</div>
             </a>
             <a href="inventory.php?tab=equipment&stock=out" class="stat-card red">
                 <span class="stat-icon"><i class="fas fa-times-circle"></i></span>
@@ -1613,7 +1899,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     <th class="col-name">Name</th>
                                     <th class="col-category">Category</th>
                                     <th class="col-qty">Total Qty</th>
-                                    <th class="col-reorder">Reorder</th>
+                                    <th class="col-reorder">Reorder (Sum)</th>
                                     <th class="col-stock">Stock</th>
                                     <th class="col-price">Price (TSh)</th>
                                     <th class="col-expiry">Expiry</th>
@@ -1628,10 +1914,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 <?php $counter = 1; ?>
                                 <?php foreach ($equipment as $item): ?>
                                     <?php
-                                        $total_qty = $item['total_quantity'] ?? 0;
+                                        $total_qty = (int)($item['total_quantity'] ?? 0);
+                                        $total_reorder = (int)($item['total_reorder_level'] ?? 0);
+                                        
                                         $stock_status = 'ok'; $stock_label = 'In Stock';
-                                        if ($total_qty <= 0) { $stock_status = 'out'; $stock_label = 'Out of Stock'; }
-                                        elseif ($total_qty <= $item['reorder_level']) { $stock_status = 'low'; $stock_label = 'Low Stock'; }
+                                        if ($total_qty <= 0) { 
+                                            $stock_status = 'out'; $stock_label = 'Out of Stock'; 
+                                        }
+                                        elseif ($total_reorder > 0 && $total_qty <= $total_reorder) { 
+                                            $stock_status = 'low'; $stock_label = 'Low Stock'; 
+                                        }
                                         
                                         $batch_numbers = $item['batch_numbers'] ?? '';
                                         $batch_count = $batch_numbers ? count(explode('|', $batch_numbers)) : 0;
@@ -1678,12 +1970,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                                 </span>
                                             <?php endif; ?>
                                         </td>
-                                        <td class="col-reorder"><?= $item['reorder_level'] ?></td>
+                                        <td class="col-reorder">
+                                            <?php if ($total_reorder > 0): ?>
+                                                <span style="color:var(--primary);font-weight:700;"><?= $total_reorder ?></span>
+                                                <span style="font-size:0.6rem;color:var(--text-muted);display:block;font-weight:500;">
+                                                    (<?= $item['active_batch_count'] ?> batch<?= $item['active_batch_count'] > 1 ? 'es' : '' ?>)
+                                                </span>
+                                            <?php else: ?>
+                                                <?= $item['reorder_level'] ?>
+                                            <?php endif; ?>
+                                        </td>
                                         <td class="col-stock">
                                             <span class="stock-badge <?= $stock_status ?>">
                                                 <i class="fas <?= $stock_status === 'ok' ? 'fa-check-circle' : ($stock_status === 'low' ? 'fa-exclamation-triangle' : 'fa-times-circle') ?>"></i>
                                                 <?= $stock_label ?>
                                             </span>
+                                            <?php if ($item['current_batch_qty'] > 0): ?>
+                                                <span class="current-batch-info">
+                                                    <i class="fas fa-tag"></i> Current batch: <?= $item['current_batch_qty'] ?> units
+                                                </span>
+                                            <?php endif; ?>
                                         </td>
                                         <td class="col-price"><?= $price_display ?></td>
                                         <td class="col-expiry">
@@ -1755,9 +2061,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
 </main>
 
-<!-- ================================================================
-     ✅ VIEW MODAL - Ipo MBELE ya sidebar (z-index: 999999)
-     ================================================================ -->
 <?php if ($view_data && !empty($view_batches)): ?>
 <div class="modal-overlay show" id="viewModal" style="display:flex;z-index:999999;">
     <div class="modal-content" style="z-index:1000000;">
@@ -1765,6 +2068,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <div class="modal-title">
                 <i class="fas fa-eye"></i> 
                 <?= ucfirst($view_type) ?> Details - <?= htmlspecialchars($view_name) ?>
+                <?php if ($view_hidden_zero_count > 0): ?>
+                    <span class="hidden-batches-note">
+                        <i class="fas fa-eye-slash"></i> <?= $view_hidden_zero_count ?> zero-qty batch<?= $view_hidden_zero_count > 1 ? 'es' : '' ?> hidden
+                    </span>
+                <?php endif; ?>
             </div>
             <a href="inventory.php?tab=<?= $active_tab ?>" class="modal-close">&times;</a>
         </div>
@@ -1786,15 +2094,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <div class="label">Total Quantity (Active)</div>
                 <div class="value">
                     <?php 
-                        $total_qty = 0;
+                        $total_qty_display = 0;
                         foreach ($view_batches as $batch) {
                             if ($batch['status'] === 'active' && (empty($batch['expiry_date']) || $batch['expiry_date'] >= date('Y-m-d'))) {
-                                $total_qty += $batch['quantity'];
+                                $total_qty_display += $batch['quantity'];
                             }
                         }
                     ?>
-                    <strong><?= $total_qty ?></strong>
-                    <?php if ($total_qty == 0): ?>
+                    <strong><?= $total_qty_display ?></strong>
+                    <?php if ($total_qty_display == 0): ?>
                         <span style="font-size:0.6rem;color:var(--warning);font-weight:600;margin-left:6px;">
                             <i class="fas fa-exclamation-triangle"></i> Cannot be sold
                         </span>
@@ -1833,7 +2141,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         <div style="margin-top:16px;">
             <div style="font-size:0.85rem;font-weight:700;margin-bottom:10px;color:var(--text-primary);display:flex;align-items:center;gap:8px;">
                 <i class="fas fa-layer-group" style="color:var(--primary);"></i> 
-                ALL BATCHES (<?= count($view_batches) ?>)
+                ACTIVE BATCHES (<?= count($view_batches) ?>)
+                <?php if ($view_hidden_zero_count > 0): ?>
+                    <span style="font-size:0.68rem;color:var(--text-muted);font-weight:500;margin-left:6px;">
+                        — <?= $view_hidden_zero_count ?> with 0 qty hidden
+                    </span>
+                <?php endif; ?>
             </div>
             <div style="overflow-x:auto;border:2px solid var(--primary);border-radius:10px;">
                 <table class="view-items-table">
@@ -1843,6 +2156,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                             <th style="min-width:150px;">Batch Number</th>
                             <th style="min-width:110px;">Category</th>
                             <th style="text-align:center;width:80px;">Qty</th>
+                            <th style="text-align:center;width:90px;">Reorder</th>
                             <th style="min-width:110px;">Expiry Date</th>
                             <th style="text-align:center;width:80px;">Days</th>
                             <th style="text-align:center;width:100px;">Status</th>
@@ -1893,11 +2207,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 </td>
                                 <td style="text-align:center;font-weight:700;font-family:monospace;">
                                     <?= $batch_qty ?>
-                                    <?php if ($batch_qty == 0): ?>
-                                        <span style="font-size:0.55rem;display:block;color:var(--warning);font-weight:600;">
-                                            <i class="fas fa-exclamation-triangle"></i> 0 Qty
-                                        </span>
-                                    <?php endif; ?>
+                                </td>
+                                <td style="text-align:center;font-weight:700;font-family:monospace;color:var(--primary);">
+                                    <?= $batch['reorder_level'] ?? 0 ?>
                                 </td>
                                 <td>
                                     <?php if (!empty($batch_expiry) && $batch_expiry !== '0000-00-00'): ?>
@@ -1948,7 +2260,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <p>
         <span class="footer-brand">Braick Dispensary</span> Management System
         <span style="color:var(--text-muted);margin:0 8px;">|</span>
-        Inventory Management (Grouped by Name)
+        Inventory Management V10.1 (Smart Low Stock + Zero-Qty Hide)
         <span style="color:var(--text-muted);margin:0 8px;">|</span>
         Total Value: <strong>TSh <?= formatMoney($total_inventory_value) ?></strong>
         <span style="color:var(--text-muted);margin:0 8px;">|</span>
@@ -1957,7 +2269,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 </footer>
 
 <script>
-// TAB SWITCHING
 function switchTab(tab) {
     var url = new URL(window.location.href);
     url.searchParams.set('tab', tab);
@@ -1970,7 +2281,6 @@ function switchTab(tab) {
     window.location.href = url.toString();
 }
 
-// SCROLL FUNCTIONS
 var scrollAmount = 400;
 
 function scrollMedTable(direction) {
@@ -2005,7 +2315,6 @@ function updateEquipScrollButtons() {
     btnRight.disabled = (scrollLeft >= maxScroll - 5 || maxScroll <= 0);
 }
 
-// AUTO SEARCH - MEDICINES
 (function() {
     var searchInput = document.getElementById('medSearchInput');
     var tableBody = document.getElementById('medTableBody');
@@ -2060,7 +2369,6 @@ function updateEquipScrollButtons() {
     });
 })();
 
-// AUTO SEARCH - EQUIPMENT
 (function() {
     var searchInput = document.getElementById('equipSearchInput');
     var tableBody = document.getElementById('equipTableBody');
@@ -2115,7 +2423,6 @@ function updateEquipScrollButtons() {
     });
 })();
 
-// INITIALIZE
 document.addEventListener('DOMContentLoaded', function() {
     var medWrap = document.getElementById('medTableWrap');
     var equipWrap = document.getElementById('equipTableWrap');
@@ -2133,13 +2440,11 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
-// CLOSE MESSAGE
 setTimeout(function() {
     var messageBox = document.querySelector('.message-box');
     if (messageBox) messageBox.style.display = 'none';
 }, 5000);
 
-// KEYBOARD SHORTCUTS
 document.addEventListener('keydown', function(e) {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
@@ -2152,12 +2457,12 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-console.log('%c💊 Braick - Pharmacy Inventory V8.9.1', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Modal ipo MBELE ya sidebar (z-index 999999)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Batch count badge ni BLUE', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Stock low, days warning, expiry expiring ni BLUE', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Table header search (auto-filter)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ View modal inaonyesha batches zote + added by', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c💊 Braick - Pharmacy Inventory V10.1', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ V10.1: Batch count, reorder_sum, na groupings zinahesabu TU batches zenye qty > 0', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ V10.1: Zero-qty batches HAZIONEKANI kwenye views ZOTE', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ V10: LOW STOCK = Total Qty ≤ JUMLA ya reorder_levels za batches ZOTE zenye stock', 'font-size:13px; color:#34D399;');
+console.log('%c✅ V10: View modal inaonyesha batches zenye stock TU + hidden count', 'font-size:13px; color:#34D399;');
+console.log('%c✅ Modal ipo MBELE ya sidebar (z-index 999999)', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
