@@ -1,11 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/components/pharmacy_sidebar.php
-// PHARMACY - SHARED SIDEBAR
-// ✅ SAME DESIGN AS LABORATORY SIDEBAR
-// ✅ NEW: Daily Activities menu (below Expired Stock)
-// ✅ NEW: Online/Offline status from DB (login/logout aware)
-// ✅ OTC History REMOVED
+// PHARMACY - SHARED SIDEBAR V12
+// ✅ V12: HEARTBEAT - Update last_online kila page load
+// ✅ V12: Catch block HAIBADILISHE status kwa network error
+// ✅ V11: Daily Activities menu (below Expired Stock)
+// ✅ V10: Toggle button (hamburger) - mobile only
+// ✅ Design sawa na laboratory sidebar
+// ✅ Online/Offline status from DB (login/logout aware)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -60,6 +62,19 @@ try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     $db = null;
+}
+
+// ================================================================
+// ✅ V12 HEARTBEAT: Update user online status kila page load
+// ================================================================
+if ($db !== null && $user_id > 0) {
+    try {
+        $stmt = $db->prepare("UPDATE users SET is_online = 1, last_online = NOW() WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $_SESSION['is_online'] = 1;
+    } catch (Exception $e) {
+        error_log("Heartbeat error: " . $e->getMessage());
+    }
 }
 
 // ================================================================
@@ -1005,7 +1020,7 @@ $initial_data = [
         </a>
         
         <!-- ============================================================ -->
-        <!-- ✅ NEW: DAILY ACTIVITIES - CHINI YA EXPIRED STOCK -->
+        <!-- ✅ DAILY ACTIVITIES - CHINI YA EXPIRED STOCK -->
         <!-- ============================================================ -->
         <a href="/dispensary_system/frontend/pages/pharmacy/daily_activities.php" class="sidebar-link <?= isActive('daily_activities.php') ?>">
             <i class="fas fa-tasks"></i>
@@ -1238,7 +1253,7 @@ $initial_data = [
     };
     
     // ================================================================
-    // ✅ UPDATE DOCTOR ONLINE/OFFLINE STATUS (FROM DB)
+    // ✅ UPDATE USER ONLINE/OFFLINE STATUS (FROM DB)
     // ================================================================
     function updateUserStatus(data) {
         if (!data) return;
@@ -1476,17 +1491,9 @@ $initial_data = [
         })
         .catch(function(error) {
             sidebarState.isUpdating = false;
-            console.warn('❌ Sidebar AJAX error:', error.message);
-            
-            var statusDot = document.getElementById('sidebarFooterDot');
-            if (statusDot) {
-                statusDot.className = 'status-dot offline';
-            }
-            var statusText = document.getElementById('sidebarFooterText');
-            if (statusText) {
-                statusText.className = 'status-text offline';
-                statusText.textContent = 'Offline';
-            }
+            // ✅ V12 FIX: HAIBADILISHI STATUS KWA KOSA LA NETWORK
+            // Status inabaki kama ilivyo (Online au Offline)
+            console.warn('❌ Sidebar AJAX error (status unchanged):', error.message);
         });
     }
 
@@ -1563,7 +1570,7 @@ $initial_data = [
         }, 1500);
     });
 
-    console.log('%c💊 Braick Dispensary - Pharmacy Sidebar (AJAX)', 
+    console.log('%c💊 Braick Dispensary - Pharmacy Sidebar V12 (FIXED)', 
         'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 
         'font-size:13px; color:#059669;');
@@ -1575,10 +1582,10 @@ $initial_data = [
         'font-size:13px; color:#F59E0B;');
     console.log('%c📅 Daily Activities: <?= $daily_activities_count ?> (Today: <?= $today_daily_activities ?>)', 
         'font-size:13px; color:#10B981;');
-    console.log('%c✅ NEW: Daily Activities below Expired Stock', 
+    console.log('%c✅ V12 FIXED: Heartbeat ina-update last_online kila page load', 
         'font-size:13px; color:#34D399; font-weight:bold;');
-    console.log('%c✅ Online/Offline status from DB (login/logout aware)', 
+    console.log('%c✅ V12 FIXED: Status haiwi "Offline" kwa network error', 
         'font-size:13px; color:#34D399; font-weight:bold;');
-    console.log('%c⚡ Auto-Update: Every 2s (only if data changed)', 
+    console.log('%c✅ Auto-Update: Every 2s (only if data changed)', 
         'font-size:13px; color:#34D399;');
 </script>

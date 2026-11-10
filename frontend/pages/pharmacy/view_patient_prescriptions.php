@@ -1,9 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/view_patient_prescriptions.php
-// V8.6 - CANCEL WITHOUT STOCK RETURN + EDITABLE QUANTITY
+// V8.7 - MULTI-BATCH FIX + EDITABLE QUANTITY
 // ================================================================
-// ✅ V8.6: Quantity inaweza kuedit (input field)
+// ✅ V8.7: GROUP prescription_items kwa medication_name wakati wa kuunda bill_items
+// ✅ V8.7: Multi-batch (batch 2 tofauti) → bill_item MOJA yenye total_qty
+// ✅ V8.7: Cashier FULL payment itaona dawa ZOTE na kudeduct stock sahihi
+// ✅ V8.6: Quantity inaweza kuedit (input field + / - buttons)
 // ✅ V8.6: Total Price (GROSS) ina green background
 // ✅ V8.5: Cancel HAIRUDISHI stock - inapunguza bill tu
 // ✅ V8.5: No stock_movements entry
@@ -77,6 +80,44 @@ $dosage_options = [
     '1000', '1200', '1500', '2000', '2500', '3000', '5000'
 ];
 
+// ================================================================
+// HELPER: GROUP PRESCRIPTION ITEMS KWA MEDICATION_NAME
+// ✅ V8.7: Multi-batch → bill_item MOJA yenye total_qty
+// ================================================================
+function groupItemsForBill($items_for_bill) {
+    $grouped = [];
+    foreach ($items_for_bill as $item) {
+        $clean_name = trim($item['medication_name']);
+        $clean_name = preg_replace('/\s*\(Batch:.*?\)\s*/i', '', $clean_name);
+        $clean_name = preg_replace('/\s*\[.*?\]\s*/i', '', $clean_name);
+        $clean_name = trim($clean_name);
+        
+        $unit_price = (float)$item['unit_price'];
+        $group_key = strtolower($clean_name) . '|' . number_format($unit_price, 2, '.', '');
+        
+        if (!isset($grouped[$group_key])) {
+            $grouped[$group_key] = [
+                'medication_name' => $clean_name,
+                'dosage' => trim($item['dosage'] ?? ''),
+                'unit_price' => $unit_price,
+                'total_quantity' => 0,
+                'prescription_id' => (int)$item['prescription_id'],
+                'batch_count' => 0,
+                'item_ids' => []
+            ];
+        }
+        $grouped[$group_key]['total_quantity'] += (int)$item['quantity'];
+        $grouped[$group_key]['batch_count']++;
+        $grouped[$group_key]['item_ids'][] = (int)$item['id'];
+        
+        // Chukua dosage ya kwanza isiyo tupu
+        if (empty($grouped[$group_key]['dosage']) && !empty($item['dosage'])) {
+            $grouped[$group_key]['dosage'] = trim($item['dosage']);
+        }
+    }
+    return $grouped;
+}
+
 try {
     $settings = [];
     $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
@@ -116,14 +157,8 @@ try {
                 $item_total = (float)$item['total_price'];
                 $item_qty = (int)$item['quantity'];
                 $item_name = trim($item['medication_name']);
-                $was_dispensed = !empty($item['dispensed_at']);
-                $rx_status = $item['rx_status'];
                 $prescription_id_of_item = (int)$item['prescription_id'];
                 $item_dosage = $item['dosage'] ?? '';
-
-                // ================================================================
-                // ✅ V8.6: NO STOCK RETURN - Only log the cancellation
-                // ================================================================
 
                 // GET BILL
                 $stmt_bill = $db->prepare("
@@ -276,7 +311,7 @@ try {
                                . " | removed: {$removed_bi_count}";
                 }
 
-                // ✅ V8.6: Store cancelled quantity (NOT delete it)
+                // Store cancelled quantity (NOT delete it)
                 $stmt_cancel_log = $db->prepare("
                     UPDATE prescription_items
                     SET cancelled_by = ?,
@@ -362,7 +397,8 @@ try {
     }
 
     // ================================================================
-    // SAVE AND CONFIRM HANDLER (with QUANTITY EDIT support)
+    // SAVE AND CONFIRM HANDLER
+    // ✅ V8.7: GROUP by medication_name (multi-batch → 1 bill_item)
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'save_and_confirm') {
         $patient_id = isset($_POST['patient_id']) ? (int)$_POST['patient_id'] : 0;
@@ -378,12 +414,10 @@ try {
                 $duration = trim($item_data['duration'] ?? '');
                 $instructions = trim($item_data['instructions'] ?? '');
 
-                // ✅ V8.6: Quantity editable
                 $new_quantity = isset($item_data['quantity']) ? (int)$item_data['quantity'] : 0;
                 if ($new_quantity < 1) $new_quantity = 1;
                 if ($new_quantity > 99999) $new_quantity = 99999;
 
-                // Get current unit_price to recalculate total_price
                 $stmt_price = $db->prepare("
                     SELECT unit_price FROM prescription_items 
                     WHERE id = ? AND patient_id = ? AND branch_id = ?
@@ -473,6 +507,9 @@ try {
                 $bill_id = null;
 
                 if ($existing_bill) {
+                    // ================================================================
+                    // ✅ EXISTING BILL - UPDATE
+                    // ================================================================
                     $bill_id = $existing_bill['id'];
                     $current_paid = (float)$existing_bill['paid_amount'];
                     $current_total_discount = (float)$existing_bill['total_discount'];
@@ -563,12 +600,14 @@ try {
                         $bill_id, $patient_id, $visit_id
                     ]);
 
+                    // Delete existing medication bill items
                     $stmt_del_bi = $db->prepare("
                         DELETE FROM bill_items
                         WHERE bill_id = ? AND item_type = 'medication' AND reference_type = 'prescription'
                     ");
                     $stmt_del_bi->execute([$bill_id]);
 
+                    // Get fresh items
                     $stmt_items = $db->prepare("
                         SELECT pi.*, p.prescription_number
                         FROM prescription_items pi
@@ -583,8 +622,19 @@ try {
                     $stmt_items->execute([$patient_id, $user_branch_id, $visit_id]);
                     $items_for_bill = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
 
-                    foreach ($items_for_bill as $item) {
-                        $gross_price = (float)$item['unit_price'] * (int)$item['quantity'];
+                    // ✅ V8.7: GROUP by medication_name (multi-batch → 1 bill_item)
+                    $grouped_for_bill = groupItemsForBill($items_for_bill);
+
+                    foreach ($grouped_for_bill as $group) {
+                        $total_qty = (int)$group['total_quantity'];
+                        $unit_price = (float)$group['unit_price'];
+                        $gross_price = $unit_price * $total_qty;
+
+                        // Item name: ongeza [N batches] kama batch_count > 1
+                        $item_display_name = $group['medication_name'] . ' (' . $group['dosage'] . ')';
+                        if ($group['batch_count'] > 1) {
+                            $item_display_name .= ' [' . $group['batch_count'] . ' batches]';
+                        }
 
                         $stmt_ins = $db->prepare("
                             INSERT INTO bill_items (
@@ -596,17 +646,20 @@ try {
                         ");
                         $stmt_ins->execute([
                             $bill_id, $patient_id, $user_branch_id,
-                            $item['medication_name'] . ' (' . ($item['dosage'] ?? '') . ')',
-                            $item['quantity'], $item['unit_price'], $gross_price,
+                            $item_display_name,
+                            $total_qty, $unit_price, $gross_price,
                             $gross_price,
-                            $item['prescription_id']
+                            $group['prescription_id']
                         ]);
                     }
 
-                    $message = "✅ Confirmed by {$user_full_name}! Bill updated (" . count($items_for_bill) . " medications).";
+                    $message = "✅ Confirmed by {$user_full_name}! Bill updated (" . count($grouped_for_bill) . " grouped medications).";
                     $message_type = 'success';
 
                 } else {
+                    // ================================================================
+                    // ✅ NEW BILL - CREATE
+                    // ================================================================
                     $bill_number = 'BILL-PRES-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
 
                     $stmt_items = $db->prepare("
@@ -662,6 +715,7 @@ try {
                     ]);
                     $bill_id = $db->lastInsertId();
 
+                    // Get fresh items
                     $stmt_items = $db->prepare("
                         SELECT pi.*, p.prescription_number
                         FROM prescription_items pi
@@ -676,8 +730,18 @@ try {
                     $stmt_items->execute([$patient_id, $user_branch_id, $visit_id]);
                     $items_for_bill = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
 
-                    foreach ($items_for_bill as $item) {
-                        $gross_price = (float)$item['unit_price'] * (int)$item['quantity'];
+                    // ✅ V8.7: GROUP by medication_name
+                    $grouped_for_bill = groupItemsForBill($items_for_bill);
+
+                    foreach ($grouped_for_bill as $group) {
+                        $total_qty = (int)$group['total_quantity'];
+                        $unit_price = (float)$group['unit_price'];
+                        $gross_price = $unit_price * $total_qty;
+
+                        $item_display_name = $group['medication_name'] . ' (' . $group['dosage'] . ')';
+                        if ($group['batch_count'] > 1) {
+                            $item_display_name .= ' [' . $group['batch_count'] . ' batches]';
+                        }
 
                         $stmt = $db->prepare("
                             INSERT INTO bill_items (
@@ -689,14 +753,14 @@ try {
                         ");
                         $stmt->execute([
                             $bill_id, $patient_id, $user_branch_id,
-                            $item['medication_name'] . ' (' . ($item['dosage'] ?? '') . ')',
-                            $item['quantity'], $item['unit_price'], $gross_price,
+                            $item_display_name,
+                            $total_qty, $unit_price, $gross_price,
                             $gross_price,
-                            $item['prescription_id']
+                            $group['prescription_id']
                         ]);
                     }
 
-                    $message = "✅ Confirmed by {$user_full_name}! New bill created with " . count($items_for_bill) . " medications.";
+                    $message = "✅ Confirmed by {$user_full_name}! New bill created with " . count($grouped_for_bill) . " grouped medications.";
                     $message_type = 'success';
                 }
 
@@ -1625,6 +1689,27 @@ include_once '../../components/pharmacy_sidebar.php';
         .status-badge.dispensed { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
         .status-badge.cancelled { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
 
+        .batch-info-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.55rem;
+            font-weight: 800;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+            color: #1E40AF;
+            border: 1px solid #60A5FA;
+            margin-left: 6px;
+            text-transform: uppercase;
+        }
+
+        [data-theme="dark"] .batch-info-tag {
+            background: linear-gradient(135deg, #1E3A5F, #1E40AF);
+            color: #93C5FD;
+            border-color: #3B82F6;
+        }
+
         .audit-badge {
             display: inline-flex;
             align-items: center;
@@ -2413,7 +2498,7 @@ include_once '../../components/pharmacy_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-prescription"></i>
                 Prescriptions
-                <span style="background:rgba(255,255,255,0.2);color:white;padding:2px 10px;border-radius:20px;font-size:0.55rem;font-weight:600;text-transform:uppercase;">PHARMACY V8.6</span>
+                <span style="background:rgba(255,255,255,0.2);color:white;padding:2px 10px;border-radius:20px;font-size:0.55rem;font-weight:600;text-transform:uppercase;">PHARMACY V8.7</span>
                 <?php if ($visit_info): ?>
                     <span class="visit-badge">
                         <i class="fas fa-calendar-check"></i>
@@ -2426,8 +2511,8 @@ include_once '../../components/pharmacy_sidebar.php';
                 <?php endif; ?>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-hourglass-half"></i>
-                <strong>PENDING, CONFIRMED, DISPENSED</strong> — All medications can be cancelled with audit trail
+                <i class="fas fa-layer-group"></i>
+                <strong>MULTI-BATCH FIX</strong> — batches zote zinawekwa kwenye bill_item MOJA
                 <?php if ($patient): ?>
                     <span style="background:rgba(255,255,255,0.12);color:white;padding:2px 10px;border-radius:20px;font-size:0.55rem;">
                         <?= htmlspecialchars($patient['full_name']) ?>
@@ -2577,6 +2662,16 @@ include_once '../../components/pharmacy_sidebar.php';
                         $display_cancelled_amount = (float)($item['total_price'] ?? 0);
                     }
                 }
+
+                // ✅ V8.7: Angalia kama kuna batches nyingine za medication hii kwenye visit hii
+                $same_med_count = 0;
+                foreach ($items as $other_item) {
+                    if (empty($other_item['cancelled_at'])
+                        && strtolower(trim($other_item['medication_name'])) === strtolower(trim($item['medication_name']))
+                        && (float)$other_item['unit_price'] === (float)$item['unit_price']) {
+                        $same_med_count++;
+                    }
+                }
             ?>
                 <div class="item-card <?= $card_class ?>" data-item-id="<?= $item['id'] ?>" data-unit-price="<?= (float)($item['unit_price'] ?? 0) ?>" data-status="<?= $is_cancelled ? 'cancelled' : $rx_status ?>">
                     <div class="item-badge">#<?= $index + 1 ?></div>
@@ -2599,7 +2694,12 @@ include_once '../../components/pharmacy_sidebar.php';
                     <?php endif; ?>
 
                     <div class="item-header">
-                        <span class="item-name"><?= htmlspecialchars($item['medication_name']) ?></span>
+                        <span class="item-name">
+                            <?= htmlspecialchars($item['medication_name']) ?>
+                            <?php if ($same_med_count > 1): ?>
+                                <span class="batch-info-tag"><i class="fas fa-layer-group"></i> <?= $same_med_count ?> batches</span>
+                            <?php endif; ?>
+                        </span>
                         <span class="item-prescription"><?= htmlspecialchars($item['prescription_number'] ?? 'N/A') ?></span>
                     </div>
 
@@ -2659,7 +2759,6 @@ include_once '../../components/pharmacy_sidebar.php';
                             </div>
                         </div>
 
-                        <!-- ✅ V8.6: QUANTITY EDITABLE -->
                         <div class="item-detail">
                             <span class="label">📦 Quantity (Editable)</span>
                             <div class="qty-input-wrapper">
@@ -2749,7 +2848,7 @@ include_once '../../components/pharmacy_sidebar.php';
                         </div>
                     </div>
 
-                    <!-- ✅ V8.6: Total Price with GREEN background -->
+                    <!-- Total Price with GREEN background -->
                     <div class="item-price" id="itemPrice_<?= $item['id'] ?>">
                         <?php if ($is_cancelled && $display_cancelled_amount > 0): ?>
                             <span class="label">❌ Cancelled Amount:</span>
@@ -2891,7 +2990,7 @@ include_once '../../components/pharmacy_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Prescriptions V8.6 (Editable Quantity + Green Total)
+            Prescriptions V8.7 (Multi-Batch Fix)
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -3035,9 +3134,6 @@ include_once '../../components/pharmacy_sidebar.php';
         status: ''
     };
 
-    // ================================================================
-    // ✅ V8.6: QUANTITY CHANGE HANDLERS
-    // ================================================================
     function changeQty(itemId, delta) {
         var input = document.getElementById('qty_input_' + itemId);
         if (!input || input.disabled) return;
@@ -3059,20 +3155,17 @@ include_once '../../components/pharmacy_sidebar.php';
         if (qty < 1) { qty = 1; input.value = 1; }
         if (qty > 99999) { qty = 99999; input.value = 99999; }
 
-        // Get unit_price from card
         var card = document.querySelector('.item-card[data-item-id="' + itemId + '"]');
         if (!card) return;
 
         var unitPrice = parseFloat(card.getAttribute('data-unit-price')) || 0;
         var totalPrice = qty * unitPrice;
 
-        // Update the item total display
         var totalEl = document.getElementById('item_total_' + itemId);
         if (totalEl) {
             totalEl.textContent = currencySymbol + ' ' + formatMoney(totalPrice);
         }
 
-        // Recalculate overall
         updateLiveData();
     }
 
@@ -3088,7 +3181,7 @@ include_once '../../components/pharmacy_sidebar.php';
         document.getElementById('modalMedName').textContent = medicationName;
         document.getElementById('modalMedStatus').textContent = statusLabel;
         document.getElementById('modalMedQty').textContent = quantity + ' units';
-        document.getElementById('modalMedAmount').textContent = '<?= $currency ?> ' + formatMoney(totalPrice);
+        document.getElementById('modalMedAmount').textContent = currencySymbol + ' ' + formatMoney(totalPrice);
 
         document.getElementById('cancelModalOverlay').classList.add('active');
     }
@@ -3178,9 +3271,6 @@ include_once '../../components/pharmacy_sidebar.php';
         });
     }
 
-    // ================================================================
-    // ✅ V8.6: Update live data with editable quantity
-    // ================================================================
     function updateLiveData() {
         var totalQty = 0, totalAmount = 0, totalItems = 0;
 
@@ -3258,6 +3348,7 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         message += '✅ Final Amount: ' + finalAmount + '\n\n';
         message += '📝 This will be logged as: Confirmed by ' + currentUserName + '\n';
+        message += '📦 MULTI-BATCH: Bill items zitakuwa GROUPED kwa medication_name.\n';
         message += '⚠️ Only remaining (non-cancelled) medications will be confirmed.';
 
         return confirm(message);
@@ -3391,7 +3482,7 @@ include_once '../../components/pharmacy_sidebar.php';
         var discountValue = unformatMoney(document.getElementById('discountAmount')?.value);
         var finalAmount = totalAmount + premiumValue - discountValue;
 
-        var html = `<div style="font-family:'Inter',sans-serif;padding:20px;"><div style="text-align:center;padding-bottom:16px;border-bottom:3px solid #0B5ED7;margin-bottom:20px;"><div style="font-size:1.6rem;font-weight:800;color:#0B5ED7;">BRAICK DISPENSARY</div><div style="font-size:0.8rem;color:#64748B;">Tunajali Afya Yako</div><div style="font-size:0.9rem;font-weight:600;color:#0B5ED7;margin-top:6px;">Prescriptions (With Cancelled Items)</div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;padding:12px 16px;background:#F8FAFC;border-radius:8px;margin-bottom:16px;"><div><strong>Patient:</strong> <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></div><div><strong>ID:</strong> <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></div><div><strong>Visit #:</strong> <?= htmlspecialchars($visit_info['visit_number'] ?? 'N/A') ?></div><div><strong>Date:</strong> <?= date('d M Y') ?></div></div><div style="margin-bottom:16px;"><div style="font-size:1rem;font-weight:700;color:#0B5ED7;border-bottom:2px solid #6EA8FE;padding-bottom:4px;margin-bottom:10px;">✅ Active Items (${totalItems})</div>${itemsHtml}</div>${cancelledCount > 0 ? `<div style="margin-bottom:16px;"><div style="font-size:1rem;font-weight:700;color:#DC2626;border-bottom:2px solid #FCA5A5;padding-bottom:4px;margin-bottom:10px;">❌ Cancelled Items (${cancelledCount})</div>${cancelledItemsHtml}</div>` : ''}<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin:16px 0;padding:12px 16px;background:#E8F0FE;border-radius:8px;"><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Active Items</div><div style="font-weight:700;color:#0B5ED7;font-family:monospace;">${totalItems}</div></div><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Active Qty</div><div style="font-weight:700;color:#D97706;font-family:monospace;">${totalQty}</div></div><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Cancelled Qty</div><div style="font-weight:700;color:#DC2626;font-family:monospace;">${cancelledQty}</div></div><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Final Amount</div><div style="font-weight:700;color:#059669;font-family:monospace;">${currencySymbol} ${formatMoney(finalAmount)}</div></div></div><div style="margin-top:20px;padding-top:12px;border-top:2px solid #E2E8F0;text-align:center;font-size:12px;color:#94A3B8;">Braick Dispensary • Generated on <?= date('F d, Y h:i:s A') ?></div></div>`;
+        var html = `<div style="font-family:'Inter',sans-serif;padding:20px;"><div style="text-align:center;padding-bottom:16px;border-bottom:3px solid #0B5ED7;margin-bottom:20px;"><div style="font-size:1.6rem;font-weight:800;color:#0B5ED7;">BRAICK DISPENSARY</div><div style="font-size:0.8rem;color:#64748B;">Tunajali Afya Yako</div><div style="font-size:0.9rem;font-weight:600;color:#0B5ED7;margin-top:6px;">Prescriptions (Multi-Batch Grouped)</div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;padding:12px 16px;background:#F8FAFC;border-radius:8px;margin-bottom:16px;"><div><strong>Patient:</strong> <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></div><div><strong>ID:</strong> <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></div><div><strong>Visit #:</strong> <?= htmlspecialchars($visit_info['visit_number'] ?? 'N/A') ?></div><div><strong>Date:</strong> <?= date('d M Y') ?></div></div><div style="margin-bottom:16px;"><div style="font-size:1rem;font-weight:700;color:#0B5ED7;border-bottom:2px solid #6EA8FE;padding-bottom:4px;margin-bottom:10px;">✅ Active Items (${totalItems})</div>${itemsHtml}</div>${cancelledCount > 0 ? `<div style="margin-bottom:16px;"><div style="font-size:1rem;font-weight:700;color:#DC2626;border-bottom:2px solid #FCA5A5;padding-bottom:4px;margin-bottom:10px;">❌ Cancelled Items (${cancelledCount})</div>${cancelledItemsHtml}</div>` : ''}<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin:16px 0;padding:12px 16px;background:#E8F0FE;border-radius:8px;"><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Active Items</div><div style="font-weight:700;color:#0B5ED7;font-family:monospace;">${totalItems}</div></div><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Active Qty</div><div style="font-weight:700;color:#D97706;font-family:monospace;">${totalQty}</div></div><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Cancelled Qty</div><div style="font-weight:700;color:#DC2626;font-family:monospace;">${cancelledQty}</div></div><div style="text-align:center;"><div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Final Amount</div><div style="font-weight:700;color:#059669;font-family:monospace;">${currencySymbol} ${formatMoney(finalAmount)}</div></div></div><div style="margin-top:20px;padding-top:12px;border-top:2px solid #E2E8F0;text-align:center;font-size:12px;color:#94A3B8;">Braick Dispensary • Generated on <?= date('F d, Y h:i:s A') ?></div></div>`;
         content.innerHTML = html;
         modal.classList.add('active');
     }
@@ -3417,10 +3508,10 @@ include_once '../../components/pharmacy_sidebar.php';
         if (e.target === this) closePDFModal();
     });
 
-    console.log('%c💊 Braick - Prescriptions V8.6', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Quantity: EDITABLE (with +/- buttons)', 'font-size:13px; color:#059669; font-weight:bold;');
-    console.log('%c✅ Total Price: GREEN background', 'font-size:13px; color:#059669; font-weight:bold;');
-    console.log('%c✅ Cancel: Bill-only (NO stock return)', 'font-size:13px; color:#DC2626; font-weight:bold;');
+    console.log('%c💊 Braick - Prescriptions V8.7', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ MULTI-BATCH FIX: Batches zote → bill_item MOJA', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ Cashier FULL payment itaona dawa ZOTE', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ Stock itadeduct kwa batches zote (FIFO)', 'font-size:13px; color:#059669; font-weight:bold;');
 </script>
 
 </body>

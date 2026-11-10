@@ -1,15 +1,17 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/audit/edit_visit.php
-// ADMIN AUDIT - FULL EDIT VISIT (V8 FINAL)
+// ADMIN AUDIT - FULL EDIT VISIT (V10 FINAL)
 // ================================================================
+// ✅ V10: KILA add_medication inaunda prescription MPYA (status = 'pending')
+// ✅ V10: Bill_item MPYA inaongezwa kwenye bill iliyopo (HAKUNA kufuta)
+// ✅ V10: Pharmacy itaiona kwenye pending_prescriptions.php
+// ✅ V10: Cashier ataiweka LOCKED hadi pharmacy aconfirm
+// ✅ V10: Bill_items za awali HAZIFUTWI
+// ✅ V9: prescription_items.confirmed_at/dispensed_at = NULL
+// ✅ V9: bill_items.reference_id = prescription_id
 // ✅ V8: Cancelled medication/lab test returns stock (if not paid)
-// ✅ V8: Bill status check before stock return
 // ✅ V7: Full stock return for all item types
-// ✅ V7: lab_test_equipment junction support
-// ✅ V7: payments table uses received_at/received_by
-// ✅ V6: prescription_items has NO status (uses prescriptions.status)
-// ✅ V6: procedures uses performed_at
 // ✅ V6: Toggle + Live search with highlight
 // ✅ V6: Money format 1,000,000,000
 // ================================================================
@@ -45,7 +47,6 @@ if ($visit_id <= 0) {
     exit;
 }
 
-// ✅ AUDIT path: 4 levels up
 require_once __DIR__ . '/../../../../backend/config/database.php';
 
 try {
@@ -82,6 +83,8 @@ function recalculateBill(PDO $db, int $bill_id, int $user_id, int $branch_id, st
     $pharm_prem = (float)$bill['pharmacy_premium'];
     $cash_prem  = (float)$bill['cashier_premium'];
 
+    // ✅ V10: SUM(total_price) ya bill_items ZOTE zenye status != 'cancelled'
+    // Hii inajumlisha bill_items ZOTE (za awali + mpya) — HAKUNA kufuta
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(total_price), 0) AS raw,
                COALESCE(SUM(discount_amount), 0) AS disc
@@ -505,7 +508,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         // ----------------------------------------------------
-        // 4. DELETE LAB TEST (V8: cancelled returns stock)
+        // 4. DELETE LAB TEST
         // ----------------------------------------------------
         elseif ($action === 'delete_lab_test') {
             $db->beginTransaction();
@@ -527,7 +530,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $lab_branch_id = (int)($lab['branch_id'] ?? $user_branch_id);
             $patient_id = (int)($lab['patient_id'] ?? 0);
 
-            // ✅ Return stock if pending/in_progress/cancelled AND bill NOT paid
             $stock_returned  = 0;
             $returned_names  = [];
             $should_return   = in_array($test_status, ['pending', 'in_progress', 'cancelled'], true);
@@ -553,19 +555,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             if ($should_return) {
                 $result = returnLabTestEquipmentStock(
-                    $db,
-                    $lab_test_id,
-                    (int)$lab['test_id'],
-                    $patient_id,
-                    $lab_branch_id,
-                    $user_id,
+                    $db, $lab_test_id, (int)$lab['test_id'], $patient_id,
+                    $lab_branch_id, $user_id,
                     "Stock returned - Deleted {$test_status} lab test: {$test_name}"
                 );
                 $stock_returned = $result['total'];
                 $returned_names = $result['names'];
             }
 
-            // Delete bill_items
             $bill_id = getVisitBillId($db, $visit_id);
             if ($bill_id) {
                 $db->prepare("
@@ -574,7 +571,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ")->execute([$bill_id, $lab_test_id]);
             }
 
-            // Delete lab_test_equipment links
             try {
                 $db->prepare("DELETE FROM lab_test_equipment WHERE lab_test_id = ?")
                    ->execute([$lab['test_id']]);
@@ -608,7 +604,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         // ----------------------------------------------------
-        // 5. ADD MEDICATION
+        // 5. ADD MEDICATION — ✅ V10 FINAL
+        // ----------------------------------------------------
+        // ✅ KILA add_medication inaunda prescription MPYA (status = 'pending')
+        // ✅ Bill_item MPYA inaongezwa kwenye bill iliyopo — HAKUNA kufuta
+        // ✅ Pharmacy itaiona kwenye pending_prescriptions.php
+        // ✅ Cashier ataiweka LOCKED hadi pharmacy aconfirm
         // ----------------------------------------------------
         elseif ($action === 'add_medication') {
             $db->beginTransaction();
@@ -640,12 +641,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt->execute([$visit_id]);
             $patient_id = (int)$stmt->fetchColumn();
 
-            $stmt = $db->prepare("SELECT id FROM prescriptions WHERE visit_id = ? ORDER BY id DESC LIMIT 1");
-            $stmt->execute([$visit_id]);
-            $prescription_id = $stmt->fetchColumn();
+            // ✅ V10: Check kama prescriptions/prescription_items zina columns za confirmation
+            $has_prescription_confirmation = false;
+            try {
+                $stmt_chk = $db->query("SHOW COLUMNS FROM prescriptions LIKE 'confirmed_at'");
+                $has_prescription_confirmation = $stmt_chk->rowCount() > 0;
+            } catch (Exception $e) {}
 
-            if (!$prescription_id) {
-                $prescription_number = 'RX-' . date('Ymd') . '-' . str_pad($visit_id, 4, '0', STR_PAD_LEFT);
+            $has_pi_confirmation = false;
+            try {
+                $stmt_chk = $db->query("SHOW COLUMNS FROM prescription_items LIKE 'confirmed_at'");
+                $has_pi_confirmation = $stmt_chk->rowCount() > 0;
+            } catch (Exception $e) {}
+
+            // ✅ V10: KILA add_medication inaunda prescription MPYA yenye status = 'pending'
+            // Hii inahakikisha pharmacy inaiona kwenye pending_prescriptions.php
+            $prescription_number = 'RX-' . date('Ymd') . '-' . str_pad($visit_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
+
+            if ($has_prescription_confirmation) {
+                $db->prepare("
+                    INSERT INTO prescriptions
+                        (prescription_number, visit_id, patient_id, doctor_id,
+                         status, pharmacy_id, confirmed_at, dispensed_at, dispensed_by,
+                         branch_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, 'pending', NULL, NULL, NULL, NULL, ?, NOW(), NOW())
+                ")->execute([
+                    $prescription_number, $visit_id, $patient_id,
+                    $user_id, $user_branch_id
+                ]);
+            } else {
                 $db->prepare("
                     INSERT INTO prescriptions
                         (prescription_number, visit_id, patient_id, doctor_id,
@@ -655,24 +679,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $prescription_number, $visit_id, $patient_id,
                     $user_id, $user_branch_id
                 ]);
-                $prescription_id = (int)$db->lastInsertId();
             }
+            $prescription_id = (int)$db->lastInsertId();
 
-            $db->prepare("
-                INSERT INTO prescription_items
-                    (prescription_id, patient_id, inventory_id, medication_name,
-                     dosage, frequency, quantity, original_quantity, duration, route,
-                     instructions, unit_price, total_price, original_total_price,
-                     branch_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-            ")->execute([
-                $prescription_id, $patient_id, $inventory_id, $med_name,
-                $dosage, $frequency, $quantity, $quantity, $duration, $route,
-                $instructions, $unit_price, $total_price, $total_price,
-                $user_branch_id
-            ]);
+            // ✅ V10: Ingiza prescription_items na confirmed_at/dispensed_at = NULL
+            if ($has_pi_confirmation) {
+                $db->prepare("
+                    INSERT INTO prescription_items
+                        (prescription_id, patient_id, inventory_id, medication_name,
+                         dosage, frequency, quantity, original_quantity, duration, route,
+                         instructions, unit_price, total_price, original_total_price,
+                         branch_id, confirmed_at, confirmed_by, dispensed_at, dispensed_by,
+                         cancelled_at, cancelled_by,
+                         created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NOW())
+                ")->execute([
+                    $prescription_id, $patient_id, $inventory_id, $med_name,
+                    $dosage, $frequency, $quantity, $quantity, $duration, $route,
+                    $instructions, $unit_price, $total_price, $total_price,
+                    $user_branch_id
+                ]);
+            } else {
+                $db->prepare("
+                    INSERT INTO prescription_items
+                        (prescription_id, patient_id, inventory_id, medication_name,
+                         dosage, frequency, quantity, original_quantity, duration, route,
+                         instructions, unit_price, total_price, original_total_price,
+                         branch_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                ")->execute([
+                    $prescription_id, $patient_id, $inventory_id, $med_name,
+                    $dosage, $frequency, $quantity, $quantity, $duration, $route,
+                    $instructions, $unit_price, $total_price, $total_price,
+                    $user_branch_id
+                ]);
+            }
             $new_item_id = (int)$db->lastInsertId();
 
+            // ✅ V10: Bill item MPYA inaongezwa kwenye bill iliyopo
+            // reference_id = $prescription_id (mpya) — HAKUNA kufuta bill_items za awali
             $bill_id = getVisitBillId($db, $visit_id);
             if (!$bill_id) {
                 $bill_id = createBillIfMissing($db, $visit_id, $user_id, $user_branch_id, 'BILL-MED');
@@ -688,19 +733,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $bill_id, $patient_id, $user_branch_id,
                 $inventory_id, $med_name, trim($dosage . ' ' . $frequency),
                 $quantity, $unit_price, $total_price, $total_price,
-                $new_item_id
+                $prescription_id
             ]);
 
+            // ✅ V10: recalculateBill inajumlisha bill_items ZOTE (za awali + mpya)
+            // Hii inaongeza bill kwa medication mpya, BILA kufuta za awali
             recalculateBill($db, $bill_id, $user_id, $user_branch_id,
-                "Added medication '$med_name' x$quantity");
+                "Added medication '$med_name' x$quantity (pending pharmacy confirmation)");
 
             $db->commit();
-            $alert_message = "✅ Medication '$med_name' x$quantity added.";
+            $alert_message = "✅ Medication <strong>'{$med_name}' x{$quantity}</strong> added kwenye bill.<br><small>⏳ Prescription MPYA (RX: {$prescription_number}) imeundwa — pharmacy atai-confirm, kisha cashier ataiweka LOCKED.</small>";
             $alert_type    = 'success';
         }
 
         // ----------------------------------------------------
-        // 6. DELETE MEDICATION (V8: cancelled returns stock)
+        // 6. DELETE MEDICATION
         // ----------------------------------------------------
         elseif ($action === 'delete_medication') {
             $db->beginTransaction();
@@ -728,7 +775,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $patient_id     = (int)($item['patient_id'] ?? 0);
             $item_status    = strtolower($item['prescription_status'] ?? 'pending');
 
-            // ✅ Return stock if pending/confirmed/cancelled AND bill NOT paid
             $stock_returned = 0;
             $should_return  = in_array($item_status, ['pending', 'confirmed', 'cancelled'], true);
             $skip_reason    = '';
@@ -741,7 +787,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         WHERE bill_id = ? AND item_type = 'medication' AND reference_id = ?
                         LIMIT 1
                     ");
-                    $stmt_bi->execute([$bill_id_chk, $item_id]);
+                    $stmt_bi->execute([$bill_id_chk, $item['prescription_id']]);
                     $bi_row = $stmt_bi->fetch(PDO::FETCH_ASSOC);
 
                     if ($bi_row && isBillItemPaid($db, (int)$bi_row['id'])) {
@@ -767,10 +813,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $bill_id = getVisitBillId($db, $visit_id);
             if ($bill_id) {
+                // ✅ V10: Futa bill_item ya prescription hii TU (sio zote)
                 $db->prepare("
                     DELETE FROM bill_items
                     WHERE bill_id = ? AND item_type = 'medication' AND reference_id = ?
-                ")->execute([$bill_id, $item_id]);
+                ")->execute([$bill_id, $item['prescription_id']]);
 
                 recalculateBill($db, $bill_id, $user_id, $user_branch_id,
                     "Deleted medication '$med_name' x$quantity" .
@@ -959,7 +1006,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         // ----------------------------------------------------
-        // 10. DELETE EQUIPMENT (V8: returns stock if not paid)
+        // 10. DELETE EQUIPMENT
         // ----------------------------------------------------
         elseif ($action === 'delete_equipment') {
             $db->beginTransaction();
@@ -1062,7 +1109,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         // ----------------------------------------------------
-        // 12. UPDATE MEDICATION STATUS (V8: cancelled returns stock)
+        // 12. UPDATE MEDICATION STATUS
         // ----------------------------------------------------
         elseif ($action === 'update_medication_status') {
             $db->beginTransaction();
@@ -1095,7 +1142,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $stock_msg = '';
 
-            // pending/confirmed → dispensed: DEDUCT
             if (in_array($old_status, ['pending', 'confirmed'], true)
                 && $new_status === 'dispensed'
                 && $inventory_id > 0) {
@@ -1131,7 +1177,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
                 $stock_msg = " | Stock deducted: -$quantity";
             }
-            // Any → cancelled: RETURN stock
             elseif ($new_status === 'cancelled'
                 && in_array($old_status, ['pending', 'confirmed', 'dispensed'], true)
                 && $inventory_id > 0) {
@@ -1476,7 +1521,7 @@ try {
 } catch (Exception $e) {}
 
 // ================================================================
-// HEADER / SIDEBAR (AUDIT versions)
+// HEADER / SIDEBAR
 // ================================================================
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
@@ -1650,6 +1695,12 @@ body {
 .header-badge.solid {
     background: linear-gradient(135deg, var(--blue-500), var(--blue-600));
     border-color: rgba(255,255,255,0.3);
+}
+.header-badge.v10-badge {
+    background: rgba(16, 185, 129, 0.35);
+    color: #A7F3D0;
+    border-color: rgba(16, 185, 129, 0.5);
+    font-weight: 800;
 }
 
 .btn-header {
@@ -2107,6 +2158,7 @@ body {
         <div>
             <h1 class="page-title">
                 <i class="fas fa-edit"></i> Edit Visit (Audit)
+                <span class="header-badge v10-badge"><i class="fas fa-shield-alt"></i> V10 - BILL ADD (NO DELETE)</span>
             </h1>
             <p class="page-subtitle">
                 <span class="header-badge solid"><i class="fas fa-hashtag"></i> <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span>
@@ -3074,12 +3126,12 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') closeDeleteModal();
 });
 
-console.log('%c✏️ Audit Edit Visit — V8 FINAL', 'font-size:16px; font-weight:bold; color:#1D4ED8;');
-console.log('%c✅ CANCELLED returns stock (if not paid)', 'font-size:12px; color:#059669; font-weight:bold;');
-console.log('%c✅ Bill status check before stock return', 'font-size:12px; color:#059669;');
-console.log('%c✅ Lab test equipment stock via lab_test_equipment', 'font-size:12px; color:#059669;');
-console.log('%c✅ Money format 1,000,000,000', 'font-size:12px; color:#D97706;');
-console.log('%c✅ Toggle + Live search with highlight', 'font-size:12px; color:#1D4ED8;');
+console.log('%c✏️ Audit Edit Visit — V10 FINAL', 'font-size:16px; font-weight:bold; color:#1D4ED8;');
+console.log('%c✅ KILA add_medication inaunda prescription MPYA (status = "pending")', 'font-size:12px; color:#059669; font-weight:bold;');
+console.log('%c✅ Bill_item MPYA inaongezwa kwenye bill iliyopo — HAKUNA kufuta', 'font-size:12px; color:#059669; font-weight:bold;');
+console.log('%c✅ Pharmacy itaiona kwenye pending_prescriptions.php', 'font-size:12px; color:#059669; font-weight:bold;');
+console.log('%c✅ Cashier ataiweka LOCKED hadi pharmacy aconfirm', 'font-size:12px; color:#059669; font-weight:bold;');
+console.log('%c✅ Bill_items za awali HAZIFUTWI', 'font-size:12px; color:#059669;');
 </script>
 
 </body>
