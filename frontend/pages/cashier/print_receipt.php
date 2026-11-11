@@ -1,11 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/print_receipt.php
-// CASHIER - PRINT RECEIPT - BEAUTIFUL DESIGN
-// ✅ PREMIUM AMOUNT HIDDEN (only Paid Amount shown)
-// ✅ BRANCH PHONE & EMAIL FROM branches TABLE
-// ✅ SUPPORTS: Regular Bills AND OTC Sales
-// ✅ Medications show dosage, route, frequency, instructions
+// CASHIER - PRINT RECEIPT V3 FINAL
+// ================================================================
+// ✅ V3: "Received By" inaonyesha ALIYEPOKEA MALIPO (payments.received_by)
+// ✅ V3: Inaonyesha WOTE waliopokea malipo (kama ni wengi) + amounts zao
+// ✅ V3: Amount Paid = JUMLA ya payments zote
+// ✅ V3: "Bill Created By" kama ni mtu tofauti (doctor/receptionist)
+// ✅ V2: Multi-batch medications → ITEM MOJA
+// ✅ V1: PREMIUM AMOUNT HIDDEN
+// ✅ V1: BRANCH PHONE & EMAIL
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -61,6 +65,8 @@ $other_items = [];
 $otc_items = [];
 $otc_sale = null;
 $payment = null;
+$payments_all = [];
+$received_by_summary = [];
 $settings = [];
 $logo_base64 = '';
 $logo_available = false;
@@ -69,9 +75,10 @@ $has_error = false;
 $currency = 'TSh';
 $is_otc = false;
 $site_name = 'Braick Dispensary';
+$total_paid_amount = 0;
 
 // ================================================================
-// ✅ BRANCH INFO (PHONE, EMAIL, LOCATION, NAME)
+// BRANCH INFO
 // ================================================================
 $branch_name = $user_branch_name;
 $branch_phone = '+255 700 000 001';
@@ -98,7 +105,7 @@ try {
 }
 
 // ================================================================
-// ✅ ADMIN CONTACTS (FROM users TABLE)
+// ADMIN CONTACTS
 // ================================================================
 $admin_phones = [];
 try {
@@ -168,15 +175,40 @@ try {
                 
                 if ($otc_sale['bill_id'] > 0) {
                     $stmt = $db->prepare("
-                        SELECT * FROM payments 
-                        WHERE bill_id = ? 
-                        ORDER BY received_at DESC LIMIT 1
+                        SELECT 
+                            p.*,
+                            u.full_name as received_by_name,
+                            u.role as received_by_role
+                        FROM payments p
+                        LEFT JOIN users u ON p.received_by = u.id
+                        WHERE p.bill_id = ? 
+                        ORDER BY p.received_at ASC
                     ");
                     $stmt->execute([$otc_sale['bill_id']]);
-                    $payment = $stmt->fetch(PDO::FETCH_ASSOC);
+                    $payments_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    
+                    $payment = !empty($payments_all) ? $payments_all[0] : null;
+                    
+                    foreach ($payments_all as $pmt) {
+                        $name = $pmt['received_by_name'] ?? 'Unknown';
+                        $role = $pmt['received_by_role'] ?? 'user';
+                        $amount = (float)($pmt['amount'] ?? 0);
+                        
+                        if (!isset($received_by_summary[$name])) {
+                            $received_by_summary[$name] = [
+                                'name' => $name,
+                                'role' => $role,
+                                'count' => 0,
+                                'total_amount' => 0,
+                                'first_date' => $pmt['received_at'] ?? null
+                            ];
+                        }
+                        $received_by_summary[$name]['count']++;
+                        $received_by_summary[$name]['total_amount'] += $amount;
+                        $total_paid_amount += $amount;
+                    }
                 }
                 
-                // Use branch data if available
                 $branch_name = $otc_sale['branch_name'] ?? $branch_name;
                 $branch_location = $otc_sale['branch_location'] ?? $branch_location;
                 $branch_phone = $otc_sale['branch_phone'] ?? $branch_phone;
@@ -197,7 +229,7 @@ try {
                     'visit_type' => 'OTC Sale',
                     'subtotal' => $otc_sale['subtotal'],
                     'total_amount' => $otc_sale['total_amount'],
-                    'paid_amount' => $payment['amount'] ?? $otc_sale['total_amount'],
+                    'paid_amount' => $total_paid_amount > 0 ? $total_paid_amount : $otc_sale['total_amount'],
                     'balance' => 0,
                     'status' => 'paid',
                     'pharmacy_discount' => 0,
@@ -207,6 +239,8 @@ try {
                     'created_at' => $otc_sale['created_at'],
                     'updated_at' => $otc_sale['updated_at'],
                     'cashier_name' => $otc_sale['cashier_name'] ?? $user_full_name,
+                    'bill_creator_name' => $otc_sale['cashier_name'] ?? null,
+                    'bill_creator_role' => null,
                     'branch_name' => $branch_name,
                     'branch_location' => $branch_location,
                     'branch_phone' => $branch_phone,
@@ -241,7 +275,8 @@ try {
                 p.address,
                 p.gender,
                 p.date_of_birth,
-                u.full_name as cashier_name,
+                u_creator.full_name as bill_creator_name,
+                u_creator.role as bill_creator_role,
                 br.name as branch_name,
                 br.location as branch_location,
                 br.phone as branch_phone,
@@ -251,7 +286,7 @@ try {
                 v.created_at as visit_date
             FROM bills b
             LEFT JOIN patients p ON b.patient_id = p.id
-            LEFT JOIN users u ON b.created_by = u.id
+            LEFT JOIN users u_creator ON b.created_by = u_creator.id
             LEFT JOIN branches br ON b.branch_id = br.id
             LEFT JOIN visits v ON b.visit_id = v.id
             WHERE b.id = ? AND b.branch_id = ?
@@ -319,8 +354,111 @@ try {
                 }
             }
             
-            $all_items = [];
+            // GROUP MULTI-BATCH MEDICATIONS
+            $grouped_medications = [];
+            $other_items_raw = [];
+            
             foreach ($bill_items_data as $item) {
+                $item_type = strtolower($item['item_type'] ?? 'other');
+                $reference_type = strtolower($item['reference_type'] ?? '');
+                $item_name = trim($item['item_name'] ?? '');
+                
+                $clean_name = preg_replace('/\s*\[.*?\]\s*/i', '', $item_name);
+                $clean_name = preg_replace('/\s*\(Batch:.*?\)\s*/i', '', $clean_name);
+                $clean_name = trim($clean_name);
+                
+                if ($item_type === 'medication' && $reference_type === 'prescription' && (int)($item['reference_id'] ?? 0) > 0) {
+                    $group_key = 'med_' . (int)$item['reference_id'] . '_' . md5($clean_name);
+                    
+                    if (!isset($grouped_medications[$group_key])) {
+                        $grouped_medications[$group_key] = [
+                            'type' => 'group',
+                            'item_name' => $clean_name,
+                            'item_type' => 'medication',
+                            'reference_id' => (int)$item['reference_id'],
+                            'reference_type' => 'prescription',
+                            'total_quantity' => 0,
+                            'total_price' => 0,
+                            'unit_price' => (float)($item['unit_price'] ?? 0),
+                            'batch_count' => 0,
+                            'batch_labels' => [],
+                            'first_item' => $item,
+                            'rx_details' => null
+                        ];
+                    }
+                    
+                    $grouped_medications[$group_key]['total_quantity'] += (int)($item['quantity'] ?? 0);
+                    $grouped_medications[$group_key]['total_price'] += (float)($item['total_price'] ?? 0);
+                    $grouped_medications[$group_key]['batch_count']++;
+                    
+                    if (preg_match('/\[(.*?)\]/', $item_name, $matches)) {
+                        $grouped_medications[$group_key]['batch_labels'][] = trim($matches[1]);
+                    } elseif (preg_match('/\(Batch:\s*(.*?)\)/i', $item_name, $matches)) {
+                        $grouped_medications[$group_key]['batch_labels'][] = trim($matches[1]);
+                    }
+                } else {
+                    $other_items_raw[] = $item;
+                }
+            }
+            
+            foreach ($grouped_medications as $group_key => &$group) {
+                $clean_name = $group['item_name'];
+                $rx_details = null;
+                if (isset($prescription_items_map[$clean_name])) {
+                    $rx_details = $prescription_items_map[$clean_name];
+                } else {
+                    foreach ($prescription_items_map as $rx_name => $rx_data) {
+                        if (stripos($clean_name, $rx_name) !== false || stripos($rx_name, $clean_name) !== false) {
+                            $rx_details = $rx_data;
+                            break;
+                        }
+                    }
+                }
+                $group['rx_details'] = $rx_details;
+            }
+            unset($group);
+            
+            $all_items = [];
+            
+            foreach ($grouped_medications as $group) {
+                $rx_details = $group['rx_details'];
+                $merged_item = $group['first_item'];
+                
+                if ($rx_details) {
+                    $merged_item['dosage'] = $rx_details['dosage'] ?? '';
+                    $merged_item['frequency'] = $rx_details['frequency'] ?? '';
+                    $merged_item['route'] = $rx_details['route'] ?? '';
+                    $merged_item['duration'] = $rx_details['duration'] ?? '';
+                    $merged_item['rx_quantity'] = $group['total_quantity'];
+                    $merged_item['instructions'] = $rx_details['instructions'] ?? '';
+                    $merged_item['pharmacy_instructions'] = $rx_details['pharmacy_instructions'] ?? '';
+                    $merged_item['prescription_number'] = $rx_details['prescription_number'] ?? '';
+                    $merged_item['prescription_status'] = $rx_details['prescription_status'] ?? '';
+                    $merged_item['rx_total_price'] = $group['total_price'];
+                } else {
+                    $merged_item['dosage'] = '';
+                    $merged_item['frequency'] = '';
+                    $merged_item['route'] = '';
+                    $merged_item['duration'] = '';
+                    $merged_item['rx_quantity'] = $group['total_quantity'];
+                    $merged_item['instructions'] = '';
+                    $merged_item['pharmacy_instructions'] = '';
+                    $merged_item['prescription_number'] = '';
+                    $merged_item['prescription_status'] = '';
+                    $merged_item['rx_total_price'] = $group['total_price'];
+                }
+                
+                $merged_item['item_name'] = $group['item_name'];
+                $merged_item['quantity'] = $group['total_quantity'];
+                $merged_item['total_price'] = $group['total_price'];
+                $merged_item['batch_count'] = $group['batch_count'];
+                $merged_item['batch_labels'] = $group['batch_labels'];
+                $merged_item['is_grouped'] = true;
+                
+                $all_items[] = $merged_item;
+            }
+            
+            foreach ($other_items_raw as $item) {
                 $item_name = trim($item['item_name'] ?? '');
                 $clean_name = preg_replace('/\s*\(Batch:.*\)/', '', $item_name);
                 $clean_name = trim($clean_name);
@@ -328,15 +466,6 @@ try {
                 $rx_details = null;
                 if (!empty($clean_name) && isset($prescription_items_map[$clean_name])) {
                     $rx_details = $prescription_items_map[$clean_name];
-                } elseif (!empty($item_name) && isset($prescription_items_map[$item_name])) {
-                    $rx_details = $prescription_items_map[$item_name];
-                } else {
-                    foreach ($prescription_items_map as $rx_name => $rx_data) {
-                        if (stripos($item_name, $rx_name) !== false || stripos($rx_name, $item_name) !== false) {
-                            $rx_details = $rx_data;
-                            break;
-                        }
-                    }
                 }
                 
                 $merged_item = $item;
@@ -364,6 +493,10 @@ try {
                     $merged_item['rx_total_price'] = $item['total_price'] ?? 0;
                 }
                 
+                $merged_item['batch_count'] = 1;
+                $merged_item['batch_labels'] = [];
+                $merged_item['is_grouped'] = false;
+                
                 $all_items[] = $merged_item;
             }
             
@@ -377,19 +510,47 @@ try {
                 }
             }
             
-            if ($payment_id > 0) {
-                $stmt = $db->prepare("SELECT * FROM payments WHERE id = ? AND bill_id = ?");
-                $stmt->execute([$payment_id, $bill_id]);
-                $payment = $stmt->fetch(PDO::FETCH_ASSOC);
+            // ✅ V3: Chukua payments ZOTE za bill
+            $stmt = $db->prepare("
+                SELECT 
+                    p.*,
+                    u.full_name as received_by_name,
+                    u.role as received_by_role
+                FROM payments p
+                LEFT JOIN users u ON p.received_by = u.id
+                WHERE p.bill_id = ? 
+                ORDER BY p.received_at ASC
+            ");
+            $stmt->execute([$bill_id]);
+            $payments_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            $payment = !empty($payments_all) ? $payments_all[0] : null;
+            
+            // Build received_by_summary
+            foreach ($payments_all as $pmt) {
+                $name = $pmt['received_by_name'] ?? 'Unknown';
+                $role = $pmt['received_by_role'] ?? 'user';
+                $amount = (float)($pmt['amount'] ?? 0);
+                
+                if (!isset($received_by_summary[$name])) {
+                    $received_by_summary[$name] = [
+                        'name' => $name,
+                        'role' => $role,
+                        'count' => 0,
+                        'total_amount' => 0,
+                        'first_date' => $pmt['received_at'] ?? null
+                    ];
+                }
+                $received_by_summary[$name]['count']++;
+                $received_by_summary[$name]['total_amount'] += $amount;
+                $total_paid_amount += $amount;
             }
             
-            if (!$payment) {
-                $stmt = $db->prepare("SELECT * FROM payments WHERE bill_id = ? ORDER BY received_at DESC LIMIT 1");
-                $stmt->execute([$bill_id]);
-                $payment = $stmt->fetch(PDO::FETCH_ASSOC);
+            // Override paid_amount kwa jumla ya payments zote
+            if ($total_paid_amount > 0) {
+                $bill['paid_amount'] = $total_paid_amount;
             }
             
-            // Use branch data
             $branch_name = $bill['branch_name'] ?? $branch_name;
             $branch_location = $bill['branch_location'] ?? $branch_location;
             $branch_phone = $bill['branch_phone'] ?? $branch_phone;
@@ -733,6 +894,50 @@ $show_receipt = !$has_error && $bill;
         .receipt-row .value.bold { font-weight: 700; }
         .receipt-row .value.otc-value { color: #7C3AED; }
         
+        /* ✅ V3: Received By list */
+        .received-by-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            align-items: flex-end;
+        }
+        
+        .received-by-entry {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 1px;
+        }
+        
+        .received-by-entry .rb-name {
+            font-weight: 700;
+            color: #0F172A;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .received-by-entry .rb-role {
+            font-size: 0.55rem;
+            color: #64748B;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        
+        .received-by-entry .rb-amount {
+            font-family: 'Courier Prime', monospace;
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: #059669;
+        }
+        
+        .received-by-entry .rb-count {
+            font-size: 0.5rem;
+            color: #64748B;
+            font-weight: 500;
+        }
+        
         .receipt-divider {
             border: none;
             border-top: 1px dashed #CBD5E1;
@@ -817,6 +1022,24 @@ $show_receipt = !$has_error && $bill;
             display: block;
             margin-top: 1px;
             font-family: 'Inter', sans-serif;
+        }
+        
+        .receipt-item .batch-badge {
+            display: inline-block;
+            padding: 1px 8px;
+            border-radius: 6px;
+            background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+            color: #1E40AF;
+            font-size: 0.5rem;
+            font-weight: 700;
+            margin-left: 6px;
+            border: 1px solid #60A5FA;
+            font-family: 'Inter', sans-serif;
+        }
+        
+        .receipt-item .batch-badge i {
+            font-size: 0.45rem;
+            margin-right: 2px;
         }
         
         .receipt-item .med-details {
@@ -1104,6 +1327,11 @@ $show_receipt = !$has_error && $bill;
                 print-color-adjust: exact !important;
             }
             
+            .receipt-item .batch-badge {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+            
             .payment-status.paid,
             .payment-status.otc-paid {
                 -webkit-print-color-adjust: exact !important;
@@ -1358,6 +1586,8 @@ $show_receipt = !$has_error && $bill;
                         $instructions = $item['instructions'] ?? '';
                         $pharmacy_instructions = $item['pharmacy_instructions'] ?? '';
                         $prescription_number = $item['prescription_number'] ?? '';
+                        $batch_count = (int)($item['batch_count'] ?? 1);
+                        $is_grouped = !empty($item['is_grouped']);
                         
                         $has_med_details = !empty($dosage) || !empty($frequency) || !empty($route) || !empty($duration);
                     ?>
@@ -1367,6 +1597,11 @@ $show_receipt = !$has_error && $bill;
                                     <?= htmlspecialchars($item['item_name'] ?? 'N/A') ?>
                                     <?php if ($rx_quantity > 1): ?>
                                         <span class="item-qty">x<?= $rx_quantity ?></span>
+                                    <?php endif; ?>
+                                    <?php if ($is_grouped && $batch_count > 1): ?>
+                                        <span class="batch-badge">
+                                            <i class="fas fa-layer-group"></i> <?= $batch_count ?> Batches
+                                        </span>
                                     <?php endif; ?>
                                     <span class="item-type">
                                         <?= !empty($prescription_number) ? 'RX: ' . htmlspecialchars($prescription_number) : '' ?>
@@ -1467,10 +1702,59 @@ $show_receipt = !$has_error && $bill;
                 <span class="value"><?= htmlspecialchars($payment['reference_number']) ?></span>
             </div>
             <?php endif; ?>
+            
+            <!-- ✅ V3: RECEIVED BY - WOTE WALIOPOKEA MALIPO -->
+            <?php if (!empty($received_by_summary)): ?>
+                <div class="receipt-row" style="align-items:flex-start;">
+                    <span class="label" style="padding-top:4px;">
+                        <i class="fas fa-user-check"></i> Received By
+                    </span>
+                    <span class="value" style="text-align:right;">
+                        <div class="received-by-list">
+                            <?php foreach ($received_by_summary as $rb): ?>
+                                <div class="received-by-entry">
+                                    <span class="rb-name">
+                                        <i class="fas fa-user-circle" style="font-size:0.65rem;color:#0B5ED7;"></i>
+                                        <?= htmlspecialchars($rb['name']) ?>
+                                    </span>
+                                    <span class="rb-role">
+                                        <?= strtoupper($rb['role']) ?>
+                                        <?php if ($rb['count'] > 1): ?>
+                                            • <?= $rb['count'] ?> payments
+                                        <?php endif; ?>
+                                    </span>
+                                    <?php if (count($received_by_summary) > 1): ?>
+                                        <span class="rb-amount">
+                                            <?= $currency ?> <?= number_format($rb['total_amount'], 0) ?>
+                                        </span>
+                                    <?php endif; ?>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    </span>
+                </div>
+            <?php endif; ?>
+            
+            <!-- ✅ V3: BILL CREATED BY (kama ni mtu tofauti) -->
+            <?php 
+            $bill_creator = $bill['bill_creator_name'] ?? null;
+            $received_names = array_keys($received_by_summary);
+            $show_bill_creator = !empty($bill_creator) && !in_array($bill_creator, $received_names);
+            ?>
+            <?php if ($show_bill_creator): ?>
             <div class="receipt-row">
-                <span class="label"><i class="fas fa-user-check"></i> Received By</span>
-                <span class="value"><?= htmlspecialchars($bill['cashier_name'] ?? $user_full_name) ?></span>
+                <span class="label"><i class="fas fa-user-tie"></i> Bill Created By</span>
+                <span class="value">
+                    <?= htmlspecialchars($bill_creator) ?>
+                    <?php if (!empty($bill['bill_creator_role'])): ?>
+                        <span style="font-size:0.55rem;color:#64748B;text-transform:uppercase;font-weight:500;">
+                            (<?= htmlspecialchars($bill['bill_creator_role']) ?>)
+                        </span>
+                    <?php endif; ?>
+                </span>
             </div>
+            <?php endif; ?>
+            
             <div class="receipt-row">
                 <span class="label"><i class="fas fa-clock"></i> Received At</span>
                 <span class="value"><?= isset($payment['received_at']) ? date('d/m/Y h:i A', strtotime($payment['received_at'])) : date('d/m/Y h:i A', strtotime($bill['created_at'] ?? 'now')) ?></span>
@@ -1527,13 +1811,12 @@ $show_receipt = !$has_error && $bill;
         }
     })();
 
-    console.log('%c🧾 Braick - Print Receipt', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Phone & Email from branches table', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Premium amount HIDDEN - only Paid Amount shown', 'font-size:13px; color:#DC2626;');
-    console.log('%c📍 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📞 Phone: <?= htmlspecialchars($branch_phone) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📧 Email: <?= htmlspecialchars($branch_email) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👑 Admin: <?= htmlspecialchars($admin_phones_display) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🧾 Braick - Print Receipt V3', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ "Received By" inaonyesha ALIYEPOKEA MALIPO', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ Inaonyesha WOTE waliopokea malipo (kama wengi)', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ Amount Paid = JUMLA ya payments zote', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c✅ "Bill Created By" kama ni mtu tofauti', 'font-size:13px; color:#7C3AED;');
+    console.log('%c✅ Multi-batch medications → ITEM MOJA', 'font-size:13px; color:#D97706;');
 </script>
 
 </body>
